@@ -238,6 +238,9 @@ examples/m231_op_matrix/drv.px src=cdab51d235c66f97 rc=0 out=b4a3a1807a43ede0574
 examples/m232_truthiness/drv.px src=21eca09432dac53c rc=0 out=9f8fcf845c71e584d9710f5b6aade6c1 err=e3b0c44298fc1c14
 examples/m233_text_cstr/drv.px src=20f3c1e13bfb1aa7 rc=0 out=69bdeb5f923d2fdf730d194f186660e3 err=e3b0c44298fc1c14
 examples/m234_bytes_family/drv.px src=1e391fd51537ce54 rc=0 out=e5e0e70833c004b152398a998283c4ca err=e3b0c44298fc1c14
+examples/m235_ws_conn_uaf/ws_meta_probe.px src=e259bbf27f3ac335 rc=0 out=ae686227cc4053f5417693e220706a7d err=e3b0c44298fc1c14
+examples/m235_ws_conn_uaf/ws_relay_repro.px src=f41cf8d1a4efecac rc=0 out=0aee10c14ec0d3b9f02bf837954b2e22 err=e3b0c44298fc1c14
+examples/m235_ws_conn_uaf/ws_uaf_repro.px src=eb6562a710f553ef rc=0 out=b72103560f212b77cb5429f87c43a94f err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

@@ -12058,6 +12058,10 @@ void px_register_builtins(void) {
     px_set_global("ws_recv", px_native("ws_recv", bi_ws_recv));
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
     px_set_global("ws_ping", px_native("ws_ping", bi_ws_ping));
+    // M235：握手元信息可见性（晨曦 ws-edge：`/agent/<节点>` 路由 + 对端 IP 限流/审计）
+    px_set_global("ws_conn_path", px_native("ws_conn_path", bi_ws_conn_path));
+    px_set_global("ws_conn_peer", px_native("ws_conn_peer", bi_ws_conn_peer));
+    px_set_global("ws_conn_header", px_native("ws_conn_header", bi_ws_conn_header));
     px_set_global("ws_heartbeat", px_native("ws_heartbeat", bi_ws_heartbeat));
 #endif // PX_NO_WS
     // M27 P0：WebServer 生产化四件套（服务端 TLS / Session / 基础认证）
@@ -23302,6 +23306,13 @@ static int px_conn_tls_handshake(PxConn* c) {
 // 初始化连接（fd 上 TLS 握手若已注册服务端证书；失败返回 -1，连接应关闭）
 int px_conn_init(PxConn* c, int fd) {
     memset(c, 0, sizeof(*c));
+    // M235（缺陷 353）：引用计数初始化 —— memset 会把 mutex 清零，故必须在其后 init。
+    //   refs 是**使用者**计数，初始 0（创建者不算使用者）。pthread_mutex_init 后即为未锁定态。
+    pthread_mutex_init(&c->mu, NULL);
+    c->refs = 0;
+    c->pending_free = 0;
+    c->freed = 0;
+    c->obj_free_pending = 0;
     c->fd = fd;
     c->is_tls = 0;
     c->owned = 1;
@@ -23314,6 +23325,7 @@ int px_conn_init(PxConn* c, int fd) {
     if (!c->ssl || !c->conf || !c->ctr_drbg || !c->entropy) {
         close(fd);
         c->fd = -1;
+        pthread_mutex_destroy(&c->mu);   // M235：调用方随后 free 对象
         return -1;
     }
     mbedtls_ssl_init((mbedtls_ssl_context*)c->ssl);
@@ -23329,7 +23341,7 @@ int px_conn_init(PxConn* c, int fd) {
 }
 
 // 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）
-ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
+static ssize_t px_conn_read_body(PxConn* c, void* buf, size_t n) {
     if (c->closed) return -1;
     if (!c->is_tls) {
         // M211（缺陷 265）：**信号打断必须重试，绝不能当成"对端关闭"**。
@@ -23370,7 +23382,7 @@ ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
     return (ssize_t)take;
 }
 
-ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
+static ssize_t px_conn_write_body(PxConn* c, const void* buf, size_t n) {
     if (c->closed) return -1;
     if (!c->is_tls) {
         // M33 修复：send 可能部分发送（TCP 缓冲满/非阻塞）→ 循环发送到写完，
@@ -23396,10 +23408,30 @@ ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
     return (ssize_t)off;
 }
 
-void px_conn_close(PxConn* c) {
-    if (!c) return;
-    if (c->closed) return;  // 幂等：已关闭
-    c->closed = 1;
+// ==================== M235（缺陷 353）：连接引用计数收口 ====================
+// 为什么需要：`px_conn_close()` 会 `mbedtls_ssl_free()` + `free(c->ssl)`，而原来的
+//   `px_conn_read/write` **只在入口**查 `c->closed`。两条线程可这样交错：
+//     T1: 检查 c->closed 通过 →（尚未调用 mbedtls_ssl_read）
+//     T2: px_conn_close(c) → free(c->ssl)，c->ssl = NULL
+//     T1: mbedtls_ssl_read((mbedtls_ssl_context*)c->ssl, …)   ← 用已释放上下文 ⇒ UAF
+//   实测崩溃点落在 `mbedtls_debug_print_msg`（读 `ssl->conf->f_dbg`，偏移 0x28）——
+//   与晨曦报告的 ip 同族（他那份 0x498601，本机最小复现器 0x4963f1）。
+// 修法：引用计数 + 延迟释放。访问 ssl 前 acquire，用完 release；close 只标记 + shutdown(fd)
+//   唤醒阻塞者；**若此刻无使用者在读**，就地释放资源（与原行为一致）；否则把释放推后到
+//   最后一个 release ⇒ 不再有 UAF 窗口。
+// 注意：`shutdown()` 必须在 close 里**无条件**做（不再依赖各调用点自己记得）——
+//   否则阻塞在 mbedtls_ssl_read 的线程永不返回 ⇒ refs 永不归零 ⇒ 资源永不释放。
+int px_conn_acquire(PxConn* c) {
+    if (!c) return 0;
+    pthread_mutex_lock(&c->mu);
+    if (c->closed || c->freed) { pthread_mutex_unlock(&c->mu); return 0; }
+    c->refs++;
+    pthread_mutex_unlock(&c->mu);
+    return 1;
+}
+
+// 释放 TLS 资源 + fd（由 freed 闸门保证只执行一次）
+static void px_conn_free_res(PxConn* c) {
     // M101：释放条件由「is_tls」放宽为「owned && ssl」——握手失败路径（px_conn_init 中
     //   px_conn_tls_handshake 返回 -1 时 is_tls 尚未置 1）原实现直接跳过释放 ssl/conf/
     //   drbg/entropy（每失败连接泄漏 ~20KB+），并发握手失败高频时泄漏严重；owned=1 时
@@ -23431,6 +23463,82 @@ void px_conn_close(PxConn* c) {
     if (c->fd >= 0) { close(c->fd); c->fd = -1; }
     if (c->owned) c->is_tls = 0;
 }
+
+void px_conn_release(PxConn* c) {
+    if (!c) return;
+    int do_res = 0, do_obj = 0;
+    pthread_mutex_lock(&c->mu);
+    if (c->refs > 0) c->refs--;
+    if (c->refs == 0) {
+        if (c->pending_free && !c->freed) { c->freed = 1; do_res = 1; }
+        if (c->obj_free_pending) do_obj = 1;
+    }
+    pthread_mutex_unlock(&c->mu);
+    if (do_res) px_conn_free_res(c);   // 锁外做重活
+    if (do_obj) {                      // obj_free_pending 只由创建者设置
+        pthread_mutex_destroy(&c->mu);
+        free(c);
+    }
+}
+
+void px_conn_close(PxConn* c) {
+    if (!c) return;
+    int do_free = 0, fd = -1;
+    pthread_mutex_lock(&c->mu);
+    if (c->closed) { pthread_mutex_unlock(&c->mu); return; }  // 幂等
+    c->closed = 1;
+    fd = c->fd;
+    if (c->refs == 0) {
+        if (!c->freed) { c->freed = 1; do_free = 1; }
+    } else {
+        c->pending_free = 1;   // 有使用者在读（阻塞中）⇒ 由它 release 时释放
+    }
+    pthread_mutex_unlock(&c->mu);
+    // M235：**无条件 shutdown（只关读方向）** —— 唤醒可能正阻塞在 mbedtls_ssl_read/recv
+    //   的线程（否则 refs 永不归零、资源永不释放），同时**不打断可能正在进行的写**
+    //   （http 路径的 close 由状态机在「响应写完/断开」时调用，但保守只动读方向；
+    //    需要彻底断开的调用点 —— 如 bi_ws_close —— 自己会 shutdown(SHUT_RDWR)）。
+    //   对已关 fd 无害（幂等）。
+    if (fd >= 0) shutdown(fd, SHUT_RD);
+    if (do_free) px_conn_free_res(c);
+}
+
+// 仅对象创建者调用：close + 释放对象（若此刻还有使用者在读，则把 free 推后到它 release）。
+void px_conn_owner_free(PxConn* c) {
+    if (!c) return;
+    px_conn_close(c);
+    int do_res = 0, do_obj = 0;
+    pthread_mutex_lock(&c->mu);
+    c->obj_free_pending = 1;
+    if (c->refs == 0) {
+        if (c->pending_free && !c->freed) { c->freed = 1; do_res = 1; }
+        do_obj = 1;
+    }
+    pthread_mutex_unlock(&c->mu);
+    if (do_res) px_conn_free_res(c);
+    if (do_obj) {
+        pthread_mutex_destroy(&c->mu);
+        free(c);
+    }
+}
+
+// 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）。
+// M235：包一层引用计数 —— 阻塞期间持引用 ⇒ close 不会在读取中途释放 ssl。
+ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
+    if (!px_conn_acquire(c)) return -1;
+    ssize_t r = px_conn_read_body(c, buf, n);
+    px_conn_release(c);
+    return r;
+}
+
+// 写：同理。
+ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
+    if (!px_conn_acquire(c)) return -1;
+    ssize_t r = px_conn_write_body(c, buf, n);
+    px_conn_release(c);
+    return r;
+}
+
 
 // tls_server(cert, key[, hostname])：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
 // M33：带 hostname → 加入 SNI 证书表（按 ClientHello 域名选择）；无 hostname → 默认证书。
@@ -24863,7 +24971,7 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
     if (e->active) {   // 防御：槽被占（理论不达，fd 唯一在途）→ 弃新建
         gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_pxpend_mu);
-        px_conn_close(c); xfree(c);
+        px_conn_owner_free(c);   // M235：close + 对象释放（有使用者在读则延后）
         if (out_fd_closed) *out_fd_closed = 1;
         return NULL;
     }
@@ -24904,7 +25012,7 @@ static void px_pxpend_close(int fd) {
     //   由 px_conn_close 负责 close。worker 处理中 ACTIVE 关闭 / 事件循环 tick/断开分支均走本函数
     //   ——detach 幂等：FREE 时无操作）
     px_evc_detach(fd);
-    if (c) { px_conn_close(c); xfree(c); }
+    if (c) { px_conn_owner_free(c); }   // M235：close + 对象释放（有使用者在读则延后）
     if (tmp[0]) unlink(tmp);
 }
 

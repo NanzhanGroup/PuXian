@@ -902,11 +902,13 @@ run m233_text_cstr bash examples/m233_text_cstr/verify.sh
 #   既「有专门数据语义」又「曾登记为未覆盖」的面。一量就照出「类型名」的表示泄漏。
 #   ⚠️ 负控 A 要重编两轨驱动（≈2 min）⇒ 本地跑全量档，CI 用 --neg-skip。
 run m234_bytes_family bash examples/m234_bytes_family/verify.sh
-# M234（第 112 轮 · 缺陷 352）：**bytes 族 × 逐类型实参**全量对拍（209 例 × 3 轨）。
-#   主题：M230 登记过「bytes 的 b[i] 未覆盖」；M233 统一文本语义侧后，bytes 是唯一
-#   既「有专门数据语义」又「曾登记为未覆盖」的面。一量就照出「类型名」的表示泄漏。
-#   ⚠️ 负控 A 要重编两轨驱动（≈2 min）⇒ 本地跑全量档，CI 用 --neg-skip。
-run m234_bytes_family bash examples/m234_bytes_family/verify.sh
+# M235（第 113 轮 · 缺陷 353）：**ws 连接「关闭 vs 并发使用」竞态（UAF）** —— 引用计数收口
+#   + 握手元信息可见性（ws_conn_path / ws_conn_peer / ws_conn_header）。
+#   主题：晨曦 ws-edge 在 m231 上「一次真实中转即崩」（崩在 mbedtls_debug_print_msg 读
+#   **已释放**的 ssl->conf）。判据：形态一 12 次 + 形态二 6 次「崩溃 0」；元信息 4 项；
+#   负控 A「忠实退回不做引用计数 ⇒ 必须崩」证明判据有牙。
+#   ⚠️ 负控 A 要重编 runtime（≈5 min）⇒ 本地跑全量档，CI 用 --neg-skip。
+run m235_ws_conn_uaf bash examples/m235_ws_conn_uaf/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

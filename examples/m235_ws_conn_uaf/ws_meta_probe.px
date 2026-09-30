@@ -1,0 +1,26 @@
+# ============================================================
+# ws_meta_probe.px —— M235 验证：ws_conn_path / ws_conn_peer / ws_conn_header
+#   客户端请求 wss://127.0.0.1:PORT/agent/cx-node-7 ⇒ 服务端应看到：
+#     path=/agent/cx-node-7   peer=127.0.0.1:<port>   ua=<客户端 UA>
+#   修前：path 恒为空、无 peer API（R1001 未定义变量）。
+# 环境变量：M235_CERT / M235_KEY / M235_PORT
+# ============================================================
+def log(msg):
+    print("[" + time_format(now_ms() // 1000, "%Y-%m-%d %H:%M:%S", "+08:00") + "] " + msg)
+def on_conn(cli):
+    log("path=[" + ws_conn_path(cli) + "]")
+    log("peer=[" + ws_conn_peer(cli) + "]")
+    log("ua=[" + str(ws_conn_header(cli, "User-Agent")) + "]")
+    log("miss=[" + str(ws_conn_header(cli, "X-Does-Not-Exist")) + "]")
+    log("M235-META-OK")
+def main():
+    cert = str(env("M235_CERT"))
+    key = str(env("M235_KEY"))
+    port = int(str(env("M235_PORT")))
+    r = tls_server(cert, key)
+    if r != true:
+        log("❌ tls_server failed: " + str(r))
+        exit(1)
+    log("✅ tls registered on " + str(port))
+    ws_serve(port, on_conn)
+main()

@@ -1,0 +1,40 @@
+# ============================================================
+# ws_uaf_repro.px —— M235（缺陷 353）最小复现器
+# ------------------------------------------------------------
+# 形态：WSS 服务端；handler 内 **spawn 一条线程**，主线自己阻塞在 ws_recv。
+#   spawn 的线程 150ms 后 ws_close(cli) ⇒ 若「关闭」与「并发使用」之间没有保护，
+#   关闭会 free 掉 ssl 上下文，而主线仍在 mbedtls_ssl_read 里 ⇒ UAF ⇒ SIGSEGV。
+#
+# 修前（v0.2.0-m234）：9/10 崩溃（rc=139），核心栈
+#   mbedtls_debug_print_msg ← mbedtls_ssl_fetch_input ← mbedtls_ssl_read
+#   ← px_conn_read ← ws_read_frame ← bi_ws_recv ← ws_conn_worker
+# 修后：0 崩溃，`r2=null`（读到关闭）。
+#
+# 环境变量（由 verify.sh 注入）：M235_CERT / M235_KEY / M235_PORT
+# ============================================================
+def log(msg):
+    print("[" + time_format(now_ms() // 1000, "%Y-%m-%d %H:%M:%S", TZ_OFF) + "] " + msg)
+TZ_OFF = "+08:00"
+# spawn 出的第二条执行流：等主线进入阻塞读，然后关闭同一连接
+def closer(cli):
+    sleep(150)
+    ws_close(cli)
+def on_conn(cli):
+    log("conn=" + str(cli))
+    spawn closer(cli)
+    m = ws_recv(cli)  # ← 阻塞在 mbedtls_ssl_read；另一线程 150ms 后 close
+    log("r1=" + str(m))
+    m2 = ws_recv(cli)
+    log("r2=" + str(m2))
+    log("M235-SURVIVED")  # ← 没崩就会打这行
+def main():
+    cert = str(env("M235_CERT"))
+    key = str(env("M235_KEY"))
+    port = int(str(env("M235_PORT")))
+    r = tls_server(cert, key)
+    if r != true:
+        log("❌ tls_server failed: " + str(r))
+        exit(1)
+    log("✅ tls registered on " + str(port))
+    ws_serve(port, on_conn)
+main()
