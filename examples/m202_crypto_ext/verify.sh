@@ -122,7 +122,7 @@ chk "[1] key 位类型守卫文案两侧一致" \
 chk "[1] 解释轨仍走**同一条**值比较器（i_cmp_values，M162 单一真相未被绕过）" \
     "grep -q 'i_cmp_values(keys\[idx\[j\]\], keys\[idx\[j + 1\]\])' selfhost/ibuiltin.px"
 chk "[1] 缺陷 244 修法在位：每线程轮转环 + 两个取值点都改用它" \
-    "grep -q 'static char\* px_tmp_slot(void)' runtime/runtime.c && [ \"\$(grep -c 'char\* tmp = px_tmp_slot();' runtime/runtime.c)\" -eq 2 ]"
+    "grep -q 'static char\* px_tmp_slot(void)' runtime/runtime.c && [ \"\$(grep -c 'char\* tmp = px_tmp_slot();' runtime/runtime.c)\" -eq 1 ] && [ \"\$(grep -c 'return px_cstr_any(v, NULL);' runtime/runtime.c)\" -eq 2 ]"
 chk "[1] 缺陷 244 旧形态已消失（val_cstr/bdata 内不再有共享 static char tmp）" \
     "! grep -qE 'static char tmp\[64\];' runtime/runtime.c"
 chk "[1] 速查表事实 229/230/231 已在位" \

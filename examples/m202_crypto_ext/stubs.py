@@ -51,15 +51,21 @@ D_OLD = """            if (compare_values(ko->as.list.items[idx[j]], ko->as.list
 D_NEW = """            if (compare_values(ko->as.list.items[idx[j]], ko->as.list.items[idx[j + 1]]) >= 0) {   /* NEGCTL-D */"""
 
 # ── E：把 `bdata` 的每线程轮转环退回「一处共享 static」⇒ 缺陷 244 复现 ──
-E_OLD = """    if (v.type == PX_STR || v.type == PX_BYTES) return v.as.obj->as.str.data;
-    // M202（缺陷 244）：**每线程轮转环**（同 val_cstr；见 px_tmp_slot 注释）
-    char* tmp = px_tmp_slot();
-    snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));
-    return tmp;
+#   ⚠️ **M233 连带更新（第 111 轮）**：`bdata` 的兜底在 M233 被统一到 `px_cstr_any`
+#      （「任意值 ⇒ 其 str() 形态」的唯一入口），原锚点（内联的 `snprintf(... fmt_num(v))`）
+#      已不存在 ⇒ 本负控**打不上桩**、门报「NEGCTL-E 打桩失败」（错误信息指不到真因）。
+#      按纪律：**判据跟着结构走** —— 锚点更新为新的 `bdata` 体，打桩目标不变
+#      （仍然是「把 TLS 轮转环换成一处共享 static ⇒ 两次取值互踩」）。
+E_OLD = """static const char* bdata(LXValue v) {
+    // M233（缺陷 349）：兜底改走与 `val_cstr` **同一个**「任意值 → 文本」入口
+    //   （修前是 `snprintf("%s", fmt_num(v))` ⇒ 非数值实参读 union 垃圾）。
+    return px_cstr_any(v, NULL);
 }"""
-E_NEW = """    if (v.type == PX_STR || v.type == PX_BYTES) return v.as.obj->as.str.data;
-    static char tmp[64];   /* NEGCTL-E */
-    snprintf(tmp, sizeof(tmp), "%s", fmt_num(v));
+E_NEW = """static const char* bdata(LXValue v) {
+    if (v.type == PX_STR || v.type == PX_BYTES) return v.as.obj->as.str.data;
+    static char tmp[64];   /* NEGCTL-E：撤回每线程轮转环 ⇒ 两次取值互踩 */
+    int n = 0;
+    snprintf(tmp, sizeof(tmp), "%s", px_cstr_any(v, &n));
     return tmp;
 }"""
 
