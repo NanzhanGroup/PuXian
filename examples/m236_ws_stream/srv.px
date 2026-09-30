@@ -1,0 +1,26 @@
+# M236 门探针 · 服务端：ws_stream 接管（与普通 HTTP 同进程共存）
+# 顶层无 spawn ⇒ 三轨（C / VM / 解释）皆可跑
+var srv_port = 18801
+let srv_av = args()
+if len(srv_av) > 1:
+    srv_port = int(srv_av[1])
+
+def agent(conn, req):
+    p = ws_conn_path(conn)
+    peer = ws_conn_peer(conn)
+    up = ws_conn_header(conn, "Upgrade")
+    q = req["query"]
+    print("SRV path=" + p + " peer_ok=" + str(len(peer) > 0) + " upg=" + up + " query=" + q)
+    ws_send(conn, "hello:" + p)
+    while true:
+        msg = ws_recv(conn, 2000)
+        if msg == null:
+            break
+        if msg == "bye":
+            break
+        ws_send(conn, "echo:" + msg)
+    print("SRV done")
+
+# 只注册 /agent/node1：其余路径（含带 Upgrade 的）必须**落回普通 HTTP 管道**
+ws_stream("/agent/node1", agent, {})
+px_serve(srv_port, ".", 30000, {})

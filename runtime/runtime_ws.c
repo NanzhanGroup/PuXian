@@ -1279,3 +1279,232 @@ LXValue bi_ws_heartbeat(LXValue* args, int nargs, void* ctx) {
     pthread_detach(th);
     return px_bool(true);
 }
+
+
+// ==================== M236：HTTP 请求 → WebSocket 升级接管（晨曦特性请求）====================
+// 需求与取舍见 docs/WS_UPGRADE.md。三句话：
+//   ① 与既有 http_stream（SSE 同端口接管）**同构** —— 注册一个 path，命中即把连接交语言层；
+//   ② 唯一不同的是「握手信息来源」：ws_serve 自己读请求头，而本路径的请求头**已被 HTTP 层
+//      读掉**（px_conn_worker / http_conn_worker 里解析进 req）⇒ 从已解析的 req 取；
+//   ③ 复用 M235 的连接元信息槽（path/hdrs/peer）+ 既有 ws_send/ws_recv/ws_close/ws_ping
+//      ⇒ 语言层除「新增一行 ws_stream 注册」外零改动。
+// 动机（晨曦 ws-edge · 2026-09-30 特性请求）：Ma（.px 服务）独占 443 且在同进程按 SNI/Host
+//   分发多域名，另起进程占 443 或让 Ma 让出 443 都不理想 ⇒ 让运行时自己具备升级接管能力，
+//   使 `wss://<节点>/agent/<节点名>` 能在**同一监听、同一进程**上完成（多节点路由）。
+
+// 从 req.headers（dict）重建握手头原文（"Name: Value\r\n"…）。
+// ws_conn_header 按该格式解析（ws_header_value）⇒ 重建后 M235 的三个元信息 API
+// （ws_conn_path/ws_conn_header/ws_conn_peer）在 ws_stream 连接上零改动可用；
+// bi_ws_reply_101 也靠它取回 Sec-WebSocket-Key。返回 malloc 串（可能为 ""）；失败 NULL。
+static char* ws_rebuild_head_from_req(LXValue req) {
+    LXValue hv = px_dict_get(req, "headers");
+    if (hv.type != PX_DICT) return NULL;
+    LXObject* ho = hv.as.obj;
+    size_t cap = 128, n = 0;
+    char* out = (char*)malloc(cap);
+    if (!out) return NULL;
+    out[0] = 0;
+    for (int i = 0; i < ho->as.dict.len; i++) {
+        LXValue vv = ho->as.dict.vals[i];
+        if (vv.type != PX_STR) continue;
+        const char* k = ho->as.dict.keys[i];
+        if (!k || !k[0]) continue;
+        const char* val = vv.as.obj->as.str.data;
+        size_t need = n + strlen(k) + strlen(val) + 4;
+        if (need + 1 > cap) {
+            size_t ncap = cap;
+            while (ncap < need + 1) ncap *= 2;
+            char* np = (char*)realloc(out, ncap);
+            if (!np) { free(out); return NULL; }
+            out = np; cap = ncap;
+        }
+        n += (size_t)snprintf(out + n, cap - n, "%s: %s\r\n", k, val);
+    }
+    return out;
+}
+
+// 本请求能不能被当成 WS 升级（= 带 Sec-WebSocket-Key）？供调用方**在建连接对象之前**判定，
+//   避免「建了 PxConn 才发现不是 WS」的浪费与回退复杂度。
+int px_ws_can_takeover(LXValue req) {
+    LXValue hd = px_dict_get(req, "headers");
+    if (hd.type != PX_DICT) return 0;
+    LXValue kv = px_dict_get_ci(hd, "Sec-WebSocket-Key");
+    if (kv.type != PX_STR) return 0;
+    return kv.as.obj->as.str.data[0] ? 1 : 0;
+}
+
+// 写 101 Switching Protocols（运行时算 Sec-WebSocket-Accept）—— 内部用，锁外调用。
+// 返回 0 成功。key 取自连接留存的握手头原文（hdrs）。
+static int ws_write_101(PxConn* c, const char* hdrs) {
+    char* key = hdrs ? ws_header_value(hdrs, "Sec-WebSocket-Key") : NULL;
+    if (!key) return -1;
+    char accept[64];
+    ws_accept_key(key, accept);
+    free(key);
+    char resp[256];
+    int rl = snprintf(resp, sizeof(resp),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n\r\n", accept);
+    return (px_conn_write(c, resp, (size_t)rl) < 0) ? -1 : 0;
+}
+
+// ws_reply_101(conn) → bool（M236）
+//   仅 `ws_stream(..., opts{"manual": true})` 端点需要：语言层做完准入决策后调用它完成握手
+//   （accept 仍由运行时算，语言层不必自己 SHA1+base64）。
+//   连接不是待握手的 ws_stream 连接 / 已写过 / 写失败 ⇒ false（不响亮：连接可能已被对端关掉）。
+LXValue bi_ws_reply_101(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: ws_reply_101 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    char* hdrs = NULL;
+    PxConn* c = NULL;
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(conn);
+    if (idx >= 0 && g_ws_conns[idx].active && !g_ws_conns[idx].closed) {
+        c = g_ws_conns[idx].conn;
+        if (g_ws_conns[idx].hdrs) hdrs = strdup(g_ws_conns[idx].hdrs);
+    }
+    pthread_mutex_unlock(&g_ws_mu);
+    if (!c || !hdrs) { if (hdrs) free(hdrs); return px_bool(false); }
+    int rc = ws_write_101(c, hdrs);
+    free(hdrs);
+    return px_bool(rc == 0);
+}
+
+// 把「已解析的 HTTP 请求连接」升级为 WS 连接并交给语言层回调。
+//   · c    —— 已建好并完成 TLS 握手（若有）的连接对象（px_serve 轨用现成的；http_serve 轨
+//             由调用方按 stream_takeover_conn 同法新建）
+//   · req  —— 已解析的请求 dict（含 headers/path；GC 根由调用方保证）
+//   · path —— 请求 path（用于 ws_conn_path）
+//   · route_idx —— ws_stream 注册下标；回调经全局键 `__wsstream_fn_<idx>` 取回
+//   · manual —— 1 = **不写 101**，由语言层调 ws_reply_101(conn) 完成握手（先决策后握手，
+//               用于鉴权/子协议协商）；0 = 运行时立即写 101（与 ws_serve 同序）
+// 返回 0 = 已接管并**已收尾**（调用方不得再 close/释放该连接，也不再落 HTTP 管道）；
+//      -1 = 未接管（缺 Sec-WebSocket-Key / 无槽 / 写 101 失败 ⇒ 调用方走原路径）。
+// ⚠️ 阻塞语义：本函数内含「注册 → 101 → 回调 → 泵循环 → 注销」全过程，与 http_stream 的
+//    SSE 接管同构 ⇒ WS 会话期间占用调用方一个 worker 线程（量化见 docs/WS_UPGRADE.md §4）。
+int px_ws_takeover_http_conn(PxConn* c, LXValue req, const char* path, int route_idx, int manual) {
+    if (!c) return -1;
+    if (!px_ws_can_takeover(req)) return -1;
+
+    // 1. 注册（先注册、后写 101 —— 与 ws_conn_worker 同序；槽满时按未接管返回，调用方走原路径）
+    char* hdr_raw = ws_rebuild_head_from_req(req);
+    int fd = c->fd;
+    pthread_mutex_lock(&g_ws_mu);
+    int slot = ws_alloc_slot();
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_ws_mu);
+        if (hdr_raw) free(hdr_raw);
+        return -1;
+    }
+    int64_t conn = g_ws_next_id++;
+    g_ws_conns[slot].fd = fd;
+    g_ws_conns[slot].id = conn;
+    g_ws_conns[slot].active = 1;
+    g_ws_conns[slot].client = 0;
+    g_ws_conns[slot].closed = 0;
+    g_ws_conns[slot].last_activity = ws_now_ms();
+    g_ws_conns[slot].hb_active = 0;
+    g_ws_conns[slot].conn = c;      // 共享 PxConn（明文/TLS 统一读写）
+    g_ws_conns[slot].path[0] = 0;
+    if (path) snprintf(g_ws_conns[slot].path, sizeof(g_ws_conns[slot].path), "%s", path);
+    g_ws_conns[slot].hdrs = hdr_raw;   // 所有权移交（槽复用时由 ws_free_hs_locked 归还）
+    g_ws_conns[slot].peer[0] = 0;
+    {
+        struct sockaddr_storage ss;
+        socklen_t sl = sizeof(ss);
+        if (getpeername(fd, (struct sockaddr*)&ss, &sl) == 0) {
+            char ip[64];
+            ip[0] = 0;
+            int prt = 0;
+            if (ss.ss_family == AF_INET) {
+                struct sockaddr_in* s4 = (struct sockaddr_in*)&ss;
+                inet_ntop(AF_INET, &s4->sin_addr, ip, sizeof(ip));
+                prt = ntohs(s4->sin_port);
+            } else if (ss.ss_family == AF_INET6) {
+                struct sockaddr_in6* s6 = (struct sockaddr_in6*)&ss;
+                inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof(ip));
+                prt = ntohs(s6->sin6_port);
+            }
+            if (ip[0])
+                snprintf(g_ws_conns[slot].peer, sizeof(g_ws_conns[slot].peer), "%s:%d", ip, prt);
+        }
+    }
+    pthread_mutex_unlock(&g_ws_mu);
+
+    // 2. 非 manual ⇒ 立即写 101（锁外）。写不出 ⇒ 撤注册、按未接管返回（不留悬挂项）
+    if (!manual) {
+        if (ws_write_101(c, hdr_raw) != 0) {
+            pthread_mutex_lock(&g_ws_mu);
+            int ix = ws_find(conn);
+            if (ix >= 0) {
+                g_ws_conns[ix].active = 0; g_ws_conns[ix].fd = -1; g_ws_conns[ix].conn = NULL;
+                ws_free_hs_locked(ix);
+            }
+            pthread_mutex_unlock(&g_ws_mu);
+            return -1;
+        }
+    }
+
+    // 3. 交给语言层：fn(conn, req) —— 两个实参（与晨曦建议的 fn(conn, req) 同形）
+    char gk[64];
+    snprintf(gk, sizeof(gk), "__wsstream_fn_%d", route_idx);
+    LXValue fn = px_get_global(gk);
+    if (fn.type == PX_FUNC || fn.type == PX_NATIVE) {
+        LXValue cargs[2];
+        cargs[0] = px_int(conn);
+        cargs[1] = req;
+        LXValue cap_ret = px_null();
+        char emsg[256];
+        emsg[0] = 0;
+        // 错误边界（M92-S2c/M98 同口径）：语言层异常**不得** longjmp 越过本函数的清理路径
+        //   —— px_native_call_capture 自带隔离点（M170 的 px_root_iso_mark/restore_iso）。
+        if (px_native_call_capture(fn, cargs, 2, &cap_ret, emsg, (int)sizeof(emsg))) {
+            fprintf(stderr, "[ws-stream] 回调出错（conn=%lld）：%s\n",
+                    (long long)conn, emsg[0] ? emsg : "未知错误");
+        }
+    }
+
+    // 4. 泵循环：回调返回后保持连接，直到对端关闭（回 ping / 响应 close）。
+    //    与 ws_conn_worker 第 4 步**逐句同构**（语言层若已在回调里自行 ws_recv 循环，
+    //    本步通常立即读到 close/EOF 而退出）。
+    for (;;) {
+        int fin = 0;
+        unsigned char* payload = NULL;
+        size_t plen = 0;
+        int opcode = ws_read_frame(c, &fin, &payload, &plen);
+        {
+            pthread_mutex_lock(&g_ws_mu);
+            int a_idx = ws_find(conn);
+            if (a_idx >= 0) g_ws_conns[a_idx].last_activity = ws_now_ms();
+            pthread_mutex_unlock(&g_ws_mu);
+        }
+        if (opcode < 0) break;   // EOF / 错误 / shutdown
+        if (opcode == WS_OP_PING) {
+            ws_send_frame(c, WS_OP_PONG, payload, plen, 0);
+        } else if (opcode == WS_OP_CLOSE) {
+            ws_send_frame(c, WS_OP_CLOSE, NULL, 0, 0);
+            break;
+        }
+        free(payload);
+        (void)fin;
+    }
+
+    // 5. 注销注册项（连接本身的关闭/释放由**调用方**按既有路径收尾：px_pxpend_close /
+    //    px_conn_close，含 M235 的引用计数语义 —— 本函数不 close，避免双重释放）。
+    pthread_mutex_lock(&g_ws_mu);
+    {
+        int ix = ws_find(conn);
+        if (ix >= 0) {
+            g_ws_conns[ix].active = 0;
+            g_ws_conns[ix].fd = -1;
+            g_ws_conns[ix].conn = NULL;
+            ws_free_hs_locked(ix);
+            g_ws_conns[ix].hb_active = 0;
+        }
+    }
+    pthread_mutex_unlock(&g_ws_mu);
+    return 0;
+}

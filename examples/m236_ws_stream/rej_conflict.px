@@ -1,0 +1,11 @@
+# M236 拒绝侧 4：同路径已被 http_stream（SSE）注册 ⇒ 响亮拒绝（两类接管语义不同，
+#   静默覆盖会让先注册者永久失效 —— 本仓「响亮优于静默」口径）
+def rej4_sse(req):
+    return {"status": 200, "body": "sse"}
+
+def rej4_h(conn, req):
+    return null
+
+http_stream("/dup", rej4_sse)
+ws_stream("/dup", rej4_h)
+print("SHOULD-NOT-REACH")

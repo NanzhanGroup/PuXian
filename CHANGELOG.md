@@ -1,3 +1,65 @@
+## M236 · **`ws_stream`：HTTP 请求 → WebSocket 升级接管**（晨曦特性请求）（第 114 轮）
+
+> 主题：晨曦 ws-edge 要做 `wss://<节点>/agent/<节点名>` 的多节点路由，而 Ma（.px 服务）
+> 独占 443 且在同进程按 SNI/Host 分发多域名 ⇒ 需要**同一监听、同一进程**内完成 WS 升级。
+> 修前 `px_serve` 的请求路径对 `Upgrade` 只处理 h2c（**忽略**），`Upgrade: websocket` 落普通
+> dispatch（handler 只能回普通响应）；而 `ws_serve` 是独立 `bind()`（只设 `SO_REUSEADDR`）
+> ⇒ 443 被占时无法共存。**这是能力缺口，不是缺陷。**
+
+### 一 交付（两文件 · +426 行）
+
+| API | 语义 |
+|---|---|
+| `ws_stream(path, fn[, opts])` | 与 `http_stream`（SSE 同端口接管）**同构**；命中即把连接升格为 WS 交语言层 |
+| `ws_reply_101(conn)` | `opts.manual: true` 时由语言层在做完准入决策后完成握手（accept 仍由运行时算） |
+
+回调 `fn(conn, req)`：`conn` 直接可用于既有 `ws_send / ws_recv / ws_close / ws_ping /
+ws_heartbeat`；元信息复用 **M235** 的 `ws_conn_path / ws_conn_header / ws_conn_peer`（**零改动**）。
+
+**语义三条**：① 默认由**运行时**写 101（在调回调之前，与 `ws_serve` 同序）；`manual` 则由
+语言层写。② 回调返回后运行时跑泵循环（回 ping / 响应 close），与 `ws_conn_worker` 逐句同构。
+③ 接管点在 **h2c 处理之后、公共管道之前** ⇒ WS 路由优先于 vhost/handler/静态；
+未注册路径（哪怕带 Upgrade）落回普通 HTTP；`Upgrade: h2c` 的既有口径一字未动。
+
+**不支持的 opts 一律响亮**（`R1002`）：`headers`（101 三项由 RFC 6455 规定）· `methods`
+含非 GET（握手固定 GET）· 同路径已被 `http_stream` 注册（两类接管语义不同）。
+
+### 二 派生索引三处同步（M235s1 缺陷 355 的教训）
+
+`runtime/native_mod_map.txt` 133 → **135** 行 · `tools/lint_core.px` **408** 名 ·
+`docs/native_index.json` 390 → **392**。
+
+### 三 判据
+
+`examples/m236_ws_stream/`：**40 通过 / 0 失败**（10 层：静态 8 处实现点 + 派生索引同步 /
+C 轨端到端 / **三轨一致**（C·VM·解释 输出逐字节相同）/ 元信息三 API / 未注册路径落回普通 HTTP /
+普通请求不受影响 / `manual` 模式两条路 / 拒绝侧 4 例 / **负控 3 道** / 覆盖边界 5 条）。
+
+### 四 文档
+
+`docs/WS_UPGRADE.md`（新增：动机 · API · 语义 · **取舍**（WS 会话占用一个 worker，量化）·
+轨间覆盖 · 与 `ws_serve`/`http_stream` 的关系 · 覆盖边界）。
+
+### 五 本轮踩的坑（都值得记）
+
+1. **解释器 CLI 约定**：`pxi` 把**最后一个**参数当脚本（配合 `px run s.px xx` 的形状）⇒
+   直接写 `pxi s.px 18813` 得到 `io: 读取文件失败 18813`（**指不到真因**）。已登记为可用性缺口。
+2. **`http_get(url)` 返回 body 字符串**（不是 dict）⇒ 要 status 必须用 `http_request`。
+3. ⚠️ **`( … ) &` 的 `$!` 是子 shell 的 pid** ⇒ 服务端成孤儿占端口（M201/M235 之后**第 3 次踩**）。
+   修：`exec` 起服务端 + kill 后轮询确认 + 门内**端口守卫** + 全局 EXIT trap 按 PID 收尾。
+4. **负控必须用独立工作目录**（`pair()` 会 `rm -rf` 自己的目录 ⇒ 吃掉前面层的产物 ⇒ 假红）。
+5. **删 `#ifndef`/`#endif` 块必须从 `#ifndef` 开始删**（只删块体会留 `unterminated #ifndef`
+   ⇒ 源码不可编译 ⇒ 负控变成「构建失败」而非「行为差异」）。
+6. ⚠️ **`grep -c … || echo 0` 会得到 `"0\n0"`** ⇒ 判据恒红（本仓 R74 记过，本轮又踩）。
+7. 我自己的判据错：静态层写「8 处」却只列 7 条 grep ⇒ 首跑必红（**计数判据须与条数机械对齐**）。
+
+### 六 下一轮候选
+
+`opts.headers`（子协议协商）· `manual` 模式的「回普通 HTTP 响应」API · 把 WS 会话挪进帧协程
+（释放 worker）· 解释器 CLI 的用法提示 · 上游 `registry-px` 哨兵。
+
+---
+
 ## M235 · **WebSocket 连接「关闭 vs 并发使用」的竞态收口** + 握手元信息可见性（缺陷 353）（第 113 轮）
 
 > 主题：晨曦 ws-edge（PuXian 版）报障 —— **一次真实中转即崩**。

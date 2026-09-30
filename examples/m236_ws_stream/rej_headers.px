@@ -1,0 +1,6 @@
+# M236 拒绝侧 2：opts.headers 暂不支持 ⇒ R1002（**不**静默忽略 —— M199 缺陷 237 同族的教训）
+def rej2_h(conn, req):
+    return null
+
+ws_stream("/x", rej2_h, {"headers": {"X-A": "1"}})
+print("SHOULD-NOT-REACH")
