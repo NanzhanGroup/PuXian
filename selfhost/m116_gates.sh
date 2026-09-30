@@ -124,7 +124,7 @@ step "生态索引防漂移（CI 有、本地全门原先没有 —— 第 17 �
 #   toolchain 步里，本地 m116/m117 都没有 ⇒ "本地全绿、CI 红"能潜伏好几轮。
 # ⚠️ 本地不能照抄 CI 的 `git diff --exit-code`：本地工作区通常**未提交**（改动一堆），
 #   那样必然假红。改为"**重生成 → 与 docs/ 现值比内容**"，与是否提交无关、语义等价。
-run eco_index bash -c 'cp docs/ecosystem_index.json /tmp/eco_before_a.json && cp docs/native_index.json /tmp/eco_before_b.json && ./bootstrap/pxi tools/gen_ecosystem.px >/dev/null && bash tools/gen_native_table.sh >/dev/null && diff -q /tmp/eco_before_a.json docs/ecosystem_index.json && diff -q /tmp/eco_before_b.json docs/native_index.json && echo "索引与 stdlib/runtime 一致"'
+run eco_index bash -c 'cp docs/ecosystem_index.json /tmp/eco_before_a.json && cp docs/native_index.json /tmp/eco_before_b.json && cp runtime/native_mod_map.txt /tmp/eco_before_c.txt && ./bootstrap/pxi tools/gen_ecosystem.px >/dev/null && bash tools/gen_native_table.sh >/dev/null && bash tools/gen_native_map.sh --update >/dev/null 2>&1 && diff -q /tmp/eco_before_a.json docs/ecosystem_index.json && diff -q /tmp/eco_before_b.json docs/native_index.json && diff -q /tmp/eco_before_c.txt runtime/native_mod_map.txt && echo "索引与 stdlib/runtime 一致（ecosystem + native + mod_map）"'
 step "语言侧常驻门（M130–M137：由 qg-issue 87 各轮真实缺陷攒下的回归门）"
 # 说明（第 17 轮补）：这批门此前**只在本地跑**，CI 与 m116/m117 都不含 ——
 #   等于"修好的缺陷没有防线"。此处显式纳入（顺序与台账一致）。

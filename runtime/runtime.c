@@ -23477,7 +23477,10 @@ void px_conn_release(PxConn* c) {
     if (do_res) px_conn_free_res(c);   // 锁外做重活
     if (do_obj) {                      // obj_free_pending 只由创建者设置
         pthread_mutex_destroy(&c->mu);
-        free(c);
+        // M235s1（缺陷 354）：对象由 `xmalloc(sizeof(PxConn))` 创建 ⇒ 必须 `xfree`。
+        //   裸 `free()` 会让 px_serve 每关一条连接即 `free(): invalid pointer` ⇒ SIGABRT
+        //   （M201 记过同款：xmalloc 返回的是跳过大小头的指针）。
+        xfree(c);
     }
 }
 
@@ -23518,7 +23521,10 @@ void px_conn_owner_free(PxConn* c) {
     if (do_res) px_conn_free_res(c);
     if (do_obj) {
         pthread_mutex_destroy(&c->mu);
-        free(c);
+        // M235s1（缺陷 354）：对象由 `xmalloc(sizeof(PxConn))` 创建 ⇒ 必须 `xfree`。
+        //   裸 `free()` 会让 px_serve 每关一条连接即 `free(): invalid pointer` ⇒ SIGABRT
+        //   （M201 记过同款：xmalloc 返回的是跳过大小头的指针）。
+        xfree(c);
     }
 }
 

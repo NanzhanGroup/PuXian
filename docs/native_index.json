@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 387,
+ "count": 390,
  "names": [
   "Err",
   "Ok",
@@ -376,6 +376,9 @@
   "write_file_opt",
   "ws_broadcast",
   "ws_close",
+  "ws_conn_header",
+  "ws_conn_path",
+  "ws_conn_peer",
   "ws_connect",
   "ws_connect_auto",
   "ws_heartbeat",
