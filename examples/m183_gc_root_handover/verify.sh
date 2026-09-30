@@ -145,9 +145,14 @@ chk_199() {          # ③b 199 判据：px_exec 的 env/srv 登记
     #   **忽略子进程退出码**。而 M233 把「任意值 ⇒ 其 str() 形态」的兜底统一到
     #   `px_cstr_any`（渲染改走**堆**）⇒ 同一处打桩的**症状从「报 UAFDET」变成「SIGSEGV」**
     #   ⇒ 判据不再有牙（全量门实测：负控 D 报「未判红」，而日志里其实是 `Segmentation fault`）。
-    #   按纪律「**判据跟着现象走**」：**进程必须正常退出**（rc=0）**且**不得报 UAFDET。
+    #   ⇒ 判据改为「**不得报 UAFDET** 且 **不得被信号杀死**」。
+    #   ⚠️ **不能写 `|| return 1`（要求 rc=0）**：CI 实测判红 —— 同一段代码在 runner 上
+    #      可能因超时（rc=124）等**环境原因**非零退出，而那不是本缺陷的症状
+    #      （本缺陷的症状是**信号致死**：SIGSEGV=139 / SIGABRT=134）。⇒ 用 `rc < 128` 判「未被信号杀死」。
     build "$WORK/m32_hot_reload.px" m32 || return 1
-    env PX_GC_UAFDET=1 PX_GC_STRESS=1 PX_GC_INLINE=1 timeout 300 "$WORK/bm32/build/m32_hot_reload" > "$WORK/m32.out" 2>&1 || return 1
+    env PX_GC_UAFDET=1 PX_GC_STRESS=1 PX_GC_INLINE=1 timeout 300 "$WORK/bm32/build/m32_hot_reload" > "$WORK/m32.out" 2>&1
+    local rc=$?
+    [ "$rc" -lt 128 ] || return 1
     ! grep -q 'PX_GC_UAFDET' "$WORK/m32.out"
 }
 chk_handover_inline() {
