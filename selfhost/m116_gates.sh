@@ -897,6 +897,16 @@ run m232_truthiness bash examples/m232_truthiness/verify.sh
 #   判据三层：三轨一致 · 对齐（f(x) ⇄ f(str(x))）· **确定性**（不同进程布局两遍逐字节一致）。
 #   ⚠️ 负控 A/B 要重编解释轨 + 两轨驱动（≈2–4 min）⇒ 本地跑全量档，CI 用 --neg-skip。
 run m233_text_cstr bash examples/m233_text_cstr/verify.sh
+# M234（第 112 轮 · 缺陷 352）：**bytes 族 × 逐类型实参**全量对拍（209 例 × 3 轨）。
+#   主题：M230 登记过「bytes 的 b[i] 未覆盖」；M233 统一文本语义侧后，bytes 是唯一
+#   既「有专门数据语义」又「曾登记为未覆盖」的面。一量就照出「类型名」的表示泄漏。
+#   ⚠️ 负控 A 要重编两轨驱动（≈2 min）⇒ 本地跑全量档，CI 用 --neg-skip。
+run m234_bytes_family bash examples/m234_bytes_family/verify.sh
+# M234（第 112 轮 · 缺陷 352）：**bytes 族 × 逐类型实参**全量对拍（209 例 × 3 轨）。
+#   主题：M230 登记过「bytes 的 b[i] 未覆盖」；M233 统一文本语义侧后，bytes 是唯一
+#   既「有专门数据语义」又「曾登记为未覆盖」的面。一量就照出「类型名」的表示泄漏。
+#   ⚠️ 负控 A 要重编两轨驱动（≈2 min）⇒ 本地跑全量档，CI 用 --neg-skip。
+run m234_bytes_family bash examples/m234_bytes_family/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
