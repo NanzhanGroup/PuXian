@@ -74,8 +74,11 @@ grep -q 'int64_t i = px_req_int_idx(args\[1\]);' "$RT" || { echo "❌ 前置自�
 grep -q 'M189（第 67 轮 · 缺陷 211）' "$IB" || { echo "❌ 前置自查失败：ibuiltin.px 缺 M189 前置校验" >&2; exit 2; }
 # 防「负控打桩残留」（M182 那次自伤）：本轮不该出现任何 NC 标记
 ! grep -q 'M189-NC' "$RT" "$IB" || { echo "❌ 前置自查失败：源码里有 M189 负控残留" >&2; exit 2; }
+# ⚠️ M230（第 108 轮 · 缺陷 345）：越界消息改报**用户原值** ⇒ 形参由 `(int)idx` 改为 `m230_raw`。
+#   下面这条既是「上一轮被强杀留下的脏源码」自查，也是**负控打桩位**的前置不变量
+#   ⇒ 必须与源码同步，否则负控静默失效（打桩锚点未命中）。
 # 负控锚点必须唯一（改代码时若撞了旧门负控的锚点，这里会先报出来）
-grep -c 'if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);' "$RT" | grep -qx 2 || { echo "❌ 前置自查失败：越界锚点不再是 2 处（bytes_get/bytes_set）" >&2; exit 2; }
+grep -c 'if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);' "$RT" | grep -qx 2 || { echo "❌ 前置自查失败：越界锚点不再是 2 处（bytes_get/bytes_set）" >&2; exit 2; }
 
 # ── 三轨 runner（interp 可指定二进制，供负控 C 用当前源码重编的解释器）──
 # 解释轨二进制：默认入库件 bootstrap/pxi；开发期可用 PX_INTERP_BIN 指到 dev 件
@@ -126,7 +129,7 @@ echo "=== [3] 拒绝侧 6 例 × 三轨：rc≠0 + 词条逐字相同 + 三轨�
 declare -A PAT=(
   [n1_get_oob]='索引越界: 3 \(len=3\)'
   [n2_set_oob]='索引越界: 3 \(len=3\)'
-  [n3_neg_oob]='索引越界: -7 \(len=2\)'
+  [n3_neg_oob]='索引越界: -9 \(len=2\)'   # M230：报用户原值（归一化后是 -7）
   [n4_type]='bytes_get 需要 bytes，实际是 int'
   [n5_badidx]='索引必须是整数，实际是 string'
   [n6_floatidx]='索引必须是整数，实际是 float'
@@ -158,6 +161,15 @@ for c in n1_get_oob n2_set_oob n3_neg_oob n4_type n5_badidx n6_floatidx; do
     chk "[3] $c：三轨 rc≠0 + ${CODE[$c]} + 词条一致 + 行号=${LNO[$c]}「$e1」" "[ $ok = 1 ]"
 done
 
+# ── M230（第 108 轮 · 缺陷 345）强化判据 ──
+# `bytes_get(b, -9)`（len=2）的越界消息必须报**用户原值 -9**；归一化后的位置是 -7。
+n3ok=1
+for t in interp vm c; do
+    grep -qE '索引越界: -9 \(len=2\)' "$W/n_n3_neg_oob.$t.out" || n3ok=0
+    if grep -qE '索引越界: -7 \(len=2\)' "$W/n_n3_neg_oob.$t.out"; then n3ok=0; fi
+done
+chk "[3] n3_neg_oob：三轨均报**原值** -9 且无归一化 -7（缺陷 345）" "[ $n3ok = 1 ]"
+
 if [ "$NEG" = 1 ]; then
     echo "=== [4] 负控（各自独立；源逐字节还原）"
     neg() {   # neg <名> <判据函数> <打桩函数> <源文件>
@@ -182,7 +194,7 @@ if [ "$NEG" = 1 ]; then
         python3 - <<'PY'
 p = 'runtime/runtime.c'
 s = open(p, encoding='utf-8').read()
-a = '''    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);
+a = '''    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
     return px_int((unsigned char)args[0].as.obj->as.str.data[idx]);'''
 assert s.count(a) == 1, 'A anchor'
 s = s.replace(a, '''    if (idx < 0 || idx >= len) return px_null();   /* M189-NC-A */
@@ -194,7 +206,7 @@ PY
         python3 - <<'PY'
 p = 'runtime/runtime.c'
 s = open(p, encoding='utf-8').read()
-a = '''    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);
+a = '''    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
     const char* src = args[0].as.obj->as.str.data;'''
 assert s.count(a) == 1, 'B anchor'
 s = s.replace(a, '''    if (idx < 0 || idx >= len) px_error("R1003: bytes_set 下标越界");   /* M189-NC-B */

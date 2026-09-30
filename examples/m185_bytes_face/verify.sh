@@ -158,9 +158,11 @@ chk "[3] 无 fd 泄漏（fd 增量 = 0）" "grep -qE '^C2 fddelta= 0\$' $W/rend.
 chk "[3] 200 次 join 结果仍正确（len=13）" "grep -qE '^C1 len= 13\$' $W/rend.interp.out && grep -qE '^C1 len= 13\$' $W/rend.c.out"
 
 echo "=== [4] 拒绝侧 4 例 × 三轨：rc≠0 + 词条逐字相同"
+# ⚠️ M230（第 108 轮 · 缺陷 345）：负索引越界的消息改报**用户输入的原值**（原报归一化后的位置）
+#   ⇒ `bytes("ab")[-5]` 由「索引越界: -3」变为「索引越界: -5」。本表**移位**，不是删除。
 declare -A PAT=(
   [oob]='索引越界: 5 \(len=2\)'
-  [oobneg]='索引越界: -3 \(len=2\)'
+  [oobneg]='索引越界: -5 \(len=2\)'
   [badidx]='索引必须是整数，实际是 string'
   [ueok]='unwrap_err 失败: Ok\(\{a: 1\}\)'
 )
@@ -178,6 +180,15 @@ for c in oob oobneg badidx ueok; do
     [ -n "$e1" ] && [ "$e1" = "$e2" ] && [ "$e1" = "$e3" ] || ok=0
     chk "[4] $c：三轨 rc≠0 + 词条一致「$e1」" "[ $ok = 1 ]"
 done
+
+# ── M230（第 108 轮 · 缺陷 345）强化判据：**反向**钉住「归一化值不得再出现」──
+# 只把 PAT 表里的期望值改掉，只能证明「现在是 -5」；钉不住缺陷 345 的精确形状。
+ok345=1
+for t in interp vm c; do
+    grep -qE '索引越界: -5 \(len=2\)' "$W/n_oobneg.$t.out" || ok345=0
+    if grep -qE '索引越界: -3 \(len=2\)' "$W/n_oobneg.$t.out"; then ok345=0; fi
+done
+chk "[4] oobneg：三轨均报**原值** -5 且无归一化 -3（缺陷 345）" "[ $ok345 = 1 ]"
 
 echo
 if [ "$NEG" = 1 ]; then
