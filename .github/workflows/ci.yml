@@ -746,6 +746,13 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m231.log | tail -20
           echo "✅ m231_op_matrix verify（315 例 × 3 轨 = 945 次 · 跨轨 0 · MODEL 双向 · 形状 12/12）PASS"
 
+      - name: m232_truthiness（真值性表 + 短路族全量对拍 · 46 例）
+        if: always()
+        run: |
+          bash examples/m232_truthiness/verify.sh --neg-skip > /tmp/v_m232.log 2>&1 || { echo "❌ m232_truthiness verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m232.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m232.log | tail -20
+          echo "✅ m232_truthiness verify（46 例 × 3 轨 · 真值性 5 个观察点 · 源码派生「专门分支集逐个相等」· 逐轨 MODEL 双向 · 形状层）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

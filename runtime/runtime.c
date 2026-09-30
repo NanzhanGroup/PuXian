@@ -3341,6 +3341,11 @@ bool px_is_truthy(LXValue v) {
         case PX_BYTES: return v.as.obj->as.str.len > 0;
         case PX_LIST: return v.as.obj->as.list.len > 0;
         case PX_DICT: return v.as.obj->as.dict.len > 0;
+        // M232（缺陷 347）：`tuple` 与 `list` 同族（同一 `len > 0` 判据）。
+        //   修前此处**没有 case** ⇒ 落到 `default: return true` ⇒ `()` 在编译两轨
+        //   被判为**真**，而解释轨（`ival.px` 的 `i_truthy` 有 `tuple` 分支）判**假**
+        //   ⇒ 三轨分叉。与 `i_truthy` 缺 `bytes` 分支是**同一个形状的两个方向**。
+        case PX_TUPLE: return v.as.obj->as.tuple.len > 0;
         default: return true;
     }
 }

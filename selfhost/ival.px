@@ -141,6 +141,13 @@ def i_truthy(v):
         return false
     if t == "string":
         return len(v) > 0
+    # M232（缺陷 347）：`bytes` 与 `string` 同族（同一 `ln > 0` 判据）。
+    #   修前此处**没有分支** ⇒ 落到末尾兜底 `return true` ⇒ `bytes("")` 在解释轨
+    #   被判为**真**，而编译两轨（runtime `px_is_truthy` 的 `PX_BYTES` 分支）判**假**
+    #   ⇒ 三轨分叉。真值性是 `if`/`while`/`not`/`and`/`or`/`bool()` 的**公共基础**，
+    #   一处漏分支会在所有这些门上同时错。
+    if t == "bytes":
+        return len(v) > 0
     if t == "list":
         return len(v) > 0
     if t == "dict":
