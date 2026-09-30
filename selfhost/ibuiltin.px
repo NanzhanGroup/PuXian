@@ -16,6 +16,23 @@
 # 交用户 .is_err()/`?` 处理（与 http_get 既有分支、编译模式行为一致）。
 def i_call_c_net(v):
     return Ok(v)
+# M233（第 111 轮 · 缺陷 351）：**解释轨的「标记字典」表示泄漏**。
+#   解释轨把 struct / enum / function / native / type / generator 表示为**带标记的 dict**
+#   （`__struct__` / `__enum__` / `__ufn__` / `__builtin__` / `__typeref__` / `__gen__`）。
+#   宿主 native 侧的「任意值 ⇒ 其 str() 形态」兜底（runtime `px_cstr_any`）看到的就是
+#   一个**普通字典** ⇒ 渲染成 `{__enum__: E1.A, payload: null, variant: A}`；对 function
+#   更糟 —— 会把**整个闭包**（含全部内置名与函数体 AST）渲成十几 KB 文本。
+#   而编译两轨渲染成 `E1.A` / `<fn userfn>` ⇒ **三轨分叉**（实测 `sha256`/`md5`/
+#   `base64_encode`/`ord`/`bytes_to_hex` 五族 × 3 类型 = 15 例）。
+#   修法：**文本语义接口**（`docs/ERROR_CODES.md` §6.5 豁免表）的实参在交给宿主 native 前，
+#   先把标记值规范化为 `i_to_str(v)`（= 编译轨的渲染）⇒ 三轨同源。
+#   ⚠️ **只对文本语义接口**做这一步：`json_stringify(dict)` / `len(struct)` 等**数据语义**
+#      接口必须拿到原值，规范化会改变它们的语义。
+def i_cstr_arg(v):
+    let t = i_type_name(v)
+    if t == "function" or t == "native" or t == "struct" or t == "enum" or t == "type" or t == "generator":
+        return i_to_str(v)
+    return v
 def i_call_builtin(name, args, pos):
     # ---- 值感知类 ----
     if name == "print":
@@ -460,7 +477,7 @@ def i_call_builtin(name, args, pos):
         # M45：完整性哈希（lockfile 校验；runtime.c 已注册，pxi 直调）
         if len(args) != 1:
             return Err(i_r1002("sha256 需要一个参数", pos))
-        return Ok(sha256(args[0]))
+        return Ok(sha256(i_cstr_arg(args[0])))
     if name == "http_get":
         # M45：远程依赖下载（runtime.c 已注册，pxi 直调）
         if len(args) != 1:
@@ -791,7 +808,7 @@ def i_call_builtin(name, args, pos):
         # bytes_to_hex(b) → str（hex 小写）
         if len(args) != 1:
             return Err(i_r1002("bytes_to_hex 需要一个参数", pos))
-        return Ok(bytes_to_hex(args[0]))
+        return Ok(bytes_to_hex(i_cstr_arg(args[0])))
     if name == "hex_to_bytes":
         # hex_to_bytes(s) → bytes|null
         if len(args) != 1:
@@ -816,7 +833,7 @@ def i_call_builtin(name, args, pos):
         # base64_encode(s) → str（字符串 base64）
         if len(args) != 1:
             return Err(i_r1002("base64_encode 需要一个参数", pos))
-        return Ok(base64_encode(args[0]))
+        return Ok(base64_encode(i_cstr_arg(args[0])))
     if name == "base64_decode":
         # base64_decode(s) → str|null
         if len(args) != 1:
@@ -989,7 +1006,7 @@ def i_call_builtin(name, args, pos):
         # ord(s) → int（M133：首字符码点；空串 0；非法 UTF-8 → 0xFFFD）
         if len(args) != 1:
             return Err(i_r1002("ord 需要一个字符串参数", pos))
-        return Ok(ord(args[0]))
+        return Ok(ord(i_cstr_arg(args[0])))
     if name == "chr":
         # chr(n) → str（M133：码点 → UTF-8；非法码点 → U+FFFD）
         if len(args) != 1:
@@ -1052,7 +1069,7 @@ def i_call_builtin(name, args, pos):
         # md5(data) → 32 字符小写 hex
         if len(args) != 1:
             return Err(i_r1002("md5 需要一个参数 (data)", pos))
-        return Ok(md5(args[0]))
+        return Ok(md5(i_cstr_arg(args[0])))
     if name == "md5_bytes":
         # md5_bytes(data) → 16 字节
         if len(args) != 1:

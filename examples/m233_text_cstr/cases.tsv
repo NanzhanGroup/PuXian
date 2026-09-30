@@ -1,0 +1,126 @@
+idx	tag	func	arg	expr	align
+0	sha256__int_0	sha256	int_0	0	YES
+1	sha256__int_7	sha256	int_7	7	YES
+2	sha256__int_neg	sha256	int_neg	0 - 7	YES
+3	sha256__float_0	sha256	float_0	0.0	YES
+4	sha256__float_15	sha256	float_15	1.5	YES
+5	sha256__float_neg	sha256	float_neg	0.0 - 1.5	YES
+6	sha256__str_empty	sha256	str_empty	""	YES
+7	sha256__str_ab	sha256	str_ab	"ab"	YES
+8	sha256__str_cjk	sha256	str_cjk	"中文"	YES
+9	sha256__bytes_ab	sha256	bytes_ab	bytes("ab")	NO
+10	sha256__bytes_empty	sha256	bytes_empty	bytes("")	NO
+11	sha256__bool_t	sha256	bool_t	true	YES
+12	sha256__bool_f	sha256	bool_f	false	YES
+13	sha256__null_v	sha256	null_v	null	YES
+14	sha256__list_1	sha256	list_1	[1]	YES
+15	sha256__list_empty	sha256	list_empty	[]	YES
+16	sha256__dict_a1	sha256	dict_a1	{"a": 1}	YES
+17	sha256__dict_empty	sha256	dict_empty	{}	YES
+18	sha256__tuple_1	sha256	tuple_1	(1,)	YES
+19	sha256__tuple_empty	sha256	tuple_empty	()	YES
+20	sha256__result_ok	sha256	result_ok	Ok(1)	YES
+21	sha256__result_err	sha256	result_err	Err("e")	YES
+22	sha256__enum_a	sha256	enum_a	E1.A	YES
+23	sha256__struct_v	sha256	struct_v	S1(1)	YES
+24	sha256__fn_v	sha256	fn_v	userfn	YES
+25	md5__int_0	md5	int_0	0	YES
+26	md5__int_7	md5	int_7	7	YES
+27	md5__int_neg	md5	int_neg	0 - 7	YES
+28	md5__float_0	md5	float_0	0.0	YES
+29	md5__float_15	md5	float_15	1.5	YES
+30	md5__float_neg	md5	float_neg	0.0 - 1.5	YES
+31	md5__str_empty	md5	str_empty	""	YES
+32	md5__str_ab	md5	str_ab	"ab"	YES
+33	md5__str_cjk	md5	str_cjk	"中文"	YES
+34	md5__bytes_ab	md5	bytes_ab	bytes("ab")	NO
+35	md5__bytes_empty	md5	bytes_empty	bytes("")	NO
+36	md5__bool_t	md5	bool_t	true	YES
+37	md5__bool_f	md5	bool_f	false	YES
+38	md5__null_v	md5	null_v	null	YES
+39	md5__list_1	md5	list_1	[1]	YES
+40	md5__list_empty	md5	list_empty	[]	YES
+41	md5__dict_a1	md5	dict_a1	{"a": 1}	YES
+42	md5__dict_empty	md5	dict_empty	{}	YES
+43	md5__tuple_1	md5	tuple_1	(1,)	YES
+44	md5__tuple_empty	md5	tuple_empty	()	YES
+45	md5__result_ok	md5	result_ok	Ok(1)	YES
+46	md5__result_err	md5	result_err	Err("e")	YES
+47	md5__enum_a	md5	enum_a	E1.A	YES
+48	md5__struct_v	md5	struct_v	S1(1)	YES
+49	md5__fn_v	md5	fn_v	userfn	YES
+50	base64_encode__int_0	base64_encode	int_0	0	YES
+51	base64_encode__int_7	base64_encode	int_7	7	YES
+52	base64_encode__int_neg	base64_encode	int_neg	0 - 7	YES
+53	base64_encode__float_0	base64_encode	float_0	0.0	YES
+54	base64_encode__float_15	base64_encode	float_15	1.5	YES
+55	base64_encode__float_neg	base64_encode	float_neg	0.0 - 1.5	YES
+56	base64_encode__str_empty	base64_encode	str_empty	""	YES
+57	base64_encode__str_ab	base64_encode	str_ab	"ab"	YES
+58	base64_encode__str_cjk	base64_encode	str_cjk	"中文"	YES
+59	base64_encode__bytes_ab	base64_encode	bytes_ab	bytes("ab")	NO
+60	base64_encode__bytes_empty	base64_encode	bytes_empty	bytes("")	NO
+61	base64_encode__bool_t	base64_encode	bool_t	true	YES
+62	base64_encode__bool_f	base64_encode	bool_f	false	YES
+63	base64_encode__null_v	base64_encode	null_v	null	YES
+64	base64_encode__list_1	base64_encode	list_1	[1]	YES
+65	base64_encode__list_empty	base64_encode	list_empty	[]	YES
+66	base64_encode__dict_a1	base64_encode	dict_a1	{"a": 1}	YES
+67	base64_encode__dict_empty	base64_encode	dict_empty	{}	YES
+68	base64_encode__tuple_1	base64_encode	tuple_1	(1,)	YES
+69	base64_encode__tuple_empty	base64_encode	tuple_empty	()	YES
+70	base64_encode__result_ok	base64_encode	result_ok	Ok(1)	YES
+71	base64_encode__result_err	base64_encode	result_err	Err("e")	YES
+72	base64_encode__enum_a	base64_encode	enum_a	E1.A	YES
+73	base64_encode__struct_v	base64_encode	struct_v	S1(1)	YES
+74	base64_encode__fn_v	base64_encode	fn_v	userfn	YES
+75	ord__int_0	ord	int_0	0	YES
+76	ord__int_7	ord	int_7	7	YES
+77	ord__int_neg	ord	int_neg	0 - 7	YES
+78	ord__float_0	ord	float_0	0.0	YES
+79	ord__float_15	ord	float_15	1.5	YES
+80	ord__float_neg	ord	float_neg	0.0 - 1.5	YES
+81	ord__str_empty	ord	str_empty	""	YES
+82	ord__str_ab	ord	str_ab	"ab"	YES
+83	ord__str_cjk	ord	str_cjk	"中文"	YES
+84	ord__bytes_ab	ord	bytes_ab	bytes("ab")	NO
+85	ord__bytes_empty	ord	bytes_empty	bytes("")	NO
+86	ord__bool_t	ord	bool_t	true	YES
+87	ord__bool_f	ord	bool_f	false	YES
+88	ord__null_v	ord	null_v	null	YES
+89	ord__list_1	ord	list_1	[1]	YES
+90	ord__list_empty	ord	list_empty	[]	YES
+91	ord__dict_a1	ord	dict_a1	{"a": 1}	YES
+92	ord__dict_empty	ord	dict_empty	{}	YES
+93	ord__tuple_1	ord	tuple_1	(1,)	YES
+94	ord__tuple_empty	ord	tuple_empty	()	YES
+95	ord__result_ok	ord	result_ok	Ok(1)	YES
+96	ord__result_err	ord	result_err	Err("e")	YES
+97	ord__enum_a	ord	enum_a	E1.A	YES
+98	ord__struct_v	ord	struct_v	S1(1)	YES
+99	ord__fn_v	ord	fn_v	userfn	YES
+100	bytes_to_hex__int_0	bytes_to_hex	int_0	0	YES
+101	bytes_to_hex__int_7	bytes_to_hex	int_7	7	YES
+102	bytes_to_hex__int_neg	bytes_to_hex	int_neg	0 - 7	YES
+103	bytes_to_hex__float_0	bytes_to_hex	float_0	0.0	YES
+104	bytes_to_hex__float_15	bytes_to_hex	float_15	1.5	YES
+105	bytes_to_hex__float_neg	bytes_to_hex	float_neg	0.0 - 1.5	YES
+106	bytes_to_hex__str_empty	bytes_to_hex	str_empty	""	YES
+107	bytes_to_hex__str_ab	bytes_to_hex	str_ab	"ab"	YES
+108	bytes_to_hex__str_cjk	bytes_to_hex	str_cjk	"中文"	YES
+109	bytes_to_hex__bytes_ab	bytes_to_hex	bytes_ab	bytes("ab")	NO
+110	bytes_to_hex__bytes_empty	bytes_to_hex	bytes_empty	bytes("")	NO
+111	bytes_to_hex__bool_t	bytes_to_hex	bool_t	true	YES
+112	bytes_to_hex__bool_f	bytes_to_hex	bool_f	false	YES
+113	bytes_to_hex__null_v	bytes_to_hex	null_v	null	YES
+114	bytes_to_hex__list_1	bytes_to_hex	list_1	[1]	YES
+115	bytes_to_hex__list_empty	bytes_to_hex	list_empty	[]	YES
+116	bytes_to_hex__dict_a1	bytes_to_hex	dict_a1	{"a": 1}	YES
+117	bytes_to_hex__dict_empty	bytes_to_hex	dict_empty	{}	YES
+118	bytes_to_hex__tuple_1	bytes_to_hex	tuple_1	(1,)	YES
+119	bytes_to_hex__tuple_empty	bytes_to_hex	tuple_empty	()	YES
+120	bytes_to_hex__result_ok	bytes_to_hex	result_ok	Ok(1)	YES
+121	bytes_to_hex__result_err	bytes_to_hex	result_err	Err("e")	YES
+122	bytes_to_hex__enum_a	bytes_to_hex	enum_a	E1.A	YES
+123	bytes_to_hex__struct_v	bytes_to_hex	struct_v	S1(1)	YES
+124	bytes_to_hex__fn_v	bytes_to_hex	fn_v	userfn	YES
