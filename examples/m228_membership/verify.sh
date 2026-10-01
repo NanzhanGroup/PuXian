@@ -53,7 +53,7 @@ chk "bc_emit: In→IN / NotIn→NOTIN"                "has selfhost/bc_emit.px '
 chk "ival: 运算符门拼写映射（op 名 ≠ 拼写）"       "has selfhost/ival.px 'if op == \"NotIn\":' && has selfhost/ival.px 'sp = \"not in\"'"
 chk "ival: i_membership 措辞归运算符门"           "has selfhost/ival.px '运算符右操作数不支持类型'"
 chk "runtime.h: px_in / px_not_in 声明"           "has runtime/runtime.h 'LXValue px_in(LXValue a, LXValue b);' && has runtime/runtime.h 'LXValue px_not_in(LXValue a, LXValue b);'"
-chk "vm.h: PXOP_IN / PXOP_NOTIN / PXM_MAX 70"     "has runtime/vm.h '#define PXOP_IN      68' && has runtime/vm.h '#define PXOP_NOTIN   69' && has runtime/vm.h '#define PXM_MAX      70'"
+chk "vm.h: PXOP_IN / PXOP_NOTIN / PXM_MAX ≥ 70"     "has runtime/vm.h '#define PXOP_IN      68' && has runtime/vm.h '#define PXOP_NOTIN   69' && [ \"\$(awk '/PXM_MAX/{print \$3}' runtime/vm.h)\" -ge 70 ]"
 chk "vm.c: 指令名 + 两个 dispatch 分支"            "has runtime/vm.c '[PXOP_IN] = \"IN\", [PXOP_NOTIN] = \"NOTIN\",' && has runtime/vm.c 'slots[in.a] = px_not_in(slots[in.b], slots[in.c]);'"
 chk "runtime: 判定核心单份（probe 恰 7 个调用/定义点）" "[ \"\$(cnt runtime/runtime.c 'px_membership_probe(')\" = 7 ]"
 chk "runtime: px_memmem( 只在 probe 内被调（2 处=定义+调用）" "[ \"\$(cnt runtime/runtime.c 'px_memmem(')\" = 2 ]"

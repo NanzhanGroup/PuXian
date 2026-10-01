@@ -910,7 +910,8 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             if (!mm || in.b >= (uint16_t)mm->nN)
                 px_error("R9001: VM %s:%d RAISE 名字越界 b=%d (nN=%d)",
                          cf->name, fr->line, in.b, mm ? mm->nN : -1);
-            px_error("%s", mm->N[in.b]);
+            const char *errmsg = mm->N[in.b];
+            px_error("%s", errmsg);
             break;
         }
         // NEWGEN（B3，M34 惰性生成器）：a=dst，b=seq 槽，c=2 连续槽基址

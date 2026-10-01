@@ -67,6 +67,11 @@ FORWARD_EXEMPT = {
         {"pat": r'px_error\(\s*"%s"\s*,\s*errmsg\)',
          "why": "透传 px_native_call_capture 的 errbuf —— 上游 native 的错误消息已带 R 码或域前缀"},
     ],
+    "runtime/vm.c": [
+        {"pat": r'px_error\(\s*"%s"\s*,\s*errmsg\)',
+         "why": "透传 PXOP_RAISE 携带的语言层消息 —— 编译期已生成、已带 R 码或域前缀；"
+                "三轨同阶段的运行期形态（M237 缺陷 366/368）"},
+    ],
 }
 EXEMPT_LINES = {}   # path → set(行号)；由「判据 ⑤」按内容锚定后填充，供 check_sites 查询
 
@@ -162,9 +167,9 @@ for path, items in FORWARD_EXEMPT.items():
         hits_all += hits
         EXEMPT_TOTAL += 1
     EXEMPT_LINES[path] = set(hits_all)
-print("── [S4] 转发豁免合计 %d（棘轮：不得多于登记数 1）──" % EXEMPT_TOTAL)
-if EXEMPT_TOTAL > 1:
-    fails.append("转发豁免条目变多：%d > 登记数 1" % EXEMPT_TOTAL)
+print("── [S4] 转发豁免合计 %d（棘轮：不得多于登记数 2）──" % EXEMPT_TOTAL)
+if EXEMPT_TOTAL > 2:
+    fails.append("转发豁免条目变多：%d > 登记数 2" % EXEMPT_TOTAL)
 
 
 CFILES = sorted(f for f in os.listdir(os.path.join(ROOT, "runtime")) if f.endswith(".c"))
