@@ -939,6 +939,8 @@ run m122 bash examples/m122_builtin_args/verify.sh
 run pkg_guard_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
 run pkg_make_release bash packaging/selftest_make_release.sh
 run pkg_tag_guard bash packaging/selftest_tag_guard.sh
+# M238：镜像器判据离线自测（原来**从未注册** ⇒ 只在我手动跑时有效 —— 缺陷 375 同族）
+run pkg_pxrepo_mirror bash packaging/selftest_pxrepo_mirror.sh
 # M168（用户报障）：安装脚本的发行版矩阵（openEuler 认脸 + 字面目录 + 不支持组合给替代路线）
 run pkg_install_rpm bash packaging/selftest_install_rpm.sh
 # M168：**二进制可移植性门** —— 入库件必须全静态（动态件在老 glibc 上"装得上跑不起来"）

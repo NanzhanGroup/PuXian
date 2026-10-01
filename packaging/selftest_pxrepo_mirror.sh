@@ -111,5 +111,41 @@ else
   echo "❌ ③ 期望「 index.html」，实得「$o」"; FAIL=$((FAIL+1))
 fi
 
+echo "== tag 命名护栏（抽取自 $SCRIPT 的 tag-name-guard 段）=="
+# 背景：2026-10-01 我方误打 v0.2.0-m237s3 ⇒ ① 版本序正则把它**静默过滤**（镜像停在旧版、
+#   无任何告警）② build_rpm.sh 的 MILESTONE 取短横线之后整段 ⇒ rpm 包名被污染成
+#   0.2.0-1.m237s3。此判据保证「不合规 tag 必须响亮」。
+BLOCK3="$W/tagname.sh"
+cat > "$BLOCK3" <<'HDR'
+ALLTAGS="${ALLTAGS:-}"
+log() { printf '   [log] %s\n' "$*"; }
+die() { printf '   [die] %s\n' "$*"; exit 1; }
+HDR
+sed -n '/^# >>> tag-name-guard >>>/,/^# <<< tag-name-guard <<<$/p' "$SCRIPT" >> "$BLOCK3"
+grep -q 'BADTAGS=' "$BLOCK3" || { echo "❌ 抽取失败：$SCRIPT 里的 tag-name-guard 标记行缺失或被改"; exit 2; }
+
+chk_tag() { # $1=用例名 $2=ALLTAGS $3=期望rc $4=必须含(可空) $5=必须不含(可空) $6=STRICT
+  local out rc ok=1
+  out="$(ALLTAGS="$2" PXREPO_STRICT_TAGS="${6:-0}" bash "$BLOCK3" 2>&1)"; rc=$?
+  [ "$rc" = "$3" ] || ok=0
+  if [ -n "$4" ]; then printf '%s' "$out" | grep -q "$4" || ok=0; fi
+  if [ -n "$5" ]; then printf '%s' "$out" | grep -q "$5" && ok=0; fi
+  if [ "$ok" = 1 ]; then echo "✅ $1（rc=$rc）"; PASS=$((PASS+1))
+  else echo "❌ $1（rc=$rc 期望 $3；输出: $(printf '%s' "$out" | tr '\n' ' ')）"; FAIL=$((FAIL+1)); fi
+}
+
+chk_tag "F1 全合规 tag → 无告警" 'v0.2.0-m236
+v0.2.0-m237' 0 '' '不符合命名规则'
+chk_tag "F2 含 v0.2.0-m237s3 → 响亮列出（默认不拦）" 'v0.2.0-m236
+v0.2.0-m237
+v0.2.0-m237s3' 0 'v0.2.0-m237s3' ''
+chk_tag "F3 同上 + PXREPO_STRICT_TAGS=1 → 拒绝继续" 'v0.2.0-m236
+v0.2.0-m237s3' 1 '拒绝继续' '' 1
+chk_tag "F4 全合规 + STRICT=1 → 仍放行" 'v0.2.0-m236' 0 '' '拒绝继续'
+
+mk_repo e "puxian-0.2.0-1.m237s3.el9.x86_64.rpm"
+tip_msg e "rpm: 发布 PuXian v0.2.0-m237"
+check "G rpm 树含违规标记(.m237s3.) → 拦住且**指名**不合规" 1 "不合规" "$W/e" "v0.2.0-m237"
+
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
 [ "$FAIL" = 0 ] || exit 1

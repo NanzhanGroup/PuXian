@@ -47,7 +47,7 @@ usage() {
     cat >&2 <<'USAGE'
 用法: tag_guard.sh [--ref <提交>] [--repo <仓库目录>] [--grace-min N]
                     [--tag-glob 'v*-m*'] [--quiet]
-退出码: 0=通过（或 grace 跳过） · 1=缺 tag · 2=参数/环境错误
+退出码: 0=通过（或 grace 跳过） · 1=缺 tag · 2=参数/环境错误 · 3=tag 命名不合规
 USAGE
 }
 
@@ -104,6 +104,58 @@ TOP=$(printf '%s\n' "$MILESTONES" | grep -E '^[0-9]+$' | sort -n | tail -1)
 if [ -z "${TOP:-}" ]; then
     echo "❌ $CHANGELOG_PATH 标题行里没有任何 M<NNN> 里程碑（无事实源，无法判定）" >&2
     exit 2
+fi
+
+# ------------------------------------------------------------
+# ③ tag 命名合规（M238 · 用户令 2026-10-01）
+# ------------------------------------------------------------
+# 规则（唯一，与 docs/RELEASE_PROCESS.md 一致）：v<主版本>-m<里程碑>，例 v0.2.0-m167。
+#   **没有补丁后缀**。补丁轮的正确做法 = 把**同一个合规 tag** 指向该里程碑的最终提交
+#   （tag 已推过 ⇒ `git push --force origin <commit>:refs/tags/<tag>` 重定向；
+#    ⚠ 不要删 tag 再建 —— GitHub 会把对应 Release 转成草稿）。
+# 为什么这不是「风格问题」—— 违规 tag 会让**发布链静默失效**（2026-10-01 实测事故）：
+#   ① packaging/pxrepo_mirror.sh 的版本序正则（= 上面这条规则）把它**静默过滤**
+#      ⇒ 镜像永远停在旧版，**连 ❌ 都打不出来**；
+#   ② packaging/build_rpm.sh 的 MILESTONE 取短横线之后**整段** ⇒ rpm 包名被污染成
+#      puxian-0.2.0-1.m237s3.el9.x86_64.rpm ⇒ 与 gh-pages 的 `.mNNN.` 交叉校验失配。
+#   ⇒ 用户的 dnf 镜像因此停摆。故 **违规必须响亮**。
+TAG_NAME_RE='^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$'
+TAG_EXEMPT_FILE="${TAG_GUARD_EXEMPT:-$(dirname "$0")/tag_name_exempt.txt}"
+TAG_EXEMPT_LIST=""
+if [ -f "$TAG_EXEMPT_FILE" ]; then
+    TAG_EXEMPT_LIST="$(grep -vE '^[[:space:]]*(#|$)' "$TAG_EXEMPT_FILE" | awk '{print $1}' || true)"
+fi
+BAD_ALL=$(git tag -l 'v*' | grep -vE "$TAG_NAME_RE" | grep -v '^$' || true)
+if [ -n "$BAD_ALL" ]; then
+    if [ -n "$TAG_EXEMPT_LIST" ]; then
+        BAD_NEW=$(printf '%s\n' "$BAD_ALL" | grep -vxF "$TAG_EXEMPT_LIST" || true)
+    else
+        BAD_NEW="$BAD_ALL"
+    fi
+    N_NEW=$(printf '%s\n' "${BAD_NEW:-}" | grep -c . || true)
+    if [ "${N_NEW:-0}" -gt 0 ]; then
+        echo "❌ 存在 $N_NEW 个**未登记**的不合规 tag（规则：v<主版本>-m<里程碑>，例 v0.2.0-m167）" >&2
+        printf '%s\n' "$BAD_NEW" | sed 's/^/     · /' >&2
+        echo "   后果：pxrepo_mirror.sh 的版本序会静默过滤它们（镜像停在旧版、无任何告警），" >&2
+        echo "         且 build_rpm.sh 会把短横线之后整段当作 MILESTONE ⇒ rpm 包名被污染。" >&2
+        echo "   整改：把合规 tag 指向该里程碑的最终提交，再 git push origin --delete <违规 tag>。" >&2
+        exit 3
+    fi
+    N_ALL=$(printf '%s\n' "$BAD_ALL" | grep -c . || true)
+    say "ℹ️ 另有 ${N_ALL:-0} 个违规 tag 已登记豁免（历史遗留 · tag_name_exempt.txt，只减不增）"
+fi
+# 豁免表**过期条目**（表里有、tag 实际不存在）⇒ 判红：防「表里塞着不存在的条目」
+# 让豁免额度永久漂着，日后可能掩盖新违规。
+if [ -n "$TAG_EXEMPT_LIST" ]; then
+    EXPIRED=$(printf '%s\n' "$TAG_EXEMPT_LIST" | while IFS= read -r _t; do
+                  [ -n "$_t" ] || continue
+                  git rev-parse -q --verify "refs/tags/$_t" >/dev/null 2>&1 || printf '%s ' "$_t"
+              done)
+    if [ -n "${EXPIRED:-}" ]; then
+        echo "❌ tag_name_exempt.txt 有**过期条目**（tag 实际不存在）：$EXPIRED" >&2
+        echo "   整改：从豁免表删掉它们（豁免必须与实际一致，否则会掩盖新违规）。" >&2
+        exit 3
+    fi
 fi
 
 ALL_TAGS=$(git tag -l "$TAG_GLOB")
