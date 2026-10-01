@@ -910,6 +910,14 @@ run m234_bytes_family bash examples/m234_bytes_family/verify.sh
 #   ⚠️ 负控 A 要重编 runtime（≈5 min）⇒ 本地跑全量档，CI 用 --neg-skip。
 run m235_ws_conn_uaf bash examples/m235_ws_conn_uaf/verify.sh
 run m236_ws_stream bash examples/m236_ws_stream/verify.sh
+# M237（第 115 轮 · 缺陷 364–371）：**字段访问 / 构造 / 变体族**全量对拍（38 例）。
+#   主题：x.f / x.f = v / T(...) / E.V / E("V") 这一族从来没做过清单级全量对拍 —— 一量就
+#   照出 8 个编号：C 轨 Color("Red") SIGSEGV（365）· C 轨诊断文本逃逸到代码生成、产出非法 C
+#   （366）· 解释轨静默构造（367）· 变体不存在时静默造假值（368）· 枚举取字段值级/类型级
+#   措辞分叉（369）· d.f = v 读支持写不支持（370）· E(V) 四种行为（371）· spec 承诺的
+#   data enum parser 不认（364）。
+#   ⚠️ 负控 A/B/C 各要重编 runtime / 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
+run m237_field_enum bash examples/m237_field_enum/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

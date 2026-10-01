@@ -791,6 +791,16 @@ jobs:
           bash examples/m236_ws_stream/verify.sh --neg-skip > /tmp/v_m236.log 2>&1 || { echo "❌ m236_ws_stream verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m236.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^(   |── )' /tmp/v_m236.log | tail -20
           echo "✅ m236_ws_stream verify（三轨一致 C/VM/解释 · 元信息 path/header/peer · manual 两条路 · 拒绝侧 4 例 · 未注册路径落回普通 HTTP）PASS"
+      # M237（第 115 轮 · 缺陷 364–371）：**字段访问 / 构造 / 变体族**全量对拍（38 例）。
+      #   主题：x.f / x.f = v / T(...) / E.V / E("V") 这一族从来没做过清单级全量对拍 ——
+      #   一量就照出 8 个编号（含 C 轨 Color("Red") SIGSEGV、C 轨诊断文本逃逸到代码生成）。
+      #   本步跑 --neg-skip 档（负控 A/B/C 各要重编 runtime / 两轨驱动）⇒ 全量档实测 38/0。
+      - name: m237_field_enum（字段访问 / 构造 / 变体族 · 三轨一致 + 拒绝侧 + arity）
+        if: always()
+        run: |
+          bash examples/m237_field_enum/verify.sh --neg-skip > /tmp/v_m237.log 2>&1 || { echo "❌ m237_field_enum verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m237.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m237.log | tail -20
+          echo "✅ m237_field_enum verify（38 例 · 三轨一致 + 拒绝侧 + struct/enum/dict 字段族）PASS"
 
 
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
