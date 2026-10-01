@@ -100,6 +100,12 @@ def cg_uid():
     return cg_uidc
 def cg_tmp():
     return "_t" + str(cg_uid())
+# M239（第 116 轮）：match 绑定局部的**专用计数器** `_mbN` + 待声明表。
+#   为什么不用 cg_new_var（`_vN`）：绑定局部没有「声明语句」可挂（match 是表达式），
+#   需在语句表达式开头就地声明；且 `_vN` 编号被占用会顶掉后续编号 ⇒ 与本轮语义无关的大面积 diff
+#   （同 M165 cg_seq_uid / M166 cg_iter_len_tmp / M167 cg_unpack_tmp 的手法）。
+var cg_match_uid = 0
+var cg_match_decls = []
 def cg_iter_len_tmp():
     # M166（缺陷 176）：迭代长度快照的**专用计数器** —— 与 cg_tmp() 的 `_tN` 分开编号，
     #   使「迭代长度校验」之外的发射文本**一字不变**（否则每个 for 都会顶掉后续 _tN 编号，

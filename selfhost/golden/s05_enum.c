@@ -11,7 +11,7 @@ static LXValue fn_desc(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
     px_srcline(12);
-    _v2 = ({ LXValue _t4 = px_field(_v1, "kind"); if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Int") == 0)) { _t4 = ({ LXValue _blk = px_null(); _blk = px_add(px_str("int:"), px_call(px_get_global("str"), (LXValue[]){px_field(_v1, "value")}, 1)); _blk; }); } else if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Str") == 0)) { _t4 = ({ LXValue _blk = px_null(); _blk = px_str("str"); _blk; }); } else if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Call") == 0)) { _t4 = ({ LXValue _blk = px_null(); _blk = px_str("call"); _blk; }); } _t4; });
+    _v2 = ({ LXValue _t4 = px_field(_v1, "kind"); LXValue _t5 = px_null(); if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Int") == 0)) { _t5 = ({ LXValue _blk = px_null(); _blk = px_add(px_str("int:"), px_call(px_get_global("str"), (LXValue[]){px_field(_v1, "value")}, 1)); _blk; }); } else if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Str") == 0)) { _t5 = ({ LXValue _blk = px_null(); _blk = px_str("str"); _blk; }); } else if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Call") == 0)) { _t5 = ({ LXValue _blk = px_null(); _blk = px_str("call"); _blk; }); } else { px_match_fail(_t4); } _t5; });
     px_srcline(19);
     return _v2;
 px_err_3:
@@ -22,20 +22,20 @@ px_err_3:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
-    LXValue _v5 = px_uninit();
     LXValue _v6 = px_uninit();
-    LXValue px_err_7_val = px_null();
-    int px_err_7_proped = 0;
+    LXValue _v7 = px_uninit();
+    LXValue px_err_8_val = px_null();
+    int px_err_8_proped = 0;
     px_srcline(22);
-    _v5 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Int", 1), px_int(42LL)}, 2);
+    _v6 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Int", 1), px_int(42LL)}, 2);
     px_srcline(23);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v5}, 1)}, 1));
-    px_srcline(24);
-    _v6 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Call", 1), px_int(0LL)}, 2);
-    px_srcline(25);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v6}, 1)}, 1));
-px_err_7:
-    if (px_err_7_proped) return px_err_7_val;
+    px_srcline(24);
+    _v7 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Call", 1), px_int(0LL)}, 2);
+    px_srcline(25);
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v7}, 1)}, 1));
+px_err_8:
+    if (px_err_8_proped) return px_err_8_val;
     return px_null();
 }
 

@@ -166,7 +166,9 @@ typedef struct {
 //   修前 bc_emit 直接 panic ⇒ `px build` 编译期失败，而解释轨与 C 轨都是运行期
 //   ⇒ 三轨在「阶段」上分叉（同一条语义三种命运）。b=N[消息] ⇒ px_error(消息)。
 #define PXOP_RAISE   70
-#define PXM_MAX      71
+#define PXOP_MATCHFAIL 71 // M239：b=subject 槽 ⇒ px_match_fail（永不返回；match 非穷尽 ⇒ R1003）
+#define PXOP_MATCHTUP 72  // M239：a=dst(bool), b=subject 槽, c=期望元素个数（px_match_tuple）
+#define PXM_MAX      73
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

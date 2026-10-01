@@ -4,31 +4,31 @@
 
 static LXValue fn_closure_1(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue _v115 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v116 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v116 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v117 = (nargs > 1) ? args[1] : px_null();
     LXValue px_cerr_1_val = px_null();
     int px_cerr_1_proped = 0;
-    return ({ LXValue _blk = px_null(); _blk = px_add(_v115, _v116); _blk; });
+    return ({ LXValue _blk = px_null(); _blk = px_add(_v116, _v117); _blk; });
 px_cerr_1:
     if (px_cerr_1_proped) return px_cerr_1_val;
     return px_null();
 }
 static LXValue fn_closure_2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue _v117 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v118 = (nargs > 0) ? args[0] : px_null();
     LXValue px_cerr_2_val = px_null();
     int px_cerr_2_proped = 0;
-    return px_mul(_v117, _v117);
+    return px_mul(_v118, _v118);
 px_cerr_2:
     if (px_cerr_2_proped) return px_cerr_2_val;
     return px_null();
 }
 static LXValue fn_closure_3(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue _v118 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v119 = (nargs > 0) ? args[0] : px_null();
     LXValue px_cerr_3_val = px_null();
     int px_cerr_3_proped = 0;
-    return px_mul(_v118, _v118);
+    return px_mul(_v119, _v119);
 px_cerr_3:
     if (px_cerr_3_proped) return px_cerr_3_val;
     return px_null();
@@ -420,7 +420,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(56);
     _v108 = px_struct("Point", (char*[]){"x", "y"}, (LXValue[]){px_int(3LL), px_int(4LL)}, 2);
     px_srcline(57);
-    _v109 = ({ LXValue _t114 = px_index(_v107, px_int(0LL)); if ((_t114.type == PX_ENUM && strcmp(_t114.as.obj->as.enum_inst.variant, "Circle") == 0)) { _t114 = ({ LXValue _blk = px_null(); _blk = px_str("circle"); _blk; }); } else if ((_t114.type == PX_ENUM && strcmp(_t114.as.obj->as.enum_inst.variant, "Square") == 0)) { _t114 = ({ LXValue _blk = px_null(); _blk = px_str("square"); _blk; }); } _t114; });
+    _v109 = ({ LXValue _t114 = px_index(_v107, px_int(0LL)); LXValue _t115 = px_null(); if ((_t114.type == PX_ENUM && strcmp(_t114.as.obj->as.enum_inst.variant, "Circle") == 0)) { _t115 = ({ LXValue _blk = px_null(); _blk = px_str("circle"); _blk; }); } else if ((_t114.type == PX_ENUM && strcmp(_t114.as.obj->as.enum_inst.variant, "Square") == 0)) { _t115 = ({ LXValue _blk = px_null(); _blk = px_str("square"); _blk; }); } else { px_match_fail(_t114); } _t115; });
     px_srcline(62);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v109}, 1));
     px_srcline(63);

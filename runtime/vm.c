@@ -122,6 +122,7 @@ const char* px_op_name(int op) {
         [PXOP_UNINIT] = "UNINIT", [PXOP_CHKINIT] = "CHKINIT",
         [PXOP_IN] = "IN", [PXOP_NOTIN] = "NOTIN",
         [PXOP_RAISE] = "RAISE",
+        [PXOP_MATCHFAIL] = "MATCHFAIL", [PXOP_MATCHTUP] = "MATCHTUP",
         [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
         [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
@@ -914,6 +915,15 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             px_error("%s", errmsg);
             break;
         }
+        // MATCHFAIL（M239）：b=subject 槽 ⇒ px_match_fail（永不返回）。对齐 C 轨 px_match_fail(t)
+        //   与解释轨的 R1003 ⇒ 三轨同码同文（修前 C/VM 轨静默返回 subject 值）。
+        case PXOP_MATCHFAIL:
+            px_match_fail(slots[in.b]);
+            break;
+        // MATCHTUP（M239）：a=dst(bool)，b=subject 槽，c=期望元素个数（元组模式的结构判据）。
+        case PXOP_MATCHTUP:
+            slots[in.a] = px_bool(px_match_tuple(slots[in.b], (int)in.c));
+            break;
         // NEWGEN（B3，M34 惰性生成器）：a=dst，b=seq 槽，c=2 连续槽基址
         //   [transform(PX_FUNC), filter(PX_FUNC|null)] → px_gen_lazy（同 codegen 单 for
         //   GenExp：elt 恒为 transform 闭包，cond 有则 filter 闭包）。槽越界容错（防御）。

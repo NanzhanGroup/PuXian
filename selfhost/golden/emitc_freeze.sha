@@ -248,6 +248,7 @@ examples/m236_ws_stream/rej_method.px src=8f3d0cc29580ad07 rc=0 out=40ca1a31b7ce
 examples/m236_ws_stream/rej_path.px src=6d191911ed26abf2 rc=0 out=5d9364262788f2b501e6dd4198003020 err=e3b0c44298fc1c14
 examples/m236_ws_stream/srv.px src=8db1da303b41b596 rc=0 out=998a39af94307aaff87ed8ee2fd1f055 err=e3b0c44298fc1c14
 examples/m236_ws_stream/srv_manual.px src=5f66080253da2a3d rc=0 out=7686ab3ce344ef39a4e6911f4945f678 err=e3b0c44298fc1c14
+examples/m239_match_case/drv.px src=d0b89f47db722687 rc=0 out=321cc4c4619a068bb06fbdc5f93f55b7 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -416,15 +417,15 @@ selfhost/cases/s01_arith.px src=b91cbe2b8b21b80b rc=0 out=8c495a9fe830ac927cc23c
 selfhost/cases/s02_str.px src=34a259cd76c8f9e1 rc=0 out=f7adad261022eb6480f282b9effba4bc err=e3b0c44298fc1c14
 selfhost/cases/s03_collections.px src=eb9599b91288049e rc=0 out=62104cdb6f8b7626dd9cc2344d08a19d err=e3b0c44298fc1c14
 selfhost/cases/s04_ctrl.px src=940242dabac2b6e0 rc=0 out=b22316c5ab768da7e77e39f1b86aad7a err=e3b0c44298fc1c14
-selfhost/cases/s05_enum.px src=eebc0b932399a289 rc=0 out=7084564d2aec2a80cfab5f5cf05a033c err=e3b0c44298fc1c14
+selfhost/cases/s05_enum.px src=eebc0b932399a289 rc=0 out=81c1b67c68b155ba98b0d865d37b05c8 err=e3b0c44298fc1c14
 selfhost/cases/s06_result.px src=f0420aa4fcc252aa rc=0 out=17f205791957565d4c71ef3cba9a3c9f err=e3b0c44298fc1c14
 selfhost/cases/s07_interp.px src=de5875b378a9bdfb rc=0 out=b851b02cf590d3e522daa7f7cd1f88a5 err=e3b0c44298fc1c14
-selfhost/cases/s08_comprehensive.px src=69c5e5c9a9552133 rc=0 out=b470d585bbf5cf53815db7c2af7fc7d7 err=76bf3f4ca5192da2
+selfhost/cases/s08_comprehensive.px src=69c5e5c9a9552133 rc=0 out=ac531e4d3c86920260b6b0245fbde903 err=76bf3f4ca5192da2
 selfhost/cases/s09_unicode_edge.px src=d5c89d5282286f65 rc=0 out=be7c1bb9aa7dcea602d30015d1182bc3 err=e3b0c44298fc1c14
 selfhost/cases/s10_nullable.px src=522794f4a7e3a72a rc=0 out=305046eec6e00db5ffd7efbd8caab036 err=e3b0c44298fc1c14
 selfhost/cases/s11_generics.px src=6149d19f2979ec80 rc=0 out=b0a69ee7994301ac85b1011947feff12 err=e3b0c44298fc1c14
 selfhost/cases/s12_cffi.px src=064f9a659a8864c4 rc=0 out=2438087d32d2fa1d4c7425dc979a733f err=e3b0c44298fc1c14
-selfhost/cases/s13_langsugar.px src=7ee402ab6bc82713 rc=0 out=291e822d8ff2c1629101f05b38809f5c err=e3b0c44298fc1c14
+selfhost/cases/s13_langsugar.px src=7ee402ab6bc82713 rc=0 out=8ef4c4ccabdfd22dba02db6863bbbb6d err=e3b0c44298fc1c14
 selfhost/cases/s14_semver.px src=9dd54216d35d6384 rc=0 out=35674c002f4b904df0dafe6738a48844 err=e3b0c44298fc1c14
 selfhost/cases/s15_multiline.px src=cff70b7cba09d2ed rc=0 out=99f3dd3cf3cfc641e462dd5021300211 err=e3b0c44298fc1c14
 selfhost/cases/v01_value.px src=3b49797916ac6cb9 rc=0 out=159be666009d388e7444908c12e2fe35 err=e3b0c44298fc1c14

@@ -4083,6 +4083,21 @@ static char* px_fmt_value_n(LXValue v, int* out_len) {
     return px_fmt_value_raw_n(v, out_len);
 }
 static char* px_fmt_value(LXValue v) { int n; return px_fmt_value_n(v, &n); }
+
+// ==================== M239（第 116 轮）：match 非穷尽 + 元组模式 ====================
+// 见 runtime.h 的 M239 段。两条判据供 **C 轨与 VM 轨共用**（解释轨对应 i_match_pattern）。
+LXValue px_match_fail(LXValue subj) {
+    int n = 0;
+    char* s = px_fmt_value_n(subj, &n);
+    px_error("R1003: match 未匹配任何分支（非穷尽）：%.*s", n, s);
+    return px_null();
+}
+// 对齐解释轨 i_match_pattern 的 PatTuple：subject ∈ {tuple, list} 且长度**恰等** ⇒ 1，否则 0。
+//   （长度不等 = 不匹配，不是错误 —— 与「响亮优于静默」不冲突：真正的兜底是全不匹配 ⇒ R1003。）
+int px_match_tuple(LXValue v, int n) {
+    if (v.type != PX_TUPLE && v.type != PX_LIST) return 0;
+    return ((int)px_len(v) == n) ? 1 : 0;
+}
 static char* px_fmt_value_raw_n(LXValue v, int* out_len) {
     RStrBuf b = {0};
     switch (v.type) {

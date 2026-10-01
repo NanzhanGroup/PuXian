@@ -845,50 +845,43 @@ def bc_emit_expr(expr, dst, func):
     if ty == "GenExp":
         return bc_emit_genexp(expr, dst, func)
     if ty == "Match":
-        # match subject { case pat: body ... } 表达式 → if-elif 链（对齐 cg Match：
-        #   d 初=subject，命中 arm body 覆写 d 并跳 end；全不命中 → 返回 subject）
+        # M239（第 116 轮）：四条收口（对齐 C 轨 cg_expr 的 Match 与解释轨 i_eval_expr）——
+        #   ① guard（arm[2]）已在位；② PatBinding 修前**不绑定**；③ PatTuple 修前只看 items[0]；
+        #   ④ 全不匹配修前**静默返回 subject 值** ⇒ 改 MATCHFAIL（R1003，三轨同码同文）。
+        #   绑定作用域 = 该 arm：绑定名走**新临时槽** + smap 快照还原 ⇒ 真遮蔽外层同名。
         var d = dst
         if d < 0:
             d = bc_tmp(func)
         let t = bc_tmp(func)
         bc_emit_expr(expr[1], t, func)
-        bc_emit_inst(func, "MOV", d, t, 0)
         let arms = expr[2]
         var pend = []
         var ai = 0
         while ai < len(arms):
             let arm = arms[ai]
-            let pcond = bc_match_cond(arm[1], t, func)
-            var skip = -1
-            var gskip = -1
-            if pcond == null:
-                # 恒真模式：无 pattern 跳转；guard（arm[2]）有则查 guard
-                if arm[2] != null:
-                    let gb = bc_tmp(func)
-                    bc_emit_expr(arm[2], gb, func)
-                    let gf = len(func["bc"])
-                    bc_emit_inst(func, "JMPF", gb, 0, 0)
-                    gskip = gf
-            else:
-                let jf = len(func["bc"])
-                bc_emit_inst(func, "JMPF", pcond, 0, 0)
-                skip = jf
-                if arm[2] != null:
-                    let gb = bc_tmp(func)
-                    bc_emit_expr(arm[2], gb, func)
-                    let gf = len(func["bc"])
-                    bc_emit_inst(func, "JMPF", gb, 0, 0)
-                    gskip = gf
+            var bn = []
+            bc_pattern_names(arm[1], bn)
+            let saved = bc_shadow_save(func, bn)
+            var jumps = []
+            bc_match_cond(arm[1], t, func, jumps)
+            if arm[2] != null:
+                let gb = bc_tmp(func)
+                bc_emit_expr(arm[2], gb, func)
+                let gf = len(func["bc"])
+                bc_emit_inst(func, "JMPF", gb, 0, 0)
+                jumps.append(gf)
             bc_emit_expr(arm[3], d, func)
             let jj = len(func["bc"])
             bc_emit_inst(func, "JMP", 0, 0, 0)
             let land = len(func["bc"])
-            if skip >= 0:
-                bc_patch_off(func, skip, land)
-            if gskip >= 0:
-                bc_patch_off(func, gskip, land)
+            var ji = 0
+            while ji < len(jumps):
+                bc_patch_off(func, jumps[ji], land)
+                ji += 1
             pend.append(jj)
+            bc_shadow_restore(func, saved)
             ai += 1
+        bc_emit_inst(func, "MATCHFAIL", 0, t, 0)
         let end = len(func["bc"])
         var pi = 0
         while pi < len(pend):
@@ -1361,29 +1354,103 @@ def bc_match_enumvar(vname, t, func):
     let eb = bc_tmp(func)
     bc_emit_inst(func, "EQ", eb, ev, ks)
     return eb
-def bc_match_cond(pattern, t, func):
+# M239：模式条件发射 —— 结果改为「往 jumps 里追加**失败即跳**的 JMPF 站点」，
+#   顺带在结构检查通过之后发射绑定 MOV（靠跳转顺序保证「元组结构不符则不绑定」）。
+#   绑定槽用 **bc_tmp**（新槽）而非 bc_slot ⇒ 真遮蔽外层同名（对齐解释轨 env_new / C 轨 cg_new_var）。
+def bc_bind_var(func, name, t):
+    let s = bc_tmp(func)
+    bc_emit_inst(func, "MOV", s, t, 0)
+    func["smap"][name] = s
+def bc_pattern_names(pattern, out):
+    let pty = pattern[0]
+    if pty == "PatBinding":
+        let name = rust_unescape(pattern[1])
+        if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
+            return
+        if not contains(out, name):
+            out.append(name)
+        return
+    if pty == "PatTuple":
+        var i = 0
+        while i < len(pattern[1]):
+            bc_pattern_names(pattern[1][i], out)
+            i += 1
+        return
+def bc_shadow_save(func, names):
+    var out = []
+    var i = 0
+    while i < len(names):
+        var s = -1
+        if func["smap"].has(names[i]):
+            s = func["smap"][names[i]]
+        out.append([names[i], s])
+        i += 1
+    return out
+def bc_shadow_restore(func, saved):
+    var i = 0
+    while i < len(saved):
+        let n = saved[i][0]
+        if saved[i][1] < 0:
+            if func["smap"].has(n):
+                func["smap"].remove(n)
+        else:
+            func["smap"][n] = saved[i][1]
+        i += 1
+def bc_match_cond(pattern, t, func, jumps):
     let pty = pattern[0]
     if pty == "PatWildcard":
-        return null
+        return
     if pty == "PatBinding":
         let name = rust_unescape(pattern[1])
         if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
             # 大写 → enum 变体名匹配（对齐 cg：变体名常量全大写惯例）
-            return bc_match_enumvar(name, t, func)
-        return null
+            # ⚠️ bc_match_enumvar 返回的是**槽号**（布尔结果槽），不是指令下标 ——
+            #   必须先发 JMPF，再把 JMPF 的**下标**入 jumps（M239 首版直接把槽号当下标 ⇒
+            #   bc_patch_off 去改一条无关指令的 b 字段，两个 case 因此分叉）。
+            let eb = bc_match_enumvar(name, t, func)
+            jumps.append(len(func["bc"]))
+            bc_emit_inst(func, "JMPF", eb, 0, 0)
+            return
+        bc_bind_var(func, name, t)
+        return
     if pty == "PatTuple":
         let items = pattern[1]
-        if len(items) > 0:
-            return bc_match_cond(items[0], t, func)
-        return null
+        let tb = bc_tmp(func)
+        bc_emit_inst(func, "MATCHTUP", tb, t, len(items))
+        let tj = len(func["bc"])
+        bc_emit_inst(func, "JMPF", tb, 0, 0)
+        jumps.append(tj)
+        var i = 0
+        while i < len(items):
+            let iv = bc_tmp(func)
+            bc_emit_inst(func, "IMM", iv, i, 0)
+            let ev = bc_tmp(func)
+            bc_emit_inst(func, "INDEX", ev, t, iv)
+            bc_match_cond(items[i], ev, func, jumps)
+            i += 1
+        return
     if pty == "PatConstructor":
-        return bc_match_enumvar(rust_unescape(pattern[1]), t, func)
+        let name = rust_unescape(pattern[1])
+        if len(pattern[2]) > 0:
+            # M239：**无载荷变体**带子模式 ⇒ 永不匹配（data enum 尚未支持；解释轨同口径）
+            let z = bc_tmp(func)
+            bc_emit_inst(func, "IMM", z, 0, 0)
+            let zj = len(func["bc"])
+            bc_emit_inst(func, "JMPF", z, 0, 0)
+            jumps.append(zj)
+            return
+        let eb2 = bc_match_enumvar(name, t, func)
+        jumps.append(len(func["bc"]))
+        bc_emit_inst(func, "JMPF", eb2, 0, 0)
+        return
     if pty == "PatLiteral":
         let ev = bc_tmp(func)
         bc_emit_expr(pattern[1], ev, func)
         let eb = bc_tmp(func)
         bc_emit_inst(func, "EQ", eb, t, ev)
-        return eb
+        jumps.append(len(func["bc"]))
+        bc_emit_inst(func, "JMPF", eb, 0, 0)
+        return
     panic("bc_match_cond 未知 pattern: " + str(pattern))
 # ---------- B1：赋值目标发射（Assign/复合赋值 目标 ∈ Var/Index/Field） ----------
 # 复合赋值语义：先读目标旧值 → 求值 rhs → 二元运算 → 写回（对齐 cg_assign_op_*）
