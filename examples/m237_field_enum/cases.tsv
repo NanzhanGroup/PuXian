@@ -1,0 +1,52 @@
+例号	接收者	操作	形状	期望种类	期望	组
+read_struct_ok	struct	read	ok	VAL	1	A
+read_struct_ok2	struct	read	ok	VAL	2	A
+read_struct_miss	struct	read	miss	ERR	R1008|结构体没有字段 'z'	A
+read_dict_ok	dict	read	ok	VAL	1	A
+read_dict_miss	dict	read	miss	ERR	R1008|字典没有键 'z'	A
+read_enum_recv	enum	read	recv	ERR	R1007|没有字段 'x'	A
+read_int	int	read	recv	ERR	R1007|类型 int 没有字段 'x'	A
+read_str	string	read	recv	ERR	R1007|类型 string 没有字段 'x'	A
+read_list	list	read	recv	ERR	R1007|类型 list 没有字段 'x'	A
+read_bool	bool	read	recv	ERR	R1007|类型 bool 没有字段 'x'	A
+read_float	float	read	recv	ERR	R1007|类型 float 没有字段 'x'	A
+read_tuple	tuple	read	recv	ERR	R1007|类型 tuple 没有字段 'x'	A
+read_bytes	bytes	read	recv	ERR	R1007|类型 bytes 没有字段 'x'	A
+read_result	result	read	recv	ERR	R1007|没有字段 'x'	A
+read_null	null	read	recv	ERR	R1007|没有字段 'x'	A
+write_struct_ok	struct	write	ok	VAL	9	A
+write_struct_ob	struct	write	ok	VAL	2	A
+write_struct_new	struct	write	new	ERR	R1008|结构体没有字段 'z'	A
+write_dict_ok	dict	write	ok	VAL	9	A
+write_dict_new	dict	write	new	VAL	7	A
+write_dict_ob	dict	write	ok	VAL	1	A
+write_enum	enum	write	recv	ERR	R1002|类型 enum 不支持字段赋值	A
+write_int	int	write	recv	ERR	R1002|不支持字段赋值	A
+write_str	string	write	recv	ERR	R1002|不支持字段赋值	A
+write_list	list	write	recv	ERR	R1002|不支持字段赋值	A
+write_null	null	write	recv	ERR	R1002|不支持字段赋值	A
+optread_struct_ok	struct	optread	ok	VAL	1	A
+optread_struct_miss	struct	optread	miss	ERR	R1008|结构体没有字段 'z'	A
+optread_dict_ok	dict	optread	ok	VAL	1	A
+optread_dict_miss	dict	optread	miss	ERR	R1008|字典没有键 'z'	A
+optread_null	null	optread	recv	VAL	null	A
+variant_ok	enum	variant	ok	VAL	Color.Red	A
+variant_ok2	enum	variant	ok	VAL	Color.Green	A
+variant_miss	enum	variant	miss	ERR	R1008|枚举 Color 没有变体 'Nope'	A
+variant_lower	enum	variant	case	ERR	R1008|没有变体 'red'	A
+variant_eq	enum	variant	ok	VAL	true	A
+variant_ne	enum	variant	ok	VAL	false	A
+variant_str	enum	variant	ok	VAL	Red	A
+ctor_struct_ok	struct	ctor	ok	VAL	<struct Point>	A
+ctor_struct_lenient	struct	ctor	typeerr	VAL	<struct Point>	A
+ctor_struct_field	struct	ctor	ok	VAL	1	A
+ctor_struct_nested	struct	ctor	ok	VAL	1	A
+sep_struct_arity_less	-	sep	-	?	?	B
+sep_struct_arity_more	-	sep	-	?	?	B
+sep_enum_call_str	-	sep	-	?	?	B
+sep_enum_call_miss	-	sep	-	?	?	B
+sep_enum_call_var	-	sep	-	?	?	B
+sep_enum_call_var_miss	-	sep	-	?	?	B
+sep_enum_call_arity0	-	sep	-	?	?	B
+sep_enum_call_arity2	-	sep	-	?	?	B
+sep_dataenum_def	-	sep	-	?	?	C

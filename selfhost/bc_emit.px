@@ -749,10 +749,16 @@ def bc_emit_expr(expr, dst, func):
                     d = bc_tmp(func)
                 bc_emit_expr(ce, d, func)
                 return d
-            if bc_enum_has(oname, fname):
+            if g_bcm["enums"].has(oname):
+                # M237（缺陷 368）：是枚举类型名 ⇒ 变体必须存在（修前：不存在时落普通 Field
+                #   访问 ⇒ GETG(类型名) ⇒ 「R1001 未定义变量: 'Color'」—— 方向错）
                 var d = dst
                 if d < 0:
                     d = bc_tmp(func)
+                if not bc_enum_has(oname, fname):
+                    let mn = bc_n_add(g_bcm["n_pool"], "R1008: 枚举 " + oname + " 没有变体 '" + fname + "'")
+                    bc_emit_inst(func, "RAISE", 0, mn, 0)
+                    return d
                 let tn = bc_n_add(g_bcm["n_pool"], oname)
                 let vn = bc_n_add(g_bcm["n_pool"], fname)
                 bc_emit_inst(func, "NEWENUM", d, tn, vn)
@@ -957,11 +963,15 @@ def bc_emit_methodcall(obj, mname, arg_list, dst, func):
 def bc_emit_struct_new(cname, sti, args, dst, func):
     let sd = g_bcm["structs"][sti]
     let n = len(sd["fnames"])
-    if len(args) != n:
-        panic("结构体 " + cname + " 需要 " + str(n) + " 个字段，给出 " + str(len(args)))
     var d = dst
     if d < 0:
         d = bc_tmp(func)
+    # M237（缺陷 366）：不再 panic（编译期失败）—— 改发射运行期 R2001，
+    #   与解释轨 / C 轨**同阶段同码同文**（修前：VM 编译期失败 · 解释轨静默 · C 轨生成非法 C）。
+    if len(args) != n:
+        let mn = bc_n_add(g_bcm["n_pool"], "R2001: 结构体 " + cname + " 需要 " + str(n) + " 个字段，给出 " + str(len(args)))
+        bc_emit_inst(func, "RAISE", 0, mn, 0)
+        return d
     let base = bc_tmp(func)
     while func["next_slot"] < base + n:
         bc_tmp(func)
@@ -973,20 +983,28 @@ def bc_emit_struct_new(cname, sti, args, dst, func):
     return d
 # Color(Red) / Color("Red")：实参=变体名 → NEWENUM dst, N(类型), N(变体)
 def bc_emit_enum_new(cname, args, dst, func):
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
     var vname = null
     if len(args) == 1:
         let a0 = args[0]
         if a0[0] == "Var":
-            let vn = rust_unescape(a0[1])
-            if bc_enum_has(cname, vn):
-                vname = vn
-        elif a0[0] == "Str":
             vname = rust_unescape(a0[1])
+        if a0[0] == "Str":
+            vname = rust_unescape(a0[1])
+    # M237（缺陷 371）：实参不是变体名 / 个数不对 ⇒ **运行期** R1005（修前 panic 编译期失败）
     if vname == null:
-        panic("bc_emit enum 构造未实现（仅支持 Color(Variant)/Color(\"Variant\"): " + str(cname))
-    var d = dst
-    if d < 0:
-        d = bc_tmp(func)
+        let mn = bc_n_add(g_bcm["n_pool"], "R1005: 枚举 " + cname + " 构造需要 1 个变体名，给出 " + str(len(args)))
+        bc_emit_inst(func, "RAISE", 0, mn, 0)
+        return d
+    # M237（缺陷 368）：变体存在性**编译期**判定 ⇒ 不存在即运行期 R1008
+    #   （修前：Str 形态不校验 ⇒ `Color(\"Nope\")` 静默造出假枚举值；
+    #     Var 形态 panic ⇒ `Color(Nope)` 编译期失败）
+    if not bc_enum_has(cname, vname):
+        let mn = bc_n_add(g_bcm["n_pool"], "R1008: 枚举 " + cname + " 没有变体 '" + vname + "'")
+        bc_emit_inst(func, "RAISE", 0, mn, 0)
+        return d
     let tn = bc_n_add(g_bcm["n_pool"], cname)
     let vn2 = bc_n_add(g_bcm["n_pool"], vname)
     bc_emit_inst(func, "NEWENUM", d, tn, vn2)

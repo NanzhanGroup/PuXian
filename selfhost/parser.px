@@ -572,7 +572,16 @@ def parse_enum_def():
             adv()
             if not chk(")"):
                 while true:
+                    # M237（缺陷 364）：spec §3.8/§16.3 承诺了 data enum（`Circle(radius: float)`），
+                    #   而本处只吃**类型**、不吃「字段名: 类型」⇒ 用户照文档写会得到
+                    #   `E2001 期望 ')'，实际得到 :`（**指不到真因**，违反「失败必须给出
+                    #   可执行的下一步」）。data enum 是**完整特性**（parser/AST/三轨构造/
+                    #   match 解构），本轮不实现 ⇒ 改为给出**能照着走**的指引。
                     fields.append(parse_type())
+                    # ⚠️ 检查必须在 `parse_type()` **之后** —— parse_type 会把 `radius` 当类型名
+                    #   消费掉，下一个 token 才是 `:`（首版写在前面 ⇒ 恒不命中 ⇒ 假绿）。
+                    if chk(":"):
+                        perr("E2001", "枚举变体字段暂不支持「字段名: 类型」（data enum 计划中）—— 请写 `Circle(float)`，或改用 struct")
                     if chk(","):
                         adv()
                         continue

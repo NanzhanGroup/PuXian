@@ -25,17 +25,17 @@ def i_call_value(cv, args, pos):
             if not g_structs.has(name):
                 return Err(i_r1002("未知结构体: '" + name + "'", pos))
             let sdef = g_structs[name]
+            # M237（缺陷 367）：修前**缺字段静默填 null** —— `Point(1)` 造出 x=1、y=null 的
+            #   「成功」结构体；而 VM/C 两轨报错 ⇒ 同一份源码「静默错值 / 响亮拒绝」两种命运。
+            #   定稿：数量必须**恰等**，与编译两轨同码同文（R2001）。
+            if len(args) != len(sdef["fields"]):
+                return Err(i_r2001("结构体 " + name + " 需要 " + str(len(sdef["fields"])) + " 个字段，给出 " + str(len(args)), pos))
             let fields = it_new_dict()
             var fi = 0
             while fi < len(sdef["fields"]):
                 let fname = sdef["fields"][fi]["name"]
-                if fi < len(args):
-                    fields[fname] = args[fi]
-                else:
-                    fields[fname] = null
+                fields[fname] = args[fi]
                 fi += 1
-            if len(args) > len(sdef["fields"]):
-                return Err(i_r1005("结构体 " + name + " 字段过多", pos))
             return Ok(it_struct(name, fields))
         return Err(i_r1004("枚举类型 " + cv["name"] + " 不能直接调用（用 " + cv["name"] + ".Variant）", pos))
     return Err(i_r1004("值不可调用: " + i_to_str(cv), pos))

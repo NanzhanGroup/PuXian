@@ -27,11 +27,11 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_7_val = px_null();
     int px_err_7_proped = 0;
     px_srcline(22);
-    _v5 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum("Kind", "Int"), px_int(42LL)}, 2);
+    _v5 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Int", 1), px_int(42LL)}, 2);
     px_srcline(23);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v5}, 1)}, 1));
     px_srcline(24);
-    _v6 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum("Kind", "Call"), px_int(0LL)}, 2);
+    _v6 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Call", 1), px_int(0LL)}, 2);
     px_srcline(25);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v6}, 1)}, 1));
 px_err_7:

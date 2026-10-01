@@ -223,11 +223,17 @@ enum Color:
     Green
     Blue
 
-# 携带数据（data enum）
+# 携带数据（data enum）—— ⚠️ 计划中，尚未实现（见下）
 enum Shape:
     Circle(radius: float)
     Rect(w: float, h: float)
 ```
+
+> ⚠️ **data enum 状态：计划中（M237 核实）**。`Circle(radius: float)` 这种「字段名: 类型」
+> 形态目前会被 parser 拒绝，并给出可执行指引（`E2001`）；写成 `Circle(float)` 虽可解析，
+> 但变体**不携带数据**（`Shape.Circle(1.5)` 报 `R1005`，须写 `Shape.Circle`）。
+> §16.3 的命名参数构造 + `match` 解构同属该特性。要实现它需要 parser/AST/三轨构造/
+> match 解构一起动，属完整特性。**在此之前请用 `struct` + 可空字段表达。**
 
 #### 3.8.1 简化枚举（type X const 一行式带值枚举，M44）
 ```python
@@ -1672,6 +1678,8 @@ def main(args: list[str]) -> int:
 ```
 
 ### 16.3 结构体 + match
+> ⚠️ 本示例是 **data enum（计划中）** 的目标形态，当前不可编译；
+> 现在请用 `struct` + `match` 判类型字段表达（见 §3.8 的状态说明）。
 ```python
 enum Shape:
     Circle(radius: float)

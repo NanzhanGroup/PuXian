@@ -339,8 +339,11 @@ def i_assign(target, op, value_expr, env, pos):
         let v = vr.unwrap()
         let fname = rust_unescape(target[2])
         let t = i_type_name(ov)
+        # M237（缺陷 369 第二面）：修前消息是「赋值目标不是可写对象」—— **不带类型**、
+        #   也指不到是哪个名字；而编译两轨一直给「R1002: 类型 X 不支持字段赋值: 'n'」。
+        #   定稿为编译轨口径（带类型 + 带字段名，且 R1002 才是「类型错」）。
         if t != "struct" and t != "dict":
-            return Err(i_r1007("赋值目标不是可写对象", pos))
+            return Err(i_r1002("类型 " + t + " 不支持字段赋值: '" + fname + "'", pos))
         var nv = v
         if op != "Assign":
             # M204（缺陷 246）：同上 —— 缺失成员 ⇒ 与「读」一致地报 R1008（不再拿 null 硬算）
@@ -358,6 +361,10 @@ def i_assign(target, op, value_expr, env, pos):
                 return Err(ar.err())
             nv = ar.unwrap()
         if t == "struct":
+            # M237（缺陷 361）：修前**纯赋值**（op=Assign）不查字段存在性 ⇒ `p.z = 9` 静默**加字段**
+            #   （rc=0，程序照跑）；而编译两轨报 R1008。定稿：与「读」和「复合赋值」同口径。
+            if not ov["__fields__"].has(fname):
+                return Err(i_r1008("结构体没有字段 '" + fname + "'", pos))
             ov["__fields__"][fname] = nv
         else:
             ov[fname] = nv

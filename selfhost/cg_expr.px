@@ -4,6 +4,34 @@
 # 被 codegen.px import；函数引用主文件全局状态。
 # 推导式公共逻辑抽为 cg_comp_* 辅助（uid 消耗顺序与 Rust 一致）。
 # ============================================================
+# ---------- M237：字段/构造/变体族的两条发射辅助 ----------
+# 缺陷 366（诊断文本逃逸）：修前「字段数不符」这类**编译期已判定**的错误，cg 直接把
+#   诊断文本 `return "结构体 X 需要 2 个字段，给出 1"` —— 而 cg 的返回值约定是
+#   **C 表达式文本** ⇒ 生成 `_v1 = 结构体 Point 需要 2 个字段，给出 1;` = **非法 C**，
+#   用户看到的是 gcc 的报错而不是 R2001（实测 4 处：struct×2 + enum×2）。
+#   修法：改成**运行期报错表达式**（px_error 是 noreturn ⇒ 逗号表达式给占位值，不破坏类型）。
+def cg_err_expr(msg):
+    # ⚠️ cg_escape_str **只转义、不加外层引号**（调用方负责）—— 首版漏了引号 ⇒ 生成非法 C。
+    return "(px_error(\"" + cg_escape_str(msg) + "\"), px_null())"
+# 缺陷 365/368/371（枚举构造）：修前发的是
+#   `px_enum("Color", (px_str("Red")).as.obj->as.enum_inst.variant)` —— 把 **string 对象
+#   当 enum 实例读** ⇒ 野指针 ⇒ SIGSEGV；且变体名从不校验 ⇒ `Color("Nope")` 静默造假值。
+#   定稿：实参一律当**变体名**（Str 字面量或 Var 标识符），存在性**编译期判定**后传 known。
+def cg_enum_ctor(cname, args):
+    if len(args) != 1:
+        return cg_err_expr("R1005: 枚举 " + cname + " 构造需要 1 个变体名，给出 " + str(len(args)))
+    let a0 = args[0]
+    var vn = null
+    if a0[0] == "Str":
+        vn = rust_unescape(a0[1])
+    if a0[0] == "Var":
+        vn = rust_unescape(a0[1])
+    if vn == null:
+        return cg_err_expr("R1002: 枚举 " + cname + " 构造的实参必须是变体名（字符串字面量或标识符）")
+    var known = 0
+    if contains(cg_enums[cname], vn):
+        known = 1
+    return "px_enum_checked(\"" + cname + "\", \"" + vn + "\", " + str(known) + ")"
 # ---------- 推导式公共：收集 clauses（生成 iterable/迭代变量/绑定） ----------
 def cg_comp_collect(clauses):
     let r = {"_": 0}
@@ -374,7 +402,11 @@ def cg_gen_expr(expr):
         if obj[0] == "Var":
             let oname = rust_unescape(obj[1])
             if cg_enums.has(oname):
-                return "px_enum(\"" + oname + "\", \"" + fname + "\")"
+                # M237（缺陷 368）：变体名**编译期**校验 —— 修前 `Color.Nope` 静默造出假枚举值
+                var vk = 0
+                if contains(cg_enums[oname], fname):
+                    vk = 1
+                return "px_enum_checked(\"" + oname + "\", \"" + fname + "\", " + str(vk) + ")"
         let o = cg_gen_expr(obj)
         return "px_field(" + o + ", \"" + fname + "\")"
     if ty == "OptionalField":
@@ -437,7 +469,7 @@ def cg_gen_expr(expr):
             if cg_structs.has(cname):
                 let fields = cg_structs[cname]
                 if len(fields) != len(args):
-                    return "结构体 " + cname + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args))
+                    return cg_err_expr("R2001: 结构体 " + cname + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args)))
                 let parts = []
                 var ai = 0
                 while ai < len(args):
@@ -451,10 +483,7 @@ def cg_gen_expr(expr):
                 let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
                 return cg_seq_wrap(sj[0], "px_struct(\"" + cname + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(fields)) + ")")
             if cg_enums.has(cname):
-                if len(args) != 1:
-                    return "枚举 " + cname + " 构造需要一个变体名"
-                let v = cg_gen_expr(args[0])
-                return "px_enum(\"" + cname + "\", (" + v + ").as.obj->as.enum_inst.variant)"
+                return cg_enum_ctor(cname, args)
         # 方法调用
         if callee[0] == "Field":
             let obj = callee[1]
@@ -665,7 +694,7 @@ def cg_gen_expr(expr):
         if cg_structs.has(name):
             let fields = cg_structs[name]
             if len(fields) != len(args):
-                return "结构体 " + name + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args))
+                return cg_err_expr("R2001: 结构体 " + name + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args)))
             let parts = []
             var ai = 0
             while ai < len(args):
@@ -679,10 +708,7 @@ def cg_gen_expr(expr):
             let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
             return cg_seq_wrap(sj[0], "px_struct(\"" + name + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(fields)) + ")")
         if cg_enums.has(name):
-            if len(args) != 1:
-                return "枚举 " + name + " 构造需要一个变体名"
-            let v = cg_gen_expr(args[0])
-            return "px_enum(\"" + name + "\", (" + v + ").as.obj->as.enum_inst.variant)"
+            return cg_enum_ctor(name, args)
         let parts = []
         var ai = 0
         while ai < len(args):

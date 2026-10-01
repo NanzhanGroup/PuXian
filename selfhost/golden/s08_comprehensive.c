@@ -416,7 +416,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_113_val = px_null();
     int px_err_113_proped = 0;
     px_srcline(55);
-    _v107 = px_list_n((LXValue[]){px_enum("Shape", "Circle"), px_enum("Shape", "Square")}, 2);
+    _v107 = px_list_n((LXValue[]){px_enum_checked("Shape", "Circle", 1), px_enum_checked("Shape", "Square", 1)}, 2);
     px_srcline(56);
     _v108 = px_struct("Point", (char*[]){"x", "y"}, (LXValue[]){px_int(3LL), px_int(4LL)}, 2);
     px_srcline(57);

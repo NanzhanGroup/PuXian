@@ -3319,6 +3319,24 @@ LXValue px_enum(const char* type_name, const char* variant) {
     return v;
 }
 
+// M237（缺陷 365/368/371）：枚举构造的**统一入口**。
+//   修前 C 轨把 `Color("Red")` 发成 `px_enum("Color", (px_str("Red")).as.obj->as.enum_inst.variant)`
+//   —— 把 **string 对象当 enum 实例读** ⇒ 野指针 ⇒ SIGSEGV（实测 3/3 core dumped）；
+//   且 `Color("Nope")` 在 VM/C 两轨**静默造出假枚举值**（变体名从不校验）。
+//   定稿：实参一律是**变体名**（Str 字面量或已知变体标识符），存在性由**编译期**
+//   判定后经 `known` 传入（三轨都持有变体表：cg_enums / g_bcm["enums"] / g_enums）
+//   ⇒ 不存在即响亮 R1008，不再发生「野指针」与「静默假值」。
+LXValue px_enum_checked(const char* type_name, const char* variant, int known) {
+    if (!known) px_error("R1008: 枚举 %s 没有变体 '%s'", type_name, variant);
+    return px_enum(type_name, variant);
+}
+
+// M237（缺陷 366）：枚举构造实参个数错（编译期已知）⇒ 运行期 R1005。
+//   noreturn —— 只作表达式位置的「报错并终止」用（`(px_enum_arity(...), px_null())`）。
+void px_enum_arity(const char* type_name, int got) {
+    px_error("R1005: 枚举 %s 构造需要 1 个变体名，给出 %d", type_name, got);
+}
+
 LXValue px_enum_variant(LXValue v) {
     if (v.type == PX_ENUM) return px_str(v.as.obj->as.enum_inst.variant);
     return px_null();
@@ -5093,6 +5111,14 @@ LXValue px_field(LXValue obj, const char* name) {
         if (!px_dict_has(obj, name)) px_error("R1008: 字典没有键 '%s'", name);
         return px_dict_get(obj, name);
     }
+    // M237（缺陷 369）：枚举值取字段 —— 解释轨报**值级**（枚举值 Color.Red 没有字段 'x'）
+    //   而编译两轨报**类型级**（类型 enum 没有字段 'x'）⇒ 同一操作两条消息。
+    //   定稿为值级（用户手里有的是**值**，报值比报类型更有用；与 i_field 逐字对齐）。
+    if (obj.type == PX_ENUM) {
+        px_error("R1007: 枚举值 %s.%s 没有字段 '%s'",
+                 obj.as.obj->as.enum_inst.type_name,
+                 obj.as.obj->as.enum_inst.variant, name);
+    }
     px_error("R1007: 类型 %s 没有字段 '%s'", px_type_name(obj), name);
     return px_null();
 }
@@ -5113,6 +5139,13 @@ void px_field_set(LXValue obj, const char* name, LXValue val) {
             }
         }
         px_error("R1008: 结构体没有字段 '%s'", name);
+    }
+    // M237（缺陷 370）：dict 的字段**读**早已支持（= d["k"]，见 px_field 的 dict 分支），
+    //   而**写**不支持 ⇒ 同一份程序读写不对称（解释轨能跑、编译两轨报 R1002）。
+    //   定稿：与读同口径 —— 字段名即键名，直接落 dict（新增键也允许，同 d["k"]=v）。
+    if (obj.type == PX_DICT) {
+        px_dict_set(obj, name, val);
+        return;
     }
     px_error("R1002: 类型 %s 不支持字段赋值: '%s'", px_type_name(obj), name);
 }

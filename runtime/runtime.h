@@ -237,6 +237,9 @@ void    px_h3_recycle_conn(int64_t conn);                // runtime_h3.c：清�
 int     px_quic_raw_stream_fin(int64_t conn, int64_t sid);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
+// M237：枚举构造统一入口（known=编译期判定的变体存在性）+ 实参个数错
+LXValue px_enum_checked(const char* type_name, const char* variant, int known);
+void px_enum_arity(const char* type_name, int got) __attribute__((noreturn));
 // M89-S3-B3b：enum 值变体名（match 模式匹配 subject.type==PX_ENUM && variant==name 用；
 //   非 enum → px_null，不报错——对齐 cg 的 type 短路判断）
 LXValue px_enum_variant(LXValue v);

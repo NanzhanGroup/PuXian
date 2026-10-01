@@ -256,6 +256,26 @@ def i_eval_expr(node, env):
             ai += 1
         return Err(i_r1003("match 未匹配任何分支（非穷尽）：" + i_to_str(sv), node[3]))
     return Err(i_r1002("未知表达式节点: " + ty, [0, 0]))
+# ---------- M237：枚举构造 ----------
+# 缺陷 371：`Color("Red")` / `Color(Red)` —— 解释轨修前一律 R1004「枚举类型不能直接调用」，
+#   而 VM 轨**支持**（bc_emit_enum_new 注释明写两种形态）、C 轨发野指针 ⇒ SIGSEGV
+#   ⇒ 三轨三种行为。定稿：保留能力（实参=变体名），存在性校验后构造。
+# ⚠️ 必须在 **args 求值之前**拦下 —— `Color(Red)` 里的 `Red` 不是变量，
+#   若先求值会报「未定义变量 'Red'」（指不到真因）。
+def i_enum_ctor(ename, args, pos):
+    if len(args) != 1:
+        return Err(i_r1005("枚举 " + ename + " 构造需要 1 个变体名，给出 " + str(len(args)), pos))
+    let a0 = args[0]
+    var vname = null
+    if a0[0] == "Str":
+        vname = rust_unescape(a0[1])
+    if a0[0] == "Var":
+        vname = rust_unescape(a0[1])
+    if vname == null:
+        return Err(i_r1002("枚举 " + ename + " 构造的实参必须是变体名（字符串字面量或标识符）", pos))
+    if not g_enums.has(ename) or not contains(g_enums[ename], vname):
+        return Err(i_r1008("枚举 " + ename + " 没有变体 '" + vname + "'", pos))
+    return Ok(it_enum(ename, vname, null))
 # ---------- 调用表达式（对齐 eval_call） ----------
 def i_eval_call(node, env):
     # node: ["Call", callee, args, pos]
@@ -279,6 +299,9 @@ def i_eval_call(node, env):
                 arg_vals.append(ar.unwrap())
                 ai += 1
             return i_builtin_ffi_call([cname, arg_vals], pos)
+        # M237（缺陷 371）：枚举类型的「调用」= 按变体名构造（须先于 args 求值，见 i_enum_ctor）
+        if g_enums.has(cname):
+            return i_enum_ctor(cname, args, pos)
         if cname == "chan":
             var cap = 0
             if len(args) > 0:
