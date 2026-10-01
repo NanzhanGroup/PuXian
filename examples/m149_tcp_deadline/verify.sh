@@ -6,6 +6,12 @@
 # 门做五件事：
 #   ① VM 轨：受控服务端（独立进程）+ 客户端断言集 → M149_ASSERT: nP/0F
 #   ② C 轨：同上（服务端也用 C 轨编译）⇒ 与 VM 轨输出**逐字节一致**
+#      ⚠️ M237s1（缺陷 372）：比对前先归一**已登记**的环境/走钟字段（走钟 dt、INFO F/G/H
+#         轮数、A 段黑洞探测分支及其派生的 SKIP 行与 M149_ASSERT 的 S 计数）——
+#         本机到 TEST-NET-1 的路由状态在**两次运行之间**就可能变（110 超时 ⇄ 101/113
+#         不可达），修前会把「两轨各自 53P/0F」误判成不一致（2026-10-01 全量门假红）。
+#         归一清单之外**任何**差异仍逐字节判红；另有硬判据守「分支必须是登记的那两种」
+#         与三条判据自证（见 §判据自证）。
 #   ③ 解释轨：interp_smoke.px（无服务端通路）→ M149_SMOKE: 9P/0F
 #      （解释器无 spawn / 无 tcp_listen 名册项 ⇒ 起不了服务端，见该文件头注释）
 #   ④ 负控 A/B/C：把三处关键语义分别退回错误语义 ⇒ 门必须变红
@@ -138,16 +144,99 @@ run_track() {
 run_track vm
 run_track c
 
-echo "--- VM / C 两轨输出逐字节一致（**走钟字段归一**：INFO *.dt 的毫秒数）---"
-norm() { sed -E 's/^(INFO [A-Z]\.)dt dt=[0-9]+ms/\1dt dt=<ms>/' "$1"; }
-if [ -f /tmp/m149_vm.out ] && [ -f /tmp/m149_c.out ] \
-   && diff <(norm /tmp/m149_vm.out) <(norm /tmp/m149_c.out) > /dev/null 2>&1; then
-    echo "PASS 两轨一致（归一后；原始差异仅 INFO *.dt 的实测毫秒）"
+echo "--- VM / C 两轨输出逐字节一致（归一字段：走钟 dt · INFO F/G/H 轮数 · A 段黑洞分支）---"
+# ── 归一化：只折叠**已登记**的环境/走钟字段；其余必须逐字节一致 ──
+#   M237s1（缺陷 372）登记表（新增字段必须同时加进这里与 abranch 的硬判据，并补自证）：
+#     · INFO *.dt 的毫秒          —— 走钟（既有）
+#     · INFO F/G/H.rounds 的轮数  —— socket 缓冲/调度决定；本门对它们只断言**下限**（H5: ≥6 等）
+#     · A 段黑洞探测的**分支**     —— 110 超时 ⇄ 101/113 不可达，取决于本机到 TEST-NET-1 的路由
+#       派生物：SKIP 行（整行删除，它是分支的产物，分支合法性由 abranch 单独守）
+#               M149_ASSERT 的 S 计数（随分支走）
+NORM_EXPR=(
+  -e 's/^(INFO [A-Z]\.)dt dt=[0-9]+ms/\1dt dt=<ms>/'
+  -e 's/^(INFO [FGH]\.rounds recv 轮数=)[0-9]+/\1<n>/'
+  -e '/^SKIP A4-A6 超时语义 /d'
+  -e 's/^(PASS A4 )(超时被遵守|不可达即失败).*/\1<A4>/'
+  -e 's/^(PASS A5 )(未远超超时|不是 refused).*/\1<A5>/'
+  -e 's/^(PASS A6 )(errno=ETIMEDOUT\(110\)|err 文案非空).*/\1<A6>/'
+  -e 's/^(INFO A\.dt ).*/\1<A 分支详情>/'
+  -e 's/^(M149_ASSERT: [0-9]+P\/0F)\/[0-9]+S$/\1\/<S>/'
+)
+norm() { sed -E "${NORM_EXPR[@]}" "$1"; }
+
+# A 段分支分类 —— 硬判据：归一化只认登记的那两种分支，第三种行为必须判红
+abranch() {
+    if grep -q '^PASS A6 errno=ETIMEDOUT(110)$' "$1"; then echo timeout
+    elif grep -q '^PASS A5 不是 refused（101/113，非 111）$' "$1"; then echo unreachable
+    else echo BAD; fi
+}
+
+# 返回 0=一致；1=不一致（并打印原因）
+cmp_tracks() {
+    local v="$1" c="$2" bv bc ok=0
+    bv=$(abranch "$v"); bc=$(abranch "$c")
+    if [ "$bv" = "BAD" ] || [ "$bc" = "BAD" ]; then
+        echo "FAIL A 段分支不在登记集（vm=$bv · c=$bc）—— 既非 110 超时、亦非 101/113 不可达"
+        ok=1
+    fi
+    if ! diff <(norm "$v") <(norm "$c") > /tmp/m149_twdiff.txt 2>&1; then
+        echo "FAIL 两轨不一致（归一后仍不同）："
+        head -10 /tmp/m149_twdiff.txt | sed 's/^/   /'
+        ok=1
+    fi
+    if [ "$ok" = "0" ]; then
+        echo "PASS 两轨一致（归一后；A 段分支 vm=$bv · c=$bc）"
+        if [ "$bv" != "$bc" ]; then
+            echo "   ℹ️ A 段分支两轨不同 —— 环境相关（本机到 TEST-NET-1 的路由状态），已归一；两轨各自断言均 0F"
+        fi
+    fi
+    return $ok
+}
+
+if [ -f /tmp/m149_vm.out ] && [ -f /tmp/m149_c.out ]; then
+    cmp_tracks /tmp/m149_vm.out /tmp/m149_c.out || FAIL=$((FAIL+1))
 else
-    echo "FAIL 两轨不一致："
-    diff <(norm /tmp/m149_vm.out) <(norm /tmp/m149_c.out) 2>/dev/null | head -10 | sed 's/^/   /'
-    FAIL=$((FAIL+1))
+    echo "FAIL 缺轨产物（/tmp/m149_vm.out 或 /tmp/m149_c.out 未生成）"; FAIL=$((FAIL+1))
 fi
+
+echo "== [判据自证] 两轨对拍 —— 归一化不得掩盖真差异，也不得吞掉第三种行为 =="
+ST=/tmp/m149_selftest; rm -rf "$ST"; mkdir -p "$ST"
+cat > "$ST/v1" <<'SEOFT1'
+PASS A4 超时被遵守（≥250ms）
+PASS A5 未远超超时（≤2500ms）
+PASS A6 errno=ETIMEDOUT(110)
+INFO A.dt dt=300ms errno=110 err=x
+INFO F.rounds recv 轮数=1
+INFO I.reply reply=got 100000
+M149_ASSERT: 53P/0F/0S
+SEOFT1
+cat > "$ST/c1" <<'SEOFT2'
+SKIP A4-A6 超时语义 —— 本机对该网段直达不可达（errno=101，非丢包）⇒ 试不到 ETIMEDOUT
+PASS A4 不可达即失败（≤2500ms）
+PASS A5 不是 refused（101/113，非 111）
+PASS A6 err 文案非空
+INFO A.dt dt=161ms errno=101 err=y
+INFO F.rounds recv 轮数=2
+INFO I.reply reply=got 100000
+M149_ASSERT: 53P/0F/1S
+SEOFT2
+st() {
+    local nm="$1" want="$2" v="$3" c="$4" got=0
+    cmp_tracks "$v" "$c" >/dev/null 2>&1 || got=1
+    if [ "$got" = "$want" ]; then echo "   PASS 自证 $nm（rc=$got）"
+    else echo "FAIL 自证 $nm（rc=$got，期望 $want）"; FAIL=$((FAIL+1)); fi
+}
+# T1：A 段分支不同 + 轮数不同 + S 计数不同（全属登记字段）⇒ 必须判「一致」
+st "T1 仅登记字段差异（A 分支/轮数/S 计数）⇒ 判一致" 0 "$ST/v1" "$ST/c1"
+# T2：真实差异（归一清单之外的一行变了）⇒ 必须判「不一致」
+sed 's/^INFO I.reply reply=got 100000$/INFO I.reply reply=got 99999/' "$ST/c1" > "$ST/c2"
+st "T2 真实差异（I.reply 值变）⇒ 判不一致" 1 "$ST/v1" "$ST/c2"
+# T3：A 段出现「第三种行为」（归一化会折叠成同形）⇒ 硬判据必须判「不一致」
+sed -e 's/^PASS A4 .*/PASS A4 第三种行为/' \
+    -e 's/^PASS A5 .*/PASS A5 第三种行为/' \
+    -e 's/^PASS A6 .*/PASS A6 第三种行为/' "$ST/c1" > "$ST/c3"
+st "T3 A 段第三种行为（归一化会被折叠）⇒ 判不一致" 1 "$ST/v1" "$ST/c3"
+rm -rf "$ST"
 
 echo "== [解释轨] interp_smoke.px（无服务端通路；三轨都要过）=="
 for mode in run vm c; do

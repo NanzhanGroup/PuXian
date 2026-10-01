@@ -52,10 +52,12 @@ chk "措辞族统一：result 四法补「方法」前缀" \
 chk "措辞族统一：pop 补「方法」前缀（两轨）" \
     "has runtime/runtime.c 'R1005: 方法 pop 不接受参数' && has selfhost/icall.px 'i_r1005(\"方法 pop 不接受参数\"'"
 # 措辞族普查：方法面 R1005 里不属于「方法 X …」的只允许登记的 类型.方法 族
-chk "措辞族普查：非「方法 X」写法只剩 类型.方法 族（4 条）" \
-    "[ \"\$(grep -oE '\\\"R1005: [^\\\"]*\\\"' runtime/runtime.c | grep -vc '方法 ')\" = 4 ]"
-chk "  且这 4 条全是 类型.方法 形式" \
-    "grep -oE '\\\"R1005: [^\\\"]*\\\"' runtime/runtime.c | grep -v '方法 ' | grep -qcE 'R1005: (list\\.index|mutex\\.with|rwlock\\.with)'"
+chk "措辞族普查：非「方法 X」写法只剩 登记族（5 条）" \
+    "[ \"\$(grep -oE '\\\"R1005: [^\\\"]*\\\"' runtime/runtime.c | grep -vc '方法 ')\" = 5 ]"
+chk "  且「类型.方法」族恰 4 条" \
+    "[ \"\$(grep -oE '\\\"R1005: [^\\\"]*\\\"' runtime/runtime.c | grep -v '方法 ' | grep -cE 'R1005: (list\\.index|mutex\\.with|rwlock\\.with)')\" = 4 ]"
+chk "  且新增的枚举构造族恰 1 条（M237 缺陷 368：E(V) 的 arity）" \
+    "[ \"\$(grep -oE '\\\"R1005: [^\\\"]*\\\"' runtime/runtime.c | grep -v '方法 ' | grep -cE 'R1005: 枚举 ')\" = 1 ]"
 chk "规模锚点：例数 ≥ 30" "[ \"\$(cnt $D/cases.tsv '')\" -ge 31 ]"
 chk "负控锚点自证（唯一性）" "NEGCTL --selftest >/dev/null"
 
