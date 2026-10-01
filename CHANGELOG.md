@@ -1,3 +1,57 @@
+## M237s3 · **自举基准重定基（缺陷 376 / 377）** —— 「CI 独占门」遮住了两处盲区（第 115 轮补）
+
+> 背景：M237 推送后 CI **两条 job 红**（`自举回归` step[17] · `原生 aarch64 自举自证` step[4]），
+> Release 的 `aarch64 自举件` job 同样红 —— 而**本机全量门失败 0 项**。
+> 根因 = **M237 改了 compiler 链（`parser.px` / `cg_expr.px` / `cg_stmt.px`）却没重定基自举基准**，
+> 而自举证明**是 CI 独占**（`m116_gates.sh` 注释明写「`bootstrap_prove(_bc)` 亦属 CI 独占」）
+> ⇒ 本地**永远看不见**。
+
+### 缺陷 376 —— `bootstrap_prove_bc.sh` 的选料不可判定
+
+按 mtime 取最新（M169 缺陷 185 已修 `devbuild.sh`，**本脚本漏了** —— 它自己又写了一遍选料）
+⇒ 挑到交叉编译缓存（riscv64）⇒ 链接报 `Relocations in generic ELF (EM: 243)` /
+`file in wrong format` —— **错误信息指不到根因**。
+⇒ 本机 bc 轨自举**恒失败**，而 CI 不跑此脚本 ⇒ 长期无人知。
+
+**修**：与 `devbuild.sh` 对齐 —— ① 主路径 = `tools/px rtcache` 的 rt_key 命中（`.complete` + `vm.o`）；
+② 回退 = 按**主机架构过滤**（`file` 判 `vm.o`）+ mtime 取最新，且**响亮**打印来源。
+
+### 缺陷 377 —— 注解只覆盖「最后写入」的失败门
+
+`packaging/ci_diagnose.py` 只对**最后写入**的日志给头/尾，其余失败门**只有末行**
+（而末行往往就是 `XXX-VERIFY-FAIL` ⇒ **指不到根因**）。
+CI 实测：m236 与 m237 同时失败，而 m237 恰好是「最后写入」且恰好是绿的
+⇒ **m236 的根因完全不可见**（这正是本轮排查被卡住的地方）。
+
+**修**：新增 E 段 —— 每个「非最后写入」的失败门都给它的 ❌/FAIL 行（无则末 6 行）+ 自测断言。
+
+### 重定基（本轮核心）
+
+| 基准 | 旧 | 新 |
+|---|---|---|
+| `selfhost/golden/compiler.c` | 18568 行 | **18654 行** |
+| `selfhost/golden/compiler.bc.dump` | 40578 行 | **40785 行** |
+
+⚠️ **重定基前的自证（不许「重定基掩盖真回归」）**：用 **M237 之前的源码**（`a086768`）
++ **当前 `bootstrap/pxc`** 编译 `compiler.px` ⇒ 产物与**旧 golden 逐字节一致（diff 0 行）** —
+这就是本仓的「**旧源 × 新编译器**交叉核对」（M169 用过）。
+⇒ 证明旧基准是**正确**的，20735 行差异**全部**来自 M237 的源码改动（新增函数 + 全局 `px_srcline` 位移）。
+
+### 验收
+
+- `./selfhost/bootstrap_prove.sh` ✅ **rc=0**（自举成立 · 18653 行逐字节一致）
+- `./selfhost/bootstrap_prove_bc.sh` ✅ **rc=0**（BC 轨自举成立 · 40784 行一致 · **选料来源=rt_key**）
+- `bash selfhost/rebake_bin.sh --check-all` ✅ **14/14**（本轮无 `runtime/*` / `selfhost/*.px` 改动 ⇒ 不需重烘）
+- `python3 packaging/ci_diagnose.py --selftest` ✅（含新断言「两个失败门 ⇒ 都可见」）
+
+### 纪律（复述）
+
+**改 compiler 链（`parser.px` / `codegen.px` / `cg_*.px`）⇒ 必须重定基两个 golden**；
+判据 = `bootstrap_prove.sh` **且** `bootstrap_prove_bc.sh` **都 rc=0**（两者都是 CI 独占 ⇒
+**每轮收尾必须在本机手工跑一次**）。
+
+---
+
 ## M237s2 · **门注册遗漏（缺陷 375）** —— 「门写了但从未注册」的第 2 次重演（第 115 轮补）
 
 > 背景：M237s1 的全量门跑绿（**失败 0 项** · 总耗时 8676s）后做收尾核对，发现

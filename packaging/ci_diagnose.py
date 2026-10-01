@@ -175,6 +175,27 @@ def build_annotations(infos, budget):
     # ⚠️ **裁剪必须在 build 内完成**：emit 只负责 quote。
     #   自测之所以能抓住旧版 bug，正是因为断言直接看这里的返回值 ——
     #   若把 fit 留在 emit，「编码后超限」这条判据就测不到（测的是未裁的原串）。
+    # ── E 其它失败门的诊断（M237s3 · 缺陷 377）──
+    #   旧版只对「最后写入」的日志给头/尾，其余失败门**只有末行** —— 而末行往往就是
+    #   `XXX-VERIFY-FAIL`（**指不到根因**）。CI 实测（M237）：m236 与 m237 同时失败，
+    #   而 m237 恰好是「最后写入」且恰好是绿的 ⇒ m236 的根因**完全不可见**。
+    others = [i for i in susp if i['name'] != lastlog['name']]
+    if others:
+        L = ['★★ 其它失败门诊断（%d 个 · 各取 ❌/FAIL 行，无则取末 6 行）' % len(others)]
+        for i in others[:4]:
+            hs = [l for l in i['lines']
+                  if ('❌' in l or 'FAIL' in l or '失败 ' in l or 'Traceback' in l
+                      or 'MISMATCH' in l or 'error' in l.lower())]
+            L.append('── %s（判定=%s）末行：%s' % (i['name'], i['v'], i['last'][:90]))
+            if hs:
+                for b in hs[:6]:
+                    L.append('   ' + b.strip()[:170])
+            else:
+                for b in i['lines'][-6:]:
+                    L.append('   ' + b.strip()[:170])
+        if len(others) > 4:
+            L.append('（还有 %d 个未列）' % (len(others) - 4))
+        anns.append(('\n'.join(L), budget))
     return [(fit(t, b), b) for t, b in anns]
 
 
@@ -332,6 +353,18 @@ def selftest():
             '摘要注解点名门名 + 末行 + ❌ 行')
 
         # ④ **编码长度**硬约束（这是本轮的核心 bug）
+        # ④b M237s3（缺陷 377）：**两个失败门** ⇒ 两个都要在注解里可见
+        #    （旧版只解释「最后写入」的那个 ⇒ 另一个只有末行 ⇒ 根因不可见）
+        time.sleep(0.01)
+        _mk(tmp, 'v_f.log', '── [1/3] 甲门\n   ❌ 甲门真因：端口被占\nM6-VERIFY-FAIL\n')
+        time.sleep(0.01)
+        _mk(tmp, 'v_g.log', '── [1/3] 乙门\n   ✅ 全过\nM7-VERIFY-OK\n')
+        ins2 = collect(os.path.join(tmp, 'v_*.log'))
+        anns2 = build_annotations(ins2, DEFAULT_BUDGET)
+        blob2 = '\n'.join(t for t, _ in anns2)
+        chk('甲门真因：端口被占' in blob2,
+            '两个失败门 ⇒ 非最后写入的那个也给出 ❌ 行（缺陷 377）')
+
         chk(all(qlen(t) <= b for t, b in anns),
             '每条注解的**编码后**长度 ≤ 预算（旧版按原始字符裁 ⇒ 溢出 9 倍）')
         _mk(tmp, 'v_e.log', ('中文超长行 ' * 4000) + '\nM1-VERIFY-OK\n')

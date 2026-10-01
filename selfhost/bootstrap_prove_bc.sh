@@ -72,11 +72,46 @@ fi
 [ -s "$BUILD/compiler_new.c" ] || { echo "❌ compiler_new.c 为空" >&2; exit 1; }
 
 # ---- 步骤 2：C 引擎版编译器二进制 compiler_new（若旧则重建）----
-CACHE=""
-for d in $(ls -dt ../.rtcache/*/ 2>/dev/null); do
-    [ -f "$d/.complete" ] && [ -f "$d/vm.o" ] && CACHE="$d" && break
-done
-[ -n "$CACHE" ] || { echo "❌ 未找到含 vm.o 的 rtcache（先 px build 任一程序）" >&2; exit 1; }
+# ── M237s3（缺陷 376）：选料必须「可判定」，不能靠「谁最新」 ──────────────────
+#   M169（缺陷 185）已把 devbuild.sh 的选料改成「rt_key 命中优先 + 主机架构过滤」，
+#   但**本脚本漏了**（它自己又写了一遍选料）。本机 .rtcache 混有交叉编译缓存
+#   （riscv64 / armv7）⇒ 按 mtime 取最新会挑到**异架构**的 vm.o
+#   ⇒ 链接报 Relocations in generic ELF (EM: 243) / file in wrong format
+#   —— 错误信息**指不到根因**（实测：本机 bc 轨自举恒失败，而 CI 不跑此脚本 ⇒ 长期无人知）。
+#   口径（与 devbuild.sh 对齐）：
+#     ① 主路径 = tools/px rtcache 的 rt_key 命中（且 .complete + vm.o 都在）
+#     ② 回退   = 按**主机架构过滤**（file 判 vm.o）+ mtime 取最新，且**响亮**打印来源
+CACHE=""; CACHE_SRC=""; CACHE_WHY=""
+keyed="$("../tools/px" rtcache 2>/dev/null | tail -1)"
+if [ -n "$keyed" ] && [ -d "$keyed" ] && [ -f "$keyed/.complete" ] && [ -f "$keyed/vm.o" ]; then
+    CACHE="${keyed%/}"; CACHE_SRC="rt_key"
+else
+    CACHE_WHY="rtcache 未命中（key=[$keyed]）"
+fi
+if [ -z "$CACHE" ]; then
+    CACHE_SRC="fallback"
+    case "$(uname -m)" in
+        x86_64)  WANT="x86-64" ;;
+        aarch64) WANT="aarch64" ;;
+        armv7l)  WANT="ARM" ;;
+        riscv64) WANT="RISC-V" ;;
+        *)       WANT="" ;;
+    esac
+    echo "⚠️ bootstrap_prove_bc 选料：主路径失效 ⇒ 回退「按 mtime 取最新」（$CACHE_WHY）" >&2
+    echo "   架构过滤 = ${WANT:-（未识别宿主，不过滤）}" >&2
+    best_m=0
+    for d in $(ls -dt ../.rtcache/*/ 2>/dev/null); do
+        [ -f "$d/.complete" ] || continue
+        [ -f "$d/vm.o" ] || continue
+        if [ -n "$WANT" ]; then
+            file -b "$d/vm.o" 2>/dev/null | grep -qF "$WANT" || continue
+        fi
+        m=$(stat -c %Y "$d" 2>/dev/null || echo 0)
+        if [ "$m" -gt "$best_m" ]; then best_m=$m; CACHE="${d%/}"; fi
+    done
+fi
+[ -n "$CACHE" ] || { echo "❌ 未找到含 vm.o 的**同架构** rtcache（先 ./tools/px build --full examples/hello.px）" >&2; exit 1; }
+echo "── 选料：$CACHE（来源=$CACHE_SRC）"
 
 need_new=0
 fresh_build "$@" && need_new=1
