@@ -77,6 +77,12 @@ def i_exec_stmt(stmt, env):
         let r = i_eval_expr(stmt[1], env)
         if r.is_err():
             return Err(r.err())
+        # M239：`match` 作为**语句**时，arm 体内的 return/break/continue 必须向上传播
+        #   （修前一律丢弃 ⇒ 解释轨「静默不返回」，与 C/VM 轨分叉）。
+        #   只在 Match 节点上判 ⇒ 不改普通表达式行为，也不误伤用户字典。
+        let ev = r.unwrap()
+        if stmt[1][0] == "Match" and type(ev) == "dict" and ev.has("__flow__"):
+            return Ok(ev)
         return Ok(null)
     if ty == "If":
         return i_exec_if(stmt, env)

@@ -240,6 +240,10 @@ def i_eval_expr(node, env):
         return Ok(last)
     if ty == "Match":
         # ["Match", subject, arms, pos]
+        # M239（第 116 轮）：两处收口 ——
+        #   ① guard（arm[2]）修前**完全不看**（模式命中即取该 arm，`case 5 if false:` 也取）；
+        #   ② arm body 的控制流修前被表达式 Block 分支吞成值 ⇒ return/break/continue 丢失。
+        #   绑定作用域 = 该 arm（child 每 arm 新建）⇒ 匹配失败的 arm 不留绑定。
         let sr = i_eval_expr(node[1], env)
         if sr.is_err():
             return Err(sr.err())
@@ -252,7 +256,15 @@ def i_eval_expr(node, env):
             if mr.is_err():
                 return Err(mr.err())
             if mr.unwrap():
-                return i_eval_expr(arm[3], child)
+                # guard 只在模式命中后求值（短路；可带副作用，最多一次）
+                var guard_ok = true
+                if arm[2] != null:
+                    let gr = i_eval_expr(arm[2], child)
+                    if gr.is_err():
+                        return Err(gr.err())
+                    guard_ok = i_truthy(gr.unwrap())
+                if guard_ok:
+                    return i_eval_arm_body(arm[3], child)
             ai += 1
         return Err(i_r1003("match 未匹配任何分支（非穷尽）：" + i_to_str(sv), node[3]))
     return Err(i_r1002("未知表达式节点: " + ty, [0, 0]))
@@ -536,6 +548,32 @@ def i_names_of(v):
 # 注意：parser.px 生成的模式节点类型带 Pat 前缀
 #   （PatLiteral/PatBinding/PatWildcard/PatTuple/PatConstructor，
 #    LAYOUT 的显示名去掉前缀）
+# M239（第 116 轮）：match arm body 求值 —— **Block 走语句路径**，控制流原样向上返回。
+#   修前一律 `i_eval_expr(arm[3], child)` ⇒ 表达式 Block 分支把 {"__flow__":"return"} 拆成
+#   Ok(value)（丢信号）⇒ `def f(n): match n: case 0: return "zero"` 在解释轨返回 null
+#   （C/VM 轨正确）⇒ 三轨分叉。非 Block 体（表达式体）行为不变。
+def i_eval_arm_body(b, env):
+    if b[0] != "Block":
+        return i_eval_expr(b, env)
+    let child = env_new(env)
+    var last = null
+    var i = 0
+    while i < len(b[1]):
+        let s = b[1][i]
+        if s[0] == "ExprStmt":
+            let r = i_eval_expr(s[1], child)
+            if r.is_err():
+                return Err(r.err())
+            last = r.unwrap()
+        else:
+            let r = i_exec_stmt(s, child)
+            if r.is_err():
+                return Err(r.err())
+            let fl = r.unwrap()
+            if fl != null and type(fl) == "dict" and fl.has("__flow__"):
+                return Ok(fl)
+        i += 1
+    return Ok(last)
 def i_match_pattern(pat, v, env, pos):
     let pty = pat[0]
     if pty == "PatLiteral":

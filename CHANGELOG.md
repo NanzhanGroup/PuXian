@@ -1,3 +1,91 @@
+## M239 · **`match` / `case` 模式族全量对拍 —— 一整个控制流构造从来没有被度量过（缺陷 382–392）**（第 116 轮）
+
+> **主题**：M199（native 函数面）· M226（方法面）· M227（同名两门）· M228（三个门）·
+> M229（tuple/result）· M230（索引/切片）· M231（运算符矩阵）· M232（真值性/短路）·
+> M233（兜底渲染器）· M234（bytes 族）· M237（字段/构造/变体）逐个推过去 ——
+> 而 **`match` / `case` 这一整个控制流构造从来没有被清单级度量过**：
+> 全仓只有 **13 个 match 站点**、一个 234 字节的裸示例（`examples/struct.px`），
+> 而它**一条语义有三个实现**（解释轨 `iexpr` · VM 轨 `bc_emit` · C 轨 `cg_expr`），三者互不相同。
+
+### 修前基线（80 例三轨实测）：**34 例分叉**，其中「静默错值」5 类
+
+| # | 形状 | 修前 |
+|---|---|---|
+| **382** ⭐ | `guard`（`case P if C:`）在**解释轨与 C 轨完全不求值** —— 不判真假，**连副作用都不发生** | `match 5: case 5 if false: print("X")` ⇒ 两轨都打印 `X`；VM 轨正确。实测 `LOG=`（空）证明确实没求值 |
+| **383** | 同上派生：`case 5 if false:` 是唯一 arm 时，两轨取 arm，VM 轨落到「无匹配」 | 三轨分叉 |
+| **384** ⭐ | **编译两轨不绑定模式变量** —— C 轨 `PatBinding` 恒 `true`（从不赋值）、VM 轨同样 | `match 5: case n: print(n)` ⇒ 解释轨 `5`，编译两轨 `R1001 未定义变量: 'n'` |
+| **385** | C 轨 binding 在 **guard 位置**能读到（走另一条路径）、VM 轨不能 | `case n if n > 3` ⇒ 解释/C `big`，VM `R1001` ⇒ **两编译轨之间**也分叉 |
+| **386** | 绑定**不遮蔽**外层同名（C/VM 直接读到外层） | `let n = 100; match 5: case n: print(n)` ⇒ 解释 `5` ⇄ 编译两轨 `100` |
+| **387** ⭐ | **tuple 模式**：C/VM 恒不匹配 —— C 轨的实现是「只看 `items[0]` 一个元素的条件」，VM 轨同样是缩减版 | `match (1,2): case (1,2): …` ⇒ 解释 `hit`，编译两轨 `miss` |
+| **388** ⭐ | 解释轨：**`return` 落在 arm 体内被「表达式 Block」分支吞成值** | `def f(n): match n: case 0: return "zero"` ⇒ 解释轨返回 `null`（值为 `"zero"` 的表达式被丢弃），C/VM 正确 |
+| **389** | 解释轨：arm 体内的 `break` / `continue` ⇒ `R1005 块内出现非法控制流` | C/VM 正常（`i0 i1 done`） |
+| **390** | 顶层 arm 体内的 `return`：解释轨忽略（继续执行后续语句），C/VM 生效 | 分叉 |
+| **391** ⭐ | **全不匹配**时 C/VM **静默返回 subject 值** | `let r = match 9: case 1: "one"` ⇒ C/VM **`r = 9`**（= 主题值泄漏）；解释轨正确报 `R1003` |
+| **392** | 构造器模式**不查 arity**：`case Red(1)` 对**无载荷**变体在 C/VM 上**照匹配** | 解释 `other`，编译两轨 `RED1` |
+
+### 定稿（三轨一条真相，参考 = 解释轨单一 env）
+
+1. **guard** 只在模式**命中后**求值，按 M232 真值性判定，**最多一次**，**可带副作用**；
+2. **绑定模式**（`case x:` / `case (a, b):`）作用域 = **该 arm**（guard + body），**遮蔽**外层同名，
+   匹配失败的 arm **不留绑定**；
+3. **tuple 模式**：`subject ∈ {tuple, list}` 且长度**恰等**，逐元素递归（长度不等 = 不匹配，不是错误）；
+4. **无载荷变体带子模式 ⇒ 永不匹配**（data enum 尚未支持 —— 缺陷 364；若这是唯一 arm，
+   末尾的非穷尽判据会**响亮**报 R1003，不静默）；
+5. **全不匹配（含 guard 全假）⇒ R1003 响亮**：
+   `match 未匹配任何分支（非穷尽）：<str(subject)>`（渲染器与 `str()`/`print` 同源，M233）；
+6. arm 体内的 `return` / `break` / `continue` **正常传播**。
+
+### 实现（6 文件 · 门 `examples/m239_match_case/` 22 通过 / 0 失败）
+
+| 层 | 改动 |
+|---|---|
+| `runtime/runtime.c` · `.h` | 新 **`px_match_fail(subj)`**（R1003，唯一出口）· 新 **`px_match_tuple(v, n)`**（元组模式结构判据，C/VM 共用） |
+| `runtime/vm.h` · `vm.c` | 新指令 **`PXOP_MATCHFAIL 71`** / **`PXOP_MATCHTUP 72`**（`PXM_MAX 71 → 73`） |
+| VM 轨 `bc_emit.px` | `bc_match_cond` 重写为「**往 jumps 追加失败即跳的 JMPF 站点**」（原返回槽 ⇒ 调用方无法表达多级结构）；新 `bc_bind_var` / `bc_pattern_names` / `bc_shadow_save` / `bc_shadow_restore`；Match 发射器逐 arm 快照 smap 并还原 |
+| C 轨 `cg_expr.px` | `cg_gen_pattern_cond` 重写（绑定 / 元组递归 / 构造器 arity）；Match 发射器加 guard、加 `else { px_match_fail(t); }`、逐 arm 快照 `cg_vars`/`cg_cells` |
+| `codegen.px` | 新**专用计数器** `cg_match_uid`（`_mbN`）+ 待声明表 `cg_match_decls` —— 绑定局部没有「声明语句」可挂（match 是表达式）⇒ 就地声明在语句表达式开头；用独立计数器**不占 `_vN` 编号**（同 M165 cg_seq_uid / M166 cg_iter_len_tmp / M167 cg_unpack_tmp 的手法） |
+| 解释轨 `iexpr.px` · `istmt.px` | guard 求值；新 **`i_eval_arm_body`**（Block 走**语句路径** ⇒ 控制流原样返回）；`ExprStmt` 对 **Match 节点**上传播 `__flow__` |
+
+### ⚠️ 本轮自己的一个真 bug（门抓回）：**槽号不能当跳转下标**
+
+`bc_match_enumvar()` 返回的是**布尔结果槽号**，而首版 `bc_match_cond` 把它直接 `jumps.append(…)`
+—— `bc_patch_off` 于是去改一条**无关指令的 `b` 字段**（实测把一条 `MOV` 的源槽改成别处的一个下标槽）。
+症状极具迷惑性：**只有两个 case 分叉**（`c_ctor_unknown` 恒匹配、`b_bind_shadow` 读到未初始化槽），
+其余 78 例全绿。修法 = 先发 `JMPF`，再把 **JMPF 的下标**入 `jumps`。
+
+### 教训（三条）
+
+1. **「一个语义 N 个实现」的清单要主动维护** —— 本轮三个轨的实现**各自缺不同的一半**：
+   解释轨有真模式匹配但**不看 guard、吞控制流**；C/VM 有 guard 但**不绑定、不认元组、不判 arity**。
+   ⇒ 只有**逐位置的全量矩阵**能把这种「互补缺失」照出来（三轨两两之间都分叉）。
+2. **静态「看起来对」的实现细节要实测** —— `cg_gen_pattern_cond` 的 `PatTuple` 分支写着
+   `if len(items) > 0: return cg_gen_pattern_cond(items[0], subject)`，**读起来像**「先判第一个」，
+   实则是「**只**判第一个」⇒ 真元组恒不匹配。
+3. **判据补丁必须实跑验证**（M237 立的规矩又救了一次）：负控锚点 A/B/C/D 逐个「应用 → 还原 →
+   `git status` 复核」，避免「锚点命中 0 次」被当成「已应用」。
+
+### 覆盖边界（如实登记）
+
+- `case -1:`（负字面量模式）报 `E2001 无效的模式: -`；`case 1 + 2:` 报「期望 ':'」；
+  **多行 `match` 不能直接作函数实参 / 括号内表达式**（`print(str(match x: …))` ⇒ 「期望 缩进块」）
+  ⇒ 门内全部用例都写成「先 `let` 绑定、再使用」的形态。
+- 构造器模式带子模式对**无载荷**变体永不匹配 ⇒ 只验「三轨同判不匹配」，不验 payload 绑定。
+- 绑定被 **arm 内闭包捕获**（`case n: let f = fn() { n }`）不在面内（VM 的 cell 装箱未覆盖该路径）。
+- **解释轨 `iexpr` 的表达式 Block**（非 match 位置）仍保留「`return` 拆成值」的旧行为 ⇒ 本轮**未动**
+  （只修 Match 路径），登记为后续候选。
+
+### 验收
+
+- 门 `examples/m239_match_case/`：**22 通过 / 0 失败**（80 例 × 3 轨 = 240 次执行 · 跨轨分叉 **0** ·
+  MODEL.tsv 双向 · 负控 A/B/C/D 各自独立判红 · 源逐字节还原 · 覆盖边界 5 条）
+- 入库件重烘 **14/14**（`--check-all` 一致）· `--check` 55 例 · `--check-vm` 镜像一致
+- **codegen golden 重定基 3 件**（`s05_enum` / `s08_comprehensive` / `s13_langsugar`）——
+  逐行核对：**非本族差异 0 行**（全是 Match 族 + `_tN`/`_vN`/`px_err_N` 编号位移），
+  且这 3 件**恰好就是全仓仅有的 3 个「无兜底 arm」的 golden 用例**（与改动面一一对应）
+- 发射冻结门重定基 **433 → 434 件**（新增本门语料）
+- `./selfhost/diffcheck.sh --codegen` **19/19 一致**
+- 门已注册进 `selfhost/m116_gates.sh` 与 `.github/workflows/ci.yml`（CI 用 `--neg-skip`）
+
 ## M238 · **tag 命名规则硬化 + 发布链两处静默失效收口（缺陷 378–381）**
 
 > **令源**（用户 2026-10-01）：「打标签的时候要按规则打，不要随意改变。现在因为包名的问题，

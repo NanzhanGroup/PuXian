@@ -868,3 +868,13 @@ int px_hdr_blocked(const char* k);
 #endif // PX_RUNTIME_H
 // 调试辅助：对象是否仍注册在对象表（未回收）
 int px_gc_contains(LXObject* o);
+
+// ==================== M239（第 116 轮）：match 非穷尽 ⇒ R1003 ====================
+// 三轨一条真相：全部 arm 都不匹配（含 guard 全假）⇒ **响亮报错**，绝不静默。
+//   修前：解释轨 R1003（正确）；C/VM 轨**静默返回 subject 值**
+//   （`let r = match 9: case 1: "one"` ⇒ r == 9）—— 静默错值，比报错危险得多。
+// 消息 = "R1003: match 未匹配任何分支（非穷尽）：" + str(subject)，渲染器与 str()/print 同源（M233）。
+// ⚠️ 不 px_root_push：subj 由调用方持有（VM 帧槽是根 / C 轨 C 局部走保守扫描），本函数不新建容器。
+LXValue px_match_fail(LXValue subj);
+// 元组模式的结构判据：tuple 或 list 且长度恰为 n（对齐解释轨 i_match_pattern 的 PatTuple 分支）。
+int px_match_tuple(LXValue v, int n);

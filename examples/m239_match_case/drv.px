@@ -1,0 +1,549 @@
+# M239 门 · 聚合驱动器（合并两轮侦察的全部用例；gen 自 /tmp/m239 的 drv_match{,2}.px）
+#   环境变量 M239C 选例；一次编译覆盖全量（M199/M226/M228/M229/M230/M237 范式）。
+enum Color:
+    Red
+    Green
+    Blue
+struct Point:
+    x: int
+    y: int
+var LOG = ""
+def note(s):
+    LOG = LOG + s
+def g_dummy(n):
+    # guard 里带副作用：验证「guard 是否真的被求值」
+    note("G")
+    return n > 3
+def f_ret_in_arm(n):
+    match n:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case _:
+            return "other"
+def f_ret_wild(n):
+    match n:
+        case _:
+            return "any"
+def f_ret_guard(n):
+    match n:
+        case x if x > 3:
+            return "big"
+        case _:
+            return "small"
+def f_let_ret(n):
+    let r = match n:
+        case 0:
+            "zero"
+        case _:
+            "other"
+    return r
+def f_nested_ret(n):
+    match n:
+        case 0:
+            match 1:
+                case 1:
+                    return "inner"
+                case _:
+                    return "inner2"
+        case _:
+            return "outer"
+def classify(n):
+    match n:
+        case 0:
+            return "zero"
+        case _:
+            return "other"
+def main():
+    let c = env("M239C")
+    if c == "a_int_lit":
+        match 2:
+            case 1:
+                print("one")
+            case 2:
+                print("two")
+            case _:
+                print("other")
+    elif c == "a_float_lit":
+        match 1.5:
+            case 1.5:
+                print("f15")
+            case _:
+                print("other")
+    elif c == "a_str_lit":
+        match "hi":
+            case "hi":
+                print("greet")
+            case _:
+                print("other")
+    elif c == "a_true_lit":
+        match true:
+            case true:
+                print("T")
+            case _:
+                print("F")
+    elif c == "a_false_lit":
+        match false:
+            case true:
+                print("T")
+            case _:
+                print("F")
+    elif c == "a_null_lit":
+        match null:
+            case null:
+                print("NIL")
+            case _:
+                print("other")
+    elif c == "a_list_subj":
+        match [1, 2]:
+            case _:
+                print("wild")
+    elif c == "a_dict_subj":
+        match {"k": 1}:
+            case _:
+                print("wild")
+    elif c == "a_tuple_pat":
+        match (1, 2):
+            case (1, 2):
+                print("t12")
+            case _:
+                print("other")
+    elif c == "a_tuple_pat_miss":
+        match (1, 3):
+            case (1, 2):
+                print("t12")
+            case _:
+                print("other")
+    elif c == "a_bytes_subj":
+        match bytes("ab"):
+            case _:
+                print("wild")
+    elif c == "a_struct_subj":
+        match Point(1, 2):
+            case _:
+                print("wild")
+    elif c == "a_enum_ctor":
+        match Color.Red:
+            case Red:
+                print("RED")
+            case _:
+                print("other")
+    elif c == "a_enum_ctor2":
+        match Color.Blue:
+            case Red:
+                print("RED")
+            case Blue:
+                print("BLUE")
+            case _:
+                print("other")
+    elif c == "a_enum_field":
+        match Color.Green:
+            case Color.Green:
+                print("G")
+            case _:
+                print("other")
+    elif c == "a_result_subj":
+        match Ok(1):
+            case _:
+                print("wild")
+    # ── 类型严格性 ────────────────────────────────────────────────
+    elif c == "t_int_vs_float":
+        match 1:
+            case 1.0:
+                print("matched-as-float")
+            case _:
+                print("no")
+    elif c == "t_float_vs_int":
+        match 1.0:
+            case 1:
+                print("matched-as-int")
+            case _:
+                print("no")
+    elif c == "t_str_vs_int":
+        match "1":
+            case 1:
+                print("matched")
+            case _:
+                print("no")
+    elif c == "t_bool_vs_int":
+        match true:
+            case 1:
+                print("matched-as-1")
+            case _:
+                print("no")
+    elif c == "t_null_vs_zero":
+        match null:
+            case 0:
+                print("matched-as-0")
+            case _:
+                print("no")
+    # ── B. 无匹配 ─────────────────────────────────────────────────
+    elif c == "b_nomatch_nowild":
+        match 9:
+            case 1:
+                print("one")
+            case 2:
+                print("two")
+        print("after")
+    elif c == "b_nomatch_wild":
+        match 9:
+            case 1:
+                print("one")
+            case _:
+                print("wild")
+    elif c == "b_nomatch_let":
+        let r = match 9:
+            case 1:
+                "one"
+        print("r=" + str(r))
+    elif c == "b_nomatch_let_wild":
+        let r = match 9:
+            case 1:
+                "one"
+            case _:
+                "w"
+        print("r=" + str(r))
+    # ── C. binding / wildcard / 顺序 ──────────────────────────────
+    elif c == "c_bind_use":
+        match 5:
+            case n:
+                print("bound=" + str(n))
+    elif c == "c_bind_guard":
+        match 5:
+            case n if n > 3:
+                print("big")
+            case n:
+                print("small")
+    elif c == "c_bind_first_swallow":
+        match 5:
+            case n:
+                print("bound")
+            case 5:
+                print("five")
+    elif c == "c_wild_first":
+        match 5:
+            case _:
+                print("wild")
+            case 5:
+                print("five")
+    elif c == "c_dup_lit":
+        match 5:
+            case 5:
+                print("first")
+            case 5:
+                print("second")
+    # ── D. guard ──────────────────────────────────────────────────
+    elif c == "d_guard_true":
+        match 5:
+            case 5 if true:
+                print("g-true")
+            case _:
+                print("other")
+    elif c == "d_guard_false_fallback":
+        match 5:
+            case 5 if false:
+                print("g-true")
+            case _:
+                print("other")
+    elif c == "d_guard_bind_false":
+        match 5:
+            case n if n > 100:
+                print("big")
+            case n if n > 3:
+                print("mid")
+            case _:
+                print("small")
+    # ── E. body 形态 ──────────────────────────────────────────────
+    elif c == "e_expr_body":
+        let r = match 3:
+            case 3:
+                1 + 2
+            case _:
+                0
+        print("r=" + str(r))
+    elif c == "e_block_body":
+        match 3:
+            case 3:
+                let t = 1 + 2
+                print("t=" + str(t))
+            case _:
+                print("other")
+    elif c == "e_nested":
+        match 1:
+            case 1:
+                match 2:
+                    case 2:
+                        print("inner")
+                    case _:
+                        print("inner-other")
+            case _:
+                print("outer-other")
+    elif c == "e_in_func":
+        print(classify(0))
+        print(classify(7))
+    # ── F. 错误面 ─────────────────────────────────────────────────
+    elif c == "f_ctor_arity":
+        match Color.Red:
+            case Red(1):
+                print("red1")
+            case _:
+                print("other")
+    elif c == "f_ctor_unknown":
+        match Color.Red:
+            case Nope:
+                print("nope")
+            case _:
+                print("other")
+    elif c == "f_enum_nope_field":
+        match Color.Red:
+            case Color.Nope:
+                print("x")
+            case _:
+                print("other")
+    elif c == "f_pat_tuple_arity":
+        match (1, 2):
+            case (1, 2, 3):
+                print("t123")
+            case _:
+                print("other")
+    elif c == "f_pat_str_esc":
+        match "a\"b":
+            case "a\"b":
+                print("esc")
+            case _:
+                print("other")
+    elif c == "g_false_literal":
+        match 1:
+            case 1 if false:
+                print("ARM-TAKEN")
+            case _:
+                print("fallback")
+    elif c == "g_true_literal":
+        match 1:
+            case 1 if true:
+                print("ARM-TAKEN")
+            case _:
+                print("fallback")
+    elif c == "g_false_wild":
+        match 1:
+            case _ if false:
+                print("ARM-TAKEN")
+            case _:
+                print("fallback")
+    elif c == "g_side_effect":
+        LOG = ""
+        match 1:
+            case 1 if g_dummy(1):
+                print("taken")
+            case _:
+                print("fallback")
+        print("LOG=" + LOG)
+    elif c == "g_side_effect_true":
+        LOG = ""
+        match 1:
+            case 1 if g_dummy(5):
+                print("taken")
+            case _:
+                print("fallback")
+        print("LOG=" + LOG)
+    elif c == "g_second_arm_shape":
+        match 2:
+            case 1 if false:
+                print("A")
+            case 2 if false:
+                print("B")
+            case _:
+                print("C")
+    elif c == "g_no_wild_false":
+        match 1:
+            case 1 if false:
+                print("A")
+        print("after")
+    elif c == "g_num_cond":
+        match 5:
+            case x if x > 3:
+                print("big")
+            case x:
+                print("small")
+    elif c == "g_guard_uses_outer":
+        let lim = 3
+        match 5:
+            case x if x > lim:
+                print("over")
+            case _:
+                print("under")
+    # ── R. return / break / continue 在 arm 内 ────────────────────
+    elif c == "r_ret_literal":
+        print(f_ret_in_arm(0))
+        print(f_ret_in_arm(7))
+    elif c == "r_ret_wild":
+        print(f_ret_wild(5))
+    elif c == "r_ret_guard":
+        print(f_ret_guard(5))
+        print(f_ret_guard(1))
+    elif c == "r_let_ret":
+        print(f_let_ret(0))
+        print(f_let_ret(7))
+    elif c == "r_nested_ret":
+        print(f_nested_ret(0))
+        print(f_nested_ret(5))
+    elif c == "r_break_in_for":
+        for i in range(0, 5):
+            match i:
+                case 2:
+                    break
+                case _:
+                    print("i=" + str(i))
+        print("done")
+    elif c == "r_continue_in_for":
+        for i in range(0, 4):
+            match i:
+                case 1:
+                    continue
+                case _:
+                    print("i=" + str(i))
+        print("done")
+    elif c == "r_toplevel_ret":
+        match 1:
+            case 1:
+                print("before")
+                return
+            case _:
+                print("other")
+        print("after")
+    # ── B. 绑定 / 作用域 ──────────────────────────────────────────
+    elif c == "b_bind_leak":
+        match 5:
+            case n:
+                print("in=" + str(n))
+        print("out-ok")
+    elif c == "b_bind_shadow":
+        let n = 100
+        match 5:
+            case n:
+                print("in=" + str(n))
+        print("outer=" + str(n))
+    elif c == "b_bind_in_arm_use":
+        match 5:
+            case n:
+                print(str(n + 1))
+    elif c == "b_tuple_bind":
+        match (1, 2):
+            case (a, b):
+                print("a=" + str(a) + " b=" + str(b))
+            case _:
+                print("no")
+    elif c == "b_tuple_bind_wild":
+        match (1, 2):
+            case (a, _):
+                print("a=" + str(a))
+            case _:
+                print("no")
+    # ── T. tuple 模式族 ───────────────────────────────────────────
+    elif c == "t_tuple_2":
+        match (1, 2):
+            case (1, 2):
+                print("hit")
+            case _:
+                print("miss")
+    elif c == "t_tuple_3":
+        match (1, 2, 3):
+            case (1, 2, 3):
+                print("hit")
+            case _:
+                print("miss")
+    elif c == "t_tuple_arity_short":
+        match (1, 2):
+            case (1, 2, 3):
+                print("hit")
+            case _:
+                print("miss")
+    elif c == "t_tuple_arity_long":
+        match (1, 2, 3):
+            case (1, 2):
+                print("hit")
+            case _:
+                print("miss")
+    elif c == "t_tuple_nested":
+        match ((1, 2), 3):
+            case ((1, 2), 3):
+                print("hit")
+            case _:
+                print("miss")
+    elif c == "t_tuple_guard":
+        match (1, 2):
+            case (a, b) if a < b:
+                print("asc")
+            case _:
+                print("other")
+    # ── C. 构造器模式（枚举） ─────────────────────────────────────
+    elif c == "c_ctor_unit":
+        match Color.Red:
+            case Red:
+                print("RED")
+            case _:
+                print("other")
+    elif c == "c_ctor_unit_arity1":
+        match Color.Red:
+            case Red(1):
+                print("RED1")
+            case _:
+                print("other")
+    elif c == "c_ctor_unknown":
+        match Color.Red:
+            case Nope:
+                print("NOPE")
+            case _:
+                print("other")
+    elif c == "c_ctor_field_ok":
+        match Color.Red:
+            case Color.Red:
+                print("cr")
+            case _:
+                print("other")
+    # ── S. subject 求值次数 ───────────────────────────────────────
+    elif c == "s_eval_once":
+        LOG = ""
+        match g_dummy(1):
+            case _:
+                print("x")
+        print("LOG=" + LOG)
+    elif c == "s_eval_nomatch":
+        LOG = ""
+        match str(g_dummy(1)) + "x":
+            case "zzz":
+                print("one")
+            case _:
+                print("wild")
+        print("LOG=" + LOG)
+    # ── N. match 作为表达式的位置 ─────────────────────────────────
+    elif c == "n_expr_singleline":
+        let m = match 2:
+            case 2:
+                42
+            case _:
+                0
+        print("v=" + str(m))
+    elif c == "n_expr_arith":
+        let t = match 2:
+            case 2:
+                10
+            case _:
+                0
+        let x = t + 5
+        print("x=" + str(x))
+    elif c == "n_expr_in_list":
+        let v = match 1:
+            case 1:
+                "a"
+            case _:
+                "b"
+        print([v, v])
+    elif c == "n_stmt_value_discard":
+        match 1:
+            case 1:
+                "ignored"
+        print("ok")
+    else:
+        print("UNKNOWN-CASE:" + str(c))

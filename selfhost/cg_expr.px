@@ -671,22 +671,49 @@ def cg_gen_expr(expr):
         s += "_blk; })"
         return s
     if ty == "Match":
+        # M239（第 116 轮）：四条收口 ——
+        #   ① guard（arm[2]）修前**完全不看**（模式命中即取 arm）；
+        #   ② PatBinding 修前恒 true（**不绑定**）⇒ arm body 里读该名 = C undeclared / 读到**外层同名**；
+        #   ③ PatTuple 修前只看 items[0]（真元组 subject 恒不匹配）；
+        #   ④ 全不匹配修前**静默返回 subject 值** ⇒ 改 px_match_fail（R1003，与解释轨同码同文）。
+        #   绑定作用域 = 该 arm：cg_vars/cg_cells 逐 arm 快照并还原。
         let sub = cg_gen_expr(expr[1])
         let t = cg_tmp()
-        var s = "({ LXValue " + t + " = " + sub + "; "
+        let rv = cg_tmp()
+        # 绑定的 `_mbN` 局部随 arms 生成而登记在 cg_match_decls ⇒ 全部**就地声明**在本语句表达式开头
+        let saved_decls = cg_match_decls
+        cg_match_decls = []
         let arms = expr[2]
+        var arms_s = ""
         var first = true
         var ai = 0
         while ai < len(arms):
-            var cond_c = cg_gen_pattern_cond(arms[ai][1], t)
+            let saved_vars = cg_dict_copy(cg_vars)
+            let saved_cells = cg_dict_copy(cg_cells)
+            let cond_c = cg_gen_pattern_cond(arms[ai][1], t)
+            var full = cond_c
+            if arms[ai][2] != null:
+                let g = cg_gen_expr(arms[ai][2])
+                full = "(" + cond_c + " && px_is_truthy(" + g + "))"
             let body_c = cg_gen_expr(arms[ai][3])
             var kw = "if"
             if not first:
                 kw = "else if"
-            s += kw + " (" + cond_c + ") { " + t + " = " + body_c + "; } "
+            arms_s += kw + " (" + full + ") { " + rv + " = " + body_c + "; } "
+            cg_vars = saved_vars
+            cg_cells = saved_cells
             first = false
             ai += 1
-        s += t + "; })"
+        var decls = ""
+        var di = 0
+        while di < len(cg_match_decls):
+            decls += "LXValue " + cg_match_decls[di] + " = px_null(); "
+            di += 1
+        cg_match_decls = saved_decls
+        var s = "({ LXValue " + t + " = " + sub + "; LXValue " + rv + " = px_null(); " + decls
+        s += arms_s
+        s += "else { px_match_fail(" + t + "); } "
+        s += rv + "; })"
         return s
     if ty == "Constructor":
         let name = rust_unescape(expr[1])
@@ -763,28 +790,53 @@ def cg_binop_cname(op):
     if op == "ShrU":
         return "px_ushr"
     return "px_add"
-# ---------- match 模式条件 ----------
+# ---------- match 模式条件（M239 重写：绑定 / 元组 / 构造器 arity） ----------
+# 契约：返回一个**布尔 C 表达式**；副作用（绑定的赋值）只能出现在「结构检查已通过」之后
+#   —— 靠 C 的 `&&` 左→右短路保证（元组的结构判据排在逐元素判据之前）。
+def cg_match_bind(name):
+    cg_match_uid = cg_match_uid + 1
+    let v = "_mb" + str(cg_match_uid)
+    cg_vars[name] = v
+    # M129（缺陷 21）：新绑定遮蔽同名旧绑定 ⇒ 旧 cell 标记必须失效
+    if cg_cells.has(name):
+        cg_cells.remove(name)
+    cg_match_decls.append(v)
+    return v
+def cg_enum_var_cond(name, subject):
+    return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + name + "\") == 0)"
 def cg_gen_pattern_cond(pattern, subject):
     let pty = pattern[0]
     if pty == "PatLiteral":
         var e = cg_gen_expr(pattern[1])
         return "px_is_truthy(px_eq(" + subject + ", " + e + "))"
+    if pty == "PatWildcard":
+        return "1"
     if pty == "PatBinding":
         let name = rust_unescape(pattern[1])
         if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
-            return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + name + "\") == 0)"
-        return "true"
-    if pty == "PatWildcard":
-        return "true"
+            return cg_enum_var_cond(name, subject)
+        # 小写名 = **绑定模式**（M239）：新帧局部 + 赋值，恒匹配（逗号表达式保序）
+        let lv = cg_match_bind(name)
+        return "(" + lv + " = " + subject + ", 1)"
     if pty == "PatTuple":
         let items = pattern[1]
-        if len(items) > 0:
-            return cg_gen_pattern_cond(items[0], subject)
-        return "true"
+        var parts = [cg_tuple_cond(subject, len(items))]
+        var i = 0
+        while i < len(items):
+            parts.append("(" + cg_gen_pattern_cond(items[i], "px_index(" + subject + ", px_int(" + str(i) + "))") + ")")
+            i += 1
+        return "(" + join(" && ", parts) + ")"
     if pty == "PatConstructor":
         let name = rust_unescape(pattern[1])
-        return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + name + "\") == 0)"
-    return "true"
+        let c = cg_enum_var_cond(name, subject)
+        if len(pattern[2]) > 0:
+            # M239：**无载荷变体**带子模式 ⇒ 永不匹配（data enum 尚未支持；解释轨同口径）。
+            #   不静默：若这是唯一的 arm，末尾 px_match_fail 会响亮报 R1003。
+            return "(0 && " + c + ")"
+        return c
+    return "1"
+def cg_tuple_cond(subject, n):
+    return "(px_match_tuple(" + subject + ", " + str(n) + "))"
 # ---------- M34：无捕获闭包函数（生成器 transform/filter） ----------
 def cg_gen_lambda(params, body):
     cg_closure_id = cg_closure_id + 1

@@ -803,6 +803,17 @@ jobs:
           echo "✅ m237_field_enum verify（38 例 · 三轨一致 + 拒绝侧 + struct/enum/dict 字段族）PASS"
 
 
+      # M239（第 116 轮）：**`match` / `case` 这一整个控制流构造从来没有被清单级度量过** ——
+      #   80 例 × 3 轨，一量就照出 34 例分叉（guard 被忽略 / 绑定不生效 / tuple 模式恒不匹配 /
+      #   非穷尽静默返回 subject / arm 内 return 丢失）。本步跑 --neg-skip 档。
+      - name: m239_match_case（match/case 模式族 · 三轨全量对拍 + MODEL 双向 + 非穷尽响亮）
+        if: always()
+        run: |
+          bash examples/m239_match_case/verify.sh --neg-skip > /tmp/v_m239.log 2>&1 || { echo "❌ m239_match_case verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m239.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m239.log | tail -20
+          echo "✅ m239_match_case verify（80 例 · guard/绑定/tuple/非穷尽/控制流传播）PASS"
+
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门
