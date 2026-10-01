@@ -56,7 +56,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(44);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("code OK: "), px_call(px_get_global("str"), (LXValue[]){px_bool(true)}, 1))}, 1));
     px_srcline(47);
-    _v5 = px_enum("Kind", "Str");
+    _v5 = px_enum_checked("Kind", "Str", 1);
     px_srcline(48);
     _v6 = ({ LXValue _t14 = _v5; if ((_t14.type == PX_ENUM && strcmp(_t14.as.obj->as.enum_inst.variant, "Int") == 0)) { _t14 = ({ LXValue _blk = px_null(); _blk = px_str("int"); _blk; }); } else if ((_t14.type == PX_ENUM && strcmp(_t14.as.obj->as.enum_inst.variant, "Str") == 0)) { _t14 = ({ LXValue _blk = px_null(); _blk = px_str("str"); _blk; }); } _t14; });
     px_srcline(53);

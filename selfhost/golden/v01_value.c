@@ -1062,9 +1062,9 @@ int main(int argc, char** argv) {
     px_srcline(80);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("== v_type 对象类型 ==")}, 1));
     px_srcline(88);
-    (void)(px_call(px_get_global("check_value"), (LXValue[]){px_str("enum 值"), px_enum("Color", "Red")}, 2));
+    (void)(px_call(px_get_global("check_value"), (LXValue[]){px_str("enum 值"), px_enum_checked("Color", "Red", 1)}, 2));
     px_srcline(89);
-    (void)(px_call(px_get_global("check_value"), (LXValue[]){px_str("enum type"), px_enum("Color", "Green")}, 2));
+    (void)(px_call(px_get_global("check_value"), (LXValue[]){px_str("enum type"), px_enum_checked("Color", "Green", 1)}, 2));
     px_srcline(90);
     (void)(px_call(px_get_global("check_value"), (LXValue[]){px_str("struct 实例"), px_struct("Point", (char*[]){"x", "y"}, (LXValue[]){px_int(1LL), px_int(2LL)}, 2)}, 2));
     px_srcline(91);
@@ -1110,9 +1110,9 @@ int main(int argc, char** argv) {
     px_srcline(119);
     (void)(px_call(px_get_global("check_eq"), (LXValue[]){px_str("dict 键序无关"), ({ LXValue _d = px_dict(); { LXValue _k = px_str("a"); LXValue _v = px_int(1LL); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("b"); LXValue _v = px_int(2LL); px_dict_set_checked(_d, _k, _v); } _d; }), ({ LXValue _d = px_dict(); { LXValue _k = px_str("b"); LXValue _v = px_int(2LL); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("a"); LXValue _v = px_int(1LL); px_dict_set_checked(_d, _k, _v); } _d; }), px_bool(true)}, 4));
     px_srcline(120);
-    (void)(px_call(px_get_global("check_eq"), (LXValue[]){px_str("enum==enum"), px_enum("Color", "Red"), px_enum("Color", "Red"), px_bool(true)}, 4));
+    (void)(px_call(px_get_global("check_eq"), (LXValue[]){px_str("enum==enum"), px_enum_checked("Color", "Red", 1), px_enum_checked("Color", "Red", 1), px_bool(true)}, 4));
     px_srcline(121);
-    (void)(px_call(px_get_global("check_eq"), (LXValue[]){px_str("enum!=enum"), px_enum("Color", "Red"), px_enum("Color", "Blue"), px_bool(false)}, 4));
+    (void)(px_call(px_get_global("check_eq"), (LXValue[]){px_str("enum!=enum"), px_enum_checked("Color", "Red", 1), px_enum_checked("Color", "Blue", 1), px_bool(false)}, 4));
     px_srcline(122);
     (void)(({ LXValue _s13 = px_call(px_get_global("Ok"), (LXValue[]){px_int(1LL)}, 1); LXValue _s14 = px_call(px_get_global("Ok"), (LXValue[]){px_int(1LL)}, 1); px_call(px_get_global("check_eq"), (LXValue[]){px_str("Ok==Ok"), _s13, _s14, px_bool(true)}, 4); }));
     px_srcline(123);

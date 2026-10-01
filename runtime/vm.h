@@ -162,7 +162,11 @@ typedef struct {
 //   （`not in 运算符左操作数需要 string`），同 M227 H3「词条归属」纪律。
 #define PXOP_IN      68  // a=dst, b=左操作数(元素)槽, c=右操作数(集合)槽（px_in）
 #define PXOP_NOTIN   69  // 同 IN（px_not_in）
-#define PXM_MAX      70
+// M237（缺陷 366/368/371）：**编译期已判定**的错误，VM 轨发射为**运行期**报错。
+//   修前 bc_emit 直接 panic ⇒ `px build` 编译期失败，而解释轨与 C 轨都是运行期
+//   ⇒ 三轨在「阶段」上分叉（同一条语义三种命运）。b=N[消息] ⇒ px_error(消息)。
+#define PXOP_RAISE   70
+#define PXM_MAX      71
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
