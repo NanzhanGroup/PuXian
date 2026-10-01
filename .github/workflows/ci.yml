@@ -894,6 +894,8 @@ jobs:
           run_guard rpm_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
           run_guard make_release  bash packaging/selftest_make_release.sh
           run_guard tag_guard     bash packaging/selftest_tag_guard.sh
+          # M238：镜像器判据离线自测（原来从未注册）
+          run_guard pxrepo_mirror bash packaging/selftest_pxrepo_mirror.sh
           # M168：install-rpm.sh 的**发行版矩阵离线自测**
           #   （openEuler 22.03/24.03 必须认脸 + 字面目录；不支持组合必须给出替代路线）
           run_guard install_rpm   bash packaging/selftest_install_rpm.sh

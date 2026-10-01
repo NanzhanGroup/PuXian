@@ -69,10 +69,50 @@ trap cleanup EXIT
 
 # ---------- 1. 权威版本：远端 tag 中最高者 ----------
 log "① 解析远端 tag（$REPO_SLUG）"
-TAGS="$(git ls-remote --tags "$REMOTE_URL" \
-        | awk '{print $2}' | sed 's#^refs/tags/##; s/\^{}$//' \
-        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-m[0-9]+)?$' | sort -u || true)"
+ALLTAGS="$(git ls-remote --tags "$REMOTE_URL" \
+        | awk '{print $2}' | sed 's#^refs/tags/##; s/\^{}$//' | sort -u || true)"
+# >>> tag-name-guard >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
+# 规则（唯一）：v<主版本>-m<里程碑>，例 v0.2.0-m167。**没有补丁后缀**。
+# M238（用户令 2026-10-01）：tag 命名**是发布规则的一部分**，不允许自由发挥。
+#   事故：误打 v0.2.0-m237s3 ⇒ ① 版本序正则把它**静默过滤**（镜像永远停在旧版、无任何告警）；
+#   ② build_rpm.sh 的 MILESTONE 取短横线之后整段 ⇒ rpm 包名变成
+#   puxian-0.2.0-1.m237s3.el9.x86_64.rpm ⇒ 与 gh-pages 的 `.mNNN.` 交叉校验失配。
+#   **违规必须响亮**：把不参与版本序的 tag 全部列出来。
+# 本段**自包含**（TAG_RE / TAGS / die 都在段内）—— 离线回归按标记抽取后可直接执行。
+TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-m[0-9]+)?$'
+TAGS="$(printf '%s\n' "$ALLTAGS" | grep -E "$TAG_RE" || true)"
 [ -n "$TAGS" ] || die "远端没有任何符合 v<M>.<m>.<p>[-mNNN] 的 tag"
+BADTAGS="$(printf '%s\n' "$ALLTAGS" | grep -vE "$TAG_RE" | grep -v '^$' || true)"
+if [ -n "$BADTAGS" ]; then
+  # 豁免表：规则确立（M238）之前的**历史遗留**，只减不增 —— 见 packaging/tag_name_exempt.txt。
+  # 未登记的违规 ⇒ **响亮**（默认不拦：宁可同步旧版，也不要把镜像整体停掉；
+  #   需要硬拦时设 PXREPO_STRICT_TAGS=1）。
+  _exf="${PXREPO_EXEMPT_FILE:-$(dirname "$0")/tag_name_exempt.txt}"
+  _exl=""
+  if [ -f "$_exf" ]; then
+    _exl="$(grep -vE '^[[:space:]]*(#|$)' "$_exf" | awk '{print $1}' || true)"
+  fi
+  if [ -n "$_exl" ]; then
+    _badnew="$(printf '%s\n' "$BADTAGS" | grep -vxF "$_exl" || true)"
+  else
+    _badnew="$BADTAGS"
+  fi
+  _nnew="$(printf '%s\n' "$_badnew" | grep -c . || true)"
+  if [ "$_nnew" -gt 0 ]; then
+    log "   ⚠ 远端有 $_nnew 个**未登记**的不合规 tag（规则应为 v<M>.<m>.<p>[-mNNN]，例 v0.2.0-m167）"
+    log "      它们不参与版本序 ⇒ 对应 Release 永远不会被镜像："
+    printf '%s\n' "$_badnew" | sed 's/^/        · /'
+    log "      整改：把合规 tag 指向该里程碑的最终提交，再 git push origin --delete <违规 tag>"
+    if [ "${PXREPO_STRICT_TAGS:-0}" = 1 ]; then
+      die "PXREPO_STRICT_TAGS=1：存在未登记的不合规 tag，拒绝继续（清单见上）"
+    fi
+  fi
+  _nall="$(printf '%s\n' "$BADTAGS" | grep -c . || true)"
+  if [ "$_nall" -gt "$_nnew" ]; then
+    log "   ℹ️ 另有 $((_nall - _nnew)) 个违规 tag 已登记在豁免表（历史遗留，不告警）"
+  fi
+fi
+# <<< tag-name-guard <<<
 
 vkey() { printf '%s' "$1" | sed -nE 's/^v([0-9]+)\.([0-9]+)\.([0-9]+)(-m([0-9]+))?$/\1 \2 \3 \5/p'; }
 BEST=""; BESTKEY=""
@@ -152,11 +192,19 @@ log "   gh-pages tip: $PAGES_MSG"
 # >>> xcheck-rpm-tree >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
 RPM_MS="$(git -C "$CLONE" ls-tree -r --name-only FETCH_HEAD rpm 2>/dev/null \
           | grep -oE '\.m[0-9]+\.' | tr -d '.' | sort -u | tr '\n' ' ' || true)"
+# 违规形态（补丁后缀，如 .m237s3.）单独抓一份 —— 否则 die 消息只能说「不同步」，
+# 指不到真因（真因是上游 tag / rpm 包名不合规）。2026-10-01 实测踩到。
+RPM_MS_BAD="$(git -C "$CLONE" ls-tree -r --name-only FETCH_HEAD rpm 2>/dev/null \
+          | grep -oE '\.m[0-9]+s[0-9]+\.' | tr -d '.' | sort -u | tr '\n' ' ' || true)"
 TAG_MS="$(printf '%s' "$TAG" | grep -oE 'm[0-9]+$' || true)"
 if [ -n "$TAG_MS" ]; then
   case " $RPM_MS " in
     *" $TAG_MS "*) log "   ✅ 交叉校验：rpm 树含 $TAG_MS（= tag $TAG）" ;;
-    *) die "版本交叉校验失败：rpm 树版本（${RPM_MS:-空}）不含 $TAG_MS（gh-pages 与 Release 不同步，保持原样）" ;;
+    *)
+      if [ -n "$RPM_MS_BAD" ]; then
+        die "版本交叉校验失败：rpm 树里的版本标记不合规（${RPM_MS_BAD}）—— 上游 tag 带了补丁后缀（如 -m237s3），build_rpm.sh 把短横线之后整段当作 MILESTONE ⇒ rpm 包名被污染。整改：删违规 tag + 合规 tag 指向该里程碑最终提交 + 重发。"
+      fi
+      die "版本交叉校验失败：rpm 树版本（${RPM_MS:-空}）不含 $TAG_MS（gh-pages 与 Release 不同步，保持原样）" ;;
   esac
   [ "$(printf '%s' "$RPM_MS" | wc -w)" -le 1 ] \
     || log "   ⚠ rpm 树内出现多个里程碑版本（$RPM_MS）—— 疑似上游 rsync 未 --delete"
@@ -174,20 +222,33 @@ git -C "$CLONE" archive --format=tar FETCH_HEAD rpm install-rpm.sh index.html 2>
 # ---------- 4. 取 Release 资产（tarball + sha256sums.txt） ----------
 log "③ 下载 Release 资产（tag=$TAG）"
 # 注：本仓库的 tag 是 annotated（refs/tags/X = tag 对象，X^{} = commit）⇒ 必须取 peeled
-SHA7="$(git ls-remote "$REMOTE_URL" "refs/tags/$TAG^{}" | awk '{print $1}' | head -1 | cut -c1-7)"
-[ -n "$SHA7" ] || SHA7="$(git ls-remote "$REMOTE_URL" "refs/tags/$TAG" | awk '{print $1}' | head -1 | cut -c1-7)"
-[ -n "$SHA7" ] || die "取不到 $TAG 的 commit"
-TARBALL="puxian-${TAG#v}-${SHA7}.tar.gz"
-TAR_URL="$DL_BASE/$TAG/$TARBALL"
-# 资产名以「实际可下载」为准：猜错（或命名规则变更）则回退 GitHub API 取真实资产名
-if ! curl -fsS -L -r 0-0 -o /dev/null "$TAR_URL" 2>/dev/null; then
-  log "   ⚠ 猜测资产名不可用（$TARBALL），改用 GitHub API 取实际资产名"
-  TARBALL="$(curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/tags/$TAG" \
-             | grep -o '"name":"[^"]*\.tar\.gz"' | head -1 | sed 's/^"name":"//; s/"$//')"
-  [ -n "$TARBALL" ] || die "取不到 $TAG 的 tarball 资产名"
-  TAR_URL="$DL_BASE/$TAG/$TARBALL"
-  log "   实际资产名 = $TARBALL"
+SHA="$(git ls-remote "$REMOTE_URL" "refs/tags/$TAG^{}" | awk '{print $1}' | head -1 || true)"
+[ -n "$SHA" ] || SHA="$(git ls-remote "$REMOTE_URL" "refs/tags/$TAG" | awk '{print $1}' | head -1 || true)"
+[ -n "$SHA" ] || die "取不到 $TAG 的 commit"
+SHORT="$(printf '%s' "$SHA" | cut -c1-8)"
+# 资产名**以 GitHub API 为真值**（不猜短 SHA 位数）。
+#   2026-10-01 实测：自 v0.2.0-m235 起资产名里的短 SHA 由 7 位变 8 位（git 随仓库对象数自动加长）
+#   ⇒ 猜名必 404；而**原来的回退分支**用 grep 匹配不到 GitHub API 的 `"name": "…"`
+#   （冒号后带空格），叠加 set -euo pipefail ⇒ **命令替换非零 ⇒ 脚本静默退出，
+#   连 die 的 ❌ 都打不出来** ⇒ 镜像同步自 09-30 起每 30 分钟失败一轮、无人知晓
+#   （晨曦 2026-10-01 报障）。故：**先 API（真值）**，API 不可用才退回猜（8/7 位各试）。
+REL_JSON="$WORK/rel-$TAG.json"
+TARBALL=""
+if curl -fsSL -o "$REL_JSON" "https://api.github.com/repos/$REPO_SLUG/releases/tags/$TAG" 2>/dev/null; then
+  TARBALL="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*\.tar\.gz"' "$REL_JSON" \
+             | head -1 | sed -E 's/^"name"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  [ -n "$TARBALL" ] || die "GitHub API 响应里没有 .tar.gz 资产（tag=$TAG，原始响应留在 $REL_JSON）"
+  log "   资产名（API 真值）= $TARBALL"
+else
+  log "   ⚠ GitHub API 不可用（限流/离线）⇒ 退回按短 SHA 猜资产名（8 位 / 7 位各试一次）"
+  for _n in 8 7; do
+    _c="puxian-${TAG#v}-$(printf '%s' "$SHA" | cut -c1-$_n).tar.gz"
+    if curl -fsS -L -r 0-0 -o /dev/null "$DL_BASE/$TAG/$_c" 2>/dev/null; then TARBALL="$_c"; break; fi
+  done
+  [ -n "$TARBALL" ] || die "取不到 $TAG 的 tarball 资产名（API 不可用，短 SHA 8/7 位猜测均 404）"
+  log "   猜中资产名 = $TARBALL"
 fi
+TAR_URL="$DL_BASE/$TAG/$TARBALL"
 mkdir -p "$STAGING/releases"
 curl -fsSL --retry 3 --retry-delay 5 -o "$STAGING/releases/sha256sums.txt" "$DL_BASE/$TAG/sha256sums.txt" \
   || die "下载 sha256sums.txt 失败"
@@ -237,7 +298,7 @@ cat > "$STAGING/version.json" <<JSON
 {
   "version": "$TAG",
   "tag": "$TAG",
-  "commit": "$SHA7",
+  "commit": "$SHORT",
   "synced_at": "$(date -Iseconds)",
   "source": "https://github.com/$REPO_SLUG",
   "tarball": "releases/$TARBALL",

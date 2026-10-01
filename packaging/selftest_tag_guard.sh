@@ -25,12 +25,18 @@ git -C "$REPO" init -q -b main
 pass=0; fail=0
 RC=0; out=""
 
+# M238：③ tag 命名合规判据要读豁免表。夹具里刻意留了一个**非里程碑 tag**
+#   （v0.2.0-m114s2，用于钉住「建议的 tag 名不得被它污染」）⇒ 默认豁免它，
+#   否则 A–I 段会全部变成 rc=3（判据没错，是夹具需要一个出口）。
+EXF_OK="$TMP/exempt-ok.txt"
+printf 'v0.2.0-m114s2\t2026-10-01\t自测夹具：非里程碑 tag\n' > "$EXF_OK"
 g() {   # g [--allow] [guard 参数...] —— 跑守卫并记下 rc/输出
+    local _ex="${SELFTEST_GUARD_EXEMPT:-$EXF_OK}"
     if [ "${1:-}" = "--allow" ]; then
         shift
-        out=$(TAG_GUARD_ALLOW_MISSING='自测放行理由' bash "$GUARD" --repo "$REPO" "$@" 2>&1); RC=$?
+        out=$(TAG_GUARD_EXEMPT="$_ex" TAG_GUARD_ALLOW_MISSING='自测放行理由' bash "$GUARD" --repo "$REPO" "$@" 2>&1); RC=$?
     else
-        out=$(bash "$GUARD" --repo "$REPO" "$@" 2>&1); RC=$?
+        out=$(TAG_GUARD_EXEMPT="$_ex" bash "$GUARD" --repo "$REPO" "$@" 2>&1); RC=$?
     fi
 }
 ck() {   # ck <用例名> <期望 rc>
@@ -155,6 +161,30 @@ ckhas "I2 判红时也打年龄行（红能读出真因）" "距今年龄"
 g --ref "$OLD" --grace-min 99999
 ck "I3 grace 覆盖老提交 ⇒ 跳过、rc=0" 0
 ckhas "I3 明示跳过" "跳过检查"
+
+echo "── J tag 命名合规（M238 新增 · 用户令 2026-10-01）──"
+#   背景（实测事故）：误打 v0.2.0-m237s3 ⇒
+#     ① packaging/pxrepo_mirror.sh 的版本序正则（= 规则本身）把它**静默过滤**
+#        ⇒ 镜像永远停在旧版、**连 ❌ 都打不出来**；
+#     ② packaging/build_rpm.sh 的 MILESTONE 取短横线之后整段 ⇒ rpm 包名被污染成
+#        puxian-0.2.0-1.m237s3.el9.x86_64.rpm ⇒ 与 gh-pages 的 `.mNNN.` 交叉校验失配。
+#   判据：未登记的违规 tag ⇒ rc=3（指名）；登记豁免 ⇒ rc=0；豁免表过期条目 ⇒ rc=3。
+git -C "$REPO" tag v0.2.0-m903s1 HEAD
+g --ref HEAD; ck "J1 未登记的违规 tag ⇒ rc=3" 3
+ckhas "J1 指出「未登记」" "未登记"
+ckhas "J1 列出违规 tag 名" "v0.2.0-m903s1"
+
+git -C "$REPO" tag v0.2.0-m910 HEAD
+{ printf 'v0.2.0-m114s2\t2026-10-01\t夹具\n'; printf 'v0.2.0-m903s1\t2026-10-01\t夹具\n'; } > "$TMP/ex2.txt"
+SELFTEST_GUARD_EXEMPT="$TMP/ex2.txt" g --ref HEAD; ck "J2 登记豁免后 ⇒ rc=0" 0
+ckhas "J2 明示已登记豁免数" "已登记豁免"
+
+{ printf 'v0.2.0-m114s2\t2026-10-01\t夹具\n'; printf 'v0.2.0-m903s1\t2026-10-01\t夹具\n'; printf 'v0.2.0-m999s9\t2026-10-01\t不存在的 tag\n'; } > "$TMP/ex3.txt"
+SELFTEST_GUARD_EXEMPT="$TMP/ex3.txt" g --ref HEAD; ck "J3 豁免表过期条目 ⇒ rc=3" 3
+ckhas "J3 指名「过期条目」" "过期条目"
+
+git -C "$REPO" tag -d v0.2.0-m903s1 >/dev/null
+g --ref HEAD; ck "J4 删掉违规 tag 后 ⇒ rc=0" 0
 
 echo
 if [ "$fail" -eq 0 ]; then
