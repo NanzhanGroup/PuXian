@@ -25180,7 +25180,7 @@ static PxPend* px_pxpend_ctx(int fd) {
     return &g_pxpend[fd];
 }
 
-// M240（缺陷 341）：`g_pxpend` 是 `xrealloc` **增长**的 —— 容量超 `fd` 时整体搬家
+// M240（缺陷 399）：`g_pxpend` 是 `xrealloc` **增长**的 —— 容量超 `fd` 时整体搬家
 //   （数组 >128KB ⇒ glibc 走 mmap ⇒ 旧块被 munmap）。所以**锁外持有的 `PxPend*` 一律不可信**：
 //   读它 = SEGV（实测 core：`px_pxpend_enter` 读 `+4` 偏移），写它 = **静默堆破坏**。
 //   口径：凡需跨锁瞬间使用，一律用下面两个访问器（锁内重新解析）。
@@ -25259,7 +25259,7 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
     }
     pthread_mutex_lock(&g_pxpend_mu);
     gc_block_stop(&old);
-    // ═══ M240（缺陷 341）：**必须重新解析 `e`** ═══
+    // ═══ M240（缺陷 399）：**必须重新解析 `e`** ═══
     //   上面那次 `px_conn_init`（TLS 握手）在**锁外**执行，其间**任何**线程都可能以更大的 fd
     //   调用本函数 ⇒ `px_pxpend_ensure` 的 `xrealloc` 把 `g_pxpend` **整体搬走**
     //   ⇒ 手里这个 `e` 是**野指针**（读它崩；写它 = 静默堆破坏）。
@@ -25881,7 +25881,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         g_cur_conn = NULL;
         return px_null();
     }
-    // M240（缺陷 341）：锁内重新解析（`pend` 只用于上面的 NULL 判定）
+    // M240（缺陷 399）：锁内重新解析（`pend` 只用于上面的 NULL 判定）
     PxConn* conn = px_pxpend_conn_of(fd);
     g_cur_conn = conn;
     // M99：每 job 登记连接上下文为 ACTIVE（FREE→ACTIVE 或幂等复位；事件循环照看/超时收尾用）。
@@ -25902,7 +25902,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     //   返回非 null → px_vhost_respond（无访问日志 = vhost 历史语义）；返回 null →
     //   docroot 回退续管道（store vroot + 重入 px_http_dispatch skip_pre=1：不重复
     //   CORS/限流/vhost，直接 route+静态/.px 完成）——vhost 回退与同步路径语义一致。
-    if (px_pxpend_stage_of(fd) == 2) {   // M240（缺陷 341）：锁内重新解析
+    if (px_pxpend_stage_of(fd) == 2) {   // M240（缺陷 399）：锁内重新解析
         LXValue sreq, sresp;
         int sh = 0, sc = 1;
         char srid[64];

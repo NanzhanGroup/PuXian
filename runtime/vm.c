@@ -850,7 +850,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             LXValue d = px_dict();
             // M208（缺陷 268 · **由 M207 的 GC 压力筛语料实跑定位**）：`d` 只活在 C 局部，
             //   而循环里的 `px_dict_set(d, …)` 会 `m128_strdup` 键副本 + 扩容 `xrealloc`
-            //   —— **那是一条分配路径**（M207 的静态审计器当时没把它算作分配，见缺陷 269）
+            //   —— **那是一条分配路径**（静态审计器当时没把它算作分配 —— 即**缺陷 270** 的整族漏报）
             //   ⇒ INLINE 档下 `d` 在第二次 `px_dict_set` 前就被回收，随后对它写入
             //   （实测 examples/m88_s3/s1b_gc_stress：`[PX_GC_LIVECHK] 读到已回收对象
             //    （px_dict_set(dict)）` + SIGABRT；**默认档下是静默错值**）。
