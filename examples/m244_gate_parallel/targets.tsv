@@ -1,0 +1,21 @@
+# M244 · 「门内并行」的目标执行器清单
+# ---------------------------------------------------------------------------
+# 主题：全量门实测 **6997s / 154 门**，其中 12 个「矩阵对拍门」占 **3513s**，
+#       而它们的耗时主体是**逐例 spawn 一个进程**的三重串行循环：
+#           for case in cases:  for face in ...:  for track in ...:  subprocess.run(...)
+#       每次 spawn 之间**无依赖**（同一驱动器、不同 case 选择；独立进程、不写共享文件）
+#       ⇒ 天生可并行；而门**之间**串行（run_gates.sh 的 PID 锁 + 53 个门的负控改源码）
+#       ⇒ **门内并行与那条护栏正交**。
+#
+# ⚠️ 本表是**清单**，不是事实源：事实源是 `examples/*/*.py` 里有没有
+#    `from gate_par import …`（static_check.py 做**双向**核对，漏登记/悬空都判红）。
+#
+# 列：门名 <TAB> 执行器路径 <TAB> 改前 `--neg-skip` 实测秒（ℹ️ 参考，不参与判据）
+# ---------------------------------------------------------------------------
+m226_method_surface	examples/m226_method_surface/three_tracks.py	48
+m227_two_faces	examples/m227_two_faces/two_faces.py	147
+m228_membership	examples/m228_membership/three_doors.py	105
+m231_op_matrix	examples/m231_op_matrix/three_tracks.py	114
+m233_text_cstr	examples/m233_text_cstr/three_tracks.py	-
+m234_bytes_family	examples/m234_bytes_family/three_tracks.py	181
+m239_match_case	examples/m239_match_case/three_tracks.py	-

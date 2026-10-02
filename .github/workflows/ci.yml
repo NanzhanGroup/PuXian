@@ -830,6 +830,10 @@ jobs:
         run: |
           bash examples/m242_table_ptr/verify.sh --neg-skip > /tmp/v_m242.log 2>&1 || { echo "❌ m242_table_ptr verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m242.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m242_table_ptr verify（8 表 · 6 访问器 · 27 调用点 · 契约表双向）PASS"
+      - name: m244_gate_parallel（门内并行 · 缺陷 412 · gate_par 机制自证 + 保序等价 + 加速比）
+        run: |
+          bash examples/m244_gate_parallel/verify.sh --neg-skip > /tmp/v_m244.log 2>&1 || { echo "❌ m244_gate_parallel verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m244.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m244_gate_parallel verify（清单⇄派生双向 · gate_par 自证 14 · 合成/真实加速比 · 缺陷 412 两档）PASS"
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（job 日志 403 ⇒ 注解就是唯一通道，通道里必须自带证据）。

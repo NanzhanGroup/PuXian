@@ -65,10 +65,19 @@ chk "旧形态清零：C 轨 PatBinding 不再恒 true" "[ \"\$(cnt selfhost/cg_
 chk "旧形态清零：VM 轨 bc_match_cond 不再返回槽（改 jumps 列表）" "[ \"\$(grep -c 'def bc_match_cond(pattern, t, func, jumps)' selfhost/bc_emit.px)\" -eq 1 ]"
 chk "规模锚点：用例 ≥ 80" "[ \$(wc -l < $D/cases.txt) -ge 80 ]"
 chk "规模锚点：驱动器 ≥ 3 个模式类（binding/tuple/guard）" "[ \$(grep -cE 'case n:|case \(a, b\):|case .* if ' $D/drv.px) -ge 4 ]"
+# ⚠️ M244（缺陷 413）：判据要**与判据前比**，不能与「空」比。
+#   原实现 `[ -z "$(git status --short selfhost/ | grep -v '^ M')" ]` 的真实语义是
+#   「**除了已跟踪文件的未暂存修改之外，工作树必须是干净的**」——
+#   于是 `selfhost/` 下**任何未跟踪的新文件**（例如本轮新增的 `gate_par.py`）
+#   都会让这条判红，而它与「负控还原」**毫无关系** ⇒ **假红**（实测：本门 rc=1，
+#   而全部 22 条其它判据都 PASS）。
+#   正确判据 = **快照前后比对**（这也正是那句提示文字本来要说的意思）。
+SS0="$(git -C $ROOT status --short selfhost/)"
 for c in A B C D; do
   chk "负控锚点 $c 可应用（自证：不改源，仅校验命中唯一）" "NEGCTL --apply $c >/dev/null 2>&1 && NEGCTL --restore >/dev/null 2>&1"
 done
-chk "负控后源码逐字节还原（git 工作树与判据前一致）" "[ -z \"\$(git -C $ROOT status --short selfhost/ | grep -v '^ M')\" ]"
+SS1="$(git -C $ROOT status --short selfhost/)"
+chk "负控后源码逐字节还原（与**判据前**一致，不是与空比）" "[ \"$SS1\" = \"$SS0\" ]"
 
 echo "── [2] 三轨对拍（80 例 × 3 轨 = 240 次执行）"
 if TRACKS 1 >"$W/t1.log" 2>&1; then

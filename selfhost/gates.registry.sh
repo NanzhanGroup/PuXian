@@ -887,6 +887,12 @@ run m236_ws_stream bash examples/m236_ws_stream/verify.sh
 run m237_field_enum bash examples/m237_field_enum/verify.sh
 run m239_match_case bash examples/m239_match_case/verify.sh
 run m242_table_ptr bash examples/m242_table_ptr/verify.sh
+step "M244 门内并行（7 个矩阵对拍执行器 · 缺陷 412）"
+#   全量门实测 6997s / 154 门，其中 12 个「矩阵对拍门」占 3513s，而耗时主体是
+#   **逐例 spawn 一个进程**的三重串行循环（m227 = 197 例 × 2 面 × 3 轨 = 1182 次串行 spawn）。
+#   每次 spawn 之间无依赖 ⇒ 门内用 `selfhost/gate_par.py` 的 pmap 吃满核数。
+#   门**之间**仍串行（PID 锁 —— 53 个门的负控会改 runtime.c / selfhost/*.px，门间并行必然互踩）。
+run m244_gate_parallel bash examples/m244_gate_parallel/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

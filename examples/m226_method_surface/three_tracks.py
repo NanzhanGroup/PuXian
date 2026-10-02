@@ -27,6 +27,12 @@ for f in (PXI, f'{a.work}/build/drv_vm', f'{a.work}/build/drv_c', f'{a.work}/cas
         print(f'❌ 缺少 {f}')
         sys.exit(2)
 
+# ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+#    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+#    ⚠️ 门**之间**仍然串行（run_gates.sh 的 PID 锁）—— 53 个门的负控会改源码，
+#       门间并行必然互相踩；门内并行与那条护栏正交。
+sys.path.insert(0, os.path.join(a.root, 'selfhost'))
+from gate_par import pmap, pmap_records   # noqa: E402
 
 def norm(txt):
     """→ (R码, 消息体)。只取**第一行像错误**的行；前缀一律剥掉（缺陷 186 族不判）。"""
@@ -63,20 +69,31 @@ for ln in open(f'{a.work}/cases.tsv', encoding='utf-8'):
     labels.append(lb); srcs[lb] = src
 
 rows, div = [], []
+
+
+def _cmd226(lb, t):
+    return {'interp': [PXI, lb, f'{a.work}/drv.px'],
+            'vm': [f'{a.work}/build/drv_vm', lb],
+            'c': [f'{a.work}/build/drv_c', lb]}[t]
+
+
+def _one226(k):
+    """单例执行体 —— 与串行版**逐字节同逻辑**，只是由 pmap 调度。"""
+    lb, t = k
+    rc, out, err = run(_cmd226(lb, t))
+    code, body = norm(err + '\n' + out)
+    so = ''
+    for ln in out.splitlines():
+        if ln.startswith('/*') or ln.startswith(' *') or ln.startswith('*/'):
+            continue
+        so = ln.strip()
+        break
+    return k, {'rc': rc, 'code': code, 'body': body, 'out': so}
+
+
+_GOT226 = pmap_records(_one226, [(lb, t) for lb in labels for t in ('interp', 'vm', 'c')])
 for lb in labels:
-    rec = {}
-    for t, cmd in (('interp', [PXI, lb, f'{a.work}/drv.px']),
-                   ('vm', [f'{a.work}/build/drv_vm', lb]),
-                   ('c', [f'{a.work}/build/drv_c', lb])):
-        rc, out, err = run(cmd)
-        code, body = norm(err + '\n' + out)
-        so = ''
-        for ln in out.splitlines():
-            if ln.startswith('/*') or ln.startswith(' *') or ln.startswith('*/'):
-                continue
-            so = ln.strip()
-            break
-        rec[t] = {'rc': rc, 'code': code, 'body': body, 'out': so}
+    rec = {t: _GOT226[(lb, t)] for t in ('interp', 'vm', 'c')}
     rows.append({'label': lb, 'src': srcs[lb], **rec})
     if len({(rec[t]['rc'], rec[t]['code'], rec[t]['body'], rec[t]['out']) for t in rec}) > 1:
         div.append(rows[-1])

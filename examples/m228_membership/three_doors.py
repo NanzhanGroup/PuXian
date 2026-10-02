@@ -41,6 +41,12 @@ for t, cmd in BIN.items():
         print(f"❌ 缺少 {t} 轨件 {cmd[0]}")
         sys.exit(2)
 
+# ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+#    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+#    ⚠️ 门**之间**仍然串行（run_gates.sh 的 PID 锁）—— 53 个门的负控会改源码，
+#       门间并行必然互相踩；门内并行与那条护栏正交。
+sys.path.insert(0, os.path.join(ROOT, 'selfhost'))
+from gate_par import pmap, pmap_records   # noqa: E402
 # ---- 读 cases.tsv ----
 cases = {}
 with open(a.cases, encoding="utf-8") as fh:
@@ -87,6 +93,11 @@ EXP_DOOR_CODE = {
 
 bad = []
 obs_rcode = {}
+_GOT228 = pmap_records(
+    lambda k: (k, run(k[2], k[0], k[1])),
+    [(cid, door, t) for cid in sorted(cases) for door in DOORS for t in TRACKS])
+
+
 for cid, c in sorted(cases.items()):
     # 期望形状
     if c["kind"] == "VAL":
@@ -99,7 +110,7 @@ for cid, c in sorted(cases.items()):
 
     per_door = {}
     for door in DOORS:
-        res = {t: run(t, cid, door) for t in TRACKS}
+        res = {t: _GOT228[(cid, door, t)] for t in TRACKS}
         # 跨轨一致（归一化后的码 + 文本）
         norm = {(r["code"], r["text"]) for r in res.values()}
         vals = {r["val"] for r in res.values()}

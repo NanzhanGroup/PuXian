@@ -109,6 +109,12 @@ def main():
     ap.add_argument("--shape346", action="store_true")
     a = ap.parse_args()
     root, work = os.path.abspath(a.root), a.work
+    # ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+    #    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+    #    ⚠️ 位置纪律：必须在 `main()` 的**最早使用之前**（`det_check` 在更下面会被调用）；
+    #       且**同一区域不要再插入别的块**（事故 1 就是插入点与替换区重叠）。
+    sys.path.insert(0, os.path.join(root, 'selfhost'))
+    from gate_par import pmap, pmap_records   # noqa: E402
     d = os.path.join(root, "examples", "m231_op_matrix")
     drv = a.drv or os.path.join(d, "drv.px")
 
@@ -131,11 +137,13 @@ def main():
             print("❌ 缺少 %s 轨件 %s" % (t, cmd[0]))
             return 2
 
+    _GOT231 = pmap_records(
+        lambda k: (k, norm_err(run(tracks[k[1]],
+                                   {"M231_CASE": str(k[0]), "M231_CWD": os.path.dirname(drv)}))),
+        [(idx, t) for idx, *_r in cases for t in tracks])
     diffs, actual = [], []
     for idx, tag, expr, kind, basis in cases:
-        res = {}
-        for t, cmd in tracks.items():
-            res[t] = norm_err(run(cmd, {"M231_CASE": str(idx), "M231_CWD": os.path.dirname(drv)}))
+        res = {t: _GOT231[(idx, t)] for t in tracks}
         # ① 响亮性
         kinds = {res[t][0] for t in tracks}
         if len(kinds) != 1:
