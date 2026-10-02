@@ -245,7 +245,7 @@ selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc · pxc
 | `selfhost/bootstrap_prove_bc.sh` | **BC 轨自举证明**：编译器编译自身 → 字节码镜像与基准逐字节 diff |
 | `selfhost/native_bootstrap.sh` | **aarch64 官方通道（M159）**：只需 gcc 的原生/交叉自举，**含自证**（编出的 pxc 再编 `compiler.px`，与 golden 逐字节一致） |
 | `selfhost/rebake_bin.sh` | 入库件重烘 + **源码链指纹门**（`--check-all` 比对 14 件二进制与**当前源码**的指纹 `PXSRC-…`/`PXRT-…`）——「入库件是否就是当前源码烘出的」有据可查 |
-| `selfhost/gates.registry.sh` + `run_gates.sh` | **全量门**（154 门：语义门 + 发射冻结 + 重烘三连 + diffcheck 六路 + 门注册一致性）：每个里程碑收尾必跑。⚠️ **M243 起清单与机制分离** —— 清单 = `gates.registry.sh`（**单一注册源**）· 运行器 = `run_gates.sh`（`--only` / `--skip` / `--list` / `--fail-fast`）；旧名 `m116_gates.sh` 仍可用（兼容转发） |
+| `selfhost/gates.registry.sh` + `run_gates.sh` | **全量门**（156 门：语义门 + 发射冻结 + 重烘三连 + diffcheck 六路 + 门注册一致性）：每个里程碑收尾必跑。⚠️ **M243 起清单与机制分离** —— 清单 = `gates.registry.sh`（**单一注册源**）· 运行器 = `run_gates.sh`（`--only` / `--skip` / `--list` / `--fail-fast`）；旧名 `m116_gates.sh` 仍可用（兼容转发） |
 
 ### 自举证明（经典三步 + 双轨自证）
 

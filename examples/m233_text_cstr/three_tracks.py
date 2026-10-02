@@ -96,7 +96,6 @@ def main():
                     cmd, wd, kk[1], perturb=None if kk[0] == 0 else "x" * 700)),
                     [(k, idx) for idx, *_rest in cs])
                 outs.append("\n".join(o))
-                outs.append("\n".join(o))
             if outs[0] != outs[1]:
                 dif = [i for i, (x, y) in enumerate(zip(outs[0].split("\n"), outs[1].split("\n")))
                        if x != y]
