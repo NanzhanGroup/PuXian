@@ -1,3 +1,50 @@
+## M240 · **晨曦缺陷 A/B 收口 —— takeover 连接生命周期 + 一条静默堆破坏（缺陷 395–399）**（第 117 轮）
+
+> **主题**：晨曦报障（Mahesvara WS 统一入口 P0）「**一次真实中转即崩**」。
+> 本轮在其最小复现器上（handler 内 `spawn` 中继协程后立即返回 + 对端 RST）逐层定位，
+> 把「五个编号」收口 —— 其中**两条是基础设施级的**，与 WS 无关，**影响所有 `px_serve` 程序**。
+
+### 一 修前基线（本机复现）
+
+| 档 | 修前 | 修后 |
+|---|---|---|
+| 最小复现器（无 ASAN） | **58 会话即崩**（逐步收口后 225~890 会话） | 未再复现 |
+| ASAN 档 | 每次都给一处新位置（共 4 处） | **0 报告** |
+
+### 二 五个编号
+
+| # | 形状 | 修前 |
+|---|---|---|
+| **399** ⭐⭐ | **`px_pxpend_enter` 跨 `xrealloc` 持有 `PxPend*`** —— `e = px_pxpend_ctx(fd)` 在第一次加锁区间内取得，解锁做 TLS 握手（可能很久），再重新加锁**仍用同一个 `e`**；而 `g_pxpend` 是几何增长 + `xrealloc`（数组 >128KB ⇒ glibc 走 mmap）⇒ 期间任何线程以更大 fd 进来就**整体搬家、旧块 munmap** ⇒ 手里是野指针 | 读 `e->active` ⇒ **SEGV**（core：`px_pxpend_enter` 读 +4 偏移）；侥幸读到 0 ⇒ 后面 `e->fd/active/conn/req…` **写进已释放内存 = 静默堆破坏** ——**这是前四处 ASAN 崩溃的共同上游** |
+| **398** ⭐ | **对象 free 与 `px_conn_free_res` 并发认领** —— `obj_free_pending` 只有「已宣告」没有「已认领」闸门 | T_offload（最后使用者）`release → refs 1→0` 后**锁外**跑 `free_res`（重活），T_owner 同时 `owner_free` 看到 `refs==0` ⇒ `xfree(c)` ⇒ 另一线程读 `c->owned` SEGV（ASAN：`px_conn_free_res ← px_conn_release ← bi_ws_recv ← offload_run_task`） |
+| **395** | **晨曦缺陷 A**：4 处 `gethostbyname()` 返回**进程级静态** `struct hostent`，不可重入 | 被撕裂时 `h_length` 可能是垃圾 ⇒ 越界写；解析失败时是 NULL 源 |
+| **396** | **晨曦缺陷 B**：takeover 连接的 `PxConn` **双所有权** —— `PxPend` 按 fd 索引存裸指针，WS 会话中途把 fd 交回内核 ⇒ 同号 fd 复用让新连接的 `px_pxpend_close` 命中**旧条目** | 对**正在被 WS 泵循环使用**的对象 `xfree`（core `rbp=c`、`rdi=c+0x4048=&c->mu`，与晨曦报告逐字节一致） |
+| **397** | `PxConn` 有**两套不一致的创建路径**：旁路（4 处）`xmalloc+memset+手赋 fd` 漏了 `pthread_mutex_init(&c->mu)` | 而引用计数（acquire/release/close）**全以 `c->mu` 为同步原语** ⇒ 一直在未初始化的 mutex 上加解锁 |
+
+### 三 定稿修法
+
+- **399**：锁内**重新解析** `e = px_pxpend_ctx(fd)`；新增两个「锁内重解析」访问器
+  `px_pxpend_conn_of` / `px_pxpend_stage_of`，**调用方不再跨锁持有 `PxPend*`**。
+  口径：**锁外持有的 `PxPend*` 一律不可信**。
+- **398**：新增 `conn_try_claim_obj()` **认领闸门**（新字段 `obj_freed` / `res_done`）——
+  `free_res` 未完成（`freed && !res_done`）时**一律放弃认领**，由正在跑 `free_res` 的线程收尾认领；
+  `px_conn_close` 也宣告 `res_done`。
+- **395**：统一 helper `px_ws_resolve_v4`（`getaddrinfo`，无静态状态）。
+- **396**：takeover 前 `px_pxpend_detach_conn(fd)` 把条目**整体摘出**（所有权完全归 WS，
+  只在本处单点 `owner_free`）；释放前 `px_ws_detach_conn` + `px_pxpend_detach_by_conn` **双向清槽**。
+- **397**：新 `px_conn_init_client`，**两条创建路径共用同一份字段初始化**；
+  顺带**分配器配对**（5 处 `malloc`→`xmalloc`、对应 `free`→`xfree` —— M235s1 缺陷 354 的镜像面）。
+
+### 四 验证
+
+- **ASAN 档**：3 轮 × 8000 + 2 轮 × 64000 = **15.2 万请求 · 0 报告 · 全存活**（修前 225~890 会话必崩）
+- **常规档（带 CPU 竞争，复现原始时序）**：**8 轮 × 64000 全存活**（修 399 前：6 轮里 2 轮崩）
+- 入库件重烘 **14/14** · `--check-all` **14/14**（`PXSRC-6eef5d24bc3b3c2a` / `PXRT-8e74ad09b93d108`）
+- 烘前/烘后 **62 文件快照一致**
+- 临时插桩（`PX_M240_TRACE` / `m240_seq`）**已全部移除**，只留承重逻辑
+
+---
+
 ## M239 · **`match` / `case` 模式族全量对拍 —— 一整个控制流构造从来没有被度量过（缺陷 382–394）**（第 116 轮）
 
 > **主题**：M199（native 函数面）· M226（方法面）· M227（同名两门）· M228（三个门）·
