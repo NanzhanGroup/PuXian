@@ -195,7 +195,8 @@ packaging/tag_guard.sh --grace-min 180  # 刚推上来的提交允许窗口期�
 - [ ] **入库件已按当前源码重烘**：`./selfhost/rebake_bin.sh && ./selfhost/rebake_bin.sh --check-all`（14/14 指纹一致）
 - [ ] 双轨自举证明本地位跑过（`bootstrap_prove.sh` + `bootstrap_prove_bc.sh`）
 - [ ] 本地先跑一次 `tools/make_release.sh` 确认冒烟全 PASS（避免 workflow 白跑）
-- [ ] 本地全量门无红：`./selfhost/m116_gates.sh`（本地含负控）
+- [ ] 本地全量门无红：`./selfhost/run_gates.sh`（本地含负控；旧名 `m116_gates.sh` 仍可用 = 兼容转发）
+      · 迭代期可用 `--only <门名表>` / `--fail-fast` 快速验回归（**发布前必须跑全量**）
 - [ ] CHANGELOG 已记录本版变更（含每轮缺陷编号与验证证据）
 - [ ] 打 tag 前 `git log --oneline <上一tag>..HEAD` 确认入版范围符合预期
 - [ ] 打完 tag 后：**CI / Release / Tag Guard 三个 run 全绿**，且 Release 资产齐全

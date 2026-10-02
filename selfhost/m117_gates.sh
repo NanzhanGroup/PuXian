@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# M116 全门本地复跑（= CI regression + toolchain 关键步）
+# ⚠️ 本文件名与下面这行历史头注都是**遗留**（M117 时从 `m116_gates.sh` **拷贝**而来）。
+#    它跑的是「既有全门的一个**子集** + M117 专项」（141 行），**不是**当前全量门。
+#    当前全量门（M243 起）：
+#      清单 = `selfhost/gates.registry.sh`（154 门 · 单一注册源）
+#      运行器 = `selfhost/run_gates.sh`（--only / --skip / --list / --fail-fast）
+#      `selfhost/m116_gates.sh` 已改为**兼容转发**到 run_gates.sh。
+#    ⇒ 按下面这行头注去找，会得到**错的答案**；留着只是为不打断历史引用。
+# M116 regression 子集（= CI 回归步 + 工具链关键步的本地复跑）
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"   # M188-STDLIB：相对自身，不再硬编码
 export LC_ALL=C LANG=C
