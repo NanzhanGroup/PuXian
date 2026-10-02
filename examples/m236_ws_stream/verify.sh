@@ -91,7 +91,12 @@ chk "静态 · stream_match 排除 is_ws（两类接管不串扰）" "$?" "0"
 grep -q 'g_stream_routes\[idx\].is_ws = 0;' "$RC"
 chk "静态 · bi_http_stream 复用槽位复位 is_ws" "$?" "0"
 # 两处接管点
-N_HOOK=$(grep -c 'px_ws_takeover_http_conn(conn, req, path, w_idx, w_manual)\|px_ws_takeover_http_conn(wc, req, path, w_idx, w_manual)' "$RC")
+# M242（缺陷 407）：判据**不得绑定变量名**（那是实现细节）。
+#   原锚点写死 `conn` / `wc` 两个变量名；M240 把 px_serve 轨的接管点改成
+#   `PxConn* ws_c = px_pxpend_detach_conn(fd); … (void)px_ws_takeover_http_conn(ws_c, …)`
+#   ⇒ 写死 `conn` 的那半从此匹配不到 ⇒ 报「实际 1」= **假红**。
+#   改为按**调用点形状**（`(void)` 前缀）计数 —— 与变量名解耦。
+N_HOOK=$(grep -c '(void)px_ws_takeover_http_conn(' "$RC")
 chk "静态 · 两处接管点（px_serve 轨 + http_serve 轨）" "$N_HOOK" "2"
 # 派生索引三处
 grep -q '^ws_stream=ws$' "$RM" && grep -q '^ws_reply_101=ws$' "$RM"

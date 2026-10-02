@@ -826,6 +826,10 @@ jobs:
       #   （m221 ≈ 200s + m222 ≈ 55s 本机量级）⇒ **净收益无法从单次样本里隔离**。
       #   本仓 job 日志非管理员**不可读**（403）⇒ 唯一对外通道是注解，故**成功时也要发**
       #   （只挂 `failure()` 等于「一切正常时什么都看不到」）。
+      - name: m242_table_ptr（表元素指针「跨锁外泄」审计 · 缺陷 403）
+        run: |
+          bash examples/m242_table_ptr/verify.sh --neg-skip > /tmp/v_m242.log 2>&1 || { echo "❌ m242_table_ptr verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m242.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m242_table_ptr verify（8 表 · 6 访问器 · 27 调用点 · 契约表双向）PASS"
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（job 日志 403 ⇒ 注解就是唯一通道，通道里必须自带证据）。

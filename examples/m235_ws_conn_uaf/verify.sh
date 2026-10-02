@@ -17,7 +17,11 @@
 #   [1] 静态：引用计数 API 与关键改点在位（含 SHUT_RD 保守唤醒）
 #   [2] 动态·形态一（阻塞读 + 并发 close）：跑 N 次 ⇒ **崩溃 0 次**
 #   [3] 动态·形态二（ws-edge 双向中转真形）：跑 M 次 ⇒ **崩溃 0 次**
-#   [4] 负控 A：忠实退回「不做引用计数」⇒ 形态一必须**崩**（判据有牙）
+#   [4] 负控 A：**同时撤两层防护** ⇒ 形态一必须**崩**（判据有牙）
+#       ⚠️ M242（缺陷 406）：原形态是「只撤 M235 的引用计数」。M240（缺陷 398）为
+#          「对象释放」加了**认领闸门**后，单独撤引用计数**不再崩** —— 两层防护
+#          兜住了同一条缝（= R57 记过的「新修复会吸收旧缺陷」）。
+#          ⇒ 换为「同时撤两层」（退回 M235 与 M240 **之前**的状态）。
 #   [5] 负控 B：判据自伤（把崩溃检测改成恒绿）⇒ A 的红必须**消失**
 #   [6] 覆盖边界登记
 #   [8] 分配器配对（缺陷 354，M235s1）：PxConn 由 `xmalloc` 创建 ⇒ 释放必须 `xfree`
@@ -219,7 +223,7 @@ else
 fi
 
 # ------------------------------------------------------------
-echo "[5] 负控 A：忠实退回「不做引用计数」⇒ 形态一必须崩"
+echo "[5] 负控 A：**同时撤两层防护**（引用计数 + 释放认领闸门）⇒ 形态一必须崩"
 # ------------------------------------------------------------
 if [ "$NEG_SKIP" = "1" ]; then
     echo "  ⏭ --neg-skip：跳过负控（CI 用）"
@@ -241,14 +245,30 @@ old = """int px_conn_acquire(PxConn* c) {
     return 1;
 }"""
 new = """int px_conn_acquire(PxConn* c) {
-    /* M235-NEG-A：忠实退回 —— 不计数（= 修前的「只在入口查 closed」语义） */
+    /* M242-NEG-A1：忠实退回 —— 不计数（= 修前的「只在入口查 closed」语义） */
     if (!c) return 0;
     if (c->closed) return 0;
     return 1;
 }"""
-assert s.count(old) == 1, "negA anchor"
-open(p, "w", encoding="utf-8").write(s.replace(old, new))
-print("NEG-A applied")
+assert s.count(old) == 1, "negA1 anchor"
+s = s.replace(old, new)
+# M242（缺陷 406）：**同时撤第二层** —— M240 的对象释放认领闸门。
+#   只撤引用计数时，闸门会兜住这条缝（实测 6 次 0 崩）⇒ 判据无牙。
+old2 = """static int conn_try_claim_obj(PxConn* c) {   // 调用方须持 c->mu
+    if (!c->obj_free_pending || c->obj_freed) return 0;
+    if (c->freed && !c->res_done) return 0;
+    c->obj_freed = 1;
+    return 1;
+}"""
+new2 = """static int conn_try_claim_obj(PxConn* c) {   // M242-NEG-A2：去掉认领闸门
+    if (!c->obj_free_pending || c->obj_freed) return 0;
+    c->obj_freed = 1;
+    return 1;
+}"""
+assert s.count(old2) == 1, "negA2 anchor"
+s = s.replace(old2, new2)
+open(p, "w", encoding="utf-8").write(s)
+print("NEG-A applied（两层）")
 PYEOF
     if [ $? -eq 0 ]; then
         bash "$ROOT/selfhost/devbuild.sh" pxc > "$W/negA_build.log" 2>&1
@@ -259,7 +279,7 @@ PYEOF
                 run_form1_once "n$i" "$((24000 + i))" || NEGCRASH=$((NEGCRASH+1))
             done
             if [ "$NEGCRASH" -ge 1 ]; then ok "负控 A：退出引用计数后复现崩溃（$NEGCRASH/6）"
-            else bad "负控 A：退出引用计数后仍不崩 ⇒ 判据无牙"; fi
+            else bad "负控 A：撤两层后仍不崩 ⇒ 判据无牙（连 M240 的闸门也撤了）"; fi
         else
             bad "负控 A：devbuild 失败"; tail -5 "$W/negA_build.log" | sed 's/^/      /'
         fi
