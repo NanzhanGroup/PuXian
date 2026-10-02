@@ -1,0 +1,59 @@
+# M245 复现器 / 判据载体：**证书热加载（重注册）与并发 TLS 握手的竞态 ⇒ UAF**
+# ---------------------------------------------------------------
+# 病灶：`tls_server()` 注册/重注册会 `free` + 重新 `parse` `g_sni_certs[slot]` 与
+#   `g_srv_cert`/`g_srv_key`，而并发握手正在用**同一对象**（TLS1.3 的
+#   CertificateVerify 用它做 ECDSA 签名；配置阶段还用它 clone 私钥）。
+#   ⚠️ 对象**地址**稳定（静态数组元素），**内容**不是 ⇒ `free`→`parse` 之间是悬垂窗口。
+# 本程序的作用：**制造并发**（客户端）并把注册循环跑起来（服务端内的 spawn 协程）。
+#   窗口放大由测试钩子 `PX_TLS_RELOAD_GAP_MS` 负责（默认不设 = 完全无感）。
+#
+# 用法：repro <port> <cert> <key> [reload_gap_ms] [n_reload]
+# 输出：stderr 打点；`M245-RELOAD-DONE n=<n>` 表示注册循环跑完（判据的窗口终点）
+var m245_port = 18445
+var m245_cert = ""
+var m245_key  = ""
+var m245_gap  = 1
+var m245_n    = 300
+
+let m245_av = args()
+if len(m245_av) > 1:
+    m245_port = int(m245_av[1])
+if len(m245_av) > 2:
+    m245_cert = m245_av[2]
+if len(m245_av) > 3:
+    m245_key = m245_av[3]
+if len(m245_av) > 4:
+    m245_gap = int(m245_av[4])
+if len(m245_av) > 5:
+    m245_n = int(m245_av[5])
+
+def m245_handler(req, params):
+    return {"status": 200, "body": "M245-OK"}
+
+# 注册循环：**交替**默认证书 / SNI 槽 —— 两条路径的窗口都在面内
+#   （默认证书那条更宽：每一次握手都会在配置阶段读 `g_srv_key`）
+def m245_reloader():
+    var i = 0
+    while i < m245_n:
+        if i % 2 == 0:
+            tls_server(m245_cert, m245_key)
+        else:
+            tls_server(m245_cert, m245_key, "localhost")
+        i += 1
+        sleep(m245_gap)
+    print("M245-RELOAD-DONE n=" + str(i))
+
+def m245_setup():
+    tls_server(m245_cert, m245_key)
+    tls_server(m245_cert, m245_key, "localhost")
+    route("GET", "/x", m245_handler)
+    let D = "/tmp/m245_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "M245-OK")
+    spawn m245_reloader()
+    px_serve(m245_port, D, 30000, {"max_conn": 16})
+    exit(0)
+
+spawn m245_setup()
+sleep(300000)
+exit(0)

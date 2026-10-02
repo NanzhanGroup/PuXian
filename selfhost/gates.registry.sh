@@ -893,6 +893,14 @@ step "M244 门内并行（7 个矩阵对拍执行器 · 缺陷 412）"
 #   每次 spawn 之间无依赖 ⇒ 门内用 `selfhost/gate_par.py` 的 pmap 吃满核数。
 #   门**之间**仍串行（PID 锁 —— 53 个门的负控会改 runtime.c / selfhost/*.px，门间并行必然互踩）。
 run m244_gate_parallel bash examples/m244_gate_parallel/verify.sh
+step "M245 · 证书热加载（重注册）与并发 TLS 握手的竞态 ⇒ UAF（缺陷 414 · 晨曦报障）"
+#   注册会 free + 重新 parse g_sni_certs[slot] / g_srv_cert / g_srv_key，而**并发握手正在用同一对象**
+#   （TLS1.3 的 CertificateVerify 用该私钥做 ECDSA 签名）。修前注册只持 g_srv_tls_mu、握手每步持
+#   g_srv_hs_mu ⇒ 两锁互不排斥 ⇒ 「free→parse」窗口必然与握手步重叠 ⇒ UAF。
+#   判据取**可观测行为**（客户端成功率 100% + 服务端存活），并用测试钩子 PX_TLS_RELOAD_GAP_MS
+#   把窗口放大成**必然** —— 否则「修好了」与「这次没复现」无法区分。
+#   ⚠️ 负控 A 要重建 runtime（摘锁）⇒ 本地跑全量档，CI 用 --neg-skip。
+run m245_tls_cert_reload bash examples/m245_tls_cert_reload/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

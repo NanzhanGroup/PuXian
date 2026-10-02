@@ -112,10 +112,11 @@ static int g_srv_tls_cache_init = 0;
 //   ③ **全局握手串行锁** g_srv_hs_mu 包整个 px_conn_tls_handshake（px_conn_tls_handshake
 //      包装 / _locked 实现）：clone+cache 锁后 RSA-TLS1.3 仍残余 ~1% 并发特有
 //      MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED(-110) + 偶发堆损坏（串行 300 次零失败；
-//      TLS1.3 服务端深层共享无法枚举）→ 串行锁根治。clone（EC 共享只读实测安全）+
+//      TLS1.3 服务端深层共享无法枚举）→ 串行锁根治。clone（EC 见 M245 前提修正） +
 //      cache 锁保留作双保险（未来换开 threading 的 mbedtls 可去串行锁仍正确）。
 // 每连接 ssl/conf/drbg/entropy 独立（px_conn_init），cert 只读共享 —— 均非竞态源。
-// 锁序：hs_mu → tls_mu（sni_cb 同序）→ 无死锁；tls_server 注册仅持 tls_mu。
+// 锁序：hs_mu → tls_mu（sni_cb / 配置阶段 / **tls_server 注册（M245）** 一律同序）→ 无死锁。
+// M245（缺陷 414）：注册**必须**先取 hs_mu（见 bi_tls_server 注释）；修前只持 tls_mu 是 UAF 根因。
 static pthread_mutex_t g_srv_cache_mu = PTHREAD_MUTEX_INITIALIZER;  // session cache 锁
 static pthread_mutex_t g_srv_hs_mu = PTHREAD_MUTEX_INITIALIZER;     // 全局握手串行锁
 static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx);
@@ -23227,9 +23228,16 @@ static int px_srv_cache_set(void* p, const unsigned char* session_id, size_t len
 // M101：RSA 私钥 per-连接 clone。mbedtls 3.6.2 无 mbedtls_pk_copy（PSA 化移除）；
 // legacy PK 后端启用（USE_PSA_CRYPTO 关）→ pk_setup(PK_RSA) + mbedtls_rsa_copy 深拷贝
 // 出独立 mbedtls_rsa_context（签名时 CRT 推导/窗口缓存写各自 ctx → 并发握手无共享写）。
-// 返回 malloc 的 mbedtls_pk_context*（调用方 px_conn_close 释放）；非 RSA → NULL（EC
-// 私钥签名并发安全实测 → 共享只读）；RSA clone 失败（OOM）→ NULL（调用方退化全局
-// 握手锁 g_srv_hs_mu 保底）。调用方应持 g_srv_tls_mu（防源 key 并发重注册覆盖）。
+// 返回 malloc 的 mbedtls_pk_context*（调用方 px_conn_close 释放）；非 RSA → NULL。
+// ⚠️ **M245 前提修正**：此前这里写「EC 私钥签名并发安全实测 → 共享只读」—— 该口径**不完整**。
+//   EC 共享只读成立的**前提是两件事同时成立**：
+//     ① 每次进入 mbedtls 都持 `g_srv_hs_mu`（M101-final 的全局握手串行锁）⇒ 无并发签名；
+//     ② **注册也持同一把锁** ⇒ 共享对象不会被 free/重 parse。
+//   ②正是 M245 补上的（修前注册只持 tls_mu ⇒ 可在两步握手之间 free 掉 EC 私钥 ⇒ UAF）。
+//   ⇒ 若将来去掉 hs_mu（例如换用开了 MBEDTLS_THREADING_C 的 mbedtls），**EC 也必须 clone**，
+//     否则立刻回退成数据竞争 —— 不是「EC 签名本身并发安全」。
+// RSA clone 失败（OOM）→ NULL（调用方退化全局握手锁 g_srv_hs_mu 保底）。
+// 调用方应持 g_srv_tls_mu（防源 key 并发重注册覆盖）。
 static mbedtls_pk_context* px_pk_clone_rsa(const mbedtls_pk_context* src) {
     if (mbedtls_pk_get_type(src) != MBEDTLS_PK_RSA) return NULL;
     mbedtls_pk_context* dst = (mbedtls_pk_context*)malloc(sizeof(mbedtls_pk_context));
@@ -23250,7 +23258,8 @@ static mbedtls_pk_context* px_pk_clone_rsa(const mbedtls_pk_context* src) {
 // M33：TLS SNI 回调——按 ClientHello 域名从 g_sni_certs 选证书（无匹配 → 默认证书，返回 0）
 // M101：p_ctx = PxConn*（conf_sni 传入 c）；命中 slot 且其 key 为 RSA → 锁内 clone 到
 //   c->own_pk_sni（per-连接独立私钥，消除与其它 worker 并发签名共享 g_sni_certs[i].key
-//   的 data race）；EC key → 共享只读（签名并发安全实测）；RSA clone 失败 → 返回错误
+//   的 data race）；EC key → 共享只读（⚠️ 前提见 px_pk_clone_rsa 的 M245 修正：靠 hs_mu 串行
+//   **且**注册持同一把锁，不是 EC 签名本身安全）；RSA clone 失败 → 返回错误
 //   （握手失败保守，宁失败不竞态——已在握手中途无法退 g_srv_hs_mu）。
 static int px_sni_cb(void* p_ctx, mbedtls_ssl_context* ssl, const unsigned char* name, size_t len) {
     PxConn* c = (PxConn*)p_ctx;
@@ -23292,8 +23301,10 @@ static int px_sni_cb(void* p_ctx, mbedtls_ssl_context* ssl, const unsigned char*
 // 次零失败 → 并发特有）。整个握手持 g_srv_hs_mu → 握手期对 mbedtls 无任何跨线程共享
 // 访问。clone + cache 锁保留作双保险（未来若换开 threading 的 mbedtls 可去掉串行锁仍
 // 正确）。keep-alive 连接握手仅一次，不受串行影响；握手本地毫秒级，新连接突发排队
-// 可接受（边缘/内部 px_serve 以 keep-alive 为主）。锁序：hs_mu → tls_mu（sni_cb 同
-// 序）→ 无死锁；tls_server 注册仅持 tls_mu 不碰 hs_mu。
+// 可接受（边缘/内部 px_serve 以 keep-alive 为主）。锁序：hs_mu → tls_mu（sni_cb / 配置阶段 /
+// tls_server 注册一律同序）→ 无死锁。
+// M245（缺陷 414）：注册**也持 hs_mu** —— 修前只持 tls_mu ⇒ 两锁互不排斥 ⇒ 注册可在两步
+//   握手之间 free 掉握手仍在引用的 cert/key ⇒ UAF（晨曦 P0 崩溃的根因）。见 bi_tls_server。
 static int px_conn_tls_handshake_locked(PxConn* c) {
     mbedtls_ssl_context* ssl = (mbedtls_ssl_context*)c->ssl;
     mbedtls_ssl_config* conf = (mbedtls_ssl_config*)c->conf;
@@ -23306,7 +23317,8 @@ static int px_conn_tls_handshake_locked(PxConn* c) {
                                     MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT) != 0) return -1;
     mbedtls_ssl_conf_rng(conf, mbedtls_ctr_drbg_random, drbg);
     // M101：私钥 clone / 共享决策（已持 g_srv_hs_mu → 无并发；clone 仍作双保险：
-    //   RSA → per-连接独立 ctx（未来去串行锁仍正确）；EC → 共享只读实测安全）
+    //   RSA → per-连接独立 ctx（未来去串行锁仍正确）；EC → 共享只读**靠 hs_mu 串行**
+    //   —— M245 前提修正：不是 EC 签名本身并发安全；且注册也持 hs_mu ⇒ 不会被 free）
     pthread_mutex_lock(&g_srv_tls_mu);
     mbedtls_pk_context* own = px_pk_clone_rsa(&g_srv_key);
     int oc;
@@ -23817,6 +23829,22 @@ ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
 }
 
 
+// M245（缺陷 414 · 晨曦报障）：测试钩子 —— 放大「释放旧证书/私钥 → 重新 parse」之间的窗口
+//   （默认不设环境变量 = 完全无感；上限 5s 防门里写错把服务端冻死）。
+//   与 PX_GC_STRESS / PX_GC_INLINE（M170/M207）同族：把「靠时序凑巧发作」的竞态变成
+//   **必然发作**，否则「修好了」与「这次没复现」无法区分。只在 examples/m245_tls_cert_reload 里开。
+static void px_tls_reload_gap(void) {
+    const char* e = getenv("PX_TLS_RELOAD_GAP_MS");
+    if (!e || !*e) return;
+    int ms = atoi(e);
+    if (ms <= 0) return;
+    if (ms > 5000) ms = 5000;
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
 // tls_server(cert, key[, hostname])：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
 // M33：带 hostname → 加入 SNI 证书表（按 ClientHello 域名选择）；无 hostname → 默认证书。
 static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
@@ -23836,6 +23864,32 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
         px_error("R1002: tls_server 的 hostname 需要字符串，实际是 %s", px_type_name(args[2]));
     const char* hostname = (nargs == 3 && args[2].type == PX_STR)
         ? args[2].as.obj->as.str.data : NULL;
+    // ── M245（缺陷 414 · 晨曦报障 · P0 崩溃）：注册/重注册必须与**并发握手**互斥 ──
+    //   `tls_server()` 会 `free` + 重新 `parse` `g_sni_certs[slot]` 与 `g_srv_cert`/`g_srv_key`；
+    //   而并发握手正在用**同一对象**：TLS1.3 服务端在 `ssl_tls13_write_certificate_verify_body`
+    //   用该私钥做 ECDSA 签名，且 `px_sni_cb` / 配置阶段早把 `&…cert/key` 的**指针**交给了 SSL 上下文。
+    //   ⚠️ 对象**地址**是稳定的（静态数组元素），**内容不是** —— `free` 到 `parse` 完成之间，
+    //     结构体里的内部指针（`cert.raw.p` / `pk.pk_ctx`）是悬垂的 ⇒ **任何落在该窗口里的
+    //     握手步都在读已释放内存**（UAF）。EC 私钥尤其危险：M101 只对 RSA 做 per-连接 clone，
+    //     EC 走「共享只读」（其前提正是「不会被 free」—— 见 px_pk_clone_rsa 的 M245 前提修正）。
+    //   修前：注册只持 `g_srv_tls_mu`，而握手每一步持 `g_srv_hs_mu` ⇒ **两把锁互不排斥**
+    //     ⇒ 窗口与握手步必然可重叠。晨曦实测（m240 编译的 Mahesvara，13 张 ECDSA P-256 SNI
+    //     证书，+60s 启动后首次全量重注册）SIGSEGV 栈：
+    //       `__memset_avx2 ← mbedtls_zeroize_and_free ← mbedtls_mpi_free
+    //        ← mbedtls_ecdsa_sign ← ssl_tls13_write_certificate_verify_body`
+    //     另有 `__memset_avx2 ← … ← mbedtls_mpi_free` 写只读 `.rodata`（`secp256r1_T`）一例。
+    //   修法：注册先取 `g_srv_hs_mu`（**必须在 `tls_mu` 之前** —— 与握手路径同序
+    //     hs_mu → tls_mu，不引入反向序；见 L118 的锁序口径）⇒ 注册与「任何一步握手」互斥。
+    //     这与 M108-S2a 之后「**配置阶段整体持 hs_mu**」是同一口径（那边也是"持锁做一段
+    //     非 I/O 的配置工作"）。
+    //   代价：注册期间（含证书文件的磁盘 I/O 与 parse）握手排队。**有意如此** ——
+    //     对象地址稳定 ⇒ 只需排除「free 与 parse 之间」被读，不必把慢路径搬出锁；
+    //     而正确调用方只在证书**内容真变**时注册（续期/装新证），并在启动期一次性登记，
+    //     不是热路径。若将来真需要「注册不阻塞握手」，正解是**换代 + 引用计数**
+    //     （旧代延迟释放），不是把锁拆掉。
+    //   ⚠️ 退出配对：`px_error` 在 spawn 隔离点 / json 捕获点会 **longjmp** ⇒ **绝不可**持锁调用；
+    //     本函数 4 个出口（1 正常 + 3 报错）逐个配对释放，判据是**形状**（见 examples/m245）。
+    pthread_mutex_lock(&g_srv_hs_mu);
     pthread_mutex_lock(&g_srv_tls_mu);
     int rc1, rc2;
     if (hostname && *hostname) {
@@ -23847,12 +23901,14 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
         }
         if (slot < 0) {
             pthread_mutex_unlock(&g_srv_tls_mu);
+            pthread_mutex_unlock(&g_srv_hs_mu);
             px_error("SNI 证书数量超出上限 %d", PX_MAX_SNI_CERTS);
         }
         if (g_sni_certs[slot].active) {
             mbedtls_x509_crt_free(&g_sni_certs[slot].cert);
             mbedtls_pk_free(&g_sni_certs[slot].key);
         }
+        px_tls_reload_gap();   // M245 测试钩子（默认 0 = 无行为改变）
         memset(&g_sni_certs[slot], 0, sizeof(PxSniCert));
         mbedtls_x509_crt_init(&g_sni_certs[slot].cert);
         mbedtls_pk_init(&g_sni_certs[slot].key);
@@ -23866,6 +23922,7 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
             char eb[256];
             mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
             pthread_mutex_unlock(&g_srv_tls_mu);
+            pthread_mutex_unlock(&g_srv_hs_mu);
             px_error("tls_server(%s): 证书/私钥解析失败: %s", hostname, eb);
         }
         // 域名规范化（小写、去尾点）
@@ -23881,6 +23938,7 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
         // 默认证书（覆盖）
         mbedtls_x509_crt_free(&g_srv_cert);
         mbedtls_pk_free(&g_srv_key);
+        px_tls_reload_gap();   // M245 测试钩子（默认 0 = 无行为改变）
         mbedtls_x509_crt_init(&g_srv_cert);
         mbedtls_pk_init(&g_srv_key);
         rc1 = strstr(cert, "-----BEGIN")
@@ -23893,6 +23951,7 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
             char eb[256];
             mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
             pthread_mutex_unlock(&g_srv_tls_mu);
+            pthread_mutex_unlock(&g_srv_hs_mu);
             px_error("tls_server: 证书/私钥解析失败: %s", eb);
         }
     }
@@ -23905,6 +23964,7 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
     }
     g_srv_tls_ready = 1;
     pthread_mutex_unlock(&g_srv_tls_mu);
+    pthread_mutex_unlock(&g_srv_hs_mu);
     return px_bool(true);
 }
 

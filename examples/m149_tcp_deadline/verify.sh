@@ -275,26 +275,48 @@ PY
         echo "FAIL 负控 $tag：篡改未生效（锚点与源码不同步）"
         FAIL=$((FAIL+1)); cp /tmp/m149_runtime_keep.c "$RT"; return
     fi
-    local verdict="green"
-    stop_server; rm -f /tmp/m149_srv.out
-    build_one m149_server.px "" > /dev/null 2>&1 || true
-    if build_one tcp_deadline.px "" > "$LOG" 2>&1; then
-        start_server || true
-        timeout 90 env M149_PORT="$PORT" ./build/tcp_deadline > "/tmp/m149_neg_$tag.out" 2>&1; local rc=$?
-        stop_server
-        if [ "$rc" = "0" ] && grep -qE '^M149_ASSERT: [0-9]+P/0F(/[0-9]+S)?$' "/tmp/m149_neg_$tag.out"; then
-            verdict="green"
+    # ── M245 补（缺陷 415）：A 段有**两条已登记分支**（110 超时 ⇄ 101/113 不可达，
+    #   取决于本机到 TEST-NET-1 的**瞬时**路由；M237s1 已为跨轨对拍登记过，但负控没跟上）。
+    #   实测（2026-10-03 全量门）：主判据两次都是 errno=110/0S，而**同一轮**负控复跑就是
+    #   101/1S —— 中间只隔几分钟。而「忽略 timeout_ms」这条篡改**只在 110 分支可观测**
+    #   ⇒ 拿 101 分支判「仍绿」= **假红**（判据比被测面更依赖环境）。
+    #   ⇒ 判据改为**分支感知**：篡改后没走到 110 ⇒ 复跑一次；仍不是 ⇒ **SKIP（带原因）**，
+    #     与主判据自身的 `SKIP A4-A6 …` **同口径**（如实跳过，不假装红、也不假装绿）。
+    #   ⚠️ 只对 tag=A 加此守卫：B（NODELAY）/C（EOF）与网络分支无关，必须照旧硬判红。
+    local verdict="green" aerr=""
+    neg_run_once() {
+        verdict="green"; aerr=""
+        stop_server; rm -f /tmp/m149_srv.out
+        build_one m149_server.px "" > /dev/null 2>&1 || true
+        if build_one tcp_deadline.px "" > "$LOG" 2>&1; then
+            start_server || true
+            timeout 90 env M149_PORT="$PORT" ./build/tcp_deadline > "/tmp/m149_neg_$tag.out" 2>&1; local rc=$?
+            stop_server
+            aerr=$(grep -m1 'INFO A.dt' "/tmp/m149_neg_$tag.out" 2>/dev/null | grep -oE 'errno=[0-9]+' | head -1 | cut -d= -f2)
+            if [ "$rc" = "0" ] && grep -qE '^M149_ASSERT: [0-9]+P/0F(/[0-9]+S)?$' "/tmp/m149_neg_$tag.out"; then
+                verdict="green"
+            else
+                verdict="red"
+            fi
         else
-            verdict="red"
+            verdict="red（编译失败）"
         fi
-    else
-        verdict="red（编译失败）"
+    }
+    neg_run_once
+    if [ "$tag" = "A" ] && [ "$verdict" = "green" ] && [ "$aerr" != "110" ]; then
+        echo "   ℹ️ 复跑：本次 A 段 errno=${aerr:-?}（非 110 ⇒ 时间面试不到）⇒ 重试一次"
+        neg_run_once
     fi
     cp /tmp/m149_runtime_keep.c "$RT"
     if [ "$verdict" = "green" ]; then
-        echo "FAIL 负控 $tag：篡改后门仍绿（该面没被覆盖）"
-        grep -E '^(FAIL |M149_ASSERT)' "/tmp/m149_neg_$tag.out" 2>/dev/null | head -5 | sed 's/^/   /'
-        FAIL=$((FAIL+1))
+        if [ "$tag" = "A" ] && [ "$aerr" != "110" ]; then
+            echo "   SKIP 负控 A：本环境 A 段走 errno=${aerr:-?}（不可达分支）⇒ 篡改「忽略 timeout_ms」不可观测"
+            echo "        （与主判据的 SKIP A4-A6 同口径：**如实跳过，不算通过**；该面由 110 分支覆盖）"
+        else
+            echo "FAIL 负控 $tag：篡改后门仍绿（该面没被覆盖）"
+            grep -E '^(FAIL |M149_ASSERT)' "/tmp/m149_neg_$tag.out" 2>/dev/null | head -5 | sed 's/^/   /'
+            FAIL=$((FAIL+1))
+        fi
     else
         echo "PASS 负控 $tag：篡改后门变红（$verdict）"
     fi
