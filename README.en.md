@@ -247,7 +247,7 @@ selfhost/*.px (PuXian sources) ──compile──► bootstrap/pxc · pxc_vm (c
 | `selfhost/bootstrap_prove_bc.sh` | **BC-rail bootstrap proof**: the compiler compiles itself → bytecode image diffed byte-for-byte against the golden |
 | `selfhost/native_bootstrap.sh` | **aarch64 official channel (M159)**: native/cross self-bootstrap needing gcc only, **with self-proof** (the freshly built pxc compiles `compiler.px` again, byte-identical to the golden) |
 | `selfhost/rebake_bin.sh` | Rebake of checked-in binaries + **source-chain fingerprint gate** (`--check-all` compares all 14 binaries against the *current* sources, `PXSRC-…` / `PXRT-…`) |
-| `selfhost/m116_gates.sh` | **Full gate suite** (semantic gates + emission freeze + rebake trio + six-way diffcheck): run at the end of every milestone |
+| `selfhost/gates.registry.sh` + `run_gates.sh` | **Full gate suite** (154 gates: semantic + emission freeze + rebake trio + six-way diffcheck + gate-registry consistency): run at the end of every milestone. ⚠️ **Since M243 the registry and the mechanism are separate** — registry = `gates.registry.sh` (**single source of truth**) · runner = `run_gates.sh` (`--only` / `--skip` / `--list` / `--fail-fast`); the old name `m116_gates.sh` still works (compat shim). |
 
 ### The Classic Bootstrap Proof (plus the BC rail)
 

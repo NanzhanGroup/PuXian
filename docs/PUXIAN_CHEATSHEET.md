@@ -3144,3 +3144,28 @@ set_timeout(fn (): print("once after 2s"), 2000)
     多行 `match` **不能**直接作函数实参或括号内表达式 ⇒ 写成「先 `let` 绑定、再使用」。
     **不是缺陷但要知道**：`match` 无常量折叠、无编译器穷尽性分析 —— 穷尽性是**运行期**判据。
 
+
+262. **门的「单一注册源」—— 全量门的清单在哪、怎么只跑一部分（第 120 轮 · M243 · 缺陷 409–411）**：
+    **三个路径**（改名不断链）：
+    - **清单** = `selfhost/gates.registry.sh` —— **唯一权威名单**（154 门 · `step` / `run` 行）；
+    - **运行器** = `selfhost/run_gates.sh` —— 只管**机制**（PID 锁 / 进出脏树检查 / 逐门
+      `timeout -k 20` / 逐门计时 TSV / 汇总 / devbuild 台账）；
+    - **旧名** = `selfhost/m116_gates.sh` —— **兼容转发**（25 行，`exec` 到运行器）。
+      ⚠️ 名字停在**建它那一轮**（M116 首次集中时 54 行 / 10 门；如今 991 行 → 154 门）——
+      留着是因为 README/spec/速查表/打包脚本等约 91 处引用它。
+    **常用参数**：
+    ```
+    ./selfhost/run_gates.sh                    # 全量（发布档 · ~90–155 分钟）
+    ./selfhost/run_gates.sh --only m242,m235    # 只跑指定门（**迭代档** —— 改完立刻验回归）
+    ./selfhost/run_gates.sh --skip m227         # 排除
+    ./selfhost/run_gates.sh --list              # 只列门名（供一致性校验）
+    ./selfhost/run_gates.sh --fail-fast         # 首败即停（写错了不必等满全程）
+    ./selfhost/run_gates.sh --allow-dirty       # 接受脏树（危险，仅排障）
+    ```
+    ⚠️ 过滤发生在 `run()` 里 ⇒ **清单仍是纯 bash 片段**（刻意不引入自定义数据格式：
+    零解析、零格式转换 ⇒ 迁移可用 `--list` 与旧脚本**逐字节对拍**）。
+    ⚠️ 环境变量 `GATE_ONLY` / `GATE_SKIP` / `GATE_FAIL_FAST` / `GATE_REGISTRY` 与同名参数等价。
+    **一致性守卫**：`selfhost/check_gate_registry.sh` —— 清单 ⇄ `ci.yml` **双向**
+    （漏注册 / 反向缺口 / 例外过期 / 例外缺理由 ⇒ 判红），两侧都从源码派生 + 规模锚点。
+    ⚠️ **纪律**：「改了哪个调用点/门 ⇒ 必须确认它在**两侧**都注册」——
+    M235 缺陷 355（native 名册同步了、门忘了注册 ⇒ 用户可见面回归）就是这条的代价。
