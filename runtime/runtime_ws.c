@@ -118,7 +118,58 @@ static int ws_get_fd(int64_t id, int* is_client) {
     return fd;
 }
 
+// M240（晨曦缺陷 B 之三 = 晨曦建议 ①）：**释放连接对象前同步失效 WS 注册表**。
+//   为什么必须有：语言层只拿得到整数 conn id，`ws_get_conn(id)` 从注册表槽里取裸指针。
+//   若对象被 `px_conn_owner_free` xfree 而槽仍指着它，**下一次 `ws_recv(id)` 就会把这个
+//   悬垂指针取出来**（acquire 也要先摸 `c->mu` ⇒ 直接 SIGSEGV）。实测 core：
+//   `px_conn_free_res ← px_conn_release ← bi_ws_recv ← offload 线程`。
+//   ⇒ 「谁真正释放对象，谁先清槽」是这一对结构的**闭合条件**（与 M235 的引用计数正交：
+//   计数保证「正在用的不被释放」，清槽保证「释放后不会被取到」）。
+// 锁序：调用方必须**不在** `g_ws_mu` 内（本文件各 API 与 runtime.c 的释放点都满足）。
+// M240（修复 g）：PxConn 的**客户端/旁路**初始化 —— 与 `px_conn_init` 共用「字段归零 +
+//   mutex 初始化」，但**不做**服务端 TLS 状态分配（`owned=0`：TLS 由外部 HttpsSession 管理）。
+//   ⚠️ 原先 4 处旁路只 `memset` + 手赋 fd ⇒ **漏了 `pthread_mutex_init(&c->mu)`**，
+//   而 M235 的引用计数（acquire/release/close）全以 `c->mu` 为同步原语 ⇒ 这些对象一直在
+//   未初始化的 mutex 上加解锁（实测崩溃对象来自这条旁路）。
+static void px_conn_init_client(PxConn* c, int fd) {
+    memset(c, 0, sizeof(*c));
+    pthread_mutex_init(&c->mu, NULL);
+    c->fd = fd;
+    c->is_tls = 0;
+    c->owned = 0;          // 客户端：TLS 状态不归本对象（由 px_https_close_ex 释放）
+    c->rlen = 0;
+    c->roff = 0;
+    c->refs = 0;
+    c->pending_free = 0;
+    c->freed = 0;
+    c->obj_free_pending = 0;
+    c->obj_freed = 0;
+    c->res_done = 0;
+}
+
+void px_ws_detach_conn(PxConn* c) {
+    if (!c) return;
+    pthread_mutex_lock(&g_ws_mu);
+    for (int i = 0; i < MAX_WS_CONNS; i++) {
+        if (g_ws_conns[i].active && g_ws_conns[i].conn == c) {
+            g_ws_conns[i].active = 0;
+            g_ws_conns[i].fd = -1;
+            g_ws_conns[i].conn = NULL;
+            g_ws_conns[i].closed = 1;
+            g_ws_conns[i].hb_active = 0;
+            ws_free_hs_locked(i);
+        }
+    }
+    pthread_mutex_unlock(&g_ws_mu);
+}
+
 // M27：取连接对象（TLS/明文统一；不持锁做 IO）。返回 NULL 表示不存在/已关闭。
+// M240（晨曦缺陷 B 之二）：**返回前在锁内 acquire 一次引用** —— 原实现把裸指针交出去，
+//   调用方在锁外使用，而「HTTP 侧释放对象」与「槽被注销」是两步 ⇒ 取指针后、使用前
+//   对象可能已被 `px_conn_owner_free`（xfree）⇒ UAF（实测 core：`px_conn_free_res`
+//   ← `bi_ws_recv` ← offload 线程）。持引用后，M235 的延迟释放会兜住最后一次使用。
+//   **调用方必须配对 `px_conn_release(c)`**（本文件 4 个语言层 API 已逐出口配对）。
+//   锁序：`g_ws_mu` → `c->mu`（`px_conn_*` 内部不碰 `g_ws_mu` ⇒ 无反向嵌套）。
 static PxConn* ws_get_conn(int64_t id, int* is_client) {
     PxConn* c = NULL;
     pthread_mutex_lock(&g_ws_mu);
@@ -126,6 +177,7 @@ static PxConn* ws_get_conn(int64_t id, int* is_client) {
     if (idx >= 0 && !g_ws_conns[idx].closed) {
         c = g_ws_conns[idx].conn;
         if (is_client) *is_client = g_ws_conns[idx].client;
+        if (c && !px_conn_acquire(c)) c = NULL;   // M240：对象已关闭/已释放 ⇒ 当作不存在
     }
     pthread_mutex_unlock(&g_ws_mu);
     return c;
@@ -514,8 +566,8 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
     // M27：TLS 握手（若 tls_server 注册）→ PxConn 统一读写（堆分配共享给 ws_send 等）
-    PxConn* c = malloc(sizeof(PxConn));
-    if (px_conn_init(c, fd) != 0) { free(c); return px_null(); }
+    PxConn* c = (PxConn*)xmalloc(sizeof(PxConn));
+    if (px_conn_init(c, fd) != 0) { xfree(c); return px_null(); }   // M240(d)：分配器配对
     g_cur_conn = c;
     __sync_fetch_and_add(&g_px_inflight, 1);
     // 1. 握手（M235：同时取回 path 与请求头原文）
@@ -641,6 +693,26 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
 
 // ws_connect(host, port, path) → int conn | null（客户端握手）
 // ws_connect(host, port, path) → int conn | null（客户端握手）
+// M240（晨曦缺陷 A）：`gethostbyname()` 返回**进程级静态** `struct hostent`，不可重入。
+//   `px_serve` 是 worker 池（本机 max_conn=32~64），而 `/agent/*` 每会话建链都要调
+//   `ws_connect` ⇒ 多线程同进时静态对象被撕裂（实测 `h_length=4` 而 `h_addr_list[0]=NULL`）
+//   ⇒ 紧接着的 `memcpy` 越界。`runtime.c` 自身早已是 `getaddrinfo` 口径（12 处），本文件
+//   此前漏改 —— 本函数是这 4 处的**唯一**解析入口。
+//   `host` 允许是 IPv4 字面量或域名（`AI_NUMERICHOST` 不开，两者都能过）。
+// 返回 0 = 成功并写入 `out4`；非 0 = 解析失败（调用方按「连不上」返回 null）。
+static int px_ws_resolve_v4(const char* host, struct in_addr* out4) {
+    if (!host || !host[0] || !out4) return -1;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;          // 与既有 `sockaddr_in` 口径一致（本文件只支持 v4）
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, "0", &hints, &res) != 0 || !res) return -1;
+    *out4 = ((struct sockaddr_in*)res->ai_addr)->sin_addr;
+    freeaddrinfo(res);
+    return 0;
+}
+
+// ws_connect(host, port, path) → int conn | null（客户端握手）
 // M32：支持一行连接 ws_connect("ws://host:port/path") / "wss://host:port/path"（wss 走 TLS）
 LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -707,20 +779,15 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
         // 明文 URL：连接后走下方共用注册
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) return px_null();
-        struct hostent* he = gethostbyname(host);
-        if (!he) { close(fd); return px_null(); }
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons((uint16_t)port);
-        memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+        if (px_ws_resolve_v4(host, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
         if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
         if (ws_client_handshake(fd, host, port, path) < 0) { close(fd); return px_null(); }
-        PxConn* cc = malloc(sizeof(PxConn));
-        memset(cc, 0, sizeof(PxConn));
-        cc->fd = fd;
-        cc->is_tls = 0;
-        cc->rlen = cc->roff = 0;
+        PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
+        px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
         pthread_mutex_lock(&g_ws_mu);
         int slot = ws_alloc_slot();
         if (slot < 0) {
@@ -748,13 +815,11 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     path = args[2].as.obj->as.str.data;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return px_null();
-    struct hostent* he = gethostbyname(host);
-    if (!he) { close(fd); return px_null(); }
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
-    memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+    if (px_ws_resolve_v4(host, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
     if (ws_client_handshake(fd, host, port, path) < 0) { close(fd); return px_null(); }
     pthread_mutex_lock(&g_ws_mu);
@@ -764,11 +829,8 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
         close(fd);
         return px_null();
     }
-    PxConn* cc = malloc(sizeof(PxConn));
-    memset(cc, 0, sizeof(PxConn));
-    cc->fd = fd;
-    cc->is_tls = 0;
-    cc->rlen = cc->roff = 0;
+    PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
+    px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
     int64_t conn = g_ws_next_id++;
     g_ws_conns[slot].fd = fd;
     g_ws_conns[slot].id = conn;
@@ -794,7 +856,7 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
-    if (!c) return px_bool(false);
+    if (!c) { LXValue _lr = (px_bool(false)); px_conn_release(c); return _lr; }
     const char* data = px_val_cstr(args[1]);
     int ok = (ws_send_frame(c, WS_OP_TEXT, (const unsigned char*)data, strlen(data), is_client) == 0);
     if (!ok) {        // 写失败：标记关闭 + 清理
@@ -810,7 +872,7 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
         }
         pthread_mutex_unlock(&g_ws_mu);
     }
-    return px_bool(ok);
+    { LXValue _lr = (px_bool(ok)); px_conn_release(c); return _lr; }
 }
 
 // M38：ws_connect_auto(url, reconnect_ms) → conn（断线自动重连；明文 ws:// 重连）
@@ -838,21 +900,18 @@ LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
     if (!hbuf[0]) return px_null();
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return px_null();
-    struct hostent* he = gethostbyname(hbuf);
-    if (!he) { close(fd); return px_null(); }
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
-    memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+    if (px_ws_resolve_v4(hbuf, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
     if (ws_client_handshake(fd, hbuf, port, path) < 0) { close(fd); return px_null(); }
-    PxConn* cc = malloc(sizeof(PxConn));
-    memset(cc, 0, sizeof(PxConn));
-    cc->fd = fd; cc->is_tls = 0; cc->rlen = cc->roff = 0;
+    PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
+    px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
     pthread_mutex_lock(&g_ws_mu);
     int slot = ws_alloc_slot();
-    if (slot < 0) { pthread_mutex_unlock(&g_ws_mu); close(fd); free(cc); return px_null(); }
+    if (slot < 0) { pthread_mutex_unlock(&g_ws_mu); close(fd); xfree(cc); return px_null(); }   // M240(d)
     int64_t conn = g_ws_next_id++;
     g_ws_conns[slot].fd = fd;
     g_ws_conns[slot].id = conn;
@@ -927,23 +986,28 @@ static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
         if (rc) { *rc = 0; rp = atoi(rc + 1); if (rp <= 0) rp = 80; }
         int nfd = socket(AF_INET, SOCK_STREAM, 0);
         if (nfd >= 0) {
-            struct hostent* rh2 = gethostbyname(rh);
             struct sockaddr_in ra;
             memset(&ra, 0, sizeof(ra));
             ra.sin_family = AF_INET;
             ra.sin_port = htons((uint16_t)rp);
-            memcpy(&ra.sin_addr, rh2 ? rh2->h_addr : NULL, rh2 ? (size_t)rh2->h_length : 0);
-            if (rh2 && connect(nfd, (struct sockaddr*)&ra, sizeof(ra)) == 0 &&
+            // M240（缺陷 A）：原实现 `memcpy(&ra.sin_addr, rh2 ? rh2->h_addr : NULL,
+            //   rh2 ? rh2->h_length : 0)` —— 在 `gethostbyname` 被撕裂时 `h_length` 可能是
+            //   垃圾值 ⇒ 越界写；解析失败时又是 NULL 源。统一走 helper（失败即不连）。
+            int ra_ok = (px_ws_resolve_v4(rh, &ra.sin_addr) == 0);
+            if (ra_ok && connect(nfd, (struct sockaddr*)&ra, sizeof(ra)) == 0 &&
                 ws_client_handshake(nfd, rh, rp, rpath) == 0) {
-                PxConn* nc = malloc(sizeof(PxConn));
-                memset(nc, 0, sizeof(PxConn));
-                nc->fd = nfd; nc->is_tls = 0; nc->rlen = nc->roff = 0;
+                PxConn* nc = (PxConn*)xmalloc(sizeof(PxConn));
+                px_conn_init_client(nc, nfd);   // M240(g)：统一初始化（含 mutex）
                 g_ws_conns[s2].fd = nfd;
                 g_ws_conns[s2].conn = nc;
                 g_ws_conns[s2].active = 1;
                 g_ws_conns[s2].closed = 0;
                 pthread_mutex_unlock(&g_ws_mu);
                 px_conn_close(*cpp);
+                // M240（缺陷 B 之二配套）：调用方**原本持有的那个引用**要**接续到新对象**上
+                //   （`ws_get_conn` 现在返回已 acquire 的指针 ⇒ 出口统一 release 的是它拿到的
+                //   那个变量）。不 acquire 的话，出口的 release 会**透支**新对象的计数。
+                px_conn_acquire(nc);
                 *cpp = nc;
                 ok = 1;
             } else {
@@ -971,7 +1035,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
-    if (!c) return px_null();
+    if (!c) { LXValue _lr = (px_null()); px_conn_release(c); return _lr; }
     unsigned char* msg = NULL;
     size_t mlen = 0, mcap = 0;
     for (;;) {
@@ -986,11 +1050,11 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             if (pr == 0) {
                 // 超时：不标记关闭，连接完好
                 if (msg) free(msg);
-                return px_null();
+                { LXValue _lr = (px_null()); px_conn_release(c); return _lr; }
             }
             if (pr < 0) {
                 if (msg) free(msg);
-                return px_null();
+                { LXValue _lr = (px_null()); px_conn_release(c); return _lr; }
             }
             if ((pfd.revents & (POLLHUP | POLLERR)) && !(pfd.revents & POLLIN)) {
                 if (msg) free(msg);
@@ -1003,7 +1067,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
                 if (idx2 >= 0) { g_ws_conns[idx2].active = 0; g_ws_conns[idx2].fd = -1; g_ws_conns[idx2].conn = NULL; ws_free_hs_locked(idx2); }
                 pthread_mutex_unlock(&g_ws_mu);
                 px_conn_close(c);  // 对象保留
-                return px_null();
+                { LXValue _lr = (px_null()); px_conn_release(c); return _lr; }
             }
         }
         int fin = 0;
@@ -1027,7 +1091,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             ws_free_hs_locked(idx); }
             pthread_mutex_unlock(&g_ws_mu);
             px_conn_close(c);  // 对象保留
-            return px_null();
+            { LXValue _lr = (px_null()); px_conn_release(c); return _lr; }
         }
         if (opcode == WS_OP_PING) {
             ws_send_frame(c, WS_OP_PONG, payload, plen, is_client);
@@ -1049,7 +1113,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             ws_free_hs_locked(idx); }
             pthread_mutex_unlock(&g_ws_mu);
             px_conn_close(c);  // 对象保留
-            return px_null();
+            { LXValue _lr = (px_null()); px_conn_release(c); return _lr; }
         }
         if (opcode == WS_OP_TEXT || opcode == WS_OP_BINARY || opcode == WS_OP_CONT) {
             if (mlen + plen > mcap) {
@@ -1064,7 +1128,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             if (fin) {
                 LXValue r = px_str_len((const char*)msg, (int)mlen);
                 free(msg);
-                return r;
+                { LXValue _lr = (r); px_conn_release(c); return _lr; }
             }
         } else {
             free(payload);  // 忽略未知 opcode（含 PONG）
@@ -1079,7 +1143,7 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
-    if (!c) return px_bool(false);
+    if (!c) { LXValue _lr = (px_bool(false)); px_conn_release(c); return _lr; }
     ws_send_frame(c, WS_OP_CLOSE, (const unsigned char*)"\x03\xe8", 2, is_client);
     shutdown(c->fd, SHUT_RDWR);
     pthread_mutex_lock(&g_ws_mu);
@@ -1092,7 +1156,7 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
     }
     pthread_mutex_unlock(&g_ws_mu);
     px_conn_close(c);  // 对象保留
-    return px_bool(true);
+    { LXValue _lr = (px_bool(true)); px_conn_release(c); return _lr; }
 }
 
 // ==================== M235：ws 连接元信息 API ====================
@@ -1156,7 +1220,7 @@ LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
-    if (!c) return px_bool(false);
+    if (!c) { LXValue _lr = (px_bool(false)); px_conn_release(c); return _lr; }
     if (ws_send_frame(c, WS_OP_PING, NULL, 0, is_client) < 0) {
         shutdown(c->fd, SHUT_RDWR);
         pthread_mutex_lock(&g_ws_mu);
@@ -1165,9 +1229,9 @@ LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
             ws_free_hs_locked(idx); }
         pthread_mutex_unlock(&g_ws_mu);
         px_conn_close(c);  // 对象保留
-        return px_bool(false);
+        { LXValue _lr = (px_bool(false)); px_conn_release(c); return _lr; }
     }
-    return px_bool(true);
+    { LXValue _lr = (px_bool(true)); px_conn_release(c); return _lr; }
 }
 
 // ==================== M26 ws_heartbeat：内置自动心跳 ====================
@@ -1204,6 +1268,13 @@ static void* ws_heartbeat_thread(void* arg) {
         }
         int fd = g_ws_conns[idx].fd;
         PxConn* c = g_ws_conns[idx].conn;
+        // M240（修复 f · 由 ASAN 直接指出）：**锁内 acquire**。
+        //   本线程拿完指针就出锁做 IO，而 `px_conn_owner_free` / `px_conn_close` 可能
+        //   在别的线程把对象释放 ⇒ 锁外那次 `ws_send_frame(c,…)` / `px_conn_close(c)`
+        //   摸到已回收对象。ASAN 实测栈：
+        //     `px_conn_free_res` ← `ws_heartbeat_thread`（SEGV on unknown address）
+        //   口径与 `ws_get_conn` 一致：每次醒来 acquire 一次，本轮用完 release。
+        if (c && !px_conn_acquire(c)) c = NULL;
         int is_client = g_ws_conns[idx].client;
         long long last = g_ws_conns[idx].last_activity;
         long long now = ws_now_ms();
@@ -1229,9 +1300,11 @@ static void* ws_heartbeat_thread(void* arg) {
                 g_ws_conns[idx].hb_active = 0;
             }
             pthread_mutex_unlock(&g_ws_mu);
-            if (c) px_conn_close(c);  // 对象保留
+            if (c) px_conn_close(c);    // 对象保留（引用计数会推迟真正的释放）
+            if (c) px_conn_release(c);  // M240（修复 f）：归还本次醒来的引用
             return NULL;
         }
+        if (c) px_conn_release(c);      // M240（修复 f）：非 dead 路径同样要归还，否则对象永不释放
     }
 }
 
