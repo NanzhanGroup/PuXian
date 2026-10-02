@@ -55,7 +55,11 @@ def snap_dir(args):
 def do_snapshot(args):
     d = snap_dir(args)
     if os.path.isdir(d):
-        shutil.rmtree(d)
+        # M239s1（缺陷 394 同族）：**已有快照就不再重拍** —— 快照语义 = 「进门时的源」。
+        #   原实现 `rmtree` + 重拍 ⇒ 若门里出现「先 apply X 再 apply Y」，第二次快照会记录
+        #   **已被 X 污染**的源 ⇒ `restore` 回不到进门态（残留）。m239 门已实测踩中。
+        print("SNAPSHOT-SKIP 已有进门快照（不可覆盖）")
+        return
     files = set()
     for items in PATCHES.values():
         for rel, _o, _n, _t in items:

@@ -17,11 +17,18 @@ FILES = ['selfhost/bc_emit.px', 'selfhost/cg_expr.px', 'selfhost/iexpr.px', 'sel
          'examples/m239_match_case/three_tracks.py']
 
 def snap():
+    # M239s1（缺陷 394 · 门自身）：**只做首次快照**。
+    #   原实现每次 `--apply` 都 `shutil.copy` 覆盖快照 ⇒ 负控 D 段是
+    #   「先 `--apply A` 再 `--apply D`」⇒ 第二次 snap 把**已被 A 污染**的源存进快照
+    #   ⇒ 之后 `--restore` 恢复的是 **A 的补丁** ⇒ **源码残留**（实测 `bc_emit.px` 留下
+    #   `MATCHFAIL→MOV` + 删 `bc_bind_var` + 删 `MATCHTUP` 三处；m116 全量门据此报
+    #   「门有副作用」并要求人工 `git checkout`）。快照语义 = 「**进门时的源**」，只能一次。
     os.makedirs(a.snap, exist_ok=True)
     for f in FILES:
         p = os.path.join(R, f)
-        if os.path.exists(p):
-            shutil.copy(p, os.path.join(a.snap, f.replace('/', '__')))
+        s = os.path.join(a.snap, f.replace('/', '__'))
+        if os.path.exists(p) and not os.path.exists(s):
+            shutil.copy(p, s)
 
 def restore():
     for f in FILES:
