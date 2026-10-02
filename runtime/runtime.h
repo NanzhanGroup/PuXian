@@ -503,6 +503,14 @@ LXObject* px_arg_dict(LXValue v, const char* fn, const char* pname);
 // ==================== 输出 ====================
 
 void px_print_value(LXValue v, bool newline);
+// M240（修复 (d)）：运行时的**带大小头**分配器，导出给 runtime_ws.c 用 ——
+//   `PxConn` 必须「谁创建谁能释放」同口径：runtime.c 的 5 处用 xmalloc，
+//   runtime_ws.c 的 5 处（ws_conn_worker / wss 客户端 ×2 / ws_connect / ws_auto_reconnect）
+//   也必须用 xmalloc，否则释放点（px_conn_owner_free / px_conn_release）的 xfree
+//   会对 malloc 指针做减法 ⇒ 野指针（M235s1 缺陷 354 的镜像面，实测 SIGSEGV 在
+//   px_conn_free_res 的字段读取上）。
+void* xmalloc(size_t n);
+void xfree(void* p);
 char* px_to_string(LXValue v);  // 返回**运行时自有**的线程局部缓冲（每次调用覆盖；调用方**不得** xfree）
 const char* px_tostr_n(LXValue v, int* out_len);  // M185：同上，并给出**字节长**（含内嵌 NUL 不截断）
 int px_unicode_len(const char* s);
@@ -780,6 +788,8 @@ typedef struct PxConn {
     int pending_free;        // close 时有使用者在 ⇒ 等最后一个 release 执行资源释放
     int freed;               // TLS 资源 + fd 已释放（幂等闸门）
     int obj_free_pending;    // 创建者已放手 ⇒ 最后一个 release free 对象
+    int obj_freed;           // M240：对象 free 闸门（与 freed 对称)
+    int res_done;            // M240：px_conn_free_res 已完成
 } PxConn;
 
 // 初始化（fd 上做 TLS 握手若服务端 TLS 已注册；失败返回 -1）

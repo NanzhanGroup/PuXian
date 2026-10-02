@@ -407,6 +407,8 @@ static LXValue bi_ws_stream(LXValue* args, int nargs, void* ctx);
 // 接管入口与判定（定义在 runtime_ws.c）
 int px_ws_takeover_http_conn(PxConn* c, LXValue req, const char* path, int route_idx, int manual);
 int px_ws_can_takeover(LXValue req);
+// M240：释放连接对象前失效 WS 注册表（定义在 runtime_ws.c）
+void px_ws_detach_conn(PxConn* c);
 LXValue bi_ws_reply_101(LXValue* args, int nargs, void* ctx);
 #endif
 // M23 P1：SSE 客户端（流式消费 / 事件订阅）
@@ -987,7 +989,12 @@ static Slab* slab_find(const void* p) {
     return s;
 }
 
-static void* xmalloc(size_t n) {
+// M240（缺陷 B 之四 · 修复 (d)）：**去掉 static** —— `runtime_ws.c` 也要用它。
+//   背景：`PxConn` 在 runtime.c 里一律 `xmalloc` 创建、`xfree` 释放；而 runtime_ws.c 的 5 处
+//   曾用裸 `malloc` ⇒ 释放侧（`px_conn_owner_free` / `px_conn_release` 的 do_obj 分支）
+//   走 `xfree` ⇒ 对 `malloc` 返回值做「跳过大小头」的减法 ⇒ **野指针**（M235s1 缺陷 354 的
+//   镜像面）。统一为「**PxConn 一律 xmalloc/xfree**」是唯一能保证配对的做法。
+void* xmalloc(size_t n) {
     if (n <= 0) n = 1;
     if (px_alloc_fail_in_lock_hit(n)) {
         // M127 测试钩子：**在调用方仍持有运行时锁时**注入分配失败 —— 用于确定性复现
@@ -1060,7 +1067,7 @@ static void* xmalloc(size_t n) {
     return slot;
 }
 
-static void xfree(void* p) {
+void xfree(void* p) {
     if (!p) return;
     sigset_t old;
     int blk = !g_in_gc_sweep;   // ISSUE28-B1：sweep 内 executor 已屏蔽信号且单线程 → 免逐趟 sigprocmask
@@ -19014,6 +19021,7 @@ static void px_ev_ensure(void);
 static void px_fd_nonblock(int fd);
 static void px_fd_block(int fd);
 static void px_pxpend_close(int fd);   // M99：px_serve 连接统一 close（px_ev_loop tick/断开分支用；定义见 px_conn_worker 区）
+static void px_pxpend_detach_by_conn(PxConn* c);   // M240（修复 e）：释放对象时作废 PxPend 里的悬垂条目
 
 // ---- M95-S2：http handler 协程化 —— pending 表前向声明（实现在 ConnCtx 区后）----
 // 读+解析完成（段1）→ put(stage=1) + spawn handler 帧协程 → 完成回调写 resp
@@ -23523,6 +23531,8 @@ int px_conn_init(PxConn* c, int fd) {
     c->pending_free = 0;
     c->freed = 0;
     c->obj_free_pending = 0;
+    c->obj_freed = 0;
+    c->res_done = 0;
     c->fd = fd;
     c->is_tls = 0;
     c->owned = 1;
@@ -23642,6 +23652,15 @@ int px_conn_acquire(PxConn* c) {
 
 // 释放 TLS 资源 + fd（由 freed 闸门保证只执行一次）
 static void px_conn_free_res(PxConn* c) {
+#ifndef PX_NO_WS
+    // M240（缺陷 B 之三）：**对象即将被回收 ⇒ 先失效 WS 注册表**。
+    //   否则语言层下一次 `ws_get_conn(id)` 会把悬垂指针取出来（acquire 先摸 `c->mu` ⇒ SIGSEGV）。
+    //   幂等；调用方均不持 `g_ws_mu`。
+    px_ws_detach_conn(c);
+#endif
+    // M240（修复 (e)）：**同样要失效 PxPend 表** —— 它与 WS 注册表同构（按 fd 索引 + 裸指针），
+    //   残留条目会在同号 fd 复用时把野指针交出去（ASAN: `c->fd` SEGV on unknown address）。
+    px_pxpend_detach_by_conn(c);
     // M101：释放条件由「is_tls」放宽为「owned && ssl」——握手失败路径（px_conn_init 中
     //   px_conn_tls_handshake 返回 -1 时 is_tls 尚未置 1）原实现直接跳过释放 ssl/conf/
     //   drbg/entropy（每失败连接泄漏 ~20KB+），并发握手失败高频时泄漏严重；owned=1 时
@@ -23674,22 +23693,45 @@ static void px_conn_free_res(PxConn* c) {
     if (c->owned) c->is_tls = 0;
 }
 
+// M240（缺陷 B · 真根因）：**「释放对象」的认领闸门**（调用方须持 `c->mu`）。
+//   实测根因（ASAN：`px_conn_free_res ← px_conn_release ← bi_ws_recv ← offload_run_task`）：
+//   `obj_free_pending` 只有「已宣告」，**没有「已认领」闸门** ⇒ 两条线程可同时判定「该我 free」：
+//     T_offload（最后的使用者）: release → refs 1→0 ⇒ freed=1 ⇒ **锁外** px_conn_free_res(c)（重活）
+//     T_owner  （对象创建者）: owner_free → 看到 refs==0 ⇒ do_obj=1 ⇒ xfree(c)
+//   ⇒ 对象在另一线程还在跑 free_res 时就被 xfree ⇒ 读 `c->owned` 即 SEGV。
+//   认领条件（三选一即安全）：① free_res 已完成（res_done）、
+//     ② free_res 从未认领（!freed）且不会再认领、③ 本线程就是刚跑完 free_res 的那个。
+//   其余（freed && !res_done）⇒ **必须放弃**，由正在跑 free_res 的线程在收尾时认领。
+static int conn_try_claim_obj(PxConn* c) {   // 调用方须持 c->mu
+    if (!c->obj_free_pending || c->obj_freed) return 0;
+    if (c->freed && !c->res_done) return 0;
+    c->obj_freed = 1;
+    return 1;
+}
+
 void px_conn_release(PxConn* c) {
     if (!c) return;
     int do_res = 0, do_obj = 0;
     pthread_mutex_lock(&c->mu);
     if (c->refs > 0) c->refs--;
     if (c->refs == 0) {
-        if (c->pending_free && !c->freed) { c->freed = 1; do_res = 1; }
-        if (c->obj_free_pending) do_obj = 1;
+        if (c->pending_free && !c->freed) { c->freed = 1; c->res_done = 0; do_res = 1; }
+        if (!do_res) do_obj = conn_try_claim_obj(c);
     }
     pthread_mutex_unlock(&c->mu);
-    if (do_res) px_conn_free_res(c);   // 锁外做重活
-    if (do_obj) {                      // obj_free_pending 只由创建者设置
+    if (do_res) {
+        px_conn_free_res(c);   // 锁外做重活
+        pthread_mutex_lock(&c->mu);
+        c->res_done = 1;       // 重活完成 ⇒ 现在才允许 free 对象
+        if (!do_obj) do_obj = conn_try_claim_obj(c);
+        pthread_mutex_unlock(&c->mu);
+    }
+    if (do_obj) {
+#ifndef PX_NO_WS
+        px_ws_detach_conn(c);          // M240：xfree 前再清一次（幂等）
+#endif
         pthread_mutex_destroy(&c->mu);
         // M235s1（缺陷 354）：对象由 `xmalloc(sizeof(PxConn))` 创建 ⇒ 必须 `xfree`。
-        //   裸 `free()` 会让 px_serve 每关一条连接即 `free(): invalid pointer` ⇒ SIGABRT
-        //   （M201 记过同款：xmalloc 返回的是跳过大小头的指针）。
         xfree(c);
     }
 }
@@ -23713,7 +23755,11 @@ void px_conn_close(PxConn* c) {
     //    需要彻底断开的调用点 —— 如 bi_ws_close —— 自己会 shutdown(SHUT_RDWR)）。
     //   对已关 fd 无害（幂等）。
     if (fd >= 0) shutdown(fd, SHUT_RD);
-    if (do_free) px_conn_free_res(c);
+    if (do_free) {
+        px_conn_free_res(c);
+        // M240：宣告「重活已完成」——并发的对象释放者靠它判定能不能 xfree
+        pthread_mutex_lock(&c->mu); c->res_done = 1; pthread_mutex_unlock(&c->mu);
+    }
 }
 
 // 仅对象创建者调用：close + 释放对象（若此刻还有使用者在读，则把 free 推后到它 release）。
@@ -23722,18 +23768,25 @@ void px_conn_owner_free(PxConn* c) {
     px_conn_close(c);
     int do_res = 0, do_obj = 0;
     pthread_mutex_lock(&c->mu);
-    c->obj_free_pending = 1;
+    c->obj_free_pending = 1;          // 只「宣告」；能不能真 free 由 conn_try_claim_obj 裁定
     if (c->refs == 0) {
-        if (c->pending_free && !c->freed) { c->freed = 1; do_res = 1; }
-        do_obj = 1;
+        if (c->pending_free && !c->freed) { c->freed = 1; c->res_done = 0; do_res = 1; }
+        if (!do_res) do_obj = conn_try_claim_obj(c);
     }
     pthread_mutex_unlock(&c->mu);
-    if (do_res) px_conn_free_res(c);
+    if (do_res) {
+        px_conn_free_res(c);
+        pthread_mutex_lock(&c->mu);
+        c->res_done = 1;
+        if (!do_obj) do_obj = conn_try_claim_obj(c);
+        pthread_mutex_unlock(&c->mu);
+    }
     if (do_obj) {
+#ifndef PX_NO_WS
+        px_ws_detach_conn(c);          // M240：xfree 前再清一次（幂等）
+#endif
         pthread_mutex_destroy(&c->mu);
         // M235s1（缺陷 354）：对象由 `xmalloc(sizeof(PxConn))` 创建 ⇒ 必须 `xfree`。
-        //   裸 `free()` 会让 px_serve 每关一条连接即 `free(): invalid pointer` ⇒ SIGABRT
-        //   （M201 记过同款：xmalloc 返回的是跳过大小头的指针）。
         xfree(c);
     }
 }
@@ -25127,6 +25180,28 @@ static PxPend* px_pxpend_ctx(int fd) {
     return &g_pxpend[fd];
 }
 
+// M240（缺陷 341）：`g_pxpend` 是 `xrealloc` **增长**的 —— 容量超 `fd` 时整体搬家
+//   （数组 >128KB ⇒ glibc 走 mmap ⇒ 旧块被 munmap）。所以**锁外持有的 `PxPend*` 一律不可信**：
+//   读它 = SEGV（实测 core：`px_pxpend_enter` 读 `+4` 偏移），写它 = **静默堆破坏**。
+//   口径：凡需跨锁瞬间使用，一律用下面两个访问器（锁内重新解析）。
+static PxConn* px_pxpend_conn_of(int fd) {
+    PxConn* c = NULL;
+    pthread_mutex_lock(&g_pxpend_mu);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e) c = e->conn;
+    pthread_mutex_unlock(&g_pxpend_mu);
+    return c;
+}
+
+static int px_pxpend_stage_of(int fd) {
+    int st = 0;
+    pthread_mutex_lock(&g_pxpend_mu);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e) st = e->stage;
+    pthread_mutex_unlock(&g_pxpend_mu);
+    return st;
+}
+
 // 扩容（持 g_pxpend_mu；上限 g_conn_max = PX_MAX_CONNS env，同 http_pend）。返回 0 可用。
 static int px_pxpend_ensure(int fd) {
     if (fd < 0 || fd >= g_conn_max) return -1;
@@ -25184,6 +25259,18 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
     }
     pthread_mutex_lock(&g_pxpend_mu);
     gc_block_stop(&old);
+    // ═══ M240（缺陷 341）：**必须重新解析 `e`** ═══
+    //   上面那次 `px_conn_init`（TLS 握手）在**锁外**执行，其间**任何**线程都可能以更大的 fd
+    //   调用本函数 ⇒ `px_pxpend_ensure` 的 `xrealloc` 把 `g_pxpend` **整体搬走**
+    //   ⇒ 手里这个 `e` 是**野指针**（读它崩；写它 = 静默堆破坏）。
+    e = px_pxpend_ctx(fd);
+    if (!e) {   // 极端情形：表已改变且本 fd 已不在范围 ⇒ 丢弃新建
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_pxpend_mu);
+        px_conn_owner_free(c);
+        if (out_fd_closed) *out_fd_closed = 1;
+        return NULL;
+    }
     if (e->active) {   // 防御：槽被占（理论不达，fd 唯一在途）→ 弃新建
         gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_pxpend_mu);
@@ -25207,6 +25294,61 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
 
 // 关闭连接并释放槽（统一 close 路径；幂等）。close(fd)+TLS 释放+free(conn) 在锁外做；
 // tmp 兜底清理。fd 复用防串扰：active=0 → 旧 done 回调/take 不再命中。
+// M240（晨曦缺陷 B · takeover 连接 UAF）：把某 fd 的 PxPend 条目**整体摘出**并把 `conn`
+//   交回调用者。与 `px_pxpend_close` 的差别：**不 close fd、不 free 连接对象**（所有权转交）。
+//
+// 为什么需要它：`px_pxpend_ctx(fd)` 是 `&g_pxpend[fd]` —— **纯按 fd 索引**。而 WS 会话说到底
+//   可能在**会话中途**就把 fd 交回内核（`bi_ws_recv` 读到对端 RST ⇒ `px_conn_close`
+//   ⇒ `px_conn_free_res` ⇒ `close(c->fd)`）。若本条目仍挂在 fd 上，内核对**同号 fd 的复用**
+//   会让新连接的 `px_pxpend_close(同号)` 命中**本条目** ⇒ 对**旧连接的 c** 做
+//   `px_conn_owner_free` ⇒ `xfree` 掉**正在被 WS 泵循环使用**的对象。
+//   实测（m237 官方包 + spawn 中继 + 立即 RST）：core `rbp=c`、`rdi=c+0x4048=&c->mu`
+//   （崩在 `px_conn_read` 的 acquire），与晨曦报告逐字节一致。
+//
+// 语义：只做「摘出」—— `active/stage/fd/conn/req/resp` 复位 + `inflight--` + 清临时文件路径，
+//   与 `px_pxpend_close` 的前半段**同口径**，但不触碰 fd 与连接对象。
+static PxConn* px_pxpend_detach_conn(int fd) {
+    if (fd < 0) return NULL;
+    PxConn* c = NULL;
+    char tmp[1024];
+    tmp[0] = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active) {
+        c = e->conn;
+        if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
+        e->active = 0; e->stage = 0; e->fd = -1; e->conn = NULL;
+        e->req.type = PX_NULL; e->resp.type = PX_NULL;
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (tmp[0]) unlink(tmp);
+    return c;
+}
+
+// M240（修复 (e)）：把 PxPend 表里所有**指向本对象**的条目作废。
+//   为什么必须有：`PxPend` 与 WS 注册表同构 —— **按 fd 索引 + 存裸 `PxConn*`**。
+//   对象一旦释放（`px_conn_free_res`），表里那份指针就是悬垂的；下一次同号 fd 的连接
+//   走到 `px_pxpend_enter(fd)` / `px_pxpend_detach_conn(fd)` 就会把**野指针**取出来用
+//   （ASAN 实测：`px_ws_takeover_http_conn` 第 3 行 `c->fd` 直接 SEGV on unknown address）。
+//   幂等；调用方（`px_conn_free_res`）不持 `g_pxpend_mu`。
+static void px_pxpend_detach_by_conn(PxConn* c) {
+    if (!c) return;
+    pthread_mutex_lock(&g_pxpend_mu);
+    for (int i = 0; i < g_pxpend_cap; i++) {
+        PxPend* e = &g_pxpend[i];
+        if (e->active && e->conn == c) {
+            e->active = 0; e->stage = 0; e->fd = -1; e->conn = NULL;
+            e->req.type = PX_NULL; e->resp.type = PX_NULL;
+            __sync_fetch_and_sub(&g_px_inflight, 1);
+        }
+    }
+    pthread_mutex_unlock(&g_pxpend_mu);
+}
+
 static void px_pxpend_close(int fd) {
     if (fd < 0) return;
     PxConn* c = NULL;
@@ -25739,7 +25881,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         g_cur_conn = NULL;
         return px_null();
     }
-    PxConn* conn = pend->conn;
+    // M240（缺陷 341）：锁内重新解析（`pend` 只用于上面的 NULL 判定）
+    PxConn* conn = px_pxpend_conn_of(fd);
     g_cur_conn = conn;
     // M99：每 job 登记连接上下文为 ACTIVE（FREE→ACTIVE 或幂等复位；事件循环照看/超时收尾用）。
     //   非 Linux（acquire stub 返回 NULL）→ 不登记，交 IDLE 时 idle_put_fd 返回 -1 → 原阻塞续读。
@@ -25759,7 +25902,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     //   返回非 null → px_vhost_respond（无访问日志 = vhost 历史语义）；返回 null →
     //   docroot 回退续管道（store vroot + 重入 px_http_dispatch skip_pre=1：不重复
     //   CORS/限流/vhost，直接 route+静态/.px 完成）——vhost 回退与同步路径语义一致。
-    if (pend->stage == 2) {
+    if (px_pxpend_stage_of(fd) == 2) {   // M240（缺陷 341）：锁内重新解析
         LXValue sreq, sresp;
         int sh = 0, sc = 1;
         char srid[64];
@@ -26138,14 +26281,26 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                     if (body_tmp_file >= 0) { close(body_tmp_file); body_tmp_file = -1; }
                     if (body_tmp_path[0]) { unlink(body_tmp_path); body_tmp_path[0] = 0; }
                     if (body_buf) { xfree(body_buf); body_buf = NULL; }
-                    if (px_ws_takeover_http_conn(conn, req, path, w_idx, w_manual) == 0) {
-                        px_reset_request_state();
-                        px_root_pop();        // M92-S2c：请求迭代登记作用域结束
-                        px_pxpend_close(fd);  // 连接与槽一并收尾（含 inflight-- / M235 引用计数）
-                        g_cur_conn = NULL;
-                        return px_null();     // worker 释放（WS 会话已在本线程内跑完）
-                    }
-                    // 未接管（g_ws_conns 槽满 / 写 101 失败）：连接按关闭处理，不让它半开
+                    // ═══ M240（晨曦缺陷 B）：**先把连接从 PxPend 表摘出**，再交给 WS 会话 ═══
+                    //   病灶：`px_pxpend_ctx(fd)` = `&g_pxpend[fd]` 是**按 fd 索引**，而 WS 会话
+                    //   有可能在**会话中途**就让 fd 回到内核（`bi_ws_recv` 读到对端 RST
+                    //   ⇒ `px_conn_close` ⇒ `px_conn_free_res` ⇒ `close(c->fd)`）。条目仍挂在
+                    //   该 fd 上时，内核对同号 fd 的**复用**会让新连接的 `px_pxpend_close(同号)`
+                    //   命中**本条目** ⇒ 对**旧连接的 c** 做 xfree（`px_conn_owner_free`）
+                    //   ⇒ 泵循环 `px_conn_read(c)` ⇒ `pthread_mutex_lock(&已释放的 c->mu)`
+                    //   ⇒ SIGSEGV。实测 core：`rbp=c`、`rdi=c+0x4048`，与晨曦签名逐字节一致。
+                    //   摘出后所有权**完全归 WS**：只在本处 `px_conn_owner_free` 单点收尾
+                    //   （引用计数会保护仍在读的并发使用者）。失败路径（槽满 / 101 写失败）
+                    //   同样收尾关闭 —— 与既有注释「连接按关闭处理，不让它半开」一致。
+                    PxConn* ws_c = px_pxpend_detach_conn(fd);
+                    if (!ws_c) ws_c = conn;   // 兜底（理论不达：进到这里条目必为 active）
+                    px_evc_detach(fd);        // 与 px_pxpend_close 同序（摘事件循环登记）
+                    (void)px_ws_takeover_http_conn(ws_c, req, path, w_idx, w_manual);
+                    px_reset_request_state();
+                    px_root_pop();            // M92-S2c：请求迭代登记作用域结束
+                    px_conn_owner_free(ws_c);
+                    g_cur_conn = NULL;
+                    return px_null();         // worker 释放（WS 会话已在本线程内跑完）
                 }
             }
         }
