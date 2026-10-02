@@ -1,0 +1,6 @@
+# M242 动态回归服务端（最小）· 证明 px_evc_acquire 改 int 后 HTTP 连接路径仍可用。
+# 深度覆盖（keep-alive / 事件循环 / WS / SSE）由既有门承担：
+#   m173_http_proxy · m176_reuseport · m180_h2_h3_stance · m235_ws_conn_uaf · m236_ws_stream。
+let p = int(env("M242_PORT"))
+let d = env("M242_WWW")
+px_serve(p, d)

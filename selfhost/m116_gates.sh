@@ -925,6 +925,7 @@ run m236_ws_stream bash examples/m236_ws_stream/verify.sh
 #   ⚠️ 负控 A/B/C 各要重编 runtime / 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
 run m237_field_enum bash examples/m237_field_enum/verify.sh
 run m239_match_case bash examples/m239_match_case/verify.sh
+run m242_table_ptr bash examples/m242_table_ptr/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

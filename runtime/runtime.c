@@ -19003,7 +19003,8 @@ static int hdr_block_chunked(const char* h) {
 #define FSERVE_KIND_PXSERVE 2   // M99：px_serve 连接（keep-alive 空闲交 IDLE，事件循环照看）
 #endif
 typedef struct PxConnCtx PxConnCtx;
-static PxConnCtx* px_evc_acquire(int fd, int kind);
+// M242（缺陷 403）：返回 int（0 成功 / -1 失败）而非 `PxConnCtx*` —— 见定义处长注释。
+static int px_evc_acquire(int fd, int kind);
 // M236：以下两个 static 函数在 http_conn_worker（本文件靠前）里被用到，而定义在本文件靠后
 //   （px_evc_detach ≈20221 / px_header_get ≈23839）⇒ 按本区既有做法集中前置声明。
 static void px_evc_detach(int fd);
@@ -19380,7 +19381,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
     // M88-B-S2：serve 连接一律非阻塞 + 登记连接上下文（FREE→ACTIVE）。fd 超 PX_MAX_CONNS
-    // 或非 Linux 时 acquire 返回 NULL（不登记）→ 后续 px_evc_idle_put 失败走阻塞续读路径，功能不降。
+    // 或非 Linux 时 acquire 返回非 0（不登记）→ 后续 px_evc_idle_put 失败走阻塞续读路径，功能不降。
     px_fd_nonblock(fd);
     px_evc_acquire(fd, FSERVE_KIND_HTTP);
     // keep-alive 空闲超时语义：非阻塞 fd 上 SO_RCVTIMEO 不生效，由 px_recv_wait 的 15s poll 等待取代
@@ -20242,9 +20243,16 @@ static void px_ev_wake(void) {
 }
 
 // 登记连接为 ACTIVE（worker 开始处理前调用；重复登记同 fd 则复位旧上下文防串扰）
-static PxConnCtx* px_evc_acquire(int fd, int kind) {
+// M242（缺陷 403）：**改返回 int**，不再把 `&g_conns[fd]` 交给调用方。
+//   为什么：`g_conns` 是 `xrealloc` 增长的表（容量不够时整体搬家，>128KB 走 mmap）
+//   ⇒ 元素地址**跨锁即失效**。原签名把表元素指针返回出去，等于邀请调用方在锁外
+//   解引用（M240 缺陷 399 的形状：读它 SEGV、写它静默堆破坏）。
+//   实测两个调用点本就把返回值**只当布尔**用 ⇒ 改 int **行为完全等价**，
+//   但从此不可能被误用（`table_ptr_audit.py` 的转发型外泄归零）。
+//   需要 ctx 的字段请在锁内用 `px_evc_ctx(fd)`（或既有访问器）。
+static int px_evc_acquire(int fd, int kind) {
     pthread_mutex_lock(&g_conn_mu);
-    if (px_evc_ensure(fd) != 0) { pthread_mutex_unlock(&g_conn_mu); return NULL; }
+    if (px_evc_ensure(fd) != 0) { pthread_mutex_unlock(&g_conn_mu); return -1; }
     PxConnCtx* c = px_evc_ctx(fd);
     if (c->state != PX_CONN_STATE_FREE) {
         // 旧上下文未收尾（异常路径）：强制清理（调用方须保证该 fd 已 close 或即将接管）
@@ -20259,7 +20267,7 @@ static PxConnCtx* px_evc_acquire(int fd, int kind) {
     c->fd = fd; c->kind = kind; c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
     c->idle_ev_cnt = 0;
     pthread_mutex_unlock(&g_conn_mu);
-    return c;
+    return 0;
 }
 
 // 关闭连接 + 收尾上下文（统一 close 路径，防 fd 复用串扰；供事件循环与 worker 收尾调用）
@@ -20477,8 +20485,8 @@ static void* px_ev_loop(void* arg) {
                             (pkn > 0 && pkn < 80) ? pkn : 0, pkb);
                 }
                 // M99：按类型投回服务池——PXSERVE → px_serve 的 g_pool；HTTP → fserve
-                PxConnCtx* ac = px_evc_acquire(fd, kind_tmo);  // FREE→ACTIVE 重新登记
-                if (ac) {
+                // M242（缺陷 403）：返回值只当布尔用 ⇒ 直接判 0/-1（不再接表指针）
+                if (px_evc_acquire(fd, kind_tmo) == 0) {   // FREE→ACTIVE 重新登记
                     // M108-S3：PXSERVE 有界入队（超时拒绝 → px_pxpend_close 收尾 + 告警）
                     if (kind_tmo == FSERVE_KIND_PXSERVE) px_pool_push_bounded(fd);
                     else fserve_push(fd, FSERVE_KIND_HTTP);    // 投回池，worker 接管读在途请求
@@ -20552,7 +20560,7 @@ static void px_ev_ensure(void) {
 // 非 Linux（Windows 交叉等）：事件驱动内核降级为空操作——连接走既有阻塞处理路径，
 // 功能不降仅无空闲不占线程优化（文档明示 Linux epoll 一等）。
 static void px_ev_wake(void) { (void)0; }
-static PxConnCtx* px_evc_acquire(int fd, int kind) { (void)fd; (void)kind; return NULL; }
+static int px_evc_acquire(int fd, int kind) { (void)fd; (void)kind; return -1; }
 static void px_evc_close(int fd) { http_pend_clear(fd); close(fd); }
 static void px_evc_detach(int fd) { (void)fd; }
 static int px_evc_is_idle(int fd) { (void)fd; return 0; }
@@ -21107,8 +21115,8 @@ static void sse_conn_hold(int fd, PxConn* c) {
     //   写失败 → sse_server_close_fd 统一清理；SSE 空闲不超时）。TLS/事件化不可用
     //   → 原阻塞保持路径（功能不降，仅 TLS SSE 长连接仍占 worker，文档注明）。
     if (!c->is_tls) {
-        PxConnCtx* ac = px_evc_acquire(fd, FSERVE_KIND_SSE);
-        if (ac) {
+        // M242（缺陷 403）：同 20480 —— 只判 0/-1
+        if (px_evc_acquire(fd, FSERVE_KIND_SSE) == 0) {
             px_ev_ensure();
             if (px_evc_idle_put(fd, FSERVE_KIND_SSE) == 0) {
                 // 交还成功：注册表项保留（conn 供 sse_send 写）；本 worker 收尾释放
@@ -25885,7 +25893,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     PxConn* conn = px_pxpend_conn_of(fd);
     g_cur_conn = conn;
     // M99：每 job 登记连接上下文为 ACTIVE（FREE→ACTIVE 或幂等复位；事件循环照看/超时收尾用）。
-    //   非 Linux（acquire stub 返回 NULL）→ 不登记，交 IDLE 时 idle_put_fd 返回 -1 → 原阻塞续读。
+    //   非 Linux（acquire stub 返回 -1）→ 不登记，交 IDLE 时 idle_put_fd 返回 -1 → 原阻塞续读。
     px_evc_acquire(fd, FSERVE_KIND_PXSERVE);
     PxHttpOut out;
     px_http_out_init_conn(&out, conn);
