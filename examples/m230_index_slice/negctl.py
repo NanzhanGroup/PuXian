@@ -93,9 +93,16 @@ N_ANCHORS = sum(len(p) for v in SPECS.values() for _, p in v)
 
 
 def snapshot(root, snap):
+    # M239s1（缺陷 394 同族）：**只做首次快照** —— 快照语义 = 「进门时的源」。
+    #   原实现无条件 `copy2` 覆盖 ⇒ 若门里出现「先 apply X 再 apply Y」，
+    #   第二次快照会记录**已被 X 污染**的源 ⇒ `restore` 回不到进门态（残留）。
+    #   m239 门已实测踩中（`bc_emit.px` 残留 3 处）；本门当前无连续 apply 段，
+    #   此处为**防御性统一**（与 m239/m231 同口径）。
     os.makedirs(snap, exist_ok=True)
     for rel in FILES:
-        shutil.copy2(os.path.join(root, rel), os.path.join(snap, rel.replace("/", "__")))
+        dst = os.path.join(snap, rel.replace("/", "__"))
+        if not os.path.exists(dst):
+            shutil.copy2(os.path.join(root, rel), dst)
     print("快照 %d 件 → %s" % (len(FILES), snap))
 
 

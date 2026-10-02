@@ -41,6 +41,10 @@ chk() { if eval "$2"; then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL
 has() { grep -qF "$2" "$ROOT/$1"; }
 cnt() { grep -cF "$2" "$ROOT/$1" || true; }
 NEGCTL() { python3 "$D/negctl.py" --root "$ROOT" --snap "$W/snap" "$@"; }
+# M239s1（缺陷 394）：① 进门记 selfhost/ 指纹 ⇒ 门尾断言「门内未改动」（负控残留自检）；
+#   ② trap 兜底还原（中途被杀/异常退出也不会把负控补丁留在源码里）。
+SELFHOST_SHA_IN=$(cd "$ROOT" && sha256sum selfhost/*.px 2>/dev/null | sha256sum | cut -d' ' -f1)
+trap 'NEGCTL --restore >/dev/null 2>&1; true' EXIT
 # 正判据用**入库件**（CI 里也在）；负控用 devbuild 重编的 dev 件
 TRACKS() { python3 "$D/three_tracks.py" --root "$ROOT" --work "$W/t$1"; }
 TRACKS_DEV() { python3 "$D/three_tracks.py" --root "$ROOT" --work "$W/t$1" --dev; }
@@ -153,7 +157,11 @@ else
   echo "── [4]-[7] 负控（--neg-skip：跳过，需重建编译器）"
 fi
 
-echo "── [8] 覆盖边界（如实登记）"
+echo "── [8] 负控残留自检（M239s1 缺陷 394）"
+SELFHOST_SHA_OUT=$(cd "$ROOT" && sha256sum selfhost/*.px 2>/dev/null | sha256sum | cut -d' ' -f1)
+chk "门内 selfhost/*.px 指纹不变（快照=进门态 ⇒ 负控还原到底）" "[ '$SELFHOST_SHA_IN' = '$SELFHOST_SHA_OUT' ]"
+
+echo "── [9] 覆盖边界（如实登记）"
 cat <<'EOF'
   · parse 限制：`case -1:`（负字面量模式）报 E2001「无效的模式: -」；`case 1 + 2:` 报「期望 ':'」；
     多行 match 不能直接作函数实参 / 括号内表达式（`print(str(match x: …))` ⇒ 「期望 缩进块」）
