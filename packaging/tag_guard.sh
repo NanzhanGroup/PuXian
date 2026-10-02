@@ -163,6 +163,30 @@ ALL_TAGS=$(git tag -l "$TAG_GLOB")
 tag_for() { printf '%s\n' "$ALL_TAGS" | grep -E -e "-m0*$1$" | sort -V | tail -1; }
 
 TAG=$(tag_for "$TOP")
+
+# ------------------------------------------------------------
+# M245 补（2026-10-03 实测事故 · **push 竞态**）：# M245-COMPAT-FETCH-SENTINEL
+#   本地 clone 的 tag 快照可能**早于** tag 到达远端 —— 实测时间线：
+#     main push ⇒ run 22:34:23Z 创建 · job 22:34:25Z 起 · checkout 的 fetch 22:34:27Z 开始
+#     tag 创建 22:34:26Z（紧随 main 推的）⇒ 快照里没有它
+#   ⇒ 守卫在本地判「缺 tag」并判红，**而远端其实已经有了**。
+#   触发条件：提交年龄 > grace（守卫不跳过、当场判）—— 本仓「commit → 跑全量门 100+ 分钟 → push」
+#   的正常节奏正好越过 grace 边界 ⇒ 与「先推 main、后推 tag」的次序构成确定的竞态。
+#   ⇒ 判「缺」之前**补取一次远端 tag**：远端已有则问题消失；取不到就按原逻辑判红（不掩盖真缺）。
+#   ⚠️ 只对「有远端」的仓库做；TAG_GUARD_NO_FETCH=1 关闭（自测的负控用它）。
+# ------------------------------------------------------------
+if [ -z "$TAG" ] && [ "${TAG_GUARD_NO_FETCH:-0}" != "1" ] && [ -n "$(git remote 2>/dev/null | head -1)" ]; then
+    say "ℹ️ 本地 tag 快照里没有 -m$TOP ⇒ 补取一次远端 tag（push 竞态兜底）…"
+    if git fetch --tags --quiet 2>/dev/null; then
+        ALL_TAGS=$(git tag -l "$TAG_GLOB")
+        TAG=$(tag_for "$TOP")
+        if [ -n "$TAG" ]; then
+            say "✅ 补取后找到 $TAG ⇒ 属 push 竞态（远端并无缺失，本地快照旧了）"
+        fi
+    else
+        say "⚠️ 补取失败（离线 / 无权限）⇒ 按本地快照继续判"
+    fi
+fi
 if [ -n "$TAG" ]; then
     TAG_COMMIT=$(git rev-list -n1 "$TAG" 2>/dev/null)
     if [ -n "$TAG_COMMIT" ] && git merge-base --is-ancestor "$TAG_COMMIT" "$COMMIT" 2>/dev/null; then

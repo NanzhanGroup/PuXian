@@ -187,6 +187,47 @@ git -C "$REPO" tag -d v0.2.0-m903s1 >/dev/null
 g --ref HEAD; ck "J4 删掉违规 tag 后 ⇒ rc=0" 0
 
 echo
+echo "── K push 竞态：本地快照缺 tag、远端已有 ⇒ 补取后必须绿（负控：禁补取必红）──"
+R2="$TMP/k-remote.git"; L2="$TMP/k-src"; L3="$TMP/k-clone"; L4="$TMP/k-clone-neg"
+EXF_EMPTY="$TMP/exempt-empty.txt"; : > "$EXF_EMPTY"   # K 的夹具里没有非里程碑 tag ⇒ 用空豁免表
+git init -q --bare "$R2"
+git init -q -b main "$L2"
+cat > "$L2/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+### runtime · 假里程碑乙（M950 · 自测夹具）
+EOF
+git -C "$L2" add -A
+git -C "$L2" commit -qm "feat: M950 假里程碑乙"
+git -C "$L2" remote add origin "$R2"
+git -C "$L2" push -q origin main
+# 关键次序：**先**做一份「没有 tag」的快照（= CI 里 checkout 的那一刻）
+git clone -q -b main "$R2" "$L3"   # -b main：bare 库的 HEAD 默认是 master（未推）⇒ 必须显式指定
+# ⚠️ 负控必须有自己的**干净起点**：K1 的补取会把 tag 拉进它那一份快照 ⇒ 若 K2 复用同一份，
+#    就变成「已经补过了」的假绿（M213/M214 立过的纪律：每道负控各自独立、干净起点）。
+git clone -q -b main "$R2" "$L4"
+# **再**打 tag 并推到远端（= 紧随 main 推出去的 tag）
+git -C "$L2" tag v0.2.0-m950
+git -C "$L2" push -q origin v0.2.0-m950
+# 夹具形状自证：快照里没有、远端里有 —— 否则本段什么都没证明
+if [ -z "$(git -C "$L3" tag -l v0.2.0-m950)" ] && [ -z "$(git -C "$L4" tag -l v0.2.0-m950)" ] \
+   && [ -n "$(git -C "$R2" tag -l v0.2.0-m950)" ]; then
+    echo "  ✅ K0 夹具形状成立（两份快照都缺 tag、远端已有）"; pass=$((pass+1))
+else
+    echo "  ❌ K0 夹具形状不成立（快照/远端的 tag 状态与预期不符）"; fail=$((fail+1))
+fi
+
+out=$(TAG_GUARD_EXEMPT="$EXF_EMPTY" bash "$GUARD" --repo "$L3" --ref HEAD 2>&1); RC=$?
+ck "K1 补取兜底后 ⇒ rc=0（不是真缺）" 0
+ckhas "K1 明示是 push 竞态" "push 竞态"
+
+out=$(TAG_GUARD_EXEMPT="$EXF_EMPTY" TAG_GUARD_NO_FETCH=1 bash "$GUARD" --repo "$L4" --ref HEAD 2>&1); RC=$?
+ck "K2 负控：禁补取 ⇒ rc=1（证明红确实来自《快照缺 tag》）" 1
+ckhas "K2 仍如实报缺 tag" "缺发布 tag"
+
+echo
 if [ "$fail" -eq 0 ]; then
     echo "✅ tag_guard 自测全通过（pass=$pass fail=0）"
     exit 0
