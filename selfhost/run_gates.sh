@@ -21,6 +21,11 @@
 #
 # 环境变量：GATE_TSV（计时输出）· GATE_TIMEOUT_DEFAULT · GATE_TIMEOUT_<门名>
 #           GATE_ONLY / GATE_SKIP / GATE_FAIL_FAST（与同名参数等价，便于 CI）
+#           GATE_JOBS —— **门内并行度**（M244）：
+#             默认 = 本机核数；`GATE_JOBS=1` = 强制串行（**判据用**：与并行档对拍）；
+#             非法值（非整数 / <1）⇒ **响亮 rc=2**，绝不静默回退。
+#             为什么不并「门之间」：53 个门的负控会**改源码**（`runtime.c` / `selfhost/*.px`），
+#             门间并行必然互相踩（M191 立 PID 锁正是为此）。门内并行与那条护栏**正交**。
 # ============================================================
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
@@ -64,7 +69,8 @@ step() { [ "$GATE_LIST" = 1 ] && return 0; echo ""; echo "══ $* ══"; }
 #         （M207 实测 s2c_pxserve 卡死 3 分钟）。
 GATE_TSV="${GATE_TSV:-/tmp/m116_gates.times.tsv}"
 GATE_TIMEOUT_DEFAULT="${GATE_TIMEOUT_DEFAULT:-900}"
-: > "$GATE_TSV"
+# ⚠️ M244（缺陷 412）：**计时 TSV 的截断不在这里** —— 已下移到 `--list` 短路之后。
+#   为什么：只读入口（`--list`）**不得有副作用**。详见下方同名注释块。
 GATE_ALL0=$SECONDS
 
 run() {  # $1=名 $2..=命令
@@ -130,6 +136,14 @@ if [ "$GATE_LIST" = 1 ]; then
     source "$REG"
     exit 0
 fi
+
+# ── M244（缺陷 412）：计时 TSV 的截断**移到这里** ──────────────────
+#   原来它写在参数解析段（`GATE_TSV=` 之后）**无条件执行**，而 `--list` 直到上面才短路
+#   ⇒ 一条**只读**的 `--list` 会把**正在跑的那一轮**的计时记录清空。
+#   实测（M243 收尾）：我为数门总数跑了一次 `--list` ⇒ 前 21 门的耗时节录当场丢失
+#   （**门的结果一条没丢** —— 丢的是「哪扇门贵」的统计，而那是决定优化顺序的唯一依据）。
+#   ⇒ 纪律：产物/统计只能由**会跑门的那条路径**创建，**只读入口不得有副作用**。
+: > "$GATE_TSV"
 
 LOCK=/tmp/.m116_gates.lock
 if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then

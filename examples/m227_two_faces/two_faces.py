@@ -67,6 +67,12 @@ for f in (PXI, f'{a.work}/build/drv_vm', f'{a.work}/build/drv_c', f'{a.work}/cas
         print(f'❌ 缺少 {f}')
         sys.exit(2)
 
+# ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+#    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+#    ⚠️ 门**之间**仍然串行（run_gates.sh 的 PID 锁）—— 53 个门的负控会改源码，
+#       门间并行必然互相踩；门内并行与那条护栏正交。
+sys.path.insert(0, os.path.join(a.root, 'selfhost'))
+from gate_par import pmap, pmap_records   # noqa: E402
 METHOD_ENTRY = re.compile(r'^(方法\s|类型\s\S+\s没有方法\s)')
 
 
@@ -95,6 +101,29 @@ def run(cmd):
 cases = [ln.rstrip('\n').split('\t') for ln in open(f'{a.work}/cases.tsv', encoding='utf-8')]
 cases = [c for c in cases if len(c) >= 3]
 
+def _cmd227(lb, face, t):
+    return {'interp': [PXI, lb, face, f'{a.work}/drv.px'],
+            'vm': [f'{a.work}/build/drv_vm', lb, face],
+            'c': [f'{a.work}/build/drv_c', lb, face]}[t]
+
+
+def _one227(k):
+    """单例执行体（面 × 轨）—— 与串行版逐字节同逻辑。
+
+    ⚠️ `dump` 的行序**必须与串行版相同**（`--dump` 的产物是可 `cmp` 的判据载体）
+    ⇒ 这里把 dump 行随结果一起带回，调用方按**输入序** append。
+    """
+    lb, face, t = k
+    rc, out, err = run(_cmd227(lb, face, t))
+    code, body = norm(err + '\n' + out)
+    so = next((ln.strip() for ln in out.splitlines()
+               if not ln.startswith(('/*', ' *', '*/'))), '')
+    return k, {'rc': rc, 'code': code, 'body': body, 'out': so,
+               '_dump': '\t'.join([lb, face, t, str(rc), code, body, so])}
+
+
+_GOT227 = pmap_records(_one227, [(lb, face, t) for lb, _f, _m in cases
+                                 for face in ('f', 'm') for t in ('interp', 'vm', 'c')])
 rows, h1, h2, h3, tri, rset = [], [], [], [], [], {}
 dump = []
 for lb, fsrc, msrc in cases:
@@ -103,16 +132,11 @@ for lb, fsrc, msrc in cases:
     variant = re.sub(r'^p\d+_.*$', 'poison', variant)
     rec = {}
     for face in ('f', 'm'):
-        for t, cmd in (('interp', [PXI, lb, face, f'{a.work}/drv.px']),
-                       ('vm', [f'{a.work}/build/drv_vm', lb, face]),
-                       ('c', [f'{a.work}/build/drv_c', lb, face])):
-            rc, out, err = run(cmd)
-            code, body = norm(err + '\n' + out)
-            so = next((ln.strip() for ln in out.splitlines()
-                       if not ln.startswith(('/*', ' *', '*/'))), '')
-            rec[(face, t)] = {'rc': rc, 'code': code, 'body': body, 'out': so}
+        for t in ('interp', 'vm', 'c'):
+            d = _GOT227[(lb, face, t)]
+            rec[(face, t)] = {k: v for k, v in d.items() if not k.startswith('_')}
             if a.dump:
-                dump.append('\t'.join([lb, face, t, str(rc), code, body, so]))
+                dump.append(d['_dump'])
     rows.append({'label': lb, 'func': fsrc, 'meth': msrc,
                  **{'%s|%s' % k: v for k, v in rec.items()}})
 

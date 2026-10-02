@@ -55,13 +55,31 @@ vbin = build('vm', {'PXC_VM_BIN': PXCV}, [])
 
 cases = [L.strip() for L in open(os.path.join(D, 'cases.txt')) if L.strip()]
 env = os.environ
+# ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+#    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+#    ⚠️ 门**之间**仍然串行（run_gates.sh 的 PID 锁）—— 53 个门的负控会改源码，
+#       门间并行必然互相踩；门内并行与那条护栏正交。
+sys.path.insert(0, os.path.join(ROOT, 'selfhost'))
+from gate_par import pmap, pmap_records   # noqa: E402
+
 nfork = 0; nok = 0; det = []
-for c in cases:
+def _one239(c):
+    """单例执行体（三轨各 spawn 一次）—— 与串行版逐字节同逻辑。
+
+    ⚠️ 下面第 65 行的 `if r[0] == r[1] == r[2]:` 是 **m239 负控 D 的打桩锚点**，
+       必须原样保留（改它 = 让旧负控静默失效，本仓撞过 4 次）。
+    """
     e = dict(env); e['M239C'] = c
-    r = []
+    out = []
     for cmd in ([PXI, DRV], [cbin], [vbin]):
         p = subprocess.run(cmd, capture_output=True, text=True, env=e, cwd=W, timeout=30)
-        r.append((p.returncode, norm(p.stdout + p.stderr)))
+        out.append((p.returncode, norm(p.stdout + p.stderr)))
+    return c, out
+
+
+_GOT239 = dict(pmap(_one239, cases))
+for c in cases:
+    r = _GOT239[c]
     if r[0] == r[1] == r[2]:
         nok += 1
     else:

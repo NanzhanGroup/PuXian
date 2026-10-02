@@ -64,6 +64,12 @@ def main():
                     help="判据自伤：**三层判据全关**（仅负控 C 用；正常路径不得带）")
     a = ap.parse_args()
     root, work = os.path.abspath(a.root), a.work
+    # ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+    #    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+    #    ⚠️ 位置纪律：必须在 `main()` 的**最早使用之前**（`det_check` 在更下面会被调用）；
+    #       且**同一区域不要再插入别的块**（事故 1 就是插入点与替换区重叠）。
+    sys.path.insert(0, os.path.join(root, 'selfhost'))
+    from gate_par import pmap, pmap_records   # noqa: E402
     d = os.path.join(root, "examples", "m234_bytes_family")
     drv = os.path.abspath(a.drv or os.path.join(d, "drv.px"))
     cs = load(d)
@@ -86,10 +92,10 @@ def main():
         for t, cmd in tracks.items():
             outs = []
             for k in range(2):
-                o = []
-                for idx, *_rest in cs:
-                    r = run(cmd, wd, idx, perturb=None if k == 0 else "x" * 700)
-                    o.append("%s|%s" % (idx, r))
+                o = pmap(lambda kk: "%s|%s" % (kk[1], run(
+                    cmd, wd, kk[1], perturb=None if kk[0] == 0 else "x" * 700)),
+                    [(k, idx) for idx, *_rest in cs])
+                outs.append("\n".join(o))
                 outs.append("\n".join(o))
             if outs[0] != outs[1]:
                 dif = [i for i, (x, y) in enumerate(zip(outs[0].split("\n"), outs[1].split("\n")))
@@ -108,10 +114,17 @@ def main():
     for t, cmd in tracks.items():
         if not os.path.exists(cmd[0]):
             print("❌ 缺少 %s 轨件 %s" % (t, cmd[0])); return 2
+# ── M244（门内并行）：逐例 spawn 彼此**无依赖**（同一驱动器、不同 case 选择，
+#    独立进程、不写共享文件）⇒ 用 gate_par.pmap 吃满整机核数。
+#    ⚠️ 门**之间**仍然串行（run_gates.sh 的 PID 锁）—— 53 个门的负控会改源码，
+#       门间并行必然互相踩；门内并行与那条护栏正交。
+    sys.path.insert(0, os.path.join(root, 'selfhost'))
 
     diffs, actual = [], {}
+    _GOT234 = pmap_records(lambda k: (k, run(tracks[k[1]], wd, k[0])),
+                           [(idx, t) for idx, *_r in cs for t in tracks])
     for idx, tag, _expr in cs:
-        res = {t: run(cmd, wd, idx) for t, cmd in tracks.items()}
+        res = {t: _GOT234[(idx, t)] for t in tracks}
         kinds = {res[t][0] for t in tracks}
         if len(kinds) != 1:
             diffs.append(("响亮性", tag, res))
