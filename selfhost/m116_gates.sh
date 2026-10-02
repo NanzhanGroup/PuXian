@@ -76,6 +76,12 @@ step "门路径卫生（不许写死开发机绝对路径 —— M213 缺陷 300
 #   ⇒ 本机全绿、**CI 红**（CI 仓库在 /home/runner/work/... 下）。⚠️ 「干净导出复现」抓不到
 #   这类缺陷：写死的路径在**本机依然存在**。⇒ 只能靠静态守卫 + CI。门自带 3 条自证。
 run check_gate_paths bash selfhost/check_gate_paths.sh
+step "里程碑↔缺陷编号 一致性门（引用的编号必须落在该里程碑声明的集合内 —— M241）"
+#   M240 的注释里 4 处把 399 写成 341（341 是 M227 的）⇒ 读者按号去查会落到**完全无关**的
+#   里程碑上（M185「错误信息指不到根因」同族，只是错在注释）。判据 = 源码里每条
+#   `M<m>（…缺陷 <n>…）` 的 n 必须 ∈ CHANGELOG 里 M<m> **自带标题**声明的编号集合。
+#   门自带 --self-test（11 条夹具，含判据自身踩过的 4 个坑）。
+run check_defect_refs python3 selfhost/check_defect_refs.py
 step "全件源码链门"
 run check_all ./selfhost/rebake_bin.sh --check-all
 step "C 轨重烘门"

@@ -181,6 +181,12 @@ jobs:
         run: |
           bash selfhost/check_gate_paths.sh --self-test
           bash selfhost/check_gate_paths.sh
+      - name: 里程碑↔缺陷编号 一致性（M241）
+        #   M240 的注释里 4 处把 399 写成 341 ⇒ 按号去查会落到完全无关的里程碑（同 M185 家族）。
+        #   判据：源码每条 `M<m>（…缺陷 <n>…）` 的 n 必须 ∈ CHANGELOG 里 M<m> 自带标题的声明集合。
+        run: |
+          python3 selfhost/check_defect_refs.py --self-test
+          python3 selfhost/check_defect_refs.py
       - name: 内置名册防漂移（单一事实源：runtime 注册表 → lint_core.px 生成块）
         run: |
           bash selfhost/builtin_list_check.sh
