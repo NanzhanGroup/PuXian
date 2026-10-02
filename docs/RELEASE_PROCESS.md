@@ -189,6 +189,27 @@ packaging/tag_guard.sh --grace-min 180  # 刚推上来的提交允许窗口期�
 「推 main 后**三小时**内不打 tag」会在 push 触发的复查里被跳过（但**次日定时**必红）；
 ⚠️ 反过来说：push 触发的绿**不能**当作「发布侧没问题」，**只有定时那次才算数**。
 
+**推送次序（M245 补 · 2026-10-03 实测事故 · ⚠️ 确定会复发）**：`main` 与 `tag` **必须同一次 push 推出去**：
+
+```bash
+git push origin main v0.2.0-mNNN                        # ✅ 一次推两个 ref：run 的快照里两者都在
+git push origin main && git push origin v0.2.0-mNNN     # ❌ 竞态（下面就是这个形状）
+```
+
+为什么：`tag-guard.yml` 由 `push(main)` 触发 ⇒ run **数秒内**创建、job 立即起、`actions/checkout`
+（`fetch-depth: 0`，本仓实测耗时 **3.5 分钟**）随即开始抓 refs。若 tag 是在原 push **之后**才推的，
+checkout 的快照里就没有它 ⇒ 守卫判「缺 tag」判红，**而远端其实已经有了**。
+实测（run **#192** · job `111057186097`）：main push **22:34:23Z** → job **22:34:25Z** 起 →
+checkout fetch **22:34:27Z** 开始 → tag **22:34:26Z** 才创建并紧随推送 ⇒ 竞态成立。
+
+⚠️ **触发条件 = 提交年龄 > grace(180 min)**（守卫不跳过、当场判）。本仓「commit（全量门拒绝脏树）
+→ 跑全量门 **100+ 分钟** → 再 push」的正常节奏**正好越过**这条线（实测该提交年龄 3h44m）
+⇒ **这是确定会复发的竞态**，不是偶发。
+
+守卫侧已加**补取兜底**（判「缺」之前 `git fetch --tags` 一次并复判；`TAG_GUARD_NO_FETCH=1` 可关）
++ 自测 **K 段**（两份干净快照 + 负控「禁补取必红」）。
+⇒ 但**次序仍照上面写**：兜底是安全网，不是「随便推」的借口。
+
 ## 发布前核对清单
 
 - [ ] `main` 已含待发代码并推送（工作区干净）
@@ -201,6 +222,8 @@ packaging/tag_guard.sh --grace-min 180  # 刚推上来的提交允许窗口期�
 - [ ] 打 tag 前 `git log --oneline <上一tag>..HEAD` 确认入版范围符合预期
 - [ ] 打完 tag 后：**CI / Release / Tag Guard 三个 run 全绿**，且 Release 资产齐全
       （主包 + `sha256sums.txt` + **aarch64 并列包** + 其 `.sha256`）
+- [ ] **推送次序**：`git push origin main v0.2.0-mNNN`（**一次推两个 ref**）——
+      分批推会与 `push(main)` 触发的 checkout 竞态（M245 补 · run #192 实测）
 - [ ] **轮末复核**：`packaging/tag_guard.sh --ref HEAD` ⇒ `rc=0`（红即按「守卫」节处置，别留给定时任务）
 
 ## 零停机升级（M176 · SO_REUSEPORT）
