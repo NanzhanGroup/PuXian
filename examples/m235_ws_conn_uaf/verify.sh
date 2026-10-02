@@ -17,12 +17,18 @@
 #   [1] 静态：引用计数 API 与关键改点在位（含 SHUT_RD 保守唤醒）
 #   [2] 动态·形态一（阻塞读 + 并发 close）：跑 N 次 ⇒ **崩溃 0 次**
 #   [3] 动态·形态二（ws-edge 双向中转真形）：跑 M 次 ⇒ **崩溃 0 次**
-#   [4] 负控 A：**同时撤两层防护** ⇒ 形态一必须**崩**（判据有牙）
-#       ⚠️ M242（缺陷 406）：原形态是「只撤 M235 的引用计数」。M240（缺陷 398）为
-#          「对象释放」加了**认领闸门**后，单独撤引用计数**不再崩** —— 两层防护
-#          兜住了同一条缝（= R57 记过的「新修复会吸收旧缺陷」）。
-#          ⇒ 换为「同时撤两层」（退回 M235 与 M240 **之前**的状态）。
-#   [5] 负控 B：判据自伤（把崩溃检测改成恒绿）⇒ A 的红必须**消失**
+#   [5] 负控 A：**判据灵敏度 · 必崩侧** —— 注入一个必然 SIGSEGV 的替身进程，
+#       崩溃检测**必须**报「已崩」（证明判据不是恒绿）。
+#   [6] 负控 B：**判据灵敏度 · 必活侧** —— 注入一个必然存活并打 M235-SURVIVED 的
+#       替身，检测**必须**报「存活」（证明判据不是恒崩）。
+#       两侧合起来 = **双向**，同时排除「恒绿」「恒红」两种假象。
+#       ⚠️ 形态沿革（M242 缺陷 406 追查 · 实测留证 /tmp/m242/exp_layer3.log）：
+#          · 原形态「忠实撤回 M235 的引用计数」在 M240 后**不再崩**（认领闸门兜住）；
+#          · 改「同时撤两层」仍**不崩**（实测 0/6）；
+#          · 撤**三层**（引用计数 + 认领闸门 + close 里的 shutdown）实测仅 **1/6** 崩
+#            ⇒ 竞态窗口已被多层防护收窄到**不可靠复现**。
+#          ⇒ 「撤回修复」**不可作判据**（假绿风险 > 判据价值，违反«门不许假红假绿»）。
+#          ⇒ 「修复是否必要」改由 [1] 静态层 + [8] 分配器配对 + 文档登记覆盖。
 #   [6] 覆盖边界登记
 #   [8] 分配器配对（缺陷 354，M235s1）：PxConn 由 `xmalloc` 创建 ⇒ 释放必须 `xfree`
 #       （裸 `free(c)` 会让 px_serve 每关一条连接就 `free(): invalid pointer` ⇒ SIGABRT）
@@ -101,13 +107,13 @@ else
 fi
 
 # 跑一次形态一：返回 0 = 存活（正确）；1 = 崩溃
-run_form1_once() {
-    local tag="$1" port="$2"
+run_form1_once() {   # $1=tag $2=port $3=二进制（默认 ./build/ws_uaf_repro；M242 起可注入替身）
+    local tag="$1" port="$2" bin="${3:-./build/ws_uaf_repro}"
     local log="$W/f1_$tag.log"
     : > "$log"
     # ⚠️ 必须 exec：否则 $! 是**子 shell**，kill 打不到服务本体（M201 同款教训）
     ( cd "$W" && exec env M235_CERT="$W/c.pem" M235_KEY="$W/k.pem" M235_PORT="$port" \
-        ./build/ws_uaf_repro >> "$log" 2>&1 ) &
+        "$bin" >> "$log" 2>&1 ) &
     local pid=$!
     sleep 1.2
     timeout 8 python3 "$W/ws_client.py" "wss://127.0.0.1:$port/probe" 2 >/dev/null 2>&1
@@ -223,87 +229,45 @@ else
 fi
 
 # ------------------------------------------------------------
-echo "[5] 负控 A：**同时撤两层防护**（引用计数 + 释放认领闸门）⇒ 形态一必须崩"
+echo "[5] 负控 A：判据灵敏度 · **必崩侧**（注入必然 SIGSEGV 的替身 ⇒ 检测必须报「已崩」）"
 # ------------------------------------------------------------
+# 为什么不再是「撤回修复」：见门头 [5] 的形态沿革登记（撤三层实测仅 1/6 崩 ⇒ 不可靠复现）。
 if [ "$NEG_SKIP" = "1" ]; then
     echo "  ⏭ --neg-skip：跳过负控（CI 用）"
 else
-    SNAP="$W/src_snapshot"; rm -rf "$SNAP"; mkdir -p "$SNAP"
-    cp "$RC" "$SNAP/runtime.c"; cp "$RH" "$SNAP/runtime.h"
-    restore_all() { cp "$SNAP/runtime.c" "$RC"; cp "$SNAP/runtime.h" "$RH"; }
-
-    # 忠实退回：acquire 变成「只查 closed，不计数」⇒ 关闭不再等待使用者
-    python3 - "$RC" <<'PYEOF'
-import sys
-p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-old = """int px_conn_acquire(PxConn* c) {
-    if (!c) return 0;
-    pthread_mutex_lock(&c->mu);
-    if (c->closed || c->freed) { pthread_mutex_unlock(&c->mu); return 0; }
-    c->refs++;
-    pthread_mutex_unlock(&c->mu);
-    return 1;
-}"""
-new = """int px_conn_acquire(PxConn* c) {
-    /* M242-NEG-A1：忠实退回 —— 不计数（= 修前的「只在入口查 closed」语义） */
-    if (!c) return 0;
-    if (c->closed) return 0;
-    return 1;
-}"""
-assert s.count(old) == 1, "negA1 anchor"
-s = s.replace(old, new)
-# M242（缺陷 406）：**同时撤第二层** —— M240 的对象释放认领闸门。
-#   只撤引用计数时，闸门会兜住这条缝（实测 6 次 0 崩）⇒ 判据无牙。
-old2 = """static int conn_try_claim_obj(PxConn* c) {   // 调用方须持 c->mu
-    if (!c->obj_free_pending || c->obj_freed) return 0;
-    if (c->freed && !c->res_done) return 0;
-    c->obj_freed = 1;
-    return 1;
-}"""
-new2 = """static int conn_try_claim_obj(PxConn* c) {   // M242-NEG-A2：去掉认领闸门
-    if (!c->obj_free_pending || c->obj_freed) return 0;
-    c->obj_freed = 1;
-    return 1;
-}"""
-assert s.count(old2) == 1, "negA2 anchor"
-s = s.replace(old2, new2)
-open(p, "w", encoding="utf-8").write(s)
-print("NEG-A applied（两层）")
-PYEOF
-    if [ $? -eq 0 ]; then
-        bash "$ROOT/selfhost/devbuild.sh" pxc > "$W/negA_build.log" 2>&1
-        if [ $? -eq 0 ]; then
-            ( cd "$W" && "$ROOT/tools/px" build ws_uaf_repro.px > "$W/negA_pxbuild.log" 2>&1 )
-            NEGCRASH=0
-            for i in $(seq 1 6); do
-                run_form1_once "n$i" "$((24000 + i))" || NEGCRASH=$((NEGCRASH+1))
-            done
-            if [ "$NEGCRASH" -ge 1 ]; then ok "负控 A：退出引用计数后复现崩溃（$NEGCRASH/6）"
-            else bad "负控 A：撤两层后仍不崩 ⇒ 判据无牙（连 M240 的闸门也撤了）"; fi
-        else
-            bad "负控 A：devbuild 失败"; tail -5 "$W/negA_build.log" | sed 's/^/      /'
-        fi
-        restore_all
-        bash "$ROOT/selfhost/devbuild.sh" pxc > "$W/restore_build.log" 2>&1
-        ( cd "$W" && "$ROOT/tools/px" build ws_uaf_repro.px > /dev/null 2>&1 )
-        cmp -s "$RC" "$SNAP/runtime.c" && ok "源码逐字节还原" || bad "源码未还原！"
+    cat > "$W/dead_probe" <<'EOS'
+#!/bin/bash
+# 替身：必然崩溃（且不打 M235-SURVIVED）
+sleep 0.4
+kill -SEGV $$
+EOS
+    chmod +x "$W/dead_probe"
+    if run_form1_once "negA" "27001" "./dead_probe"; then
+        bad "负控 A：替身必然崩溃，检测却报「存活」⇒ 判据无牙"
     else
-        bad "负控 A：补丁未应用"
-        restore_all
+        ok "负控 A：替身必然崩溃 ⇒ 检测正确报「已崩」（判据有牙）"
     fi
 fi
 
 # ------------------------------------------------------------
-echo "[6] 负控 B：判据自伤（崩溃检测改成恒绿）⇒ 不红"
+echo "[6] 负控 B：判据灵敏度 · **必活侧**（必然存活的替身 ⇒ 检测必须报「存活」）"
 # ------------------------------------------------------------
+# 与 [5] 合起来 = 双向：排除「恒绿」（[5] 抓）与「恒红」（本条抓）两种假象。
 if [ "$NEG_SKIP" = "1" ]; then
     echo "  ⏭ --neg-skip：跳过负控（CI 用）"
 else
-    echo "  ℹ️ 本门判据是「进程存活 + 日志含 M235-SURVIVED」，由 run_form1_once 的"
-    echo "     返回值决定；自伤即把该返回值改成恒 0 ⇒ [2] 恒绿。已在 [4] 用「退出引用"
-    echo "     计数必崩」证明返回值**确实**能观测到崩溃，故不再重复一次完整自伤跑"
-    echo "     （每次需重编 runtime ≈5min；口径同 m222/m233：CI 用 --neg-skip）。"
-    ok "负控 B：以 [4] 的「必崩」作为返回值可观测性的证明（省一次 5min 重编）"
+    cat > "$W/alive_probe" <<'EOS'
+#!/bin/bash
+echo "M235-SURVIVED"
+sleep 30
+EOS
+    chmod +x "$W/alive_probe"
+    if run_form1_once "negB" "27002" "./alive_probe"; then
+        ok "负控 B：替身必然存活 ⇒ 检测正确报「存活」（判据不是恒判崩）"
+    else
+        bad "负控 B：替身必然存活，检测却报「已崩」⇒ 判据恒红（无鉴别力）"
+    fi
+    rm -f "$W/dead_probe" "$W/alive_probe"
 fi
 
 # ------------------------------------------------------------
