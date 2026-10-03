@@ -935,6 +935,17 @@ run gate_anchor_sentinel python3 selfhost/check_gate_anchors.py
 #   是**老版本**烘出的逐字节基准 ⇒ CI 两个 job 红（aarch64 自举自证 / 自举回归）。
 #   本地全量门测不到（`bootstrap_prove(_bc)` 属 CI 独占 · 各约 7 分钟）⇒ 本守卫是**廉价的那一半**。
 run version_golden bash selfhost/check_version_golden.sh
+step "shell 契约守卫（sh 调用脚本 / bashism × shebang · M251s1 · 缺陷 441）"
+#   来历：CI run 37152650582 step7 —— `selfhost/check_version_golden.sh` 的**自证**用
+#   `sh "$SELF"` 调自己，而 ubuntu 的 /bin/sh 是 **dash**：不支持 `set -o pipefail`；
+#   `set` 是**特殊内建**（POSIX：选项非法 ⇒ 非交互 shell **退出**）⇒ dash 立即退出（rc=2），
+#   判据主体**一行都没跑**。而自证用 `cmd && r=0 || r=1` 把 rc 归一化成 0/1 ⇒
+#   「脚本崩了」被误判成「脚本正确判红」⇒ 三道负控**假绿**（S2 的 grep 还命中了错误消息里的文件名）。
+#   ⚠️ 本机 /bin/sh 是 bash（RHEL 系）⇒ **本地永远绿**，只有 CI 才发作。
+#   ⇒ 本守卫**跨平台**：静态查「用 sh 调用脚本」（本仓脚本普遍用 bash 语义）与
+#     「含 bashism 但 shebang 非 bash」，在本机就能查出 CI/dash 才会发作的问题。
+#     判据 A 有豁免：同行含 `# sh-call-ok: <理由>`；自带 5 条自证（含"违规清零必须绿"）。
+run shell_contract bash selfhost/check_shell_contract.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
