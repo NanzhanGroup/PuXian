@@ -37,6 +37,15 @@ step "门路径卫生（不许写死开发机绝对路径 —— M213 缺陷 300
 #   ⇒ 本机全绿、**CI 红**（CI 仓库在 /home/runner/work/... 下）。⚠️ 「干净导出复现」抓不到
 #   这类缺陷：写死的路径在**本机依然存在**。⇒ 只能靠静态守卫 + CI。门自带 3 条自证。
 run check_gate_paths bash selfhost/check_gate_paths.sh
+step "被 import 的模块必须有 __main__ 守卫（缺陷 418 机械化 —— M247）"
+#   M246 实锤：`pair_check.py` 写了 `from three_tracks import …`，而那份 three_tracks.py
+#   末尾是**模块级** `sys.exit(main())` ⇒ **import 动作本身**跑完了整个对拍并终止调用方进程
+#   （症状 = 日志里出现**被 import 方**的输出，排查者会以为新脚本没写对 —— M185 同族）。
+#   判据 = ① 被某个 .py **指向**（ast 解析 import 图，同目录优先 → 唯一 → 歧义全算）
+#          ② 顶层 `sys.exit(` ③ 无 `__main__` 守卫。
+#   ⚠️ 未被指向的独立 runner **不判红**（没守卫是正确形态）⇒ 只报 ℹ️ 潜伏面（复用前先加守卫）。
+#   门自带 --self-test（8 判据，含判据自伤负控 + 「docstring 里的 import 不算数」）。
+run pymain_guard python3 selfhost/check_pymain_guard.py
 step "里程碑↔缺陷编号 一致性门（引用的编号必须落在该里程碑声明的集合内 —— M241）"
 #   M240 的注释里 4 处把 399 写成 341（341 是 M227 的）⇒ 读者按号去查会落到**完全无关**的
 #   里程碑上（M185「错误信息指不到根因」同族，只是错在注释）。判据 = 源码里每条

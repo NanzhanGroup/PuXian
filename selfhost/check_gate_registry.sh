@@ -90,6 +90,48 @@ done < "$T/exempt.txt"
 NOREASON=$(awk -F'|' 'NF<2 || length($2)<8 {n++} END{print n+0}' "$T/exempt.txt")
 [ "$NOREASON" = 0 ] && ok "例外条目全部带理由（≥8 字）" || bad "$NOREASON 条例外缺理由"
 
+# ── 5 **推广**：selfhost / tools / packaging 级「脚本门」同样双向（M247 补）──
+#   为什么推广：M243 建立本守卫时只覆盖 `examples/*/verify.sh`，而本仓还有一批
+#   `run <name> bash|python3 selfhost|tools|packaging/<script>` 形式的门 ——
+#   它们**同样**会「清单加了、CI 忘了」（M235 缺陷 355 的形状）。
+#   M247 实测：22 个脚本门里 **2 个**不在 ci.yml ⇒ 1 个补进 CI（本守卫自己）、
+#   1 个登记例外（check_cross_ports.sh 在 CI 上必然全档 SKIP）。
+grep -E '^[[:space:]]*run[[:space:]]' "$REG" \
+  | grep -oE '(selfhost|tools|packaging)/[A-Za-z0-9_.-]+\.(sh|py)' | sort -u > "$T/s_local.txt"
+: > "$T/s_ci.txt"
+while read -r p; do
+    grep -qF "$p" "$CI" && echo "$p" >> "$T/s_ci.txt"
+done < "$T/s_local.txt"
+sort -u "$T/s_ci.txt" -o "$T/s_ci.txt"
+NSL=$(wc -l < "$T/s_local.txt")
+echo "  本地清单脚本门 = $NSL"
+[ "$NSL" -ge 15 ] && ok "脚本门规模下限（≥15）" || bad "只 $NSL 个脚本门 —— 提取器坏了？"
+
+cat > "$T/s_exempt.txt" <<'EOF'
+selfhost/check_cross_ports.sh|CI runner 无 /opt/muslcc-bin ⇒ 本门在 CI 上必然**全档 SKIP**（门自己会打印原因）；权威覆盖在 ci.yml 的 m67_multiarch job（那里带 qemu 真跑）
+EOF
+cut -d'|' -f1 "$T/s_exempt.txt" | sort -u > "$T/s_exempt_paths.txt"
+
+comm -23 "$T/s_local.txt" "$T/s_ci.txt" > "$T/s_only_local.txt"
+comm -23 "$T/s_only_local.txt" "$T/s_exempt_paths.txt" > "$T/s_bad.txt"
+if [ -s "$T/s_bad.txt" ]; then
+    bad "以下**脚本门**在清单里、ci.yml 里没有（漏注册 · M235 缺陷 355 同形）："
+    sed 's/^/       /' "$T/s_bad.txt"
+else
+    ok "脚本门无漏注册（清单有 ⇒ CI 有，或已登记例外）"
+fi
+
+SEXP=0; NSEX=0
+while IFS='|' read -r p reason; do
+    [ -z "$p" ] && continue
+    NSEX=$((NSEX+1))
+    if ! grep -qxF "$p" "$T/s_only_local.txt"; then
+        bad "脚本门例外**已过期**：$p 现在两边都有（或都没有）—— 原理由：$reason"
+        SEXP=$((SEXP+1))
+    fi
+done < "$T/s_exempt.txt"
+[ "$SEXP" = 0 ] && ok "脚本门例外无过期条目（$NSEX 条 · 仍然成立）"
+
 echo
 echo "结果：通过 $PASS / 失败 $FAIL"
 [ "$FAIL" = 0 ] && { echo "GATE-REGISTRY-OK"; exit 0; } || { echo "GATE-REGISTRY-FAIL"; exit 1; }

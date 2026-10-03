@@ -17,6 +17,7 @@
 | [`ECOSYSTEM.md`](ECOSYSTEM.md) | **生态总览**：13 个公开库的定位与导出 API、示例能力导航、消费路径（import / pxpkg / 拷源码）、机器索引与防漂移 | 写库 / 用库的人 |
 | [`ROADMAP.md`](ROADMAP.md) | 路线图：能力基线、已完成主线、远期方向、语言面欠账 | 想了解进度与方向的人 |
 | [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) | 发布 SOP：tag 驱动自动发布、发布物清单（含 aarch64 并列资产）、漏打 tag 守卫 | 发版的人 |
+| [`NEW_GATE_CHECKLIST.md`](NEW_GATE_CHECKLIST.md) | **新建「门」的落盘检查清单**（M247 建立）：生成器 / 复用与 import / 性能 / **负控** / 判据 / 注册六类必查项 + 已被守卫机械化的五条 | 写门的人；**改 `examples/*/verify.sh` 前先过一遍** |
 | [`ECOSYSTEM_GAPS.md`](ECOSYSTEM_GAPS.md) | 写库规范 checklist + 语言缺口评估（含历史结论与后续处置） | 写库/报缺口的人 |
 | [`GAP_ANALYSIS.md`](GAP_ANALYSIS.md) | 能力差距分析（边缘设备 / 2D-3D 游戏两条线的差距清单） | 排期与选型 |
 | [`PXML.md`](PXML.md) | PXML 配置语言规范（`std.pxml` 背后的语言） | 用 PXML 的人 |
@@ -37,7 +38,7 @@
 - **第一次接触 PuXian**：根 [`README.md`](../README.md)（快速开始 + 能力一览）→ `spec.md` §1–§7 → `ECOSYSTEM.md` §1（能用什么库）。
 - **让 AI 写 PuXian**：把 `PUXIAN_CHEATSHEET.md` + `spec.md` §17 一起喂；速查表是为「整包投喂」写的。
 - **写库 / 写生产应用**：`ECOSYSTEM.md` + `ECOSYSTEM_GAPS.md` §1 checklist + `DICT_STRICT_MIGRATION.md`。
-- **改编译器 / 解释器 / runtime**：`MINI_SUBSET.md` → `spec.md` §17 → 根 `CONTRIBUTING.md`（门与重定基纪律）→ `ROADMAP.md` §五（验证体系）。
+- **改编译器 / 解释器 / runtime**：`MINI_SUBSET.md` → `spec.md` §17 → 根 `CONTRIBUTING.md`（门与重定基纪律）→ **`NEW_GATE_CHECKLIST.md`（写/改门前必过）** → `ROADMAP.md` §五（验证体系）。
 - **发版**：`RELEASE_PROCESS.md`。
 - **排查「同一份源码两轨结果不同」**：先查 `spec.md` §17 与速查表「三轨差异」条目 —— 若规则已收口，那就是 bug，请带最小复现提 issue。
 

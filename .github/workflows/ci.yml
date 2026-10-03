@@ -181,6 +181,20 @@ jobs:
         run: |
           bash selfhost/check_gate_paths.sh --self-test
           bash selfhost/check_gate_paths.sh
+      - name: 被 import 的模块必须有 __main__ 守卫（M247 · 缺陷 418 机械化）
+        #   M246 实锤：`pair_check.py` 写了 `from three_tracks import …`，而那份 three_tracks.py
+        #   末尾是**模块级** `sys.exit(main())` ⇒ import 动作本身跑完了整个对拍并终止调用方进程
+        #   （症状 = 日志里出现被 import 方的输出，排查者会以为新脚本没写对）。
+        #   判据：① 被某个 .py **指向**（ast 解析 import 图，同目录优先）② 顶层 `sys.exit(`
+        #   ③ 无 `__main__` 守卫。未被指向的独立 runner **不判红**（只报 ℹ️ 潜伏面）。
+        run: |
+          python3 selfhost/check_pymain_guard.py --self-test
+          python3 selfhost/check_pymain_guard.py
+      - name: 门注册一致性（清单 ⇄ ci.yml 双向 · M243 / M247 补）
+        #   M247 实测：本守卫**没被 CI 跑过** —— 于是「registry 里加了、ci.yml 忘了加」
+        #   这一类（M235 缺陷 355 同形）在 CI 上无人发现。本步补上。
+        run: |
+          bash selfhost/check_gate_registry.sh
       - name: 里程碑↔缺陷编号 一致性（M241）
         #   M240 的注释里 4 处把 399 写成 341 ⇒ 按号去查会落到完全无关的里程碑（同 M185 家族）。
         #   判据：源码每条 `M<m>（…缺陷 <n>…）` 的 n 必须 ∈ CHANGELOG 里 M<m> 自带标题的声明集合。
