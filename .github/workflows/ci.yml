@@ -197,6 +197,14 @@ jobs:
         #   ⚠️ 本地全量门**测不到**：`bootstrap_prove(_bc)` 属 CI 独占（各约 7 分钟）。
         #   ⇒ 本守卫是**廉价的那一半**（毫秒级，不跑编译器）：三方字面量对拍，自带 5 条自证。
         run: |
+          # M251 补：CI 实测该步红而**本地干净导出实测绿** ⇒ 加**最小化诊断**（≤10 行，
+          #   避免撑爆注解上限）：下一轮 CI 的注解里就能读到真因。
+          echo "=== 诊断：三方一致守卫（M251 补）==="
+          echo "cwd=$(pwd)"
+          ls -l bootstrap/pxc bootstrap/pxi 2>&1 | head -2
+          ./bootstrap/pxc --version 2>&1 | head -1 || echo "pxc 执行失败 rc=$?"
+          ./bootstrap/pxi --version 2>&1 | head -1 || echo "pxi 执行失败 rc=$?"
+          grep -c '0\.2\.2' selfhost/golden/compiler.c selfhost/golden/compiler.bc.dump 2>&1
           bash selfhost/check_version_golden.sh --self-test
           bash selfhost/check_version_golden.sh
       - name: 门注册一致性（清单 ⇄ ci.yml 双向 · M243 / M247 补）
