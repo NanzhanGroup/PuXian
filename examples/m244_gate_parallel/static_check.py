@@ -96,8 +96,13 @@ for rel in sorted(listed):
     chk('[B] %s：import + 调度调用' % os.path.basename(rel),
         bool(re.search(r'from gate_par import\s', code))
         and bool(re.search(r'\bpmap(_records)?\(', code)))
+    # ⚠️ M246（缺陷 421）：判据原先写死 `"'selfhost'"`（**单引号**）⇒ 新执行器用
+    #    `"selfhost"`（双引号）时**功能正确却判红** —— 这是**拿引号风格当判据** = 判据**过窄**
+    #    （与「判据过宽」一样是错）。放宽为「两种引号都认」，仍要求
+    #    `sys.path.insert(0, os.path.join(` 的**字面形态**（那是**形状**，不是风格）。
     chk('[C] %s：sys.path.insert(…selfhost)' % os.path.basename(rel),
-        "sys.path.insert(0, os.path.join(" in code and "'selfhost'" in code)
+        "sys.path.insert(0, os.path.join(" in code
+        and ("'selfhost'" in code or '"selfhost"' in code))
 
 # ── [E] 负控锚点自证 ────────────────────────────────────────────
 gp = os.path.join(ROOT, 'selfhost/gate_par.py')

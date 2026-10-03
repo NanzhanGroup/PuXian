@@ -19,3 +19,5 @@ m231_op_matrix	examples/m231_op_matrix/three_tracks.py	114
 m233_text_cstr	examples/m233_text_cstr/three_tracks.py	-
 m234_bytes_family	examples/m234_bytes_family/three_tracks.py	181
 m239_match_case	examples/m239_match_case/three_tracks.py	-
+m246_compound_assign	examples/m246_compound_assign/three_tracks.py	-
+m246_compound_assign	examples/m246_compound_assign/pair_check.py	-
