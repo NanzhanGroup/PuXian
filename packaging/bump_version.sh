@@ -47,13 +47,22 @@ CUR="$(peek)"
 [ -n "$CUR" ] || die "读不到当前版本号（tools/px 里没有 SELFHOST_VER=\"X.Y.Z\"）"
 
 echo "=== 版本号：当前 $CUR ==="
-FILES="tools/px tools/pxc selfhost/compiler.px selfhost/interp.px tools/pxfmt.px tools/pxlsp.px tools/pxmcp.px"
+# M250（缺陷 435）：**自举基准也在版本链上** —— `selfhost/compiler.px` 的 `PXC_VER`
+#   进 compiler.px 的 import 链 ⇒ `pxc` 编出的 C 里带这个字符串 ⇒ `selfhost/golden/compiler.c`
+#   与 `compiler.bc.dump` **必须同步**，否则 `bootstrap_prove.sh` 必然失败（CI 实测红：
+#   aarch64 自举自证 + 自举回归两个 job）。基准是**逐字节副本**，而版本串是**字面量**
+#   ⇒ 文本替换与「重编译」等价（下方校验 + `check_version_golden.sh` + CI 的 prove 三重把关）。
+FILES="tools/px tools/pxc selfhost/compiler.px selfhost/interp.px tools/pxfmt.px tools/pxlsp.px tools/pxmcp.px selfhost/golden/compiler.c selfhost/golden/compiler.bc.dump"
 printf '  %-24s %s\n' "文件" "含 $CUR 的次数"
 for f in $FILES; do
     [ -f "$f" ] || die "缺文件：$f"
     n="$(grep -cF "$CUR" "$f" 2>/dev/null || echo 0)"
     printf '  %-24s %s\n' "$f" "$n"
     [ "$n" -ge 1 ] || die "$f 里找不到 '$CUR' —— 版本号可能已被改过，或该文件的写法变了"
+    case "$f" in
+        # 基准必须**恰好 1 处**：多了说明它别处也含这个串 ⇒ 文本替换可能改到不该改的地方
+        selfhost/golden/*) [ "$n" = 1 ] || die "$f 含 '$CUR' $n 处（基准要求恰 1）⇒ 拒绝自动改写，请用 --update-golden";;
+    esac
 done
 
 if [ -z "$NEW" ]; then
@@ -106,10 +115,13 @@ if [ "$BAD" != 0 ]; then
 fi
 rm -rf "$BAK"
 
-echo "✅ 已把 $CUR → $NEW 写在 7 个文件里"
+echo "✅ 已把 $CUR → $NEW 写在 9 个文件里（含 2 份自举基准）"
 echo
 echo "⚠️ 接下来必做（改了 selfhost/*.px ⇒ 源码链变了）："
 echo "   ① 重烘入库件：  ./selfhost/rebake_bin.sh"
 echo "   ② 冻定格验证：  见 CHANGELOG M249 的「重烘 + 冻结门」段"
-echo "   ③ 跑门：        ./selfhost/run_gates.sh"
+echo "   ③ **确认基准未被误改**：cd selfhost && ./bootstrap_prove.sh && ./bootstrap_prove_bc.sh"
+echo "      （版本串是字面量 ⇒ 文本替换与重编译等价；这两条是**最终判据**）"
+echo "   ④ 廉价守卫（毫秒级，先跑这个）：bash selfhost/check_version_golden.sh"
+echo "   ⑤ 跑门：        ./selfhost/run_gates.sh"
 echo "   ④ 打 tag 时会**自动**用递增后的版本段：packaging/make_tag.sh --milestone <N>"

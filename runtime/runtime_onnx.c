@@ -436,17 +436,38 @@ static const char* onnx_bytes_arg(LXValue v, int* len) {
     return v.as.obj->as.str.data;
 }
 
+/* M250（缺陷 433）：`f32_at` / `i64_at` 的**唯一**界判据。
+ * 合法下标 ∈ [0, len / elem_bytes) —— 与 `f32_count` / `i64_count` 同一把尺。
+ * 全程 int64、**不乘用户值** ⇒ 无溢出（修前 int32 溢出 ⇒ 判据放行 ⇒ 越界读，见下方长注）。 */
+static int onnx_at_in_range(int64_t idx, int len, int elem_bytes) {
+    return idx >= 0 && idx < (int64_t)(len / elem_bytes);
+}
+
+/* M250（缺陷 433）：界判据必须**全程在 int64 域**完成，且**不把用户给的下标拿去乘**。
+ *
+ * 修前（M157 起）：
+ *     i = (int)args[1].as.i;
+ *     if (i < 0 || (size_t)(i * 4 + 4) > (size_t)len) return px_err(...);
+ *     memcpy(&f, b + i * 4, 4);
+ * 两处 undefined behavior（本仓无 -fwrapv，实测构建就是 -O2 且可叠 -flto）：
+ *   ① `(int)` 截断 —— `2^32` / `2^62` 这类下标静默变成 0 ⇒ **静默返回 0 号元素**
+ *      （三轨一致地错 ⇒ 任何「三轨对拍」门按定义看不见 · 同 M215/M226/M227/M230 家族）；
+ *   ② `i * 4 + 4` 在 int32 里溢出 —— `2^30-1` ⇒ `-4 + 4 == 0` ⇒ **判据放行** ⇒
+ *      memcpy 读缓冲**之前**的 4 字节（解释轨实测回读堆垃圾，**每次运行都不同** ⇒ 信息泄漏）。
+ * 现口径 = 与 `f32_count` / `i64_count` **同一把尺**：合法下标 ∈ [0, len/4)（resp. len/8）。
+ * 不乘用户值 ⇒ 无溢出；**不动 Err 通道** ⇒ 家族语义（`onnx_*` 一律走 Result）不变。 */
 static LXValue bi_f32_at(LXValue* args, int nargs, void* ctx) {
-    int len = 0, i;
+    int len = 0;
     const char* b;
     float f;
+    int64_t i;
     (void)ctx;
     if (nargs != 2) px_error("R1002: f32_at 需要 2 个参数 (bytes, i)");
     b = onnx_bytes_arg(args[0], &len);
     if (!b || args[1].type != PX_INT) return px_err(px_str("f32_at: 参数类型错误"));
-    i = (int)args[1].as.i;
-    if (i < 0 || (size_t)(i * 4 + 4) > (size_t)len) return px_err(px_str("f32_at: 下标越界"));
-    memcpy(&f, b + i * 4, 4);
+    i = args[1].as.i;
+    if (!onnx_at_in_range(i, len, 4)) return px_err(px_str("f32_at: 下标越界"));
+    memcpy(&f, b + (size_t)i * 4, 4);
     return px_float((double)f);
 }
 
@@ -479,16 +500,17 @@ static LXValue bi_i64_bytes(LXValue* args, int nargs, void* ctx) {
 }
 
 static LXValue bi_i64_at(LXValue* args, int nargs, void* ctx) {
-    int len = 0, i;
+    int len = 0;
     const char* b;
     int64_t v;
+    int64_t i;
     (void)ctx;
     if (nargs != 2) px_error("R1002: i64_at 需要 2 个参数 (bytes, i)");
     b = onnx_bytes_arg(args[0], &len);
     if (!b || args[1].type != PX_INT) return px_err(px_str("i64_at: 参数类型错误"));
-    i = (int)args[1].as.i;
-    if (i < 0 || (size_t)(i * 8 + 8) > (size_t)len) return px_err(px_str("i64_at: 下标越界"));
-    memcpy(&v, b + i * 8, 8);
+    i = args[1].as.i;
+    if (!onnx_at_in_range(i, len, 8)) return px_err(px_str("i64_at: 下标越界"));
+    memcpy(&v, b + (size_t)i * 8, 8);
     return px_int(v);
 }
 
