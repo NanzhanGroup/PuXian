@@ -1,0 +1,365 @@
+idx	tag	expr	kind	basis
+0	c_Plus_int_int	var x = 1; x += 1	VAL	arith-numeric
+1	c_Plus_int_int_ref	var x = 1; x = x + 1	VAL	arith-numeric-ref
+2	c_Plus_float_float	var x = 1.5; x += 1.5	VAL	arith-numeric
+3	c_Plus_float_float_ref	var x = 1.5; x = x + 1.5	VAL	arith-numeric-ref
+4	c_Plus_str_str	var x = "s"; x += "s"	VAL	arith-str-concat
+5	c_Plus_str_str_ref	var x = "s"; x = x + "s"	VAL	arith-str-concat-ref
+6	c_Plus_bool_bool	var x = true; x += true	ERR	arith-undefined-pair
+7	c_Plus_bool_bool_ref	var x = true; x = x + true	ERR	arith-undefined-pair-ref
+8	c_Plus_list_list	var x = [1]; x += [1]	VAL	arith-list-concat
+9	c_Plus_list_list_ref	var x = [1]; x = x + [1]	VAL	arith-list-concat-ref
+10	c_Plus_dict_dict	var x = {"a": 1}; x += {"a": 1}	ERR	arith-undefined-pair
+11	c_Plus_dict_dict_ref	var x = {"a": 1}; x = x + {"a": 1}	ERR	arith-undefined-pair-ref
+12	c_Plus_null_null	var x = null; x += null	ERR	arith-undefined-pair
+13	c_Plus_null_null_ref	var x = null; x = x + null	ERR	arith-undefined-pair-ref
+14	c_Plus_int_float	var x = 1; x += 1.5	VAL	arith-numeric
+15	c_Plus_int_float_ref	var x = 1; x = x + 1.5	VAL	arith-numeric-ref
+16	c_Plus_float_int	var x = 1.5; x += 1	VAL	arith-numeric
+17	c_Plus_float_int_ref	var x = 1.5; x = x + 1	VAL	arith-numeric-ref
+18	c_Plus_str_int	var x = "s"; x += 1	ERR	arith-undefined-pair
+19	c_Plus_str_int_ref	var x = "s"; x = x + 1	ERR	arith-undefined-pair-ref
+20	c_Plus_int_str	var x = 1; x += "s"	ERR	arith-undefined-pair
+21	c_Plus_int_str_ref	var x = 1; x = x + "s"	ERR	arith-undefined-pair-ref
+22	c_Plus_null_int	var x = null; x += 1	ERR	arith-undefined-pair
+23	c_Plus_null_int_ref	var x = null; x = x + 1	ERR	arith-undefined-pair-ref
+24	c_Plus_int_null	var x = 1; x += null	ERR	arith-undefined-pair
+25	c_Plus_int_null_ref	var x = 1; x = x + null	ERR	arith-undefined-pair-ref
+26	c_Plus_dict_int	var x = {"a": 1}; x += 1	ERR	arith-undefined-pair
+27	c_Plus_dict_int_ref	var x = {"a": 1}; x = x + 1	ERR	arith-undefined-pair-ref
+28	c_Minus_int_int	var x = 1; x -= 1	VAL	arith-numeric
+29	c_Minus_int_int_ref	var x = 1; x = x - 1	VAL	arith-numeric-ref
+30	c_Minus_float_float	var x = 1.5; x -= 1.5	VAL	arith-numeric
+31	c_Minus_float_float_ref	var x = 1.5; x = x - 1.5	VAL	arith-numeric-ref
+32	c_Minus_str_str	var x = "s"; x -= "s"	ERR	arith-undefined-pair
+33	c_Minus_str_str_ref	var x = "s"; x = x - "s"	ERR	arith-undefined-pair-ref
+34	c_Minus_bool_bool	var x = true; x -= true	ERR	arith-undefined-pair
+35	c_Minus_bool_bool_ref	var x = true; x = x - true	ERR	arith-undefined-pair-ref
+36	c_Minus_list_list	var x = [1]; x -= [1]	ERR	arith-undefined-pair
+37	c_Minus_list_list_ref	var x = [1]; x = x - [1]	ERR	arith-undefined-pair-ref
+38	c_Minus_dict_dict	var x = {"a": 1}; x -= {"a": 1}	ERR	arith-undefined-pair
+39	c_Minus_dict_dict_ref	var x = {"a": 1}; x = x - {"a": 1}	ERR	arith-undefined-pair-ref
+40	c_Minus_null_null	var x = null; x -= null	ERR	arith-undefined-pair
+41	c_Minus_null_null_ref	var x = null; x = x - null	ERR	arith-undefined-pair-ref
+42	c_Minus_int_float	var x = 1; x -= 1.5	VAL	arith-numeric
+43	c_Minus_int_float_ref	var x = 1; x = x - 1.5	VAL	arith-numeric-ref
+44	c_Minus_float_int	var x = 1.5; x -= 1	VAL	arith-numeric
+45	c_Minus_float_int_ref	var x = 1.5; x = x - 1	VAL	arith-numeric-ref
+46	c_Minus_str_int	var x = "s"; x -= 1	ERR	arith-undefined-pair
+47	c_Minus_str_int_ref	var x = "s"; x = x - 1	ERR	arith-undefined-pair-ref
+48	c_Minus_int_str	var x = 1; x -= "s"	ERR	arith-undefined-pair
+49	c_Minus_int_str_ref	var x = 1; x = x - "s"	ERR	arith-undefined-pair-ref
+50	c_Minus_null_int	var x = null; x -= 1	ERR	arith-undefined-pair
+51	c_Minus_null_int_ref	var x = null; x = x - 1	ERR	arith-undefined-pair-ref
+52	c_Minus_int_null	var x = 1; x -= null	ERR	arith-undefined-pair
+53	c_Minus_int_null_ref	var x = 1; x = x - null	ERR	arith-undefined-pair-ref
+54	c_Minus_dict_int	var x = {"a": 1}; x -= 1	ERR	arith-undefined-pair
+55	c_Minus_dict_int_ref	var x = {"a": 1}; x = x - 1	ERR	arith-undefined-pair-ref
+56	c_Star_int_int	var x = 1; x *= 1	VAL	arith-numeric
+57	c_Star_int_int_ref	var x = 1; x = x * 1	VAL	arith-numeric-ref
+58	c_Star_float_float	var x = 1.5; x *= 1.5	VAL	arith-numeric
+59	c_Star_float_float_ref	var x = 1.5; x = x * 1.5	VAL	arith-numeric-ref
+60	c_Star_str_str	var x = "s"; x *= "s"	ERR	arith-undefined-pair
+61	c_Star_str_str_ref	var x = "s"; x = x * "s"	ERR	arith-undefined-pair-ref
+62	c_Star_bool_bool	var x = true; x *= true	ERR	arith-undefined-pair
+63	c_Star_bool_bool_ref	var x = true; x = x * true	ERR	arith-undefined-pair-ref
+64	c_Star_list_list	var x = [1]; x *= [1]	ERR	arith-undefined-pair
+65	c_Star_list_list_ref	var x = [1]; x = x * [1]	ERR	arith-undefined-pair-ref
+66	c_Star_dict_dict	var x = {"a": 1}; x *= {"a": 1}	ERR	arith-undefined-pair
+67	c_Star_dict_dict_ref	var x = {"a": 1}; x = x * {"a": 1}	ERR	arith-undefined-pair-ref
+68	c_Star_null_null	var x = null; x *= null	ERR	arith-undefined-pair
+69	c_Star_null_null_ref	var x = null; x = x * null	ERR	arith-undefined-pair-ref
+70	c_Star_int_float	var x = 1; x *= 1.5	VAL	arith-numeric
+71	c_Star_int_float_ref	var x = 1; x = x * 1.5	VAL	arith-numeric-ref
+72	c_Star_float_int	var x = 1.5; x *= 1	VAL	arith-numeric
+73	c_Star_float_int_ref	var x = 1.5; x = x * 1	VAL	arith-numeric-ref
+74	c_Star_str_int	var x = "s"; x *= 1	VAL	arith-str-repeat
+75	c_Star_str_int_ref	var x = "s"; x = x * 1	VAL	arith-str-repeat-ref
+76	c_Star_int_str	var x = 1; x *= "s"	ERR	arith-undefined-pair
+77	c_Star_int_str_ref	var x = 1; x = x * "s"	ERR	arith-undefined-pair-ref
+78	c_Star_null_int	var x = null; x *= 1	ERR	arith-undefined-pair
+79	c_Star_null_int_ref	var x = null; x = x * 1	ERR	arith-undefined-pair-ref
+80	c_Star_int_null	var x = 1; x *= null	ERR	arith-undefined-pair
+81	c_Star_int_null_ref	var x = 1; x = x * null	ERR	arith-undefined-pair-ref
+82	c_Star_dict_int	var x = {"a": 1}; x *= 1	ERR	arith-undefined-pair
+83	c_Star_dict_int_ref	var x = {"a": 1}; x = x * 1	ERR	arith-undefined-pair-ref
+84	c_Slash_int_int	var x = 1; x /= 1	VAL	arith-numeric
+85	c_Slash_int_int_ref	var x = 1; x = x / 1	VAL	arith-numeric-ref
+86	c_Slash_float_float	var x = 1.5; x /= 1.5	VAL	arith-numeric
+87	c_Slash_float_float_ref	var x = 1.5; x = x / 1.5	VAL	arith-numeric-ref
+88	c_Slash_str_str	var x = "s"; x /= "s"	ERR	arith-undefined-pair
+89	c_Slash_str_str_ref	var x = "s"; x = x / "s"	ERR	arith-undefined-pair-ref
+90	c_Slash_bool_bool	var x = true; x /= true	ERR	arith-undefined-pair
+91	c_Slash_bool_bool_ref	var x = true; x = x / true	ERR	arith-undefined-pair-ref
+92	c_Slash_list_list	var x = [1]; x /= [1]	ERR	arith-undefined-pair
+93	c_Slash_list_list_ref	var x = [1]; x = x / [1]	ERR	arith-undefined-pair-ref
+94	c_Slash_dict_dict	var x = {"a": 1}; x /= {"a": 1}	ERR	arith-undefined-pair
+95	c_Slash_dict_dict_ref	var x = {"a": 1}; x = x / {"a": 1}	ERR	arith-undefined-pair-ref
+96	c_Slash_null_null	var x = null; x /= null	ERR	arith-undefined-pair
+97	c_Slash_null_null_ref	var x = null; x = x / null	ERR	arith-undefined-pair-ref
+98	c_Slash_int_float	var x = 1; x /= 1.5	VAL	arith-numeric
+99	c_Slash_int_float_ref	var x = 1; x = x / 1.5	VAL	arith-numeric-ref
+100	c_Slash_float_int	var x = 1.5; x /= 1	VAL	arith-numeric
+101	c_Slash_float_int_ref	var x = 1.5; x = x / 1	VAL	arith-numeric-ref
+102	c_Slash_str_int	var x = "s"; x /= 1	ERR	arith-undefined-pair
+103	c_Slash_str_int_ref	var x = "s"; x = x / 1	ERR	arith-undefined-pair-ref
+104	c_Slash_int_str	var x = 1; x /= "s"	ERR	arith-undefined-pair
+105	c_Slash_int_str_ref	var x = 1; x = x / "s"	ERR	arith-undefined-pair-ref
+106	c_Slash_null_int	var x = null; x /= 1	ERR	arith-undefined-pair
+107	c_Slash_null_int_ref	var x = null; x = x / 1	ERR	arith-undefined-pair-ref
+108	c_Slash_int_null	var x = 1; x /= null	ERR	arith-undefined-pair
+109	c_Slash_int_null_ref	var x = 1; x = x / null	ERR	arith-undefined-pair-ref
+110	c_Slash_dict_int	var x = {"a": 1}; x /= 1	ERR	arith-undefined-pair
+111	c_Slash_dict_int_ref	var x = {"a": 1}; x = x / 1	ERR	arith-undefined-pair-ref
+112	c_IntDiv_int_int	var x = 1; x //= 1	VAL	arith-numeric
+113	c_IntDiv_int_int_ref	var x = 1; x = x // 1	VAL	arith-numeric-ref
+114	c_IntDiv_float_float	var x = 1.5; x //= 1.5	VAL	arith-numeric
+115	c_IntDiv_float_float_ref	var x = 1.5; x = x // 1.5	VAL	arith-numeric-ref
+116	c_IntDiv_str_str	var x = "s"; x //= "s"	ERR	arith-undefined-pair
+117	c_IntDiv_str_str_ref	var x = "s"; x = x // "s"	ERR	arith-undefined-pair-ref
+118	c_IntDiv_bool_bool	var x = true; x //= true	ERR	arith-undefined-pair
+119	c_IntDiv_bool_bool_ref	var x = true; x = x // true	ERR	arith-undefined-pair-ref
+120	c_IntDiv_list_list	var x = [1]; x //= [1]	ERR	arith-undefined-pair
+121	c_IntDiv_list_list_ref	var x = [1]; x = x // [1]	ERR	arith-undefined-pair-ref
+122	c_IntDiv_dict_dict	var x = {"a": 1}; x //= {"a": 1}	ERR	arith-undefined-pair
+123	c_IntDiv_dict_dict_ref	var x = {"a": 1}; x = x // {"a": 1}	ERR	arith-undefined-pair-ref
+124	c_IntDiv_null_null	var x = null; x //= null	ERR	arith-undefined-pair
+125	c_IntDiv_null_null_ref	var x = null; x = x // null	ERR	arith-undefined-pair-ref
+126	c_IntDiv_int_float	var x = 1; x //= 1.5	VAL	arith-numeric
+127	c_IntDiv_int_float_ref	var x = 1; x = x // 1.5	VAL	arith-numeric-ref
+128	c_IntDiv_float_int	var x = 1.5; x //= 1	VAL	arith-numeric
+129	c_IntDiv_float_int_ref	var x = 1.5; x = x // 1	VAL	arith-numeric-ref
+130	c_IntDiv_str_int	var x = "s"; x //= 1	ERR	arith-undefined-pair
+131	c_IntDiv_str_int_ref	var x = "s"; x = x // 1	ERR	arith-undefined-pair-ref
+132	c_IntDiv_int_str	var x = 1; x //= "s"	ERR	arith-undefined-pair
+133	c_IntDiv_int_str_ref	var x = 1; x = x // "s"	ERR	arith-undefined-pair-ref
+134	c_IntDiv_null_int	var x = null; x //= 1	ERR	arith-undefined-pair
+135	c_IntDiv_null_int_ref	var x = null; x = x // 1	ERR	arith-undefined-pair-ref
+136	c_IntDiv_int_null	var x = 1; x //= null	ERR	arith-undefined-pair
+137	c_IntDiv_int_null_ref	var x = 1; x = x // null	ERR	arith-undefined-pair-ref
+138	c_IntDiv_dict_int	var x = {"a": 1}; x //= 1	ERR	arith-undefined-pair
+139	c_IntDiv_dict_int_ref	var x = {"a": 1}; x = x // 1	ERR	arith-undefined-pair-ref
+140	c_Mod_int_int	var x = 1; x %= 1	VAL	arith-numeric
+141	c_Mod_int_int_ref	var x = 1; x = x % 1	VAL	arith-numeric-ref
+142	c_Mod_float_float	var x = 1.5; x %= 1.5	VAL	arith-numeric
+143	c_Mod_float_float_ref	var x = 1.5; x = x % 1.5	VAL	arith-numeric-ref
+144	c_Mod_str_str	var x = "s"; x %= "s"	ERR	arith-undefined-pair
+145	c_Mod_str_str_ref	var x = "s"; x = x % "s"	ERR	arith-undefined-pair-ref
+146	c_Mod_bool_bool	var x = true; x %= true	ERR	arith-undefined-pair
+147	c_Mod_bool_bool_ref	var x = true; x = x % true	ERR	arith-undefined-pair-ref
+148	c_Mod_list_list	var x = [1]; x %= [1]	ERR	arith-undefined-pair
+149	c_Mod_list_list_ref	var x = [1]; x = x % [1]	ERR	arith-undefined-pair-ref
+150	c_Mod_dict_dict	var x = {"a": 1}; x %= {"a": 1}	ERR	arith-undefined-pair
+151	c_Mod_dict_dict_ref	var x = {"a": 1}; x = x % {"a": 1}	ERR	arith-undefined-pair-ref
+152	c_Mod_null_null	var x = null; x %= null	ERR	arith-undefined-pair
+153	c_Mod_null_null_ref	var x = null; x = x % null	ERR	arith-undefined-pair-ref
+154	c_Mod_int_float	var x = 1; x %= 1.5	VAL	arith-numeric
+155	c_Mod_int_float_ref	var x = 1; x = x % 1.5	VAL	arith-numeric-ref
+156	c_Mod_float_int	var x = 1.5; x %= 1	VAL	arith-numeric
+157	c_Mod_float_int_ref	var x = 1.5; x = x % 1	VAL	arith-numeric-ref
+158	c_Mod_str_int	var x = "s"; x %= 1	ERR	arith-undefined-pair
+159	c_Mod_str_int_ref	var x = "s"; x = x % 1	ERR	arith-undefined-pair-ref
+160	c_Mod_int_str	var x = 1; x %= "s"	ERR	arith-undefined-pair
+161	c_Mod_int_str_ref	var x = 1; x = x % "s"	ERR	arith-undefined-pair-ref
+162	c_Mod_null_int	var x = null; x %= 1	ERR	arith-undefined-pair
+163	c_Mod_null_int_ref	var x = null; x = x % 1	ERR	arith-undefined-pair-ref
+164	c_Mod_int_null	var x = 1; x %= null	ERR	arith-undefined-pair
+165	c_Mod_int_null_ref	var x = 1; x = x % null	ERR	arith-undefined-pair-ref
+166	c_Mod_dict_int	var x = {"a": 1}; x %= 1	ERR	arith-undefined-pair
+167	c_Mod_dict_int_ref	var x = {"a": 1}; x = x % 1	ERR	arith-undefined-pair-ref
+168	c_Pow_int_int	var x = 1; x **= 1	VAL	arith-numeric
+169	c_Pow_int_int_ref	var x = 1; x = x ** 1	VAL	arith-numeric-ref
+170	c_Pow_float_float	var x = 1.5; x **= 1.5	VAL	arith-numeric
+171	c_Pow_float_float_ref	var x = 1.5; x = x ** 1.5	VAL	arith-numeric-ref
+172	c_Pow_str_str	var x = "s"; x **= "s"	ERR	arith-undefined-pair
+173	c_Pow_str_str_ref	var x = "s"; x = x ** "s"	ERR	arith-undefined-pair-ref
+174	c_Pow_bool_bool	var x = true; x **= true	ERR	arith-undefined-pair
+175	c_Pow_bool_bool_ref	var x = true; x = x ** true	ERR	arith-undefined-pair-ref
+176	c_Pow_list_list	var x = [1]; x **= [1]	ERR	arith-undefined-pair
+177	c_Pow_list_list_ref	var x = [1]; x = x ** [1]	ERR	arith-undefined-pair-ref
+178	c_Pow_dict_dict	var x = {"a": 1}; x **= {"a": 1}	ERR	arith-undefined-pair
+179	c_Pow_dict_dict_ref	var x = {"a": 1}; x = x ** {"a": 1}	ERR	arith-undefined-pair-ref
+180	c_Pow_null_null	var x = null; x **= null	ERR	arith-undefined-pair
+181	c_Pow_null_null_ref	var x = null; x = x ** null	ERR	arith-undefined-pair-ref
+182	c_Pow_int_float	var x = 1; x **= 1.5	VAL	arith-numeric
+183	c_Pow_int_float_ref	var x = 1; x = x ** 1.5	VAL	arith-numeric-ref
+184	c_Pow_float_int	var x = 1.5; x **= 1	VAL	arith-numeric
+185	c_Pow_float_int_ref	var x = 1.5; x = x ** 1	VAL	arith-numeric-ref
+186	c_Pow_str_int	var x = "s"; x **= 1	ERR	arith-undefined-pair
+187	c_Pow_str_int_ref	var x = "s"; x = x ** 1	ERR	arith-undefined-pair-ref
+188	c_Pow_int_str	var x = 1; x **= "s"	ERR	arith-undefined-pair
+189	c_Pow_int_str_ref	var x = 1; x = x ** "s"	ERR	arith-undefined-pair-ref
+190	c_Pow_null_int	var x = null; x **= 1	ERR	arith-undefined-pair
+191	c_Pow_null_int_ref	var x = null; x = x ** 1	ERR	arith-undefined-pair-ref
+192	c_Pow_int_null	var x = 1; x **= null	ERR	arith-undefined-pair
+193	c_Pow_int_null_ref	var x = 1; x = x ** null	ERR	arith-undefined-pair-ref
+194	c_Pow_dict_int	var x = {"a": 1}; x **= 1	ERR	arith-undefined-pair
+195	c_Pow_dict_int_ref	var x = {"a": 1}; x = x ** 1	ERR	arith-undefined-pair-ref
+196	c_BitAnd_int_int	var x = 1; x &= 1	VAL	bit-int-only
+197	c_BitAnd_int_int_ref	var x = 1; x = x & 1	VAL	bit-int-only-ref
+198	c_BitAnd_float_float	var x = 1.5; x &= 1.5	ERR	bit-int-only
+199	c_BitAnd_float_float_ref	var x = 1.5; x = x & 1.5	ERR	bit-int-only-ref
+200	c_BitAnd_str_str	var x = "s"; x &= "s"	ERR	bit-int-only
+201	c_BitAnd_str_str_ref	var x = "s"; x = x & "s"	ERR	bit-int-only-ref
+202	c_BitAnd_bool_bool	var x = true; x &= true	ERR	bit-int-only
+203	c_BitAnd_bool_bool_ref	var x = true; x = x & true	ERR	bit-int-only-ref
+204	c_BitAnd_list_list	var x = [1]; x &= [1]	ERR	bit-int-only
+205	c_BitAnd_list_list_ref	var x = [1]; x = x & [1]	ERR	bit-int-only-ref
+206	c_BitAnd_dict_dict	var x = {"a": 1}; x &= {"a": 1}	ERR	bit-int-only
+207	c_BitAnd_dict_dict_ref	var x = {"a": 1}; x = x & {"a": 1}	ERR	bit-int-only-ref
+208	c_BitAnd_null_null	var x = null; x &= null	ERR	bit-int-only
+209	c_BitAnd_null_null_ref	var x = null; x = x & null	ERR	bit-int-only-ref
+210	c_BitAnd_int_float	var x = 1; x &= 1.5	ERR	bit-int-only
+211	c_BitAnd_int_float_ref	var x = 1; x = x & 1.5	ERR	bit-int-only-ref
+212	c_BitAnd_float_int	var x = 1.5; x &= 1	ERR	bit-int-only
+213	c_BitAnd_float_int_ref	var x = 1.5; x = x & 1	ERR	bit-int-only-ref
+214	c_BitAnd_str_int	var x = "s"; x &= 1	ERR	bit-int-only
+215	c_BitAnd_str_int_ref	var x = "s"; x = x & 1	ERR	bit-int-only-ref
+216	c_BitAnd_int_str	var x = 1; x &= "s"	ERR	bit-int-only
+217	c_BitAnd_int_str_ref	var x = 1; x = x & "s"	ERR	bit-int-only-ref
+218	c_BitAnd_null_int	var x = null; x &= 1	ERR	bit-int-only
+219	c_BitAnd_null_int_ref	var x = null; x = x & 1	ERR	bit-int-only-ref
+220	c_BitAnd_int_null	var x = 1; x &= null	ERR	bit-int-only
+221	c_BitAnd_int_null_ref	var x = 1; x = x & null	ERR	bit-int-only-ref
+222	c_BitAnd_dict_int	var x = {"a": 1}; x &= 1	ERR	bit-int-only
+223	c_BitAnd_dict_int_ref	var x = {"a": 1}; x = x & 1	ERR	bit-int-only-ref
+224	c_BitOr_int_int	var x = 1; x |= 1	VAL	bit-int-only
+225	c_BitOr_int_int_ref	var x = 1; x = x | 1	VAL	bit-int-only-ref
+226	c_BitOr_float_float	var x = 1.5; x |= 1.5	ERR	bit-int-only
+227	c_BitOr_float_float_ref	var x = 1.5; x = x | 1.5	ERR	bit-int-only-ref
+228	c_BitOr_str_str	var x = "s"; x |= "s"	ERR	bit-int-only
+229	c_BitOr_str_str_ref	var x = "s"; x = x | "s"	ERR	bit-int-only-ref
+230	c_BitOr_bool_bool	var x = true; x |= true	ERR	bit-int-only
+231	c_BitOr_bool_bool_ref	var x = true; x = x | true	ERR	bit-int-only-ref
+232	c_BitOr_list_list	var x = [1]; x |= [1]	ERR	bit-int-only
+233	c_BitOr_list_list_ref	var x = [1]; x = x | [1]	ERR	bit-int-only-ref
+234	c_BitOr_dict_dict	var x = {"a": 1}; x |= {"a": 1}	ERR	bit-int-only
+235	c_BitOr_dict_dict_ref	var x = {"a": 1}; x = x | {"a": 1}	ERR	bit-int-only-ref
+236	c_BitOr_null_null	var x = null; x |= null	ERR	bit-int-only
+237	c_BitOr_null_null_ref	var x = null; x = x | null	ERR	bit-int-only-ref
+238	c_BitOr_int_float	var x = 1; x |= 1.5	ERR	bit-int-only
+239	c_BitOr_int_float_ref	var x = 1; x = x | 1.5	ERR	bit-int-only-ref
+240	c_BitOr_float_int	var x = 1.5; x |= 1	ERR	bit-int-only
+241	c_BitOr_float_int_ref	var x = 1.5; x = x | 1	ERR	bit-int-only-ref
+242	c_BitOr_str_int	var x = "s"; x |= 1	ERR	bit-int-only
+243	c_BitOr_str_int_ref	var x = "s"; x = x | 1	ERR	bit-int-only-ref
+244	c_BitOr_int_str	var x = 1; x |= "s"	ERR	bit-int-only
+245	c_BitOr_int_str_ref	var x = 1; x = x | "s"	ERR	bit-int-only-ref
+246	c_BitOr_null_int	var x = null; x |= 1	ERR	bit-int-only
+247	c_BitOr_null_int_ref	var x = null; x = x | 1	ERR	bit-int-only-ref
+248	c_BitOr_int_null	var x = 1; x |= null	ERR	bit-int-only
+249	c_BitOr_int_null_ref	var x = 1; x = x | null	ERR	bit-int-only-ref
+250	c_BitOr_dict_int	var x = {"a": 1}; x |= 1	ERR	bit-int-only
+251	c_BitOr_dict_int_ref	var x = {"a": 1}; x = x | 1	ERR	bit-int-only-ref
+252	c_BitXor_int_int	var x = 1; x ^= 1	VAL	bit-int-only
+253	c_BitXor_int_int_ref	var x = 1; x = x ^ 1	VAL	bit-int-only-ref
+254	c_BitXor_float_float	var x = 1.5; x ^= 1.5	ERR	bit-int-only
+255	c_BitXor_float_float_ref	var x = 1.5; x = x ^ 1.5	ERR	bit-int-only-ref
+256	c_BitXor_str_str	var x = "s"; x ^= "s"	ERR	bit-int-only
+257	c_BitXor_str_str_ref	var x = "s"; x = x ^ "s"	ERR	bit-int-only-ref
+258	c_BitXor_bool_bool	var x = true; x ^= true	ERR	bit-int-only
+259	c_BitXor_bool_bool_ref	var x = true; x = x ^ true	ERR	bit-int-only-ref
+260	c_BitXor_list_list	var x = [1]; x ^= [1]	ERR	bit-int-only
+261	c_BitXor_list_list_ref	var x = [1]; x = x ^ [1]	ERR	bit-int-only-ref
+262	c_BitXor_dict_dict	var x = {"a": 1}; x ^= {"a": 1}	ERR	bit-int-only
+263	c_BitXor_dict_dict_ref	var x = {"a": 1}; x = x ^ {"a": 1}	ERR	bit-int-only-ref
+264	c_BitXor_null_null	var x = null; x ^= null	ERR	bit-int-only
+265	c_BitXor_null_null_ref	var x = null; x = x ^ null	ERR	bit-int-only-ref
+266	c_BitXor_int_float	var x = 1; x ^= 1.5	ERR	bit-int-only
+267	c_BitXor_int_float_ref	var x = 1; x = x ^ 1.5	ERR	bit-int-only-ref
+268	c_BitXor_float_int	var x = 1.5; x ^= 1	ERR	bit-int-only
+269	c_BitXor_float_int_ref	var x = 1.5; x = x ^ 1	ERR	bit-int-only-ref
+270	c_BitXor_str_int	var x = "s"; x ^= 1	ERR	bit-int-only
+271	c_BitXor_str_int_ref	var x = "s"; x = x ^ 1	ERR	bit-int-only-ref
+272	c_BitXor_int_str	var x = 1; x ^= "s"	ERR	bit-int-only
+273	c_BitXor_int_str_ref	var x = 1; x = x ^ "s"	ERR	bit-int-only-ref
+274	c_BitXor_null_int	var x = null; x ^= 1	ERR	bit-int-only
+275	c_BitXor_null_int_ref	var x = null; x = x ^ 1	ERR	bit-int-only-ref
+276	c_BitXor_int_null	var x = 1; x ^= null	ERR	bit-int-only
+277	c_BitXor_int_null_ref	var x = 1; x = x ^ null	ERR	bit-int-only-ref
+278	c_BitXor_dict_int	var x = {"a": 1}; x ^= 1	ERR	bit-int-only
+279	c_BitXor_dict_int_ref	var x = {"a": 1}; x = x ^ 1	ERR	bit-int-only-ref
+280	c_Shl_int_int	var x = 1; x <<= 1	VAL	bit-int-only
+281	c_Shl_int_int_ref	var x = 1; x = x << 1	VAL	bit-int-only-ref
+282	c_Shl_float_float	var x = 1.5; x <<= 1.5	ERR	bit-int-only
+283	c_Shl_float_float_ref	var x = 1.5; x = x << 1.5	ERR	bit-int-only-ref
+284	c_Shl_str_str	var x = "s"; x <<= "s"	ERR	bit-int-only
+285	c_Shl_str_str_ref	var x = "s"; x = x << "s"	ERR	bit-int-only-ref
+286	c_Shl_bool_bool	var x = true; x <<= true	ERR	bit-int-only
+287	c_Shl_bool_bool_ref	var x = true; x = x << true	ERR	bit-int-only-ref
+288	c_Shl_list_list	var x = [1]; x <<= [1]	ERR	bit-int-only
+289	c_Shl_list_list_ref	var x = [1]; x = x << [1]	ERR	bit-int-only-ref
+290	c_Shl_dict_dict	var x = {"a": 1}; x <<= {"a": 1}	ERR	bit-int-only
+291	c_Shl_dict_dict_ref	var x = {"a": 1}; x = x << {"a": 1}	ERR	bit-int-only-ref
+292	c_Shl_null_null	var x = null; x <<= null	ERR	bit-int-only
+293	c_Shl_null_null_ref	var x = null; x = x << null	ERR	bit-int-only-ref
+294	c_Shl_int_float	var x = 1; x <<= 1.5	ERR	bit-int-only
+295	c_Shl_int_float_ref	var x = 1; x = x << 1.5	ERR	bit-int-only-ref
+296	c_Shl_float_int	var x = 1.5; x <<= 1	ERR	bit-int-only
+297	c_Shl_float_int_ref	var x = 1.5; x = x << 1	ERR	bit-int-only-ref
+298	c_Shl_str_int	var x = "s"; x <<= 1	ERR	bit-int-only
+299	c_Shl_str_int_ref	var x = "s"; x = x << 1	ERR	bit-int-only-ref
+300	c_Shl_int_str	var x = 1; x <<= "s"	ERR	bit-int-only
+301	c_Shl_int_str_ref	var x = 1; x = x << "s"	ERR	bit-int-only-ref
+302	c_Shl_null_int	var x = null; x <<= 1	ERR	bit-int-only
+303	c_Shl_null_int_ref	var x = null; x = x << 1	ERR	bit-int-only-ref
+304	c_Shl_int_null	var x = 1; x <<= null	ERR	bit-int-only
+305	c_Shl_int_null_ref	var x = 1; x = x << null	ERR	bit-int-only-ref
+306	c_Shl_dict_int	var x = {"a": 1}; x <<= 1	ERR	bit-int-only
+307	c_Shl_dict_int_ref	var x = {"a": 1}; x = x << 1	ERR	bit-int-only-ref
+308	c_Shr_int_int	var x = 1; x >>= 1	VAL	bit-int-only
+309	c_Shr_int_int_ref	var x = 1; x = x >> 1	VAL	bit-int-only-ref
+310	c_Shr_float_float	var x = 1.5; x >>= 1.5	ERR	bit-int-only
+311	c_Shr_float_float_ref	var x = 1.5; x = x >> 1.5	ERR	bit-int-only-ref
+312	c_Shr_str_str	var x = "s"; x >>= "s"	ERR	bit-int-only
+313	c_Shr_str_str_ref	var x = "s"; x = x >> "s"	ERR	bit-int-only-ref
+314	c_Shr_bool_bool	var x = true; x >>= true	ERR	bit-int-only
+315	c_Shr_bool_bool_ref	var x = true; x = x >> true	ERR	bit-int-only-ref
+316	c_Shr_list_list	var x = [1]; x >>= [1]	ERR	bit-int-only
+317	c_Shr_list_list_ref	var x = [1]; x = x >> [1]	ERR	bit-int-only-ref
+318	c_Shr_dict_dict	var x = {"a": 1}; x >>= {"a": 1}	ERR	bit-int-only
+319	c_Shr_dict_dict_ref	var x = {"a": 1}; x = x >> {"a": 1}	ERR	bit-int-only-ref
+320	c_Shr_null_null	var x = null; x >>= null	ERR	bit-int-only
+321	c_Shr_null_null_ref	var x = null; x = x >> null	ERR	bit-int-only-ref
+322	c_Shr_int_float	var x = 1; x >>= 1.5	ERR	bit-int-only
+323	c_Shr_int_float_ref	var x = 1; x = x >> 1.5	ERR	bit-int-only-ref
+324	c_Shr_float_int	var x = 1.5; x >>= 1	ERR	bit-int-only
+325	c_Shr_float_int_ref	var x = 1.5; x = x >> 1	ERR	bit-int-only-ref
+326	c_Shr_str_int	var x = "s"; x >>= 1	ERR	bit-int-only
+327	c_Shr_str_int_ref	var x = "s"; x = x >> 1	ERR	bit-int-only-ref
+328	c_Shr_int_str	var x = 1; x >>= "s"	ERR	bit-int-only
+329	c_Shr_int_str_ref	var x = 1; x = x >> "s"	ERR	bit-int-only-ref
+330	c_Shr_null_int	var x = null; x >>= 1	ERR	bit-int-only
+331	c_Shr_null_int_ref	var x = null; x = x >> 1	ERR	bit-int-only-ref
+332	c_Shr_int_null	var x = 1; x >>= null	ERR	bit-int-only
+333	c_Shr_int_null_ref	var x = 1; x = x >> null	ERR	bit-int-only-ref
+334	c_Shr_dict_int	var x = {"a": 1}; x >>= 1	ERR	bit-int-only
+335	c_Shr_dict_int_ref	var x = {"a": 1}; x = x >> 1	ERR	bit-int-only-ref
+336	c_ShrU_int_int	var x = 1; x >>>= 1	VAL	bit-int-only
+337	c_ShrU_int_int_ref	var x = 1; x = x >>> 1	VAL	bit-int-only-ref
+338	c_ShrU_float_float	var x = 1.5; x >>>= 1.5	ERR	bit-int-only
+339	c_ShrU_float_float_ref	var x = 1.5; x = x >>> 1.5	ERR	bit-int-only-ref
+340	c_ShrU_str_str	var x = "s"; x >>>= "s"	ERR	bit-int-only
+341	c_ShrU_str_str_ref	var x = "s"; x = x >>> "s"	ERR	bit-int-only-ref
+342	c_ShrU_bool_bool	var x = true; x >>>= true	ERR	bit-int-only
+343	c_ShrU_bool_bool_ref	var x = true; x = x >>> true	ERR	bit-int-only-ref
+344	c_ShrU_list_list	var x = [1]; x >>>= [1]	ERR	bit-int-only
+345	c_ShrU_list_list_ref	var x = [1]; x = x >>> [1]	ERR	bit-int-only-ref
+346	c_ShrU_dict_dict	var x = {"a": 1}; x >>>= {"a": 1}	ERR	bit-int-only
+347	c_ShrU_dict_dict_ref	var x = {"a": 1}; x = x >>> {"a": 1}	ERR	bit-int-only-ref
+348	c_ShrU_null_null	var x = null; x >>>= null	ERR	bit-int-only
+349	c_ShrU_null_null_ref	var x = null; x = x >>> null	ERR	bit-int-only-ref
+350	c_ShrU_int_float	var x = 1; x >>>= 1.5	ERR	bit-int-only
+351	c_ShrU_int_float_ref	var x = 1; x = x >>> 1.5	ERR	bit-int-only-ref
+352	c_ShrU_float_int	var x = 1.5; x >>>= 1	ERR	bit-int-only
+353	c_ShrU_float_int_ref	var x = 1.5; x = x >>> 1	ERR	bit-int-only-ref
+354	c_ShrU_str_int	var x = "s"; x >>>= 1	ERR	bit-int-only
+355	c_ShrU_str_int_ref	var x = "s"; x = x >>> 1	ERR	bit-int-only-ref
+356	c_ShrU_int_str	var x = 1; x >>>= "s"	ERR	bit-int-only
+357	c_ShrU_int_str_ref	var x = 1; x = x >>> "s"	ERR	bit-int-only-ref
+358	c_ShrU_null_int	var x = null; x >>>= 1	ERR	bit-int-only
+359	c_ShrU_null_int_ref	var x = null; x = x >>> 1	ERR	bit-int-only-ref
+360	c_ShrU_int_null	var x = 1; x >>>= null	ERR	bit-int-only
+361	c_ShrU_int_null_ref	var x = 1; x = x >>> null	ERR	bit-int-only-ref
+362	c_ShrU_dict_int	var x = {"a": 1}; x >>>= 1	ERR	bit-int-only
+363	c_ShrU_dict_int_ref	var x = {"a": 1}; x = x >>> 1	ERR	bit-int-only-ref
