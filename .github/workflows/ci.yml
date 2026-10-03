@@ -190,6 +190,16 @@ jobs:
         run: |
           python3 selfhost/check_pymain_guard.py --self-test
           python3 selfhost/check_pymain_guard.py
+      - name: shell 契约守卫（sh 调用脚本 / bashism × shebang · M251s1 · 缺陷 441）
+        #   来历：CI run 37152650582 step7 —— `check_version_golden.sh` 的**自证**用 `sh "$SELF"`
+        #   调自己，而 ubuntu 的 /bin/sh 是 **dash**（不支持 `set -o pipefail`）；`set` 是
+        #   **特殊内建** ⇒ dash 立即退出（rc=2）⇒ 判据主体一行都没跑；自证又把 rc 归一化成 0/1
+        #   ⇒ 「脚本崩了」被误判成「脚本正确判红」⇒ 三道负控**假绿**。
+        #   ⚠️ 本机 /bin/sh 是 bash（RHEL 系）⇒ **本地永远绿**，只有 CI 才发作。
+        #   ⇒ 本守卫**跨平台**（静态判据），在本机就能查出 CI/dash 才会发作的问题。
+        run: |
+          bash selfhost/check_shell_contract.sh --self-test
+          bash selfhost/check_shell_contract.sh
       - name: 版本字面量 ⇄ 自举基准 ⇄ 入库件 三方一致（M250 · 缺陷 435）
         #   实证（CI run #484 · bdf7090）：M249 的版本递增改了 `selfhost/compiler.px` 的
         #   `PXC_VER`，而 `selfhost/golden/compiler.c` / `compiler.bc.dump` 是**老版本**烘出的
@@ -197,14 +207,19 @@ jobs:
         #   ⚠️ 本地全量门**测不到**：`bootstrap_prove(_bc)` 属 CI 独占（各约 7 分钟）。
         #   ⇒ 本守卫是**廉价的那一半**（毫秒级，不跑编译器）：三方字面量对拍，自带 5 条自证。
         run: |
-          # M251 补：CI 实测该步红而**本地干净导出实测绿** ⇒ 加**最小化诊断**（≤10 行，
-          #   避免撑爆注解上限）：下一轮 CI 的注解里就能读到真因。
-          echo "=== 诊断：三方一致守卫（M251 补）==="
+          # M251s1 更正（缺陷 443）：此前这里记「CI 实测红而本地干净导出绿 ⇒ 差异在环境，
+          #   而本仓 job 日志非管理员不可读（API 403）」——**前半对、后半错**。
+          #   真因正是**从日志里读出来的**（`python3 selfhost/ci_log.py log <job_id>`）：
+          #     selfhost/check_version_golden.sh: 29: set: Illegal option -o pipefail
+          #   自证用 `sh "$SELF"` 调自己，而 ubuntu 的 /bin/sh 是 dash ⇒ 见缺陷 441。
+          #   诊断保留（成本极低、信息有用），但**去掉硬编码版本号** —— 上一版写死
+          #   `grep -c '0.2.2'`，每次 bump 都要改（M223「魔法数」同族）。
+          echo "=== 诊断：三方一致守卫 ==="
           echo "cwd=$(pwd)"
+          echo "源码版本字面量（派生，不硬编码）: $(sed -n 's/.*VER *= *"\([0-9][0-9.]*\)".*/\1/p' selfhost/compiler.px | head -1)"
           ls -l bootstrap/pxc bootstrap/pxi 2>&1 | head -2
           ./bootstrap/pxc --version 2>&1 | head -1 || echo "pxc 执行失败 rc=$?"
           ./bootstrap/pxi --version 2>&1 | head -1 || echo "pxi 执行失败 rc=$?"
-          grep -c '0\.2\.2' selfhost/golden/compiler.c selfhost/golden/compiler.bc.dump 2>&1
           bash selfhost/check_version_golden.sh --self-test
           bash selfhost/check_version_golden.sh
       - name: 门注册一致性（清单 ⇄ ci.yml 双向 · M243 / M247 补）
@@ -856,8 +871,12 @@ jobs:
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门
       #   （m221 ≈ 200s + m222 ≈ 55s 本机量级）⇒ **净收益无法从单次样本里隔离**。
-      #   本仓 job 日志非管理员**不可读**（403）⇒ 唯一对外通道是注解，故**成功时也要发**
+      #   ⇒ 台账合成 `::notice::`，在 run 摘要里**第一眼**可见，故**成功时也要发**
       #   （只挂 `failure()` 等于「一切正常时什么都看不到」）。
+# ⚠️ M251s1 更正（缺陷 443）：此前多处记账写「本仓 job 日志非管理员不可读（API 403）」
+      #   是**错的** —— 日志一直可读：`python3 selfhost/ci_log.py jobs <run_id>` /
+      #   `log <job_id>`（token 走 $GH_TOKEN 或 $GH_TOKEN_FILE）。那个「403」来自**未带 token**
+      #   的调用。⇒ 注解是**第一眼**通道（run 摘要即见、长期留档），与日志**互补**，不是唯一通道。
       - name: m242_table_ptr（表元素指针「跨锁外泄」审计 · 缺陷 403）
         run: |
           bash examples/m242_table_ptr/verify.sh --neg-skip > /tmp/v_m242.log 2>&1 || { echo "❌ m242_table_ptr verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m242.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
@@ -891,7 +910,7 @@ jobs:
           echo "✅ m250_onnx_tensor verify（193 例 × 3 轨 · 分叉 0 · 边界 34 例全响亮 + 反向判据 · 独立真值 20 · 确定性 · 覆盖面台账五判据）PASS"
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
-        #   不告诉你**为什么**（job 日志 403 ⇒ 注解就是唯一通道，通道里必须自带证据）。
+        #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。
         #   ⇒ 打印 **key 取值**（按件分组）+ **选料来源**列（rt_key / fallback），
         #     并按 **pxc key** 去重报「源码链漂移数」（vm 的 key 是 `<pxc>/<sha>` 派生，
         #     按字符串去重会虚增 —— 这是 M222 那次「3 个」里至少有 1 个的来源）。
@@ -916,10 +935,11 @@ jobs:
           if [ "${NKP:-0}" -gt 1 ]; then
             echo "::warning::devbuild 源码链出现 ${NKP} 个 pxc key ⇒ **指纹漂移**（M223 已加归因：查各门日志的「源码链指纹变化」行）"
           fi
-      # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
-      #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
+      # M188 补：这一步（工具自测）在 run 382/383 上红了，当时以为读不到 job 日志
+      #   ⇒ 注解成了**第一眼**通道。⚠️ M251s1 更正：**日志一直可读**（缺陷 443）——
+      #   `python3 selfhost/ci_log.py log <job_id>`；当时看到的 403 是**未带 token** 的调用。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。
-      - name: 失败诊断注解（工具自测 —— job 日志 403，此注解是唯一可读通道）
+      - name: 失败诊断注解（工具自测 —— 第一眼通道；完整日志见 selfhost/ci_log.py）
         # ⚠️⚠️ M216s6：**这一行不能少**。s2 重写本 step 时把它弄丢了 ⇒ 该 step 回退成
         #   默认的 `if: success()` ⇒ 前一步失败时**直接 skip** ⇒ 注解永远不产生
         #   （实测 run 36257633483：step 8 failure、step 9/10/11/12/13 全 skipped）。
@@ -948,7 +968,7 @@ jobs:
       - name: 发布侧守卫自测（Issue 41 单调性守卫 + Issue 56 发布包内容/可复现 + Issue 86 tag 守卫 + M168 安装矩阵与二进制可移植性）
         # ⚠️ 沿用 Issue 64 的教训：**每条独立成行**，不要用 `&&` 串联（`&&` 会吞掉前件失败）。
         # M225s1：本 step 此前**没有诊断包装** —— 首次失败时注解只有
-        #   「Process completed with exit code 1」（**指不到真因**，job 日志又 403）。
+        #   「Process completed with exit code 1」（**指不到真因**）。
         #   按本仓纪律「门的红必须读出真因」改为逐条包装：失败即调
         #   annotate_failure.sh 发一条**富注解**（换行编码 %0A）。
         # M225s2：守卫日志**不能**落 `/tmp/v_*.log` —— 其中一条守卫正是

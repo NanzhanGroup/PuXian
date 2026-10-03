@@ -211,8 +211,9 @@ jobs:
       - name: 可移植性门（全静态 + 架构 aarch64 —— 每一件都过，否则 job 红）
         run: |
           set -e
-          # ⚠️ 失败诊断必须走 `::error::` 注释：本仓 job 日志**非管理员不可读**
-          #   （API 403），只有注解能在外部看到 —— 首跑红时正是靠这一点定位。
+          # 失败诊断走 `::error::` 注释：它在 run 摘要里**第一眼**可见 —— 首跑红时正是靠它定位。
+          # ⚠️ M251s1 更正（缺陷 443）：此前记的「job 日志非管理员不可读（API 403）」是**错的** ——
+          #   完整日志可读：`python3 selfhost/ci_log.py log <job_id>`。
           if ! bash selfhost/check_bin_portability.sh --self-test > "$RUNNER_TEMP/pst.log" 2>&1; then
             echo "::error::可移植性门自证失败（--self-test）"
             sed 's/^/::error::pst /' "$RUNNER_TEMP/pst.log"; exit 1

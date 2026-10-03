@@ -26,6 +26,19 @@
 # 退出码：0=通过 · 1=判红 · 2=用法错 · 3=判据自身失效（一个版本字面量都没解析出来）
 # 用法：check_version_golden.sh [--root .] [--self-test]
 # ============================================================
+# ── shell 契约（M251s1 · 缺陷 441）────────────────────────────
+#   shebang 是 bash，且下面用了 bash 专有语义（`set -o pipefail`）。
+#   ⚠️ 事故（CI run 37152650582 · 2026-10-03）：自证里用 `sh "$SELF"` 调自己，而
+#   ubuntu 的 /bin/sh 是 **dash** ⇒ 不支持 `-o pipefail`；`set` 是**特殊内建**，
+#   选项非法会让 dash **立即退出**（rc=2）⇒ 判据主体**一行都没跑**。
+#   更糟的是自证用 `cmd && r=0 || r=1` 把 rc=2 归一化成 1 ⇒ 「脚本崩了」被误判成
+#   「脚本正确判红」⇒ 三道负控**假绿**（其中 S2 的 grep 还命中了错误消息里的文件名）。
+#   ⇒ 契约显式化：非 bash 调用**响亮退出**，而不是静默死在第 33 行。
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "❌ check_version_golden.sh 需要 bash（当前 shell 不是 bash：$0）。" >&2
+    echo "   请用：bash $0 [--root .] [--self-test]" >&2
+    exit 2
+fi
 set -uo pipefail
 ROOT=.
 ST=0
@@ -55,27 +68,46 @@ if [ "$ST" = 1 ]; then
     echo 'const char* s = "9.9.9";' > "$T/selfhost/golden/compiler.c"
     echo 'CONST 9.9.9' > "$T/selfhost/golden/compiler.bc.dump"
     printf '#!/bin/sh\necho "pxc 9.9.9 (fixture)"\n' > "$T/bootstrap/pxc"; chmod +x "$T/bootstrap/pxc"
-    sh "$SELF" --root "$T" > "$T/o1" 2>&1 && r1=0 || r1=1
-    chk $([ "$r1" = 0 ] && echo 1 || echo 0) "S1 三方一致 ⇒ rc=0"
+    bash "$SELF" --root "$T" > "$T/o1" 2>&1; r1=$?
+    chk $([ "$r1" = 0 ] && grep -qF 'VERSION-GOLDEN-OK' "$T/o1" && echo 1 || echo 0) "S1 三方一致 ⇒ rc=0（实测 rc=$r1）"
     # 夹具 2（负控①）：golden 落后一个版本 ⇒ 判红且点名
     echo 'const char* s = "9.9.8";' > "$T/selfhost/golden/compiler.c"
-    sh "$SELF" --root "$T" > "$T/o2" 2>&1 && r2=0 || r2=1
-    chk $([ "$r2" = 1 ] && grep -q '自举基准"*.*落后\|golden' "$T/o2" && echo 1 || echo 0) "S2 负控①：golden 落后 ⇒ 判红"
+    bash "$SELF" --root "$T" > "$T/o2" 2>&1; r2=$?
+    chk $([ "$r2" = 1 ] && grep -qF 'VERSION-GOLDEN-FAIL' "$T/o2" && echo 1 || echo 0) "S2 负控①：golden 落后 ⇒ 判红（实测 rc=$r2）"
     echo 'const char* s = "9.9.9";' > "$T/selfhost/golden/compiler.c"
     # 夹具 3（负控②）：工具字面量彼此不等 ⇒ 判红
     echo 'let PXLSP_VER = "9.9.8"' > "$T/tools/pxlsp.px"
-    sh "$SELF" --root "$T" > "$T/o3" 2>&1 && r3=0 || r3=1
-    chk $([ "$r3" = 1 ] && echo 1 || echo 0) "S3 负控②：.px 字面量彼此不等 ⇒ 判红"
+    bash "$SELF" --root "$T" > "$T/o3" 2>&1; r3=$?
+    chk $([ "$r3" = 1 ] && grep -qF 'VERSION-GOLDEN-FAIL' "$T/o3" && echo 1 || echo 0) "S3 负控②：.px 字面量彼此不等 ⇒ 判红（实测 rc=$r3）"
     echo 'let PXLSP_VER = "9.9.9"' > "$T/tools/pxlsp.px"
     # 夹具 4（负控③）：入库件版本落后 ⇒ 判红
     printf '#!/bin/sh\necho "pxc 9.9.7 (fixture)"\n' > "$T/bootstrap/pxc"
-    sh "$SELF" --root "$T" > "$T/o4" 2>&1 && r4=0 || r4=1
-    chk $([ "$r4" = 1 ] && echo 1 || echo 0) "S4 负控③：入库件版本落后 ⇒ 判红"
+    bash "$SELF" --root "$T" > "$T/o4" 2>&1; r4=$?
+    chk $([ "$r4" = 1 ] && grep -qF 'VERSION-GOLDEN-FAIL' "$T/o4" && echo 1 || echo 0) "S4 负控③：入库件版本落后 ⇒ 判红（实测 rc=$r4）"
     printf '#!/bin/sh\necho "pxc 9.9.9 (fixture)"\n' > "$T/bootstrap/pxc"
     # 夹具 5：**一个版本字面量都解析不出来** ⇒ rc=3（拒绝静默回退成「全绿」）
     : > "$T/selfhost/compiler.px"
-    sh "$SELF" --root "$T" > "$T/o5" 2>&1; r5=$?
-    chk $([ "$r5" = 3 ] && echo 1 || echo 0) "S5 解析不出字面量 ⇒ rc=3（判据自身失效，不许绿）"
+    bash "$SELF" --root "$T" > "$T/o5" 2>&1; r5=$?
+    chk $([ "$r5" = 3 ] && grep -qF '解析不出 PXC_VER' "$T/o5" && echo 1 || echo 0) "S5 解析不出字面量 ⇒ rc=3（判据自身失效，不许绿）（实测 rc=$r5）"
+    # ── S0 元判据（缺陷 442）─────────────────────────────────
+    #   把「脚本**根本没跑到结尾**」与「脚本**正确地判红**」区分开：
+    #   前者（崩溃 / 未执行 / shell 不对）在输出里**没有**任何判据标记。
+    #   ⚠️ 事故里 S2/S3/S4 就是因为只有 rc 断言（而 rc 被归一化成 1）⇒ 假绿。
+    _nomark=""
+    for _i in 1 2 3 4 5; do
+        grep -qE 'VERSION-GOLDEN-(OK|FAIL)|解析不出 PXC_VER' "$T/o$_i" || _nomark="$_nomark $_i"
+    done
+    chk $([ -z "$_nomark" ] && echo 1 || echo 0) "S0 元判据：每个夹具输出都含判据标记（未含夹具编号：${_nomark:-无}）"
+    # 夹具 6（契约 · 缺陷 441）：**非 bash 调用**必须 rc=2 + 响亮
+    #   ⚠️ 本机 /bin/sh 是 bash（RHEL 系）⇒ 需 CVG_NONBASH_SH 指定 dash 才能真跑；
+    #      ubuntu CI（/bin/sh=dash）会**真跑**这条。跳过时**响亮登记**，不静默。
+    _sh="${CVG_NONBASH_SH:-sh}"
+    if [ -z "$("$_sh" -c 'echo ${BASH_VERSION:-}' 2>/dev/null)" ]; then
+        "$_sh" "$SELF" --root "$T" > "$T/o6" 2>&1; r6=$?
+        chk $([ "$r6" = 2 ] && grep -qF '需要 bash' "$T/o6" && echo 1 || echo 0) "S6 非 bash 调用（$_sh）⇒ rc=2 + 响亮（实测 rc=$r6）"
+    else
+        echo "  ⏭ S6 跳过：$_sh 是 bash（本机无非 bash sh）—— CI/dash 会真跑；本地可用 CVG_NONBASH_SH=<dash 路径> 复现"
+    fi
     rm -rf "$T"
     echo ""; echo "自证：$ok 通过 / $bad 失败"
     [ "$bad" = 0 ] && exit 0 || exit 1
