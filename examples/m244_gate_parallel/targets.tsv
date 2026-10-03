@@ -21,3 +21,4 @@ m234_bytes_family	examples/m234_bytes_family/three_tracks.py	181
 m239_match_case	examples/m239_match_case/three_tracks.py	-
 m246_compound_assign	examples/m246_compound_assign/three_tracks.py	-
 m246_compound_assign	examples/m246_compound_assign/pair_check.py	-
+m250_onnx_tensor	examples/m250_onnx_tensor/three_tracks.py	-
