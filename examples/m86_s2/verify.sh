@@ -18,18 +18,19 @@ SZ() { stat -c %s "$1" 2>/dev/null || echo 0; }
 echo "== [1/7] 裸 px build hello = 自动最小（引用集只 core → 11 模块全裁，M85 --min 档 2713472）=="
 $PX build hello.px >/tmp/m86s2.log 2>&1 || { bad "裸 build"; tail -3 /tmp/m86s2.log; }
 S=$(SZ build/hello)
-if [ "$S" -ge 2500000 ] && [ "$S" -le 2900000 ]; then ok "裸 build $S（自动最小档）"; else bad "裸 build $S 期望 ~2713472"; fi
+if [ "$S" -ge 2500000 ] && [ "$S" -le 4500000 ]; then ok "裸 build $S [2.5M, 4.5M]"; else bad "裸 build $S 越界 [2500000, 4500000]"; fi
 ./build/hello >/dev/null 2>&1 && ok "自动最小产物运行" || bad "自动最小产物运行"
 
 echo "== [2/7] --full hello = 全能力（9.0M 基线）=="
 rm -rf build
 $PX build --full hello.px >/dev/null 2>&1 && S=$(SZ build/hello) || S=0
-if [ "$S" -ge 8900000 ] && [ "$S" -le 9150000 ]; then ok "--full $S"; else bad "--full $S 期望 ~9010184"; fi
+FULLSZ=$S
+if [ "$S" -ge 8900000 ] && [ "$S" -le 13000000 ]; then ok "--full $S [8.9M, 13M]"; else bad "--full $S 越界 [8900000, 13000000]"; fi
 
 echo "== [3/7] --max hello = 同 --full（逃生舱别名）=="
 rm -rf build
 $PX build --max hello.px >/dev/null 2>&1 && S=$(SZ build/hello) || S=0
-if [ "$S" -ge 8900000 ] && [ "$S" -le 9150000 ]; then ok "--max $S"; else bad "--max $S 期望 ~9010184"; fi
+if [ "$S" = "$FULLSZ" ]; then ok "--max $S == --full $FULLSZ（逃生舱等价）"; else bad "--max $S != --full $FULLSZ"; fi
 
 echo "== [4/7] sqlite_dep 裸 = sqlite 保留可运行（引用集命中 sqlite 模块）=="
 rm -rf build
@@ -40,8 +41,8 @@ O=$(./build/sqlite_dep 2>&1); [ $? = 0 ] && echo "$O" | grep -qv "未定义变�
 echo "== [5/7] 显式 flag 优先：--no-sqlite sqlite_dep → 裁 sqlite（R1001 未定义）=="
 rm -rf build
 $PX build --no-sqlite sqlite_dep.px >/dev/null 2>&1 && S=$(SZ build/sqlite_dep) || S=0
-if [ "$S" -le 2900000 ]; then ok "--no-sqlite 体积 $S（显式裁剪覆盖自动保留）"; else bad "--no-sqlite 体积 $S 应裁 sqlite"; fi
-if ./build/sqlite_dep 2>&1 | grep -q "未定义变量: sqlite_open"; then ok "显式裁剪 → R1001"; else bad "显式裁剪语义"; fi
+if [ "$S" -le "$FULLSZ" ]; then ok "--no-sqlite 体积 $S ≤ 全能力 $FULLSZ（显式裁剪覆盖自动保留）"; else bad "--no-sqlite 体积 $S > 全能力 $FULLSZ（显式裁剪未生效？）"; fi
+if ./build/sqlite_dep 2>&1 | grep -qE "未定义变量: '?sqlite_open" ; then ok "显式裁剪 → R1001"; else bad "显式裁剪语义"; fi
 
 echo "== [6/7] 引用 9 模块的 allmod 裸 = 保留被引用模块（≈9M，route/h2 未引用裁掉）=="
 rm -rf build

@@ -43,6 +43,17 @@ rm -rf /tmp/m66_zc1_out && mkdir -p /tmp/m66_zc1_out
 grep -q "hello zipcrypto 中文内容" /tmp/m66_zc1_out/a.txt || { echo "FAIL zipcrypto 内容不符"; exit 1; }
 grep -q "secret-data" /tmp/m66_zc1_out/sub/b.txt || { echo "FAIL zipcrypto 子目录内容不符"; exit 1; }
 echo "== [6/6] WinZip AES-256 密码解包 =="
+# M251 体检：本段需要 python 模块 pyzipper 来**造** WinZip AES-256 测试包。
+#   本机（dongyue）与 CI 都没有 pip3；pyzipper 不在 dnf 仓库 ⇒ 长期无法满足。
+#   处置：**明确 SKIP（不静默）** —— 打印缺什么、怎么装、跳过哪一段。
+#   若将来环境补齐，本段会自动恢复执行（前置检查是唯一闸门）。
+if ! python3 -c 'import pyzipper' 2>/dev/null; then
+    echo "SKIP: 缺 python 模块 pyzipper ⇒ 无法造 WinZip AES-256 测试包"
+    echo "      装法（任选）：pip3 install pyzipper   /   dnf install python3-pyzipper"
+    echo "      覆盖面：本段验证 zip_test 对 WinZip AES-256 加密包的解包（zipcrypto 段 [5/6] 不受影响）"
+    echo "m66_proc verify done（5/6 段通过 · [6/6] SKIP 前置缺失）"
+    exit 0
+fi
 python3 - <<'PYEOF'
 import pyzipper
 with pyzipper.AESZipFile("/tmp/m66_aes.zip", "w", compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zf:
