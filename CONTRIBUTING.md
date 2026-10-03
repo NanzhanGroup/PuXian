@@ -151,6 +151,23 @@ bash tools/gen_builtin_list.sh --check  # 只比不写（CI 用）
 > `compiler.px` 需 411 s，新件 8.3 s）⇒ **不要再引用那个数字去判断"是不是慢/是不是卡住了"**。
 > 若你的改动未触及 `selfhost/compiler.px` 及其模块，可跳过第 3 步并在 PR 描述中注明。
 
+### 写新「门」（`examples/*/verify.sh`）时另见
+
+本仓的验证门槛由 **157 个门**组成（`selfhost/gates.registry.sh` 是**唯一注册源**，M243 建立）。
+写门有一类特有的坑 —— **负控假绿、注入点错、判据过宽/过窄、注册遗漏** ——
+它们**只在门跑起来才暴露**，且症状常指不到根因。
+
+落盘前请过一遍 [`docs/NEW_GATE_CHECKLIST.md`](docs/NEW_GATE_CHECKLIST.md)；
+其中**能机械化的五条**已由守卫覆盖，改门后跑一遍即可：
+
+```bash
+python3 selfhost/check_pymain_guard.py   # 被 import 的模块必须有 __main__ 守卫（缺陷 418）
+python3 selfhost/check_gate_anchors.py   # 负控锚点是否仍在当前源码里唯一命中
+bash selfhost/check_gate_registry.sh     # 门是否已在「单一注册源」里（双向一致）
+bash selfhost/check_gate_paths.sh        # 门里不许出现开发机绝对路径
+python3 selfhost/check_defect_refs.py    # 里程碑 ↔ 缺陷编号引用一致性
+```
+
 ## 语言约束（写代码前必读）
 
 编译器自身运行在 **Mini 子集**锁定面上（语法基线 M40），写 `.px` 时必须规避以下坑，详见 [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md)：
