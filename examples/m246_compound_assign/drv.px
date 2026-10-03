@@ -1,0 +1,2193 @@
+# M246 复合赋值矩阵探针驱动器（自动生成 · 勿手改）
+def t0():
+    var x = 1
+    x += 1
+    print("c_Plus_int_int=" + str(x))
+def t1():
+    var x = 1
+    x = x + 1
+    print("c_Plus_int_int_ref=" + str(x))
+def t2():
+    var x = 1.5
+    x += 1.5
+    print("c_Plus_float_float=" + str(x))
+def t3():
+    var x = 1.5
+    x = x + 1.5
+    print("c_Plus_float_float_ref=" + str(x))
+def t4():
+    var x = "s"
+    x += "s"
+    print("c_Plus_str_str=" + str(x))
+def t5():
+    var x = "s"
+    x = x + "s"
+    print("c_Plus_str_str_ref=" + str(x))
+def t6():
+    var x = true
+    x += true
+    print("c_Plus_bool_bool=" + str(x))
+def t7():
+    var x = true
+    x = x + true
+    print("c_Plus_bool_bool_ref=" + str(x))
+def t8():
+    var x = [1]
+    x += [1]
+    print("c_Plus_list_list=" + str(x))
+def t9():
+    var x = [1]
+    x = x + [1]
+    print("c_Plus_list_list_ref=" + str(x))
+def t10():
+    var x = {"a": 1}
+    x += {"a": 1}
+    print("c_Plus_dict_dict=" + str(x))
+def t11():
+    var x = {"a": 1}
+    x = x + {"a": 1}
+    print("c_Plus_dict_dict_ref=" + str(x))
+def t12():
+    var x = null
+    x += null
+    print("c_Plus_null_null=" + str(x))
+def t13():
+    var x = null
+    x = x + null
+    print("c_Plus_null_null_ref=" + str(x))
+def t14():
+    var x = 1
+    x += 1.5
+    print("c_Plus_int_float=" + str(x))
+def t15():
+    var x = 1
+    x = x + 1.5
+    print("c_Plus_int_float_ref=" + str(x))
+def t16():
+    var x = 1.5
+    x += 1
+    print("c_Plus_float_int=" + str(x))
+def t17():
+    var x = 1.5
+    x = x + 1
+    print("c_Plus_float_int_ref=" + str(x))
+def t18():
+    var x = "s"
+    x += 1
+    print("c_Plus_str_int=" + str(x))
+def t19():
+    var x = "s"
+    x = x + 1
+    print("c_Plus_str_int_ref=" + str(x))
+def t20():
+    var x = 1
+    x += "s"
+    print("c_Plus_int_str=" + str(x))
+def t21():
+    var x = 1
+    x = x + "s"
+    print("c_Plus_int_str_ref=" + str(x))
+def t22():
+    var x = null
+    x += 1
+    print("c_Plus_null_int=" + str(x))
+def t23():
+    var x = null
+    x = x + 1
+    print("c_Plus_null_int_ref=" + str(x))
+def t24():
+    var x = 1
+    x += null
+    print("c_Plus_int_null=" + str(x))
+def t25():
+    var x = 1
+    x = x + null
+    print("c_Plus_int_null_ref=" + str(x))
+def t26():
+    var x = {"a": 1}
+    x += 1
+    print("c_Plus_dict_int=" + str(x))
+def t27():
+    var x = {"a": 1}
+    x = x + 1
+    print("c_Plus_dict_int_ref=" + str(x))
+def t28():
+    var x = 1
+    x -= 1
+    print("c_Minus_int_int=" + str(x))
+def t29():
+    var x = 1
+    x = x - 1
+    print("c_Minus_int_int_ref=" + str(x))
+def t30():
+    var x = 1.5
+    x -= 1.5
+    print("c_Minus_float_float=" + str(x))
+def t31():
+    var x = 1.5
+    x = x - 1.5
+    print("c_Minus_float_float_ref=" + str(x))
+def t32():
+    var x = "s"
+    x -= "s"
+    print("c_Minus_str_str=" + str(x))
+def t33():
+    var x = "s"
+    x = x - "s"
+    print("c_Minus_str_str_ref=" + str(x))
+def t34():
+    var x = true
+    x -= true
+    print("c_Minus_bool_bool=" + str(x))
+def t35():
+    var x = true
+    x = x - true
+    print("c_Minus_bool_bool_ref=" + str(x))
+def t36():
+    var x = [1]
+    x -= [1]
+    print("c_Minus_list_list=" + str(x))
+def t37():
+    var x = [1]
+    x = x - [1]
+    print("c_Minus_list_list_ref=" + str(x))
+def t38():
+    var x = {"a": 1}
+    x -= {"a": 1}
+    print("c_Minus_dict_dict=" + str(x))
+def t39():
+    var x = {"a": 1}
+    x = x - {"a": 1}
+    print("c_Minus_dict_dict_ref=" + str(x))
+def t40():
+    var x = null
+    x -= null
+    print("c_Minus_null_null=" + str(x))
+def t41():
+    var x = null
+    x = x - null
+    print("c_Minus_null_null_ref=" + str(x))
+def t42():
+    var x = 1
+    x -= 1.5
+    print("c_Minus_int_float=" + str(x))
+def t43():
+    var x = 1
+    x = x - 1.5
+    print("c_Minus_int_float_ref=" + str(x))
+def t44():
+    var x = 1.5
+    x -= 1
+    print("c_Minus_float_int=" + str(x))
+def t45():
+    var x = 1.5
+    x = x - 1
+    print("c_Minus_float_int_ref=" + str(x))
+def t46():
+    var x = "s"
+    x -= 1
+    print("c_Minus_str_int=" + str(x))
+def t47():
+    var x = "s"
+    x = x - 1
+    print("c_Minus_str_int_ref=" + str(x))
+def t48():
+    var x = 1
+    x -= "s"
+    print("c_Minus_int_str=" + str(x))
+def t49():
+    var x = 1
+    x = x - "s"
+    print("c_Minus_int_str_ref=" + str(x))
+def t50():
+    var x = null
+    x -= 1
+    print("c_Minus_null_int=" + str(x))
+def t51():
+    var x = null
+    x = x - 1
+    print("c_Minus_null_int_ref=" + str(x))
+def t52():
+    var x = 1
+    x -= null
+    print("c_Minus_int_null=" + str(x))
+def t53():
+    var x = 1
+    x = x - null
+    print("c_Minus_int_null_ref=" + str(x))
+def t54():
+    var x = {"a": 1}
+    x -= 1
+    print("c_Minus_dict_int=" + str(x))
+def t55():
+    var x = {"a": 1}
+    x = x - 1
+    print("c_Minus_dict_int_ref=" + str(x))
+def t56():
+    var x = 1
+    x *= 1
+    print("c_Star_int_int=" + str(x))
+def t57():
+    var x = 1
+    x = x * 1
+    print("c_Star_int_int_ref=" + str(x))
+def t58():
+    var x = 1.5
+    x *= 1.5
+    print("c_Star_float_float=" + str(x))
+def t59():
+    var x = 1.5
+    x = x * 1.5
+    print("c_Star_float_float_ref=" + str(x))
+def t60():
+    var x = "s"
+    x *= "s"
+    print("c_Star_str_str=" + str(x))
+def t61():
+    var x = "s"
+    x = x * "s"
+    print("c_Star_str_str_ref=" + str(x))
+def t62():
+    var x = true
+    x *= true
+    print("c_Star_bool_bool=" + str(x))
+def t63():
+    var x = true
+    x = x * true
+    print("c_Star_bool_bool_ref=" + str(x))
+def t64():
+    var x = [1]
+    x *= [1]
+    print("c_Star_list_list=" + str(x))
+def t65():
+    var x = [1]
+    x = x * [1]
+    print("c_Star_list_list_ref=" + str(x))
+def t66():
+    var x = {"a": 1}
+    x *= {"a": 1}
+    print("c_Star_dict_dict=" + str(x))
+def t67():
+    var x = {"a": 1}
+    x = x * {"a": 1}
+    print("c_Star_dict_dict_ref=" + str(x))
+def t68():
+    var x = null
+    x *= null
+    print("c_Star_null_null=" + str(x))
+def t69():
+    var x = null
+    x = x * null
+    print("c_Star_null_null_ref=" + str(x))
+def t70():
+    var x = 1
+    x *= 1.5
+    print("c_Star_int_float=" + str(x))
+def t71():
+    var x = 1
+    x = x * 1.5
+    print("c_Star_int_float_ref=" + str(x))
+def t72():
+    var x = 1.5
+    x *= 1
+    print("c_Star_float_int=" + str(x))
+def t73():
+    var x = 1.5
+    x = x * 1
+    print("c_Star_float_int_ref=" + str(x))
+def t74():
+    var x = "s"
+    x *= 1
+    print("c_Star_str_int=" + str(x))
+def t75():
+    var x = "s"
+    x = x * 1
+    print("c_Star_str_int_ref=" + str(x))
+def t76():
+    var x = 1
+    x *= "s"
+    print("c_Star_int_str=" + str(x))
+def t77():
+    var x = 1
+    x = x * "s"
+    print("c_Star_int_str_ref=" + str(x))
+def t78():
+    var x = null
+    x *= 1
+    print("c_Star_null_int=" + str(x))
+def t79():
+    var x = null
+    x = x * 1
+    print("c_Star_null_int_ref=" + str(x))
+def t80():
+    var x = 1
+    x *= null
+    print("c_Star_int_null=" + str(x))
+def t81():
+    var x = 1
+    x = x * null
+    print("c_Star_int_null_ref=" + str(x))
+def t82():
+    var x = {"a": 1}
+    x *= 1
+    print("c_Star_dict_int=" + str(x))
+def t83():
+    var x = {"a": 1}
+    x = x * 1
+    print("c_Star_dict_int_ref=" + str(x))
+def t84():
+    var x = 1
+    x /= 1
+    print("c_Slash_int_int=" + str(x))
+def t85():
+    var x = 1
+    x = x / 1
+    print("c_Slash_int_int_ref=" + str(x))
+def t86():
+    var x = 1.5
+    x /= 1.5
+    print("c_Slash_float_float=" + str(x))
+def t87():
+    var x = 1.5
+    x = x / 1.5
+    print("c_Slash_float_float_ref=" + str(x))
+def t88():
+    var x = "s"
+    x /= "s"
+    print("c_Slash_str_str=" + str(x))
+def t89():
+    var x = "s"
+    x = x / "s"
+    print("c_Slash_str_str_ref=" + str(x))
+def t90():
+    var x = true
+    x /= true
+    print("c_Slash_bool_bool=" + str(x))
+def t91():
+    var x = true
+    x = x / true
+    print("c_Slash_bool_bool_ref=" + str(x))
+def t92():
+    var x = [1]
+    x /= [1]
+    print("c_Slash_list_list=" + str(x))
+def t93():
+    var x = [1]
+    x = x / [1]
+    print("c_Slash_list_list_ref=" + str(x))
+def t94():
+    var x = {"a": 1}
+    x /= {"a": 1}
+    print("c_Slash_dict_dict=" + str(x))
+def t95():
+    var x = {"a": 1}
+    x = x / {"a": 1}
+    print("c_Slash_dict_dict_ref=" + str(x))
+def t96():
+    var x = null
+    x /= null
+    print("c_Slash_null_null=" + str(x))
+def t97():
+    var x = null
+    x = x / null
+    print("c_Slash_null_null_ref=" + str(x))
+def t98():
+    var x = 1
+    x /= 1.5
+    print("c_Slash_int_float=" + str(x))
+def t99():
+    var x = 1
+    x = x / 1.5
+    print("c_Slash_int_float_ref=" + str(x))
+def t100():
+    var x = 1.5
+    x /= 1
+    print("c_Slash_float_int=" + str(x))
+def t101():
+    var x = 1.5
+    x = x / 1
+    print("c_Slash_float_int_ref=" + str(x))
+def t102():
+    var x = "s"
+    x /= 1
+    print("c_Slash_str_int=" + str(x))
+def t103():
+    var x = "s"
+    x = x / 1
+    print("c_Slash_str_int_ref=" + str(x))
+def t104():
+    var x = 1
+    x /= "s"
+    print("c_Slash_int_str=" + str(x))
+def t105():
+    var x = 1
+    x = x / "s"
+    print("c_Slash_int_str_ref=" + str(x))
+def t106():
+    var x = null
+    x /= 1
+    print("c_Slash_null_int=" + str(x))
+def t107():
+    var x = null
+    x = x / 1
+    print("c_Slash_null_int_ref=" + str(x))
+def t108():
+    var x = 1
+    x /= null
+    print("c_Slash_int_null=" + str(x))
+def t109():
+    var x = 1
+    x = x / null
+    print("c_Slash_int_null_ref=" + str(x))
+def t110():
+    var x = {"a": 1}
+    x /= 1
+    print("c_Slash_dict_int=" + str(x))
+def t111():
+    var x = {"a": 1}
+    x = x / 1
+    print("c_Slash_dict_int_ref=" + str(x))
+def t112():
+    var x = 1
+    x //= 1
+    print("c_IntDiv_int_int=" + str(x))
+def t113():
+    var x = 1
+    x = x // 1
+    print("c_IntDiv_int_int_ref=" + str(x))
+def t114():
+    var x = 1.5
+    x //= 1.5
+    print("c_IntDiv_float_float=" + str(x))
+def t115():
+    var x = 1.5
+    x = x // 1.5
+    print("c_IntDiv_float_float_ref=" + str(x))
+def t116():
+    var x = "s"
+    x //= "s"
+    print("c_IntDiv_str_str=" + str(x))
+def t117():
+    var x = "s"
+    x = x // "s"
+    print("c_IntDiv_str_str_ref=" + str(x))
+def t118():
+    var x = true
+    x //= true
+    print("c_IntDiv_bool_bool=" + str(x))
+def t119():
+    var x = true
+    x = x // true
+    print("c_IntDiv_bool_bool_ref=" + str(x))
+def t120():
+    var x = [1]
+    x //= [1]
+    print("c_IntDiv_list_list=" + str(x))
+def t121():
+    var x = [1]
+    x = x // [1]
+    print("c_IntDiv_list_list_ref=" + str(x))
+def t122():
+    var x = {"a": 1}
+    x //= {"a": 1}
+    print("c_IntDiv_dict_dict=" + str(x))
+def t123():
+    var x = {"a": 1}
+    x = x // {"a": 1}
+    print("c_IntDiv_dict_dict_ref=" + str(x))
+def t124():
+    var x = null
+    x //= null
+    print("c_IntDiv_null_null=" + str(x))
+def t125():
+    var x = null
+    x = x // null
+    print("c_IntDiv_null_null_ref=" + str(x))
+def t126():
+    var x = 1
+    x //= 1.5
+    print("c_IntDiv_int_float=" + str(x))
+def t127():
+    var x = 1
+    x = x // 1.5
+    print("c_IntDiv_int_float_ref=" + str(x))
+def t128():
+    var x = 1.5
+    x //= 1
+    print("c_IntDiv_float_int=" + str(x))
+def t129():
+    var x = 1.5
+    x = x // 1
+    print("c_IntDiv_float_int_ref=" + str(x))
+def t130():
+    var x = "s"
+    x //= 1
+    print("c_IntDiv_str_int=" + str(x))
+def t131():
+    var x = "s"
+    x = x // 1
+    print("c_IntDiv_str_int_ref=" + str(x))
+def t132():
+    var x = 1
+    x //= "s"
+    print("c_IntDiv_int_str=" + str(x))
+def t133():
+    var x = 1
+    x = x // "s"
+    print("c_IntDiv_int_str_ref=" + str(x))
+def t134():
+    var x = null
+    x //= 1
+    print("c_IntDiv_null_int=" + str(x))
+def t135():
+    var x = null
+    x = x // 1
+    print("c_IntDiv_null_int_ref=" + str(x))
+def t136():
+    var x = 1
+    x //= null
+    print("c_IntDiv_int_null=" + str(x))
+def t137():
+    var x = 1
+    x = x // null
+    print("c_IntDiv_int_null_ref=" + str(x))
+def t138():
+    var x = {"a": 1}
+    x //= 1
+    print("c_IntDiv_dict_int=" + str(x))
+def t139():
+    var x = {"a": 1}
+    x = x // 1
+    print("c_IntDiv_dict_int_ref=" + str(x))
+def t140():
+    var x = 1
+    x %= 1
+    print("c_Mod_int_int=" + str(x))
+def t141():
+    var x = 1
+    x = x % 1
+    print("c_Mod_int_int_ref=" + str(x))
+def t142():
+    var x = 1.5
+    x %= 1.5
+    print("c_Mod_float_float=" + str(x))
+def t143():
+    var x = 1.5
+    x = x % 1.5
+    print("c_Mod_float_float_ref=" + str(x))
+def t144():
+    var x = "s"
+    x %= "s"
+    print("c_Mod_str_str=" + str(x))
+def t145():
+    var x = "s"
+    x = x % "s"
+    print("c_Mod_str_str_ref=" + str(x))
+def t146():
+    var x = true
+    x %= true
+    print("c_Mod_bool_bool=" + str(x))
+def t147():
+    var x = true
+    x = x % true
+    print("c_Mod_bool_bool_ref=" + str(x))
+def t148():
+    var x = [1]
+    x %= [1]
+    print("c_Mod_list_list=" + str(x))
+def t149():
+    var x = [1]
+    x = x % [1]
+    print("c_Mod_list_list_ref=" + str(x))
+def t150():
+    var x = {"a": 1}
+    x %= {"a": 1}
+    print("c_Mod_dict_dict=" + str(x))
+def t151():
+    var x = {"a": 1}
+    x = x % {"a": 1}
+    print("c_Mod_dict_dict_ref=" + str(x))
+def t152():
+    var x = null
+    x %= null
+    print("c_Mod_null_null=" + str(x))
+def t153():
+    var x = null
+    x = x % null
+    print("c_Mod_null_null_ref=" + str(x))
+def t154():
+    var x = 1
+    x %= 1.5
+    print("c_Mod_int_float=" + str(x))
+def t155():
+    var x = 1
+    x = x % 1.5
+    print("c_Mod_int_float_ref=" + str(x))
+def t156():
+    var x = 1.5
+    x %= 1
+    print("c_Mod_float_int=" + str(x))
+def t157():
+    var x = 1.5
+    x = x % 1
+    print("c_Mod_float_int_ref=" + str(x))
+def t158():
+    var x = "s"
+    x %= 1
+    print("c_Mod_str_int=" + str(x))
+def t159():
+    var x = "s"
+    x = x % 1
+    print("c_Mod_str_int_ref=" + str(x))
+def t160():
+    var x = 1
+    x %= "s"
+    print("c_Mod_int_str=" + str(x))
+def t161():
+    var x = 1
+    x = x % "s"
+    print("c_Mod_int_str_ref=" + str(x))
+def t162():
+    var x = null
+    x %= 1
+    print("c_Mod_null_int=" + str(x))
+def t163():
+    var x = null
+    x = x % 1
+    print("c_Mod_null_int_ref=" + str(x))
+def t164():
+    var x = 1
+    x %= null
+    print("c_Mod_int_null=" + str(x))
+def t165():
+    var x = 1
+    x = x % null
+    print("c_Mod_int_null_ref=" + str(x))
+def t166():
+    var x = {"a": 1}
+    x %= 1
+    print("c_Mod_dict_int=" + str(x))
+def t167():
+    var x = {"a": 1}
+    x = x % 1
+    print("c_Mod_dict_int_ref=" + str(x))
+def t168():
+    var x = 1
+    x **= 1
+    print("c_Pow_int_int=" + str(x))
+def t169():
+    var x = 1
+    x = x ** 1
+    print("c_Pow_int_int_ref=" + str(x))
+def t170():
+    var x = 1.5
+    x **= 1.5
+    print("c_Pow_float_float=" + str(x))
+def t171():
+    var x = 1.5
+    x = x ** 1.5
+    print("c_Pow_float_float_ref=" + str(x))
+def t172():
+    var x = "s"
+    x **= "s"
+    print("c_Pow_str_str=" + str(x))
+def t173():
+    var x = "s"
+    x = x ** "s"
+    print("c_Pow_str_str_ref=" + str(x))
+def t174():
+    var x = true
+    x **= true
+    print("c_Pow_bool_bool=" + str(x))
+def t175():
+    var x = true
+    x = x ** true
+    print("c_Pow_bool_bool_ref=" + str(x))
+def t176():
+    var x = [1]
+    x **= [1]
+    print("c_Pow_list_list=" + str(x))
+def t177():
+    var x = [1]
+    x = x ** [1]
+    print("c_Pow_list_list_ref=" + str(x))
+def t178():
+    var x = {"a": 1}
+    x **= {"a": 1}
+    print("c_Pow_dict_dict=" + str(x))
+def t179():
+    var x = {"a": 1}
+    x = x ** {"a": 1}
+    print("c_Pow_dict_dict_ref=" + str(x))
+def t180():
+    var x = null
+    x **= null
+    print("c_Pow_null_null=" + str(x))
+def t181():
+    var x = null
+    x = x ** null
+    print("c_Pow_null_null_ref=" + str(x))
+def t182():
+    var x = 1
+    x **= 1.5
+    print("c_Pow_int_float=" + str(x))
+def t183():
+    var x = 1
+    x = x ** 1.5
+    print("c_Pow_int_float_ref=" + str(x))
+def t184():
+    var x = 1.5
+    x **= 1
+    print("c_Pow_float_int=" + str(x))
+def t185():
+    var x = 1.5
+    x = x ** 1
+    print("c_Pow_float_int_ref=" + str(x))
+def t186():
+    var x = "s"
+    x **= 1
+    print("c_Pow_str_int=" + str(x))
+def t187():
+    var x = "s"
+    x = x ** 1
+    print("c_Pow_str_int_ref=" + str(x))
+def t188():
+    var x = 1
+    x **= "s"
+    print("c_Pow_int_str=" + str(x))
+def t189():
+    var x = 1
+    x = x ** "s"
+    print("c_Pow_int_str_ref=" + str(x))
+def t190():
+    var x = null
+    x **= 1
+    print("c_Pow_null_int=" + str(x))
+def t191():
+    var x = null
+    x = x ** 1
+    print("c_Pow_null_int_ref=" + str(x))
+def t192():
+    var x = 1
+    x **= null
+    print("c_Pow_int_null=" + str(x))
+def t193():
+    var x = 1
+    x = x ** null
+    print("c_Pow_int_null_ref=" + str(x))
+def t194():
+    var x = {"a": 1}
+    x **= 1
+    print("c_Pow_dict_int=" + str(x))
+def t195():
+    var x = {"a": 1}
+    x = x ** 1
+    print("c_Pow_dict_int_ref=" + str(x))
+def t196():
+    var x = 1
+    x &= 1
+    print("c_BitAnd_int_int=" + str(x))
+def t197():
+    var x = 1
+    x = x & 1
+    print("c_BitAnd_int_int_ref=" + str(x))
+def t198():
+    var x = 1.5
+    x &= 1.5
+    print("c_BitAnd_float_float=" + str(x))
+def t199():
+    var x = 1.5
+    x = x & 1.5
+    print("c_BitAnd_float_float_ref=" + str(x))
+def t200():
+    var x = "s"
+    x &= "s"
+    print("c_BitAnd_str_str=" + str(x))
+def t201():
+    var x = "s"
+    x = x & "s"
+    print("c_BitAnd_str_str_ref=" + str(x))
+def t202():
+    var x = true
+    x &= true
+    print("c_BitAnd_bool_bool=" + str(x))
+def t203():
+    var x = true
+    x = x & true
+    print("c_BitAnd_bool_bool_ref=" + str(x))
+def t204():
+    var x = [1]
+    x &= [1]
+    print("c_BitAnd_list_list=" + str(x))
+def t205():
+    var x = [1]
+    x = x & [1]
+    print("c_BitAnd_list_list_ref=" + str(x))
+def t206():
+    var x = {"a": 1}
+    x &= {"a": 1}
+    print("c_BitAnd_dict_dict=" + str(x))
+def t207():
+    var x = {"a": 1}
+    x = x & {"a": 1}
+    print("c_BitAnd_dict_dict_ref=" + str(x))
+def t208():
+    var x = null
+    x &= null
+    print("c_BitAnd_null_null=" + str(x))
+def t209():
+    var x = null
+    x = x & null
+    print("c_BitAnd_null_null_ref=" + str(x))
+def t210():
+    var x = 1
+    x &= 1.5
+    print("c_BitAnd_int_float=" + str(x))
+def t211():
+    var x = 1
+    x = x & 1.5
+    print("c_BitAnd_int_float_ref=" + str(x))
+def t212():
+    var x = 1.5
+    x &= 1
+    print("c_BitAnd_float_int=" + str(x))
+def t213():
+    var x = 1.5
+    x = x & 1
+    print("c_BitAnd_float_int_ref=" + str(x))
+def t214():
+    var x = "s"
+    x &= 1
+    print("c_BitAnd_str_int=" + str(x))
+def t215():
+    var x = "s"
+    x = x & 1
+    print("c_BitAnd_str_int_ref=" + str(x))
+def t216():
+    var x = 1
+    x &= "s"
+    print("c_BitAnd_int_str=" + str(x))
+def t217():
+    var x = 1
+    x = x & "s"
+    print("c_BitAnd_int_str_ref=" + str(x))
+def t218():
+    var x = null
+    x &= 1
+    print("c_BitAnd_null_int=" + str(x))
+def t219():
+    var x = null
+    x = x & 1
+    print("c_BitAnd_null_int_ref=" + str(x))
+def t220():
+    var x = 1
+    x &= null
+    print("c_BitAnd_int_null=" + str(x))
+def t221():
+    var x = 1
+    x = x & null
+    print("c_BitAnd_int_null_ref=" + str(x))
+def t222():
+    var x = {"a": 1}
+    x &= 1
+    print("c_BitAnd_dict_int=" + str(x))
+def t223():
+    var x = {"a": 1}
+    x = x & 1
+    print("c_BitAnd_dict_int_ref=" + str(x))
+def t224():
+    var x = 1
+    x |= 1
+    print("c_BitOr_int_int=" + str(x))
+def t225():
+    var x = 1
+    x = x | 1
+    print("c_BitOr_int_int_ref=" + str(x))
+def t226():
+    var x = 1.5
+    x |= 1.5
+    print("c_BitOr_float_float=" + str(x))
+def t227():
+    var x = 1.5
+    x = x | 1.5
+    print("c_BitOr_float_float_ref=" + str(x))
+def t228():
+    var x = "s"
+    x |= "s"
+    print("c_BitOr_str_str=" + str(x))
+def t229():
+    var x = "s"
+    x = x | "s"
+    print("c_BitOr_str_str_ref=" + str(x))
+def t230():
+    var x = true
+    x |= true
+    print("c_BitOr_bool_bool=" + str(x))
+def t231():
+    var x = true
+    x = x | true
+    print("c_BitOr_bool_bool_ref=" + str(x))
+def t232():
+    var x = [1]
+    x |= [1]
+    print("c_BitOr_list_list=" + str(x))
+def t233():
+    var x = [1]
+    x = x | [1]
+    print("c_BitOr_list_list_ref=" + str(x))
+def t234():
+    var x = {"a": 1}
+    x |= {"a": 1}
+    print("c_BitOr_dict_dict=" + str(x))
+def t235():
+    var x = {"a": 1}
+    x = x | {"a": 1}
+    print("c_BitOr_dict_dict_ref=" + str(x))
+def t236():
+    var x = null
+    x |= null
+    print("c_BitOr_null_null=" + str(x))
+def t237():
+    var x = null
+    x = x | null
+    print("c_BitOr_null_null_ref=" + str(x))
+def t238():
+    var x = 1
+    x |= 1.5
+    print("c_BitOr_int_float=" + str(x))
+def t239():
+    var x = 1
+    x = x | 1.5
+    print("c_BitOr_int_float_ref=" + str(x))
+def t240():
+    var x = 1.5
+    x |= 1
+    print("c_BitOr_float_int=" + str(x))
+def t241():
+    var x = 1.5
+    x = x | 1
+    print("c_BitOr_float_int_ref=" + str(x))
+def t242():
+    var x = "s"
+    x |= 1
+    print("c_BitOr_str_int=" + str(x))
+def t243():
+    var x = "s"
+    x = x | 1
+    print("c_BitOr_str_int_ref=" + str(x))
+def t244():
+    var x = 1
+    x |= "s"
+    print("c_BitOr_int_str=" + str(x))
+def t245():
+    var x = 1
+    x = x | "s"
+    print("c_BitOr_int_str_ref=" + str(x))
+def t246():
+    var x = null
+    x |= 1
+    print("c_BitOr_null_int=" + str(x))
+def t247():
+    var x = null
+    x = x | 1
+    print("c_BitOr_null_int_ref=" + str(x))
+def t248():
+    var x = 1
+    x |= null
+    print("c_BitOr_int_null=" + str(x))
+def t249():
+    var x = 1
+    x = x | null
+    print("c_BitOr_int_null_ref=" + str(x))
+def t250():
+    var x = {"a": 1}
+    x |= 1
+    print("c_BitOr_dict_int=" + str(x))
+def t251():
+    var x = {"a": 1}
+    x = x | 1
+    print("c_BitOr_dict_int_ref=" + str(x))
+def t252():
+    var x = 1
+    x ^= 1
+    print("c_BitXor_int_int=" + str(x))
+def t253():
+    var x = 1
+    x = x ^ 1
+    print("c_BitXor_int_int_ref=" + str(x))
+def t254():
+    var x = 1.5
+    x ^= 1.5
+    print("c_BitXor_float_float=" + str(x))
+def t255():
+    var x = 1.5
+    x = x ^ 1.5
+    print("c_BitXor_float_float_ref=" + str(x))
+def t256():
+    var x = "s"
+    x ^= "s"
+    print("c_BitXor_str_str=" + str(x))
+def t257():
+    var x = "s"
+    x = x ^ "s"
+    print("c_BitXor_str_str_ref=" + str(x))
+def t258():
+    var x = true
+    x ^= true
+    print("c_BitXor_bool_bool=" + str(x))
+def t259():
+    var x = true
+    x = x ^ true
+    print("c_BitXor_bool_bool_ref=" + str(x))
+def t260():
+    var x = [1]
+    x ^= [1]
+    print("c_BitXor_list_list=" + str(x))
+def t261():
+    var x = [1]
+    x = x ^ [1]
+    print("c_BitXor_list_list_ref=" + str(x))
+def t262():
+    var x = {"a": 1}
+    x ^= {"a": 1}
+    print("c_BitXor_dict_dict=" + str(x))
+def t263():
+    var x = {"a": 1}
+    x = x ^ {"a": 1}
+    print("c_BitXor_dict_dict_ref=" + str(x))
+def t264():
+    var x = null
+    x ^= null
+    print("c_BitXor_null_null=" + str(x))
+def t265():
+    var x = null
+    x = x ^ null
+    print("c_BitXor_null_null_ref=" + str(x))
+def t266():
+    var x = 1
+    x ^= 1.5
+    print("c_BitXor_int_float=" + str(x))
+def t267():
+    var x = 1
+    x = x ^ 1.5
+    print("c_BitXor_int_float_ref=" + str(x))
+def t268():
+    var x = 1.5
+    x ^= 1
+    print("c_BitXor_float_int=" + str(x))
+def t269():
+    var x = 1.5
+    x = x ^ 1
+    print("c_BitXor_float_int_ref=" + str(x))
+def t270():
+    var x = "s"
+    x ^= 1
+    print("c_BitXor_str_int=" + str(x))
+def t271():
+    var x = "s"
+    x = x ^ 1
+    print("c_BitXor_str_int_ref=" + str(x))
+def t272():
+    var x = 1
+    x ^= "s"
+    print("c_BitXor_int_str=" + str(x))
+def t273():
+    var x = 1
+    x = x ^ "s"
+    print("c_BitXor_int_str_ref=" + str(x))
+def t274():
+    var x = null
+    x ^= 1
+    print("c_BitXor_null_int=" + str(x))
+def t275():
+    var x = null
+    x = x ^ 1
+    print("c_BitXor_null_int_ref=" + str(x))
+def t276():
+    var x = 1
+    x ^= null
+    print("c_BitXor_int_null=" + str(x))
+def t277():
+    var x = 1
+    x = x ^ null
+    print("c_BitXor_int_null_ref=" + str(x))
+def t278():
+    var x = {"a": 1}
+    x ^= 1
+    print("c_BitXor_dict_int=" + str(x))
+def t279():
+    var x = {"a": 1}
+    x = x ^ 1
+    print("c_BitXor_dict_int_ref=" + str(x))
+def t280():
+    var x = 1
+    x <<= 1
+    print("c_Shl_int_int=" + str(x))
+def t281():
+    var x = 1
+    x = x << 1
+    print("c_Shl_int_int_ref=" + str(x))
+def t282():
+    var x = 1.5
+    x <<= 1.5
+    print("c_Shl_float_float=" + str(x))
+def t283():
+    var x = 1.5
+    x = x << 1.5
+    print("c_Shl_float_float_ref=" + str(x))
+def t284():
+    var x = "s"
+    x <<= "s"
+    print("c_Shl_str_str=" + str(x))
+def t285():
+    var x = "s"
+    x = x << "s"
+    print("c_Shl_str_str_ref=" + str(x))
+def t286():
+    var x = true
+    x <<= true
+    print("c_Shl_bool_bool=" + str(x))
+def t287():
+    var x = true
+    x = x << true
+    print("c_Shl_bool_bool_ref=" + str(x))
+def t288():
+    var x = [1]
+    x <<= [1]
+    print("c_Shl_list_list=" + str(x))
+def t289():
+    var x = [1]
+    x = x << [1]
+    print("c_Shl_list_list_ref=" + str(x))
+def t290():
+    var x = {"a": 1}
+    x <<= {"a": 1}
+    print("c_Shl_dict_dict=" + str(x))
+def t291():
+    var x = {"a": 1}
+    x = x << {"a": 1}
+    print("c_Shl_dict_dict_ref=" + str(x))
+def t292():
+    var x = null
+    x <<= null
+    print("c_Shl_null_null=" + str(x))
+def t293():
+    var x = null
+    x = x << null
+    print("c_Shl_null_null_ref=" + str(x))
+def t294():
+    var x = 1
+    x <<= 1.5
+    print("c_Shl_int_float=" + str(x))
+def t295():
+    var x = 1
+    x = x << 1.5
+    print("c_Shl_int_float_ref=" + str(x))
+def t296():
+    var x = 1.5
+    x <<= 1
+    print("c_Shl_float_int=" + str(x))
+def t297():
+    var x = 1.5
+    x = x << 1
+    print("c_Shl_float_int_ref=" + str(x))
+def t298():
+    var x = "s"
+    x <<= 1
+    print("c_Shl_str_int=" + str(x))
+def t299():
+    var x = "s"
+    x = x << 1
+    print("c_Shl_str_int_ref=" + str(x))
+def t300():
+    var x = 1
+    x <<= "s"
+    print("c_Shl_int_str=" + str(x))
+def t301():
+    var x = 1
+    x = x << "s"
+    print("c_Shl_int_str_ref=" + str(x))
+def t302():
+    var x = null
+    x <<= 1
+    print("c_Shl_null_int=" + str(x))
+def t303():
+    var x = null
+    x = x << 1
+    print("c_Shl_null_int_ref=" + str(x))
+def t304():
+    var x = 1
+    x <<= null
+    print("c_Shl_int_null=" + str(x))
+def t305():
+    var x = 1
+    x = x << null
+    print("c_Shl_int_null_ref=" + str(x))
+def t306():
+    var x = {"a": 1}
+    x <<= 1
+    print("c_Shl_dict_int=" + str(x))
+def t307():
+    var x = {"a": 1}
+    x = x << 1
+    print("c_Shl_dict_int_ref=" + str(x))
+def t308():
+    var x = 1
+    x >>= 1
+    print("c_Shr_int_int=" + str(x))
+def t309():
+    var x = 1
+    x = x >> 1
+    print("c_Shr_int_int_ref=" + str(x))
+def t310():
+    var x = 1.5
+    x >>= 1.5
+    print("c_Shr_float_float=" + str(x))
+def t311():
+    var x = 1.5
+    x = x >> 1.5
+    print("c_Shr_float_float_ref=" + str(x))
+def t312():
+    var x = "s"
+    x >>= "s"
+    print("c_Shr_str_str=" + str(x))
+def t313():
+    var x = "s"
+    x = x >> "s"
+    print("c_Shr_str_str_ref=" + str(x))
+def t314():
+    var x = true
+    x >>= true
+    print("c_Shr_bool_bool=" + str(x))
+def t315():
+    var x = true
+    x = x >> true
+    print("c_Shr_bool_bool_ref=" + str(x))
+def t316():
+    var x = [1]
+    x >>= [1]
+    print("c_Shr_list_list=" + str(x))
+def t317():
+    var x = [1]
+    x = x >> [1]
+    print("c_Shr_list_list_ref=" + str(x))
+def t318():
+    var x = {"a": 1}
+    x >>= {"a": 1}
+    print("c_Shr_dict_dict=" + str(x))
+def t319():
+    var x = {"a": 1}
+    x = x >> {"a": 1}
+    print("c_Shr_dict_dict_ref=" + str(x))
+def t320():
+    var x = null
+    x >>= null
+    print("c_Shr_null_null=" + str(x))
+def t321():
+    var x = null
+    x = x >> null
+    print("c_Shr_null_null_ref=" + str(x))
+def t322():
+    var x = 1
+    x >>= 1.5
+    print("c_Shr_int_float=" + str(x))
+def t323():
+    var x = 1
+    x = x >> 1.5
+    print("c_Shr_int_float_ref=" + str(x))
+def t324():
+    var x = 1.5
+    x >>= 1
+    print("c_Shr_float_int=" + str(x))
+def t325():
+    var x = 1.5
+    x = x >> 1
+    print("c_Shr_float_int_ref=" + str(x))
+def t326():
+    var x = "s"
+    x >>= 1
+    print("c_Shr_str_int=" + str(x))
+def t327():
+    var x = "s"
+    x = x >> 1
+    print("c_Shr_str_int_ref=" + str(x))
+def t328():
+    var x = 1
+    x >>= "s"
+    print("c_Shr_int_str=" + str(x))
+def t329():
+    var x = 1
+    x = x >> "s"
+    print("c_Shr_int_str_ref=" + str(x))
+def t330():
+    var x = null
+    x >>= 1
+    print("c_Shr_null_int=" + str(x))
+def t331():
+    var x = null
+    x = x >> 1
+    print("c_Shr_null_int_ref=" + str(x))
+def t332():
+    var x = 1
+    x >>= null
+    print("c_Shr_int_null=" + str(x))
+def t333():
+    var x = 1
+    x = x >> null
+    print("c_Shr_int_null_ref=" + str(x))
+def t334():
+    var x = {"a": 1}
+    x >>= 1
+    print("c_Shr_dict_int=" + str(x))
+def t335():
+    var x = {"a": 1}
+    x = x >> 1
+    print("c_Shr_dict_int_ref=" + str(x))
+def t336():
+    var x = 1
+    x >>>= 1
+    print("c_ShrU_int_int=" + str(x))
+def t337():
+    var x = 1
+    x = x >>> 1
+    print("c_ShrU_int_int_ref=" + str(x))
+def t338():
+    var x = 1.5
+    x >>>= 1.5
+    print("c_ShrU_float_float=" + str(x))
+def t339():
+    var x = 1.5
+    x = x >>> 1.5
+    print("c_ShrU_float_float_ref=" + str(x))
+def t340():
+    var x = "s"
+    x >>>= "s"
+    print("c_ShrU_str_str=" + str(x))
+def t341():
+    var x = "s"
+    x = x >>> "s"
+    print("c_ShrU_str_str_ref=" + str(x))
+def t342():
+    var x = true
+    x >>>= true
+    print("c_ShrU_bool_bool=" + str(x))
+def t343():
+    var x = true
+    x = x >>> true
+    print("c_ShrU_bool_bool_ref=" + str(x))
+def t344():
+    var x = [1]
+    x >>>= [1]
+    print("c_ShrU_list_list=" + str(x))
+def t345():
+    var x = [1]
+    x = x >>> [1]
+    print("c_ShrU_list_list_ref=" + str(x))
+def t346():
+    var x = {"a": 1}
+    x >>>= {"a": 1}
+    print("c_ShrU_dict_dict=" + str(x))
+def t347():
+    var x = {"a": 1}
+    x = x >>> {"a": 1}
+    print("c_ShrU_dict_dict_ref=" + str(x))
+def t348():
+    var x = null
+    x >>>= null
+    print("c_ShrU_null_null=" + str(x))
+def t349():
+    var x = null
+    x = x >>> null
+    print("c_ShrU_null_null_ref=" + str(x))
+def t350():
+    var x = 1
+    x >>>= 1.5
+    print("c_ShrU_int_float=" + str(x))
+def t351():
+    var x = 1
+    x = x >>> 1.5
+    print("c_ShrU_int_float_ref=" + str(x))
+def t352():
+    var x = 1.5
+    x >>>= 1
+    print("c_ShrU_float_int=" + str(x))
+def t353():
+    var x = 1.5
+    x = x >>> 1
+    print("c_ShrU_float_int_ref=" + str(x))
+def t354():
+    var x = "s"
+    x >>>= 1
+    print("c_ShrU_str_int=" + str(x))
+def t355():
+    var x = "s"
+    x = x >>> 1
+    print("c_ShrU_str_int_ref=" + str(x))
+def t356():
+    var x = 1
+    x >>>= "s"
+    print("c_ShrU_int_str=" + str(x))
+def t357():
+    var x = 1
+    x = x >>> "s"
+    print("c_ShrU_int_str_ref=" + str(x))
+def t358():
+    var x = null
+    x >>>= 1
+    print("c_ShrU_null_int=" + str(x))
+def t359():
+    var x = null
+    x = x >>> 1
+    print("c_ShrU_null_int_ref=" + str(x))
+def t360():
+    var x = 1
+    x >>>= null
+    print("c_ShrU_int_null=" + str(x))
+def t361():
+    var x = 1
+    x = x >>> null
+    print("c_ShrU_int_null_ref=" + str(x))
+def t362():
+    var x = {"a": 1}
+    x >>>= 1
+    print("c_ShrU_dict_int=" + str(x))
+def t363():
+    var x = {"a": 1}
+    x = x >>> 1
+    print("c_ShrU_dict_int_ref=" + str(x))
+def main():
+    let c = env("M246_CASE")
+    if c == null:
+        print("usage: M246_CASE=<idx>")
+        return
+    let i = c
+    if i == "0":
+        t0()
+    elif i == "1":
+        t1()
+    elif i == "2":
+        t2()
+    elif i == "3":
+        t3()
+    elif i == "4":
+        t4()
+    elif i == "5":
+        t5()
+    elif i == "6":
+        t6()
+    elif i == "7":
+        t7()
+    elif i == "8":
+        t8()
+    elif i == "9":
+        t9()
+    elif i == "10":
+        t10()
+    elif i == "11":
+        t11()
+    elif i == "12":
+        t12()
+    elif i == "13":
+        t13()
+    elif i == "14":
+        t14()
+    elif i == "15":
+        t15()
+    elif i == "16":
+        t16()
+    elif i == "17":
+        t17()
+    elif i == "18":
+        t18()
+    elif i == "19":
+        t19()
+    elif i == "20":
+        t20()
+    elif i == "21":
+        t21()
+    elif i == "22":
+        t22()
+    elif i == "23":
+        t23()
+    elif i == "24":
+        t24()
+    elif i == "25":
+        t25()
+    elif i == "26":
+        t26()
+    elif i == "27":
+        t27()
+    elif i == "28":
+        t28()
+    elif i == "29":
+        t29()
+    elif i == "30":
+        t30()
+    elif i == "31":
+        t31()
+    elif i == "32":
+        t32()
+    elif i == "33":
+        t33()
+    elif i == "34":
+        t34()
+    elif i == "35":
+        t35()
+    elif i == "36":
+        t36()
+    elif i == "37":
+        t37()
+    elif i == "38":
+        t38()
+    elif i == "39":
+        t39()
+    elif i == "40":
+        t40()
+    elif i == "41":
+        t41()
+    elif i == "42":
+        t42()
+    elif i == "43":
+        t43()
+    elif i == "44":
+        t44()
+    elif i == "45":
+        t45()
+    elif i == "46":
+        t46()
+    elif i == "47":
+        t47()
+    elif i == "48":
+        t48()
+    elif i == "49":
+        t49()
+    elif i == "50":
+        t50()
+    elif i == "51":
+        t51()
+    elif i == "52":
+        t52()
+    elif i == "53":
+        t53()
+    elif i == "54":
+        t54()
+    elif i == "55":
+        t55()
+    elif i == "56":
+        t56()
+    elif i == "57":
+        t57()
+    elif i == "58":
+        t58()
+    elif i == "59":
+        t59()
+    elif i == "60":
+        t60()
+    elif i == "61":
+        t61()
+    elif i == "62":
+        t62()
+    elif i == "63":
+        t63()
+    elif i == "64":
+        t64()
+    elif i == "65":
+        t65()
+    elif i == "66":
+        t66()
+    elif i == "67":
+        t67()
+    elif i == "68":
+        t68()
+    elif i == "69":
+        t69()
+    elif i == "70":
+        t70()
+    elif i == "71":
+        t71()
+    elif i == "72":
+        t72()
+    elif i == "73":
+        t73()
+    elif i == "74":
+        t74()
+    elif i == "75":
+        t75()
+    elif i == "76":
+        t76()
+    elif i == "77":
+        t77()
+    elif i == "78":
+        t78()
+    elif i == "79":
+        t79()
+    elif i == "80":
+        t80()
+    elif i == "81":
+        t81()
+    elif i == "82":
+        t82()
+    elif i == "83":
+        t83()
+    elif i == "84":
+        t84()
+    elif i == "85":
+        t85()
+    elif i == "86":
+        t86()
+    elif i == "87":
+        t87()
+    elif i == "88":
+        t88()
+    elif i == "89":
+        t89()
+    elif i == "90":
+        t90()
+    elif i == "91":
+        t91()
+    elif i == "92":
+        t92()
+    elif i == "93":
+        t93()
+    elif i == "94":
+        t94()
+    elif i == "95":
+        t95()
+    elif i == "96":
+        t96()
+    elif i == "97":
+        t97()
+    elif i == "98":
+        t98()
+    elif i == "99":
+        t99()
+    elif i == "100":
+        t100()
+    elif i == "101":
+        t101()
+    elif i == "102":
+        t102()
+    elif i == "103":
+        t103()
+    elif i == "104":
+        t104()
+    elif i == "105":
+        t105()
+    elif i == "106":
+        t106()
+    elif i == "107":
+        t107()
+    elif i == "108":
+        t108()
+    elif i == "109":
+        t109()
+    elif i == "110":
+        t110()
+    elif i == "111":
+        t111()
+    elif i == "112":
+        t112()
+    elif i == "113":
+        t113()
+    elif i == "114":
+        t114()
+    elif i == "115":
+        t115()
+    elif i == "116":
+        t116()
+    elif i == "117":
+        t117()
+    elif i == "118":
+        t118()
+    elif i == "119":
+        t119()
+    elif i == "120":
+        t120()
+    elif i == "121":
+        t121()
+    elif i == "122":
+        t122()
+    elif i == "123":
+        t123()
+    elif i == "124":
+        t124()
+    elif i == "125":
+        t125()
+    elif i == "126":
+        t126()
+    elif i == "127":
+        t127()
+    elif i == "128":
+        t128()
+    elif i == "129":
+        t129()
+    elif i == "130":
+        t130()
+    elif i == "131":
+        t131()
+    elif i == "132":
+        t132()
+    elif i == "133":
+        t133()
+    elif i == "134":
+        t134()
+    elif i == "135":
+        t135()
+    elif i == "136":
+        t136()
+    elif i == "137":
+        t137()
+    elif i == "138":
+        t138()
+    elif i == "139":
+        t139()
+    elif i == "140":
+        t140()
+    elif i == "141":
+        t141()
+    elif i == "142":
+        t142()
+    elif i == "143":
+        t143()
+    elif i == "144":
+        t144()
+    elif i == "145":
+        t145()
+    elif i == "146":
+        t146()
+    elif i == "147":
+        t147()
+    elif i == "148":
+        t148()
+    elif i == "149":
+        t149()
+    elif i == "150":
+        t150()
+    elif i == "151":
+        t151()
+    elif i == "152":
+        t152()
+    elif i == "153":
+        t153()
+    elif i == "154":
+        t154()
+    elif i == "155":
+        t155()
+    elif i == "156":
+        t156()
+    elif i == "157":
+        t157()
+    elif i == "158":
+        t158()
+    elif i == "159":
+        t159()
+    elif i == "160":
+        t160()
+    elif i == "161":
+        t161()
+    elif i == "162":
+        t162()
+    elif i == "163":
+        t163()
+    elif i == "164":
+        t164()
+    elif i == "165":
+        t165()
+    elif i == "166":
+        t166()
+    elif i == "167":
+        t167()
+    elif i == "168":
+        t168()
+    elif i == "169":
+        t169()
+    elif i == "170":
+        t170()
+    elif i == "171":
+        t171()
+    elif i == "172":
+        t172()
+    elif i == "173":
+        t173()
+    elif i == "174":
+        t174()
+    elif i == "175":
+        t175()
+    elif i == "176":
+        t176()
+    elif i == "177":
+        t177()
+    elif i == "178":
+        t178()
+    elif i == "179":
+        t179()
+    elif i == "180":
+        t180()
+    elif i == "181":
+        t181()
+    elif i == "182":
+        t182()
+    elif i == "183":
+        t183()
+    elif i == "184":
+        t184()
+    elif i == "185":
+        t185()
+    elif i == "186":
+        t186()
+    elif i == "187":
+        t187()
+    elif i == "188":
+        t188()
+    elif i == "189":
+        t189()
+    elif i == "190":
+        t190()
+    elif i == "191":
+        t191()
+    elif i == "192":
+        t192()
+    elif i == "193":
+        t193()
+    elif i == "194":
+        t194()
+    elif i == "195":
+        t195()
+    elif i == "196":
+        t196()
+    elif i == "197":
+        t197()
+    elif i == "198":
+        t198()
+    elif i == "199":
+        t199()
+    elif i == "200":
+        t200()
+    elif i == "201":
+        t201()
+    elif i == "202":
+        t202()
+    elif i == "203":
+        t203()
+    elif i == "204":
+        t204()
+    elif i == "205":
+        t205()
+    elif i == "206":
+        t206()
+    elif i == "207":
+        t207()
+    elif i == "208":
+        t208()
+    elif i == "209":
+        t209()
+    elif i == "210":
+        t210()
+    elif i == "211":
+        t211()
+    elif i == "212":
+        t212()
+    elif i == "213":
+        t213()
+    elif i == "214":
+        t214()
+    elif i == "215":
+        t215()
+    elif i == "216":
+        t216()
+    elif i == "217":
+        t217()
+    elif i == "218":
+        t218()
+    elif i == "219":
+        t219()
+    elif i == "220":
+        t220()
+    elif i == "221":
+        t221()
+    elif i == "222":
+        t222()
+    elif i == "223":
+        t223()
+    elif i == "224":
+        t224()
+    elif i == "225":
+        t225()
+    elif i == "226":
+        t226()
+    elif i == "227":
+        t227()
+    elif i == "228":
+        t228()
+    elif i == "229":
+        t229()
+    elif i == "230":
+        t230()
+    elif i == "231":
+        t231()
+    elif i == "232":
+        t232()
+    elif i == "233":
+        t233()
+    elif i == "234":
+        t234()
+    elif i == "235":
+        t235()
+    elif i == "236":
+        t236()
+    elif i == "237":
+        t237()
+    elif i == "238":
+        t238()
+    elif i == "239":
+        t239()
+    elif i == "240":
+        t240()
+    elif i == "241":
+        t241()
+    elif i == "242":
+        t242()
+    elif i == "243":
+        t243()
+    elif i == "244":
+        t244()
+    elif i == "245":
+        t245()
+    elif i == "246":
+        t246()
+    elif i == "247":
+        t247()
+    elif i == "248":
+        t248()
+    elif i == "249":
+        t249()
+    elif i == "250":
+        t250()
+    elif i == "251":
+        t251()
+    elif i == "252":
+        t252()
+    elif i == "253":
+        t253()
+    elif i == "254":
+        t254()
+    elif i == "255":
+        t255()
+    elif i == "256":
+        t256()
+    elif i == "257":
+        t257()
+    elif i == "258":
+        t258()
+    elif i == "259":
+        t259()
+    elif i == "260":
+        t260()
+    elif i == "261":
+        t261()
+    elif i == "262":
+        t262()
+    elif i == "263":
+        t263()
+    elif i == "264":
+        t264()
+    elif i == "265":
+        t265()
+    elif i == "266":
+        t266()
+    elif i == "267":
+        t267()
+    elif i == "268":
+        t268()
+    elif i == "269":
+        t269()
+    elif i == "270":
+        t270()
+    elif i == "271":
+        t271()
+    elif i == "272":
+        t272()
+    elif i == "273":
+        t273()
+    elif i == "274":
+        t274()
+    elif i == "275":
+        t275()
+    elif i == "276":
+        t276()
+    elif i == "277":
+        t277()
+    elif i == "278":
+        t278()
+    elif i == "279":
+        t279()
+    elif i == "280":
+        t280()
+    elif i == "281":
+        t281()
+    elif i == "282":
+        t282()
+    elif i == "283":
+        t283()
+    elif i == "284":
+        t284()
+    elif i == "285":
+        t285()
+    elif i == "286":
+        t286()
+    elif i == "287":
+        t287()
+    elif i == "288":
+        t288()
+    elif i == "289":
+        t289()
+    elif i == "290":
+        t290()
+    elif i == "291":
+        t291()
+    elif i == "292":
+        t292()
+    elif i == "293":
+        t293()
+    elif i == "294":
+        t294()
+    elif i == "295":
+        t295()
+    elif i == "296":
+        t296()
+    elif i == "297":
+        t297()
+    elif i == "298":
+        t298()
+    elif i == "299":
+        t299()
+    elif i == "300":
+        t300()
+    elif i == "301":
+        t301()
+    elif i == "302":
+        t302()
+    elif i == "303":
+        t303()
+    elif i == "304":
+        t304()
+    elif i == "305":
+        t305()
+    elif i == "306":
+        t306()
+    elif i == "307":
+        t307()
+    elif i == "308":
+        t308()
+    elif i == "309":
+        t309()
+    elif i == "310":
+        t310()
+    elif i == "311":
+        t311()
+    elif i == "312":
+        t312()
+    elif i == "313":
+        t313()
+    elif i == "314":
+        t314()
+    elif i == "315":
+        t315()
+    elif i == "316":
+        t316()
+    elif i == "317":
+        t317()
+    elif i == "318":
+        t318()
+    elif i == "319":
+        t319()
+    elif i == "320":
+        t320()
+    elif i == "321":
+        t321()
+    elif i == "322":
+        t322()
+    elif i == "323":
+        t323()
+    elif i == "324":
+        t324()
+    elif i == "325":
+        t325()
+    elif i == "326":
+        t326()
+    elif i == "327":
+        t327()
+    elif i == "328":
+        t328()
+    elif i == "329":
+        t329()
+    elif i == "330":
+        t330()
+    elif i == "331":
+        t331()
+    elif i == "332":
+        t332()
+    elif i == "333":
+        t333()
+    elif i == "334":
+        t334()
+    elif i == "335":
+        t335()
+    elif i == "336":
+        t336()
+    elif i == "337":
+        t337()
+    elif i == "338":
+        t338()
+    elif i == "339":
+        t339()
+    elif i == "340":
+        t340()
+    elif i == "341":
+        t341()
+    elif i == "342":
+        t342()
+    elif i == "343":
+        t343()
+    elif i == "344":
+        t344()
+    elif i == "345":
+        t345()
+    elif i == "346":
+        t346()
+    elif i == "347":
+        t347()
+    elif i == "348":
+        t348()
+    elif i == "349":
+        t349()
+    elif i == "350":
+        t350()
+    elif i == "351":
+        t351()
+    elif i == "352":
+        t352()
+    elif i == "353":
+        t353()
+    elif i == "354":
+        t354()
+    elif i == "355":
+        t355()
+    elif i == "356":
+        t356()
+    elif i == "357":
+        t357()
+    elif i == "358":
+        t358()
+    elif i == "359":
+        t359()
+    elif i == "360":
+        t360()
+    elif i == "361":
+        t361()
+    elif i == "362":
+        t362()
+    elif i == "363":
+        t363()
+    else:
+        print("bad idx")

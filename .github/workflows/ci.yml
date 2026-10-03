@@ -838,6 +838,12 @@ jobs:
         run: |
           bash examples/m245_tls_cert_reload/verify.sh --neg-skip > /tmp/v_m245.log 2>&1 || { echo "❌ m245_tls_cert_reload verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m245.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m245_tls_cert_reload verify（锁序/出口形状配对/钩子默认无感 + 风暴期成功率 100% + 服务端存活）PASS"
+      - name: m246_compound_assign（复合赋值 Var 目标全量对拍 · 364 例）
+        if: always()
+        run: |
+          bash examples/m246_compound_assign/verify.sh --neg-skip > /tmp/v_m246.log 2>&1 || { echo "❌ m246_compound_assign verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m246.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m246.log | tail -20
+          echo "✅ m246_compound_assign verify（364 例 × 3 轨 · 跨轨 0 · MODEL 双向 · 形态等价性 182 对）PASS"
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（job 日志 403 ⇒ 注解就是唯一通道，通道里必须自带证据）。

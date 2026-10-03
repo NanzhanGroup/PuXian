@@ -901,6 +901,13 @@ step "M245 · 证书热加载（重注册）与并发 TLS 握手的竞态 ⇒ UA
 #   把窗口放大成**必然** —— 否则「修好了」与「这次没复现」无法区分。
 #   ⚠️ 负控 A 要重建 runtime（摘锁）⇒ 本地跑全量档，CI 用 --neg-skip。
 run m245_tls_cert_reload bash examples/m245_tls_cert_reload/verify.sh
+# M246（第 123 轮）：**复合赋值（`Var` 目标）全量对拍**（364 例 × 3 轨 + 形态等价性 182 对）。
+#   M231 量的是「二元运算符 × 类型对」的**表达式**矩阵；M204 量的是 `Index`/`Field` 目标；
+#   本轮把 M204 门头那句**口头断言**（「`Var` 目标那一支是对的」）变成判据 ——
+#   面 = 13 个复合赋值运算符 × 14 个类型对 × {复合形态, 展开形态}。
+#   判据 [5] 是**独立真值**（不依赖三轨）：`x op= y` ⇄ `x = x op y` 必须同结果。
+#   负控要重编 C 轨 + 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
+run m246_compound_assign bash examples/m246_compound_assign/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
