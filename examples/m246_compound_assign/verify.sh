@@ -69,9 +69,10 @@ chk "负控锚点自证（唯一命中）" "python3 \"$D/negctl.py\" --root \"$R
 
 echo "── [2] 生成探针 + 构建两轨驱动器"
 build_drivers() {
+    local extra="${1:-}"      # 负控用：PX_PXC_BIN=/tmp/pxcdev（否则跑的是入库件 = 假绿）
     rm -rf "$W/a_c" "$W/a_vm" "$W/build"; mkdir -p "$W/a_c" "$W/a_vm" "$W/build"
     cp -f "$D/drv.px" "$W/a_c/drv.px"; cp -f "$D/drv.px" "$W/a_vm/drv.px"
-    ( cd "$W/a_c" && PX_BUILD_ENGINE=c timeout 2400 "$ROOT/tools/px" build drv.px ) >"$W/b_c.log" 2>&1 \
+    ( cd "$W/a_c" && env $extra PX_BUILD_ENGINE=c timeout 2400 "$ROOT/tools/px" build drv.px ) >"$W/b_c.log" 2>&1 \
         || { echo "     ❌ C 轨构建失败："; tail -12 "$W/b_c.log" | sed 's/^/     /'; return 1; }
     ( cd "$W/a_vm" && timeout 2400 "$ROOT/tools/px" build drv.px ) >"$W/b_vm.log" 2>&1 \
         || { echo "     ❌ VM 轨构建失败："; tail -12 "$W/b_vm.log" | sed 's/^/     /'; return 1; }
@@ -102,20 +103,31 @@ negA="skip"
 if [ "$NEG" = 1 ]; then
     restore_src
     if python3 "$D/negctl.py" --root "$ROOT" --snap "$W/snap" --apply >"$W/negctl.log" 2>&1; then
-        if build_drivers >"$W/negA_build.log" 2>&1; then
-            if M246_PXI="$PXI" timeout 1800 python3 "$D/three_tracks.py" --root "$ROOT" --work "$W" >"$W/negA.log" 2>&1; then
-                negA="green"     # 打桩后仍绿 ⇒ 判据没牙
+        # ⚠️ `cg_stmt.px` 是**编译器源码** ⇒ 只打桩**不会**影响 `tools/px build`
+        #    （它用入库的 `bootstrap/pxc`）⇒ 必须**重编 C 轨编译器**（devbuild → /tmp/pxcdev）
+        #    并用 `PX_PXC_BIN` 注入，否则跑的还是入库件 = **假绿**
+        #    —— 这条纪律 M204 门头已登记，本门首版正是踩在它上面（实测「打桩成功但门仍绿」）。
+        if timeout 900 bash selfhost/devbuild.sh >"$W/negA_dev.log" 2>&1 && [ -x /tmp/pxcdev ]; then
+            if build_drivers "PX_PXC_BIN=/tmp/pxcdev" >"$W/negA_build.log" 2>&1; then
+                if M246_PXI="$PXI" timeout 1800 python3 "$D/three_tracks.py" --root "$ROOT" --work "$W" >"$W/negA.log" 2>&1; then
+                    negA="green"     # 打桩后仍绿 ⇒ 判据没牙
+                else
+                    negA="red"       # 分叉 ⇒ 正是要的红
+                fi
             else
-                negA="red"       # 分叉 ⇒ 正是要的红
+                negA="buildfail"
             fi
         else
-            negA="buildfail"
+            negA="devfail"
         fi
     else
         negA="anchor"
     fi
     restore_src
-    chk "负控 A 打桩成功（锚点唯一命中）" "[ '$negA' != 'anchor' ] && [ '$negA' != 'buildfail' ]"
+    # ⚠️ /tmp/pxcdev 是**共享**产物（`PX_PXC_BIN` 的默认注入点）⇒ 留着**打桩版**会污染
+    #    后续用它的门（如 M204）。删掉 ⇒ 下一个需要它的门自己重建（devbuild 有指纹短路）。
+    rm -f /tmp/pxcdev
+    chk "负控 A 打桩成功（锚点唯一命中）" "[ '$negA' != 'anchor' ] && [ '$negA' != 'buildfail' ] && [ '$negA' != 'devfail' ]"
     chk "★ 负控 A：丢弃 += 运算符后**必须判红**（三轨分叉）—— 实测 $negA" "[ '$negA' = 'red' ]"
 else
     echo "     （--neg-skip：跳过负控 A）"
