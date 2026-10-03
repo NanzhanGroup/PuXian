@@ -105,6 +105,49 @@ else
     done < <(grep -vE '^[[:space:]]*(#|$)' "$BASE")
     [ "$NOREASON" = 0 ] && ok "基线条目全部带理由（≥8 字）" || bad "$NOREASON 条基线条目缺理由"
 
+    # ── 3e 体检台账（M251 · 缺陷 428 的「下半条」）─────────────────────
+    # M249 挡住了「新增孤儿」，但基线理由统一是「存量」——
+    #   「这扇门现在还是绿的吗？它依赖的东西还在吗？」**无人回答**。
+    #   m63 已证明「孤儿门 = 判据腐烂的温床」⇒ 体检必须留下**可核对**的记录。
+    AUDIT="${ORPHAN_AUDIT:-selfhost/orphan_audit.tsv}"
+    if [ ! -f "$AUDIT" ]; then
+        bad "体检台账不存在：$AUDIT（每个孤儿门都要有一条实测记录）"
+    else
+        awk -F'\t' '!/^#/ && NF>=5 {print $1}' "$AUDIT" | sed 's/[[:space:]]*$//' | sort -u > "$T/audit.txt"
+        NX=$(wc -l < "$T/audit.txt")
+        echo "  体检台账 $NX 条"
+        comm -23 "$T/base.txt" "$T/audit.txt" > "$T/a_miss.txt"
+        comm -13 "$T/base.txt" "$T/audit.txt" > "$T/a_stale.txt"
+        NM=$(wc -l < "$T/a_miss.txt"); NX2=$(wc -l < "$T/a_stale.txt")
+        [ "$NM" = 0 ] && ok "台账无漏记（$NB 个孤儿门全部有实测记录）" \
+                      || { bad "台账**漏记 $NM 个**（孤儿门没有实测记录）:"; sed 's/^/       /' "$T/a_miss.txt"; }
+        [ "$NX2" = 0 ] && ok "台账无过期条目" \
+                       || { bad "台账**过期 $NX2 条**（不在基线里 ⇒ 删它）:"; sed 's/^/       /' "$T/a_stale.txt"; }
+
+        # 3e-2 分类合法 + 非 OK 条目必须带定性处置
+        BADCLS=0; BADNOTE=0
+        : > "$T/a_bad.txt"
+        while IFS=$'\t' read -r g deps rc sec cls note; do
+            case "$g" in ''|'#'*) continue ;; esac
+            case "$cls" in
+                OK|SKIP|FAIL|TIMEOUT) ;;
+                *) echo "       ⚠️ 非法分类 '$cls'（门 $g）"; BADCLS=$((BADCLS+1)) ;;
+            esac
+            case "$cls" in
+                SKIP|FAIL|TIMEOUT)
+                    case "$note" in
+                        *已修*|*已登记*|*环境*|*设计性*) ;;
+                        *) echo "       ⚠️ $g 分类 $cls 但无处置（note 需含 已修/已登记/环境/设计性）"; BADNOTE=$((BADNOTE+1)) ;;
+                    esac ;;
+            esac
+        done < "$AUDIT"
+        [ "$BADCLS" = 0 ] && ok "台账分类字段全部合法" || bad "$BADCLS 条分类非法"
+        [ "$BADNOTE" = 0 ] && ok "非 OK 条目全部带定性处置" || bad "$BADNOTE 条缺处置文本"
+
+        # 3e-3 规模锚点（防「空台账 ⊇ 空基线」的假绿）
+        [ "$NX" -ge 40 ] && ok "台账规模下限（≥40，实测 $NX）" || bad "台账只 $NX 条 —— 体检没跑？"
+    fi
+
     # 3d 基线只许缩小
     if [ "$NB" -le "$ORPHAN_MAX" ]; then
         ok "基线规模 $NB ≤ 上限 $ORPHAN_MAX（只许缩小）"

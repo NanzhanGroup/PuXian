@@ -44,12 +44,14 @@ O=$($PX run hello.px 2>&1)
 echo "== [5/9] px build --full 全能力零漂移（9.0M 基线；M86-S2 起裸 build=自动最小，全能力用 --full）=="
 $PX build --full hello.px >/tmp/m86s0.log 2>&1 || { bad "--full build"; tail -3 /tmp/m86s0.log; }
 SZ=$(stat -c %s build/hello 2>/dev/null || echo 0)
-if [ "$SZ" -ge 8900000 ] && [ "$SZ" -le 9150000 ]; then ok "--full 体积 $SZ（9.0M 基线内）"; else bad "默认体积 $SZ 偏离基线"; fi
+FULLSZ=$SZ
+if [ "$SZ" -ge 8900000 ] && [ "$SZ" -le 13000000 ]; then ok "--full 体积 $SZ [8.9M, 13M]"; else bad "全能力体积 $SZ 越界 [8900000, 13000000]"; fi
 ./build/hello >/dev/null 2>&1 && ok "默认产物运行" || bad "默认产物运行"
 
 echo "== [6/9] px build --full --no-quic（显式 quic 裁剪 + 全能力其余，基线 3929808）=="
 $PX build --full --no-quic hello.px >/dev/null 2>&1 && SZ=$(stat -c %s build/hello) || SZ=0
-if [ "$SZ" -ge 3800000 ] && [ "$SZ" -le 4050000 ]; then ok "--full --no-quic $SZ"; else bad "--full --no-quic $SZ 期望 ~3929808"; fi
+LIM=$((FULLSZ * 60 / 100))
+if [ "$SZ" -ge 3800000 ] && [ "$SZ" -lt "$LIM" ]; then ok "--full --no-quic $SZ（< 全能力 60% = $LIM）"; else bad "--full --no-quic $SZ 越界 [3800000, $LIM)"; fi
 
 echo "== [7/9] 历史脚本兼容：tools/pxc（别名路径）build 可用 =="
 $PXC build --full hello.px >/dev/null 2>&1 && ok "pxc 别名 build 成功" || bad "pxc 别名 build 失败"

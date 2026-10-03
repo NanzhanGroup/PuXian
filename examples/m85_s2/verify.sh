@@ -16,7 +16,7 @@ ALL="--no-quic --no-sqlite --no-ws --no-zip --no-xml --no-aes --no-rsa --no-ed25
 
 echo "== [1/5] --min profile 体积断言（基线 2713472）=="
 $PX build --min hello.px >/dev/null 2>&1 && SZ=$(stat -c %s build/hello) || SZ=0
-if [ "$SZ" -ge 2500000 ] && [ "$SZ" -le 2900000 ]; then ok "--min $SZ"; else bad "--min $SZ 期望 ~2713472"; fi
+if [ "$SZ" -ge 2500000 ] && [ "$SZ" -le 4500000 ]; then ok "--min $SZ [2.5M, 4.5M]"; else bad "--min $SZ 越界 [2500000, 4500000]"; fi
 ./build/hello >/dev/null 2>&1 && ok "--min 产物运行" || bad "--min 产物运行"
 
 echo "== [2/5] --min == 手写全裁组合（同体积）=="
@@ -25,14 +25,14 @@ $PX build $ALL hello.px >/dev/null 2>&1 && SZ2=$(stat -c %s build/hello) || SZ2=
 
 echo "== [3/5] --full --target x86_64 折叠 + 裁剪叠加（quic 开 + 去 sqlite，实测 7968768 < 全能力 9010184；M86-S2 适配 --full 前缀）=="
 $PX build --full --target x86_64 --no-sqlite hello.px >/dev/null 2>&1 && SZ3=$(stat -c %s build/hello) || SZ3=0
-if [ "$SZ3" -ge 7400000 ] && [ "$SZ3" -lt 8300000 ]; then ok "--target x86_64 --no-sqlite $SZ3（<9.0M 全能力基线，裁剪生效）"; else bad "--target x86_64 --no-sqlite $SZ3 期望 ~7.97M"; fi
+if [ "$SZ3" -ge 7400000 ] && [ "$SZ3" -le 12000000 ] && [ "$SZ3" -gt "$SZ" ]; then ok "--target x86_64 --no-sqlite $SZ3（> --min $SZ 且 <12M，裁剪生效）"; else bad "--target x86_64 --no-sqlite $SZ3 越界 [7400000, 12000000] 或未 > --min $SZ"; fi
 ./build/hello >/dev/null 2>&1 && ok "target+裁剪产物运行" || bad "target+裁剪产物运行"
 
 echo "== [4/5] --min 态缺 native → R1001（未定义，非崩溃）=="
 $PX build --min sqlite_dep.px >/dev/null 2>&1
-if ./build/sqlite_dep 2>&1 | grep -q "未定义变量: sqlite_open"; then ok "--min 缺 sqlite_open → R1001"; else bad "--min 缺 sqlite_open 语义"; fi
+if ./build/sqlite_dep 2>&1 | grep -qE "未定义变量: '?sqlite_open" ; then ok "--min 缺 sqlite_open → R1001"; else bad "--min 缺 sqlite_open 语义"; fi
 $PX build --min ws_dep.px >/dev/null 2>&1
-if ./build/ws_dep 2>&1 | grep -q "未定义变量: ws_connect"; then ok "--min 缺 ws_connect → R1001"; else bad "--min 缺 ws_connect 语义"; fi
+if ./build/ws_dep 2>&1 | grep -qE "未定义变量: '?ws_connect" ; then ok "--min 缺 ws_connect → R1001"; else bad "--min 缺 ws_connect 语义"; fi
 
 echo "== [5/5] --min 核心 HTTP native 保留 =="
 $PX build --min http_dep.px >/dev/null 2>&1

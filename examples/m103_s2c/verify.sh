@@ -13,8 +13,8 @@ mkdir -p build artifacts
 rm -f artifacts/*.yaml
 
 echo "== [1/4] Go gen（yaml.Marshal → go_out.yaml，供 px 反向读）=="
-(cd "$(dirname "$0")" && go build -o build/go_s2c .) || { echo "FAIL go build"; exit 1; }
-(cd "$(dirname "$0")" && ./build/go_s2c gen) || { echo "FAIL go gen"; exit 1; }
+go build -o build/go_s2c . || { echo "FAIL go build"; exit 1; }
+./build/go_s2c gen || { echo "FAIL go gen"; exit 1; }
 
 echo "== [2/4] px build =="
 $PX build --no-quic yaml_stringify_test.px >/tmp/m103s2c_build.log 2>&1 || { echo "FAIL build"; tail -20 /tmp/m103s2c_build.log; exit 1; }
@@ -25,6 +25,6 @@ echo "$OUT"
 echo "$OUT" | grep -q 'YAML_STRINGIFY_TEST:.*0F' || { echo "FAIL px 断言未全过"; exit 1; }
 
 echo "== [4/4] Go check（px 写 → Go yaml 读回互认）=="
-(cd "$(dirname "$0")" && ./build/go_s2c check) || { echo "FAIL Go check"; exit 1; }
+./build/go_s2c check || { echo "FAIL Go check"; exit 1; }
 echo "m103_s2c_yaml_stringify verify done"
 exit 0
