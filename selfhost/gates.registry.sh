@@ -918,10 +918,23 @@ run m245_tls_cert_reload bash examples/m245_tls_cert_reload/verify.sh
 #   判据 [5] 是**独立真值**（不依赖三轨）：`x op= y` ⇄ `x = x op y` 必须同结果。
 #   负控要重编 C 轨 + 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
 run m246_compound_assign bash examples/m246_compound_assign/verify.sh
+# M250（第 127 轮 · 缺陷 433）：**ONNX 张量助手族全量对拍 + native 覆盖面台账**。
+#   来历：M248 首算「392 个 native 里 21 个从未被任何门触碰」，顺着这份账证出
+#   `f32_at`/`i64_at` 的界判据在 int32 里溢出（UB ⇒ 越界读 / 静默错值）。
+#   判据四层互相独立：三轨对拍 · 边界必须响亮 · **反向判据**（合法域上界仍可取 ——
+#   只证「越界被拒」不够，**一律拒绝**同样能让边界层变绿）· 独立真值 · 确定性。
+#   覆盖面台账（selfhost/check_native_coverage.py）把 M248 的一次性分析变成常设判据。
+#   负控要重编解释轨 + 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
+run m250_onnx_tensor bash examples/m250_onnx_tensor/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
 run gate_anchor_sentinel python3 selfhost/check_gate_anchors.py
+# M250（缺陷 435）：**版本字面量 ⇄ 自举基准 ⇄ 入库件** 三方一致。
+#   实证：M249 的版本递增改了 `selfhost/compiler.px` 的 `PXC_VER`，而 `selfhost/golden/*`
+#   是**老版本**烘出的逐字节基准 ⇒ CI 两个 job 红（aarch64 自举自证 / 自举回归）。
+#   本地全量门测不到（`bootstrap_prove(_bc)` 属 CI 独占 · 各约 7 分钟）⇒ 本守卫是**廉价的那一半**。
+run version_golden bash selfhost/check_version_golden.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

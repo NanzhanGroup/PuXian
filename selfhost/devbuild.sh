@@ -65,10 +65,23 @@ devb_summary() {
     r=$(grep -c $'\treuse\t'   "$DEVB_STATS_FILE" 2>/dev/null || true)
     b=$(grep -c $'\trebuild\t' "$DEVB_STATS_FILE" 2>/dev/null || true)
     echo "── devbuild 累计：重建 ${b:-0} 次 / 复用 ${r:-0} 次（台账 $DEVB_STATS_FILE）"
-    echo "── 源码链 key（按件分组 · 取值 ⇒ 可归因）"
-    cut -f3,4 "$DEVB_STATS_FILE" 2>/dev/null | sort | uniq -c | sort -k2,2 -k1,1nr | while read -r cnt nm kv; do
+    # ── M250（缺陷 434）：**汇总必须有上限** ──────────────────────────────
+    #   台账是**只追加**的长期文件（本机实测 4712 行 ⇒ 相异 (件,key) 组上百）。
+    #   修前这里对每一组打印一行 ⇒ 每次 devbuild 调用吐 2000+ 行 ⇒
+    #   ① 门日志被淹没（真信号被埋）；② ci.yml 把它合成 `::notice::` ⇒ 注解逼近长度上限。
+    #   现在：打印 **Top-N**（按出现次数降序）+ 明确报出「共几组、略去几组」。
+    #   ⚠️ 一律不静默截断 —— 略去的**数量**必须打出来（否则读者会以为这就是全部）。
+    local topn="${DEVB_SUMMARY_TOP:-12}"
+    local all tot
+    all=$(cut -f3,4 "$DEVB_STATS_FILE" 2>/dev/null | sort | uniq -c | sort -k1,1nr -k2,2)
+    tot=$(printf '%s\n' "$all" | grep -c . || true)
+    echo "── 源码链 key（按件分组 · 取值 ⇒ 可归因）· 共 ${tot:-0} 组，列出前 ${topn} 组"
+    printf '%s\n' "$all" | head -n "$topn" | while read -r cnt nm kv; do
         echo "     $nm  $kv  ×$cnt"
     done
+    if [ "${tot:-0}" -gt "$topn" ]; then
+        echo "     …（略去 $((tot - topn)) 组 —— 完整清单见台账；本行**不许**被当成全部）"
+    fi
     local cs
     cs=$(cut -f5 "$DEVB_STATS_FILE" 2>/dev/null | sort | uniq -c | awk '{printf "%s×%s ", $2, $1}')
     echo "── 选料来源：${cs:-（本台账无第 5 列 —— 旧版 devbuild 写的）}"

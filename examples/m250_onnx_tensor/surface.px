@@ -1,0 +1,27 @@
+# M250 · ONNX 张量助手族「合法侧最小冒烟」（**提交入库** · 两个用途）
+# ------------------------------------------------------------
+# ① 可手工跑：`./bootstrap/pxi examples/m250_onnx_tensor/surface.px`
+#    （或 `./tools/px build` 后跑产出——三轨应逐字节一致）
+# ② ⭐ **让 `selfhost/check_native_coverage.py` 的语料面看得见这 13 个 native**。
+#    本门的**对拍语料是运行期生成**到 /tmp 的（`gen_probes.py` → drv.px），仓库里没有痕迹；
+#    而台账的消费面**只扫 `.px`**（门脚本是装置、不是语料 —— 见该脚本头的口径说明）。
+#    ⇒ 不提交本文件，台账会把「本门明明已覆盖的 native」继续记成**未覆盖**。
+#    这是「生成式语料」的通用约定：**生成器有，仓库里也要有一份可见的 .px 冒烟**。
+#
+# 合法侧真值（与 three_tracks.py 的 [4] 层同口径，独立算出）：
+#   f32_bytes([1.5, 2.5]) → 8 字节（2 × sizeof(float)）· f32_count = 2 · f32_at(0) = 1.5
+#   i64_bytes([1, 2, 3, 4]) → 32 字节（4 × sizeof(int64)）· i64_count = 4 · i64_at(3) = 4
+def run():
+    b8 = f32_bytes([1.5, 2.5])
+    print("f32_bytes=" + str(len(b8)) + " f32_count=" + str(f32_count(b8)) + " f32_at0=" + str(f32_at(b8, 0)))
+    b32 = i64_bytes([1, 2, 3, 4])
+    print("i64_bytes=" + str(len(b32)) + " i64_count=" + str(i64_count(b32)) + " i64_at3=" + str(i64_at(b32, 3)))
+    # onnx_* 五件：不带真实模型 ⇒ 走 Err 通道（**契约**，非缺陷）
+    print("onnx_op_names=" + str(len(onnx_op_names())))
+    print("onnx_model_open=" + str(onnx_model_open("/nonexistent-m250.onnx")))
+    print("onnx_info=" + str(onnx_info(0)))
+    print("onnx_initializer=" + str(onnx_initializer(0, "w")))
+    print("onnx_initializer_names=" + str(onnx_initializer_names(0)))
+    print("onnx_model_close=" + str(onnx_model_close(0)))
+    print("onnx_run=" + str(onnx_run(0, {})))
+run()

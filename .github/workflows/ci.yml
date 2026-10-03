@@ -190,6 +190,15 @@ jobs:
         run: |
           python3 selfhost/check_pymain_guard.py --self-test
           python3 selfhost/check_pymain_guard.py
+      - name: 版本字面量 ⇄ 自举基准 ⇄ 入库件 三方一致（M250 · 缺陷 435）
+        #   实证（CI run #484 · bdf7090）：M249 的版本递增改了 `selfhost/compiler.px` 的
+        #   `PXC_VER`，而 `selfhost/golden/compiler.c` / `compiler.bc.dump` 是**老版本**烘出的
+        #   逐字节基准 ⇒ 两个 job 红（aarch64 自举自证 step 4 · 自举回归 step 17）。
+        #   ⚠️ 本地全量门**测不到**：`bootstrap_prove(_bc)` 属 CI 独占（各约 7 分钟）。
+        #   ⇒ 本守卫是**廉价的那一半**（毫秒级，不跑编译器）：三方字面量对拍，自带 5 条自证。
+        run: |
+          bash selfhost/check_version_golden.sh --self-test
+          bash selfhost/check_version_golden.sh
       - name: 门注册一致性（清单 ⇄ ci.yml 双向 · M243 / M247 补）
         #   M247 实测：本守卫**没被 CI 跑过** —— 于是「registry 里加了、ci.yml 忘了加」
         #   这一类（M235 缺陷 355 同形）在 CI 上无人发现。本步补上。
@@ -859,6 +868,19 @@ jobs:
           bash examples/m246_compound_assign/verify.sh --neg-skip > /tmp/v_m246.log 2>&1 || { echo "❌ m246_compound_assign verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m246.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^(   |── )' /tmp/v_m246.log | tail -20
           echo "✅ m246_compound_assign verify（364 例 × 3 轨 · 跨轨 0 · MODEL 双向 · 形态等价性 182 对）PASS"
+
+      # M250（第 127 轮 · 缺陷 433）：**ONNX 张量助手族全量对拍 + native 覆盖面台账** ——
+      #   来历：M248 第一次算出「392 个 native 里 21 个从未被任何门触碰到」，顺着这份账
+      #   证出 `f32_at`/`i64_at` 的界判据在 int32 里溢出（UB ⇒ 越界读 / 静默错值）。
+      #   判据四层**互相独立**：三轨对拍 · 边界必须响亮 · **反向判据**（合法域上界仍可取）·
+      #   独立真值（小端/IEEE754 算出）· 确定性（两遍逐字节）。负控要重编解释轨+两轨驱动
+      #   ⇒ CI 用 --neg-skip。
+      - name: m250_onnx_tensor（ONNX 张量助手族 193 例 + native 覆盖面台账 · 缺陷 433）
+        if: always()
+        run: |
+          bash examples/m250_onnx_tensor/verify.sh --neg-skip > /tmp/v_m250.log 2>&1 || { echo "❌ m250_onnx_tensor verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m250.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m250.log | tail -20
+          echo "✅ m250_onnx_tensor verify（193 例 × 3 轨 · 分叉 0 · 边界 34 例全响亮 + 反向判据 · 独立真值 20 · 确定性 · 覆盖面台账五判据）PASS"
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（job 日志 403 ⇒ 注解就是唯一通道，通道里必须自带证据）。

@@ -1,0 +1,42 @@
+# native 覆盖面基线 —— **「从未被任何门语料触碰过」的 native 清单**
+# 由 selfhost/check_native_coverage.py 维护；纪律：
+#   ① 本表**只许缩小** —— 新出现的未覆盖条目 ⇒ 判红；
+#   ② 已覆盖的条目必须删掉（否则判「过期」）；
+#   ③ 每条必须带理由（新增条目默认「（待定性）」⇒ 不满足③ ⇒ 会判红）。
+#   ④ 「已覆盖」= 名字以**独立词**（两侧非 [0-9A-Za-z_]）出现在 **`.px` 源文件**里
+#      （消费面 = examples/ + registry/，**不含 tools/ 与 selfhost/**）。
+#      ⚠️ 只扫 `.px`：门脚本（.sh/.py/.md）是**装置**不是语料 —— 把它们计进来会**自我污染**
+#         （M250 首跑实测：本门的「覆盖边界」段用文字列了 16 个未覆盖名字 ⇒ 立刻被判成「已覆盖」）。
+#      ⇒ 约定：**语料若是运行期生成的，必须另提交一份 `.px` 冒烟**
+#         （例：`examples/m250_onnx_tensor/surface.px`）。
+#
+# ── M250 定性（M248 首算 21 → 本轮 19；口径同时收窄为「.px 语料」）──
+#   本轮**已覆盖**（进 `examples/m250_onnx_tensor/`）：f32_at/f32_bytes/f32_count/
+#     i64_at/i64_bytes/i64_count + onnx_info/onnx_initializer/onnx_initializer_names/
+#     onnx_model_close/onnx_model_open/onnx_op_names/onnx_run（13 个）
+#   本轮**新增入表**（收窄口径后浮出）：print_err / session_destroy / tz_local
+#     —— 此前只被 `.sh`/`.md` 提到过，**从没有任何普贤程序真的调过**
+#
+#   [A 类 · 设计边界] 内部机制/原语被 `px_set_global` 发布为全局：
+#       用户面不该直接调；C 侧（HTTP/3 服务端）直调，不经 .px ⇒ 门语料不触碰**是预期**。
+#       ⚠️ 但「该不该发布为全局」是**未定的设计问题**（M248 登记过同族），下一轮定性。
+#   [B 类 · 欠账] 真·用户面 API 却没有任何普贤语料调用：**需补门**（下一轮候选）。
+aes_decrypt_bytes	[B·欠账] M72-S4 二进制安全 AES 解密（含 \0/非 UTF-8）· 用户面 API · **未进速查表** ⇒ 待补门
+aes_decrypt_ecb	[B·欠账] M83-S2 AES-ECB(PKCS7) 解密（微信网关媒体链路）· 用户面 API · 未进速查表 ⇒ 待补门
+aes_encrypt_bytes	[B·欠账] M72-S4 二进制安全 AES 加密（GCM 输出 密文||tag）· 用户面 API · 未进速查表 ⇒ 待补门
+aes_gcm_decrypt_bytes	[B·欠账] M72-S4 AES-GCM 解密（原始 bytes 版）· 用户面 API · 未进速查表 ⇒ 待补门
+aes_gcm_encrypt_bytes	[B·欠账] M72-S4 AES-GCM 加密（原始 bytes 版）· 用户面 API · 未进速查表 ⇒ 待补门
+go_errno_string	[B·欠账] errno → Go 风格名字映射 · 用户面工具函数 · 无普贤语料调用 ⇒ 待补门
+h3_qs_ack_inc	[A·设计边界] QPACK 原语层（px_set_global + px_ffi_register 双注册）· HTTP/3 服务端内部直调
+h3_qs_ack_sec	[A·设计边界] QPACK 原语层 · 同上
+h3_qs_de_len	[A·设计边界] QPACK 原语层 · 同上
+h3_qs_dec_ric	[A·设计边界] QPACK 原语层 · 同上
+h3_qs_en_len	[A·设计边界] QPACK 原语层 · 同上
+h3_qs_enc_ric	[A·设计边界] QPACK 原语层 · 同上
+h3_qs_ins	[A·设计边界] QPACK 原语层 · 同上
+h3_qs_krc	[A·设计边界] QPACK 原语层 · 同上
+interp_bridge	[A·设计边界] M158 解释轨「函数值」桥（缺陷 114 的修复件）· 运行时内部机制，非用户 API
+print_err	[B·欠账] 输出到 stderr 的 print（速查表 4 处提及）· 用户面 API ⇒ 待补门
+session_destroy	[B·欠账] M27 服务端 Session 四件套之一（session_open/session_id/session_destroy）· 用户面 API · 未进速查表 ⇒ 待补门
+session_id	[B·欠账] M27 服务端 Session 四件套之一 · 用户面 API · 无普贤语料调用 ⇒ 待补门
+tz_local	[B·欠账] 本地时区转换（与 now_sec / now 同族）· 用户面 API · 未进速查表 ⇒ 待补门
