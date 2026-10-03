@@ -290,6 +290,7 @@ examples/m62_langfix/fp_bytes.px src=d346596c98a3d5e2 rc=0 out=0c5ead802fc4452e1
 examples/m62_langfix/fp_floatfmt.px src=33f2366c4b6ae3b9 rc=0 out=30268190197c4179e5e1b1548406f8fc err=e3b0c44298fc1c14
 examples/m62_langfix/fp_split.px src=c369f50f83ca25e0 rc=0 out=8e57895fc623288f54941103fbdfbde6 err=e3b0c44298fc1c14
 examples/m63_langfix/m63_fp.px src=1cda5319634ee052 rc=0 out=f62c127fd3b2d35ef4feac111b408487 err=e3b0c44298fc1c14
+examples/m63_langfix/m63_mock.px src=c761976159c86790 rc=0 out=0d5429b49108bc8c0e7fa00dd6472ea7 err=e3b0c44298fc1c14
 examples/m63_langfix/m63_net.px src=e266115e4d545045 rc=0 out=a46213698a8e560f79dca3551c1d4622 err=e3b0c44298fc1c14
 examples/m63_langfix/m63_net_err.px src=6a0fc45a286b9a9c rc=0 out=304d712cb4ef8707d6758e38fc92b539 err=e3b0c44298fc1c14
 examples/m63_langfix/m63_prec.px src=d66a55c3b8741409 rc=0 out=43a89dfa0cd3cd51ffe58ab3b29c6283 err=e3b0c44298fc1c14

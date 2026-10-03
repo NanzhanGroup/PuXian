@@ -92,13 +92,34 @@ git rev-parse -q --verify "${AT}^{commit}" >/dev/null 2>&1 \
 SHA_FULL="$(git rev-parse "${AT}^{commit}")"
 SHA="$(git rev-parse --short "$SHA_FULL")"
 
-# ---------- 2. 主版本段：取最近一个 tag 的 vX.Y.Z ----------
+# ---------- 2. 主版本段：自最高 tag **递增 patch**（M249 · 用户令 2026-10-03）----------
+# 规则：每个新 tag 把 patch 段 +1；patch 累计到 100 ⇒ 进位 minor（patch 归 0）。
+#   例：v0.2.0-m246 → v0.2.1-m247 → … → v0.2.99-m345 → v0.3.0-m346
+# 为什么（用户原话）：「以后每次 tag 之前都改变一下 0.2.*，直到 * 变为 100 就升为 0.3.0」
+#   —— `0.2.0` 自 M73 起挂了 175 个里程碑，用户在版本号上**看不出任何进展**。
+# ⚠ `--move`（把已有 tag 重定向到最终提交）**不递增**：那不是新版本，只是同一版换个提交。
+#   若递增，自测 E 段（--move v0.2.0-m248）会算出 v0.2.1-m248 ⇒ 名字对不上。
+# ⚠ `--name` 路径不参与本段（手输完整名，直接过命名校验）。
 VER="0.2.0"
-LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+LAST_TAG="$(git tag -l --sort=-v:refname 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$' | head -1 || true)"
 if [ -n "$LAST_TAG" ]; then
     _tv="${LAST_TAG#v}"; _tv="${_tv%%-*}"
     case "$_tv" in
-        [0-9]*.[0-9]*.[0-9]*) VER="$_tv" ;;
+        [0-9]*.[0-9]*.[0-9]*)
+            VER="$_tv"
+            if [ "$DO_MOVE" != 1 ]; then
+                _maj="${_tv%%.*}"; _rest="${_tv#*.}"
+                _min="${_rest%%.*}"; _pat="${_rest#*.}"
+                _pat=$((_pat + 1))
+                if [ "$_pat" -ge 100 ]; then
+                    _pat=0; _min=$((_min + 1))
+                fi
+                VER="${_maj}.${_min}.${_pat}"
+                say "ℹ️ 版本段自 $LAST_TAG **递增** patch: $_tv → $VER（patch 到 100 ⇒ 进位 minor）"
+            else
+                say "ℹ️ 版本段沿用 $LAST_TAG: $VER（--move 不递增）"
+            fi
+            ;;
     esac
 fi
 

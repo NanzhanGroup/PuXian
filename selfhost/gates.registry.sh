@@ -72,6 +72,7 @@ run zombie_reap ./selfhost/zombie_reap_check.sh
 step "M116 专项门"
 run m116 bash examples/m116_builtin_semantics/verify.sh
 step "工具自测（CI toolchain 步列出的那批）"
+run m63_langfix bash examples/m63_langfix/verify.sh
 run m64_fmt bash examples/m64_fmt/verify.sh
 run m64_lint bash examples/m64_lint/verify.sh
 run m65_lsp bash examples/m65_lsp/verify.sh
