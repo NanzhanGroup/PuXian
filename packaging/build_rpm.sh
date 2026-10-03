@@ -60,6 +60,20 @@ VER="${TVER%%-*}"                      # 0.2.0 / 0.1.0
 MILESTONE=""
 if [ "$TVER" != "${TVER%%-*}" ]; then  # 含 -m<里程碑> 段
     MILESTONE="$(echo "${TVER#*-}" | tr 'A-Z' 'a-z')"
+    # ---- M248 第 ② 道防线：tag 派生的 MILESTONE 必须是 m<数字> ----
+    #   此前这里**不校验**：短横线之后整段都当里程碑 ⇒ 2026-10-03 实测，一个
+    #   v0.2.0-m245s1 tag 让 rpm 包名变成 puxian-0.2.0-1.m245s1.el9.x86_64.rpm
+    #   ⇒ 污染 gh-pages ⇒ pxrepo_mirror.sh 的 xcheck-rpm-tree 判「版本标记不合规」
+    #   ⇒ **镜像同步停摆**（用户报障）。事后守卫（tag_guard ③）能发现，但那时包名已进仓库。
+    #   ⇒ 宁可让 Release 红（可见、可查、不扩散），也不要把污染包名推出去（静默、难查）。
+    #   ⚠ 判据用**完整锚定正则**（不用 glob）：首版写 `case … in m[0-9]*`，而 glob 的 `*`
+    #     匹配任意串 ⇒ `m245s1` 也命中 ⇒ 闸门形同虚设（自测当场照出）。
+    if ! printf '%s' "$MILESTONE" | grep -qE '^m[0-9]+$'; then
+        echo "❌ tag 命名不合规：$TAG ⇒ MILESTONE='$MILESTONE'（规则: v<主版本>-m<里程碑>，无补丁后缀）" >&2
+        echo "   后果：rpm 包名会被污染成 puxian-$VER-1.$MILESTONE.el<dist>.x86_64.rpm ⇒ 镜像同步停摆。" >&2
+        echo "   整改：把**合规 tag** 重定向到该里程碑最终提交 —— packaging/make_tag.sh --move" >&2
+        exit 1
+    fi
 else                                   # 语义版本 tag 无 - 段 → 同 make_release 兜底
     MILESTONE="$(git log -1 --pretty=%s | grep -o 'M[0-9][0-9]*' | head -1 || true)"
     [ -n "$MILESTONE" ] || MILESTONE="dev"

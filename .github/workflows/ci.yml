@@ -943,6 +943,10 @@ jobs:
           run_guard rpm_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
           run_guard make_release  bash packaging/selftest_make_release.sh
           run_guard tag_guard     bash packaging/selftest_tag_guard.sh
+          # M248：tag 命名护栏（创建时刻 make_tag.sh + 构建时刻 build_rpm/make_release）
+          #   由来：一个 v0.2.0-m245s1 tag 让 gh-pages 出现 puxian-0.2.0-1.m245s1.*.rpm
+          #   ⇒ pxrepo_mirror 的 xcheck-rpm-tree 判红 ⇒ 镜像同步停摆（用户报障）。
+          run_guard make_tag      bash packaging/selftest_make_tag.sh
           # M238：镜像器判据离线自测（原来从未注册）
           run_guard pxrepo_mirror bash packaging/selftest_pxrepo_mirror.sh
           # M168：install-rpm.sh 的**发行版矩阵离线自测**

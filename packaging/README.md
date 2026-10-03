@@ -29,6 +29,8 @@ yum install puxian      # EL7
 | 文件 | 作用 |
 |---|---|
 | `puxian.spec` | RPM 打包定义（Version 取 `%{pxver}`，由 build_rpm.sh 按 git tag 派生注入；Release `1.<里程碑>.el<dist>`；M168 起依赖含**静态 libc**：el7 硬依赖 `glibc-static`、el9/openEuler 用 `Recommends`（dnf 默认装；openEuler 无此包名、libc.a 随 `glibc-devel` 到位）） |
+| `make_tag.sh` | **发布 tag 的唯一创建入口**（M248 · 用户令「tag 不要使用 s1 这样的标签，影响镜像同步」）：不合规名**创建时刻**就拒绝（exit 3），补丁后缀形态直接给出合规名与 `--move` 出路；`--push` 把 main+tag **一次推**（消 push 竞态）；`--dry-run` 只读无副作用 |
+| `selftest_make_tag.sh` | **上述护栏的三道防线自测**（71 断言）：创建时刻拒绝 + 构建时刻 `build_rpm.sh`/`make_release.sh` 的 MILESTONE 校验 + 与 `tag_guard.sh` 的规则**逐字符一致**；负控：拆掉判据 ⇒ 必须真的建出/构建出不合规产物 |
 | `build_rpm.sh` | 全链路（el7/el8/el9 通用）：tarball → rpmbuild → 包签名 → createrepo(_c) → repomd 签名 → 公钥导出；`DIST=7/9` 决定目录与 `.el` 后缀 |
 | `build_rpm_el7.sh` | centos:7 容器内执行：EOL vault 源修正 + gpg2.0(headless) + createrepo(gzip) + yum 3.4 双验签 + 真实安装验证 |
 | `install-rpm.sh` | 用户侧仓库安装脚本（M168 重写：发行版显式映射 / `--dry-run` / `status` / 替代路线指引） |
