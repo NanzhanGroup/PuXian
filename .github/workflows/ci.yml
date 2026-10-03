@@ -230,6 +230,7 @@ jobs:
         #    （两者都在等早已不存在的 0.1.0 版本串，二进制从 M-某 起就是 0.2.0）。
         #    登记：qg-issue 64。⇒ 新增门时**不要**用 `&&` 串联命令。
         run: |
+          bash examples/m63_langfix/verify.sh > /tmp/v_m63_langfix.log 2>&1 || { echo "❌ m63_langfix verify 失败"; tail -40 /tmp/v_m63_langfix.log; exit 1; }
           bash examples/m64_fmt/verify.sh > /tmp/v_m64_fmt.log 2>&1 || { echo "❌ m64_fmt verify 失败"; tail -40 /tmp/v_m64_fmt.log; exit 1; }
           bash examples/m64_lint/verify.sh > /tmp/v_m64_lint.log 2>&1 || { echo "❌ m64_lint verify 失败"; tail -40 /tmp/v_m64_lint.log; exit 1; }
           python3 -c "import sys; assert sys.version_info[0]==3"

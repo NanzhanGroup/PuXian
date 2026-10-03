@@ -93,15 +93,19 @@ chk "D --name '' ⇒ rc=2（参数错 · 不静默退回构造名）" "$RC" "2"
 chk "D --name '' 零副作用" "$(tags "$R")" ""
 
 echo "── E 已存在且指向别处、未 --move ⇒ rc=4 且**不动**原 tag ──"
-R="$(newrepo e)"; run "$R" --milestone 248; OLD="$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')"
+# ⚠ M249：本段与 F 段改走 `--name`（**钉死完整名**）—— 默认路径自 M249 起会
+#   递增 patch ⇒ 第二次 `--milestone 248` 算出 v0.2.1-m248（**不重名** ⇒ rc=0）。
+#   本段要测的是「**同名** tag 已存在的行为」，与版本段无关 ⇒ 名字必须钉死。
+#   默认路径不重名这件事由 **R7** 正面覆盖。
+R="$(newrepo e)"; run "$R" --name v0.2.0-m248; OLD="$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')"
 git -C "$R" commit -q --allow-empty -m "M248：第二个提交"
-run "$R" --milestone 248
+run "$R" --name v0.2.0-m248
 chk "E rc=4" "$RC" "4"
 chk "E 原 tag 未被移动" "$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')" "$OLD"
 case "$out" in *"--move"*) ok "E 信息给出合规出路（--move）";; *) bad "E 未给出路";; esac
 
 echo "── F --move 重定向 ──"
-run "$R" --move --milestone 248
+run "$R" --move --name v0.2.0-m248
 chk "F rc=0" "$RC" "0"
 chk "F tag 已指向新 HEAD" \
     "$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')" "$(git -C "$R" rev-parse HEAD)"
@@ -235,6 +239,76 @@ R2="$(newrepo q5b)"; mkdir -p "$R2/packaging"; cp "$RPM_STUB" "$R2/packaging/bui
 git -C "$R2" tag -a v0.2.0-m245s1 -m "夹具：坏 tag"
 out="$(cd "$R2" && SKIP_SIGN=1 timeout 60 bash packaging/build_rpm.sh 2>&1)"; :
 case "$out" in *"tag 命名不合规"*) bad "Q5 build_rpm 打桩后仍在报错（打桩无效）";; *) ok "Q5 build_rpm 打桩后不再拦（= 原判据确实在拦）";; esac
+
+echo "── R：版本段**递增**（M249 · 用户令「每次 tag 改 0.2.*，到 100 就升 0.3.0」）──"
+#   判据形态：`--dry-run` 只读入口（无副作用 · M244 缺陷 412 的纪律）⇒ 把 tag 名读回来比。
+bump_probe() {  # bump_probe <仓库> <里程碑> <期望tag> [额外参数...]
+    local d="$1"
+    local ms="$2"
+    local exp="$3"
+    shift 3
+    out="$(PX_TAG_REPO="$d" bash "$MT" --milestone "$ms" --dry-run "$@" 2>&1)"; RC=$?
+    local got
+    got="$(printf '%s\n' "$out" | sed -n 's/^  tag 名   : //p' | head -1)"
+    chk "R m$ms ⇒ $exp" "$got" "$exp"
+}
+
+# R0 无 tag ⇒ **不递增**（保持 0.2.0 默认 —— A 段判据不变的前提）
+R0="$(newrepo r0)"; bump_probe "$R0" 249 "v0.2.0-m249"
+
+# R1 基线 v0.2.0-m246 ⇒ patch+1
+R1="$(newrepo r1)"; git -C "$R1" tag -a v0.2.0-m246 -m x
+bump_probe "$R1" 247 "v0.2.1-m247"
+
+# R2 v0.2.98-m344 ⇒ 0.2.99（未到 100，不进位）
+RB2="$(newrepo r2)"; git -C "$RB2" tag -a v0.2.98-m344 -m x
+bump_probe "$RB2" 345 "v0.2.99-m345"
+
+# R3 v0.2.99-m345 ⇒ **patch 到 100 ⇒ 进位 0.3.0**
+R3="$(newrepo r3)"; git -C "$R3" tag -a v0.2.99-m345 -m x
+bump_probe "$R3" 346 "v0.3.0-m346"
+
+# R4 多 tag 乱序 ⇒ 取**版本序最高**那个（不是「最近可达」）
+R4="$(newrepo r4)"; git -C "$R4" tag -a v0.2.0-m246 -m x; git -C "$R4" tag -a v0.2.1-m249 -m x
+bump_probe "$R4" 250 "v0.2.2-m250"
+
+# R5 `--move` **不递增**（重定向同一 tag 换提交 ≠ 新版本）
+R5="$(newrepo r5)"; git -C "$R5" tag -a v0.2.0-m248 -m x
+git -C "$R5" commit -q --allow-empty -m "second"
+bump_probe "$R5" 248 "v0.2.0-m248" --move
+
+# R7 默认路径：连续两次 `--milestone` 得到**不同**名字（递增 ⇒ 不重名 ⇒ 都 rc=0）
+R7="$(newrepo r7)"
+run "$R7" --milestone 800
+chk "R7 第一次 rc=0" "$RC" "0"
+run "$R7" --milestone 800
+chk "R7 第二次仍 rc=0（递增后不重名）" "$RC" "0"
+chk "R7 两个 tag 并存" "$(tags "$R7")" "v0.2.0-m800 v0.2.1-m800 "
+
+# R6 ★负控：**拆掉递增逻辑** ⇒ R1 的结论必须不再成立（证明 R1 的绿来自递增本身）
+MT_STUB="$TMP/make_tag_nobump.sh"
+cp "$MT" "$MT_STUB"
+python3 - "$MT_STUB" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text(encoding="utf-8")
+OLD = ('                _pat=$((_pat + 1))\n'
+       '                if [ "$_pat" -ge 100 ]; then\n'
+       '                    _pat=0; _min=$((_min + 1))\n'
+       '                fi\n'
+       '                VER="${_maj}.${_min}.${_pat}"\n')
+NEW = '                VER="$_tv"\n'
+if s.count(OLD) != 1:
+    sys.stderr.write("NEGCTL-R6-MISS\n"); sys.exit(1)
+p.write_text(s.replace(OLD, NEW, 1), encoding="utf-8")
+PYEOF
+if [ $? != 0 ]; then
+    bad "R6 ★负控：打桩失败（递增段锚点没命中 —— 说明 make_tag.sh 的写法变了，判据要跟着改）"
+else
+    bash -n "$MT_STUB" || bad "R6 打桩后语法错"
+    out="$(PX_TAG_REPO="$R1" bash "$MT_STUB" --milestone 247 --dry-run 2>&1)"
+    got="$(printf '%s\n' "$out" | sed -n 's/^  tag 名   : //p' | head -1)"
+    chkn "R6 ★负控：拆掉递增后**不再**给出 v0.2.1-m247" "$got" "v0.2.1-m247"
+fi
 
 echo
 echo "══ selftest_make_tag: 通过 $pass / 失败 $fail ══"

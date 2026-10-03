@@ -1,0 +1,81 @@
+# ============================================================
+# examples/m63_langfix/m63_mock.px —— M63-L8 的本地 mock HTTP 端点（**本仓自建**）
+# ------------------------------------------------------------
+# 为什么需要它（M249 · 2026-10-03）：
+#   本门原先依赖 `/tmp/m63_mock.py`（**临时目录里的外部脚本**）——
+#   而 `m63_langfix` 长期**不在任何运行器里**（孤儿门）⇒ 没人跑它
+#   ⇒ `/tmp` 被清理后**无人发现**，门实际早已跑不起来。
+#   本次改成**随门自带**（普贤写 —— 符合本仓「不引入新依赖」纪律，
+#   同 upstream-tests/fixtures/ 的 oauth2/pop3/ftp/imap mock 做法）。
+#
+# 契约（严格按 m63_net.px 的断言反推）：
+#   POST /api  body=hello-px  → 200 body="mock-ok:hello-px"
+#   POST /api  body=reqdata   → 200 body="mock-ok:reqdata"
+#   GET  /api                 → 200 body="mock-ok:"
+#   —— 即 body = "mock-ok:" + 请求体（与方法/路径无关）。
+#
+# 用法：./m63_mock      （监听 127.0.0.1:18080；由 verify.sh 起来并在 EXIT 收尾）
+# ============================================================
+var M63_PORT = 18080
+var M63_LFD = tcp_listen(M63_PORT)
+print("m63mock: listening " + str(M63_PORT))
+def m63_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var r = tcp_recv_ex(fd, n - bytes_len(buf))
+        if not r["ok"]:
+            return buf
+        if r["eof"] or r["timeout"]:
+            return buf
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return buf
+def m63_read_headers(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"] or r["eof"]:
+            break
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        if bytes_len(buf) >= 4 and bytes_to_str(bytes_slice(buf, bytes_len(buf) - 4, bytes_len(buf))) == "\r\n\r\n":
+            break
+    return bytes_to_str(buf)
+def m63_header(hdrs, name):
+    var lines = split(hdrs, "\r\n")
+    var lname = to_lower(name)
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        var p = ln.find(":")
+        if p > 0 and to_lower(trim(ln[0:p])) == lname:
+            return trim(ln[p + 1:len(ln)])
+        i += 1
+    return ""
+def m63_respond(fd, body):
+    var msg = "HTTP/1.1 200 OK\r\n" +
+        "Content-Type: text/plain\r\n" +
+        "Content-Length: " + str(bytes_len(bytes(body))) + "\r\n" +
+        "Connection: close\r\n\r\n" + body
+    tcp_send_ex(fd, bytes(msg))
+def m63_handle(cfd):
+    var hdrs = m63_read_headers(cfd)
+    if len(hdrs) == 0:
+        tcp_close(cfd)
+        return
+    var clen = 0
+    var cl = m63_header(hdrs, "Content-Length")
+    if cl != "":
+        clen = int(cl)
+    var body = ""
+    if clen > 0:
+        body = bytes_to_str(m63_recv_n(cfd, clen))
+    m63_respond(cfd, "mock-ok:" + body)
+    tcp_close(cfd)
+while true:
+    var cfd = tcp_accept(M63_LFD)
+    m63_handle(cfd)

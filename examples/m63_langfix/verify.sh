@@ -5,7 +5,9 @@
 #   L10 编译期浮点字面量全精度（m63_prec）
 #   L8  pxi 网络补白名单（m63_net 双模式对拍 + m63_net_err pxi 单测）
 #   L11 pxc --version
-# 依赖：本地 mock HTTP server 已起在 :18080（/tmp/m63_mock.py）
+# mock：**随门自带**（m63_mock.px · 普贤写 · M249 起）—— 监听 127.0.0.1:18080，EXIT 收尾。
+#   此前依赖 /tmp/m63_mock.py（易失的外部脚本），而本门长期不在任何运行器里
+#   ⇒ 该文件被清理后无人发现，门实际早已跑不起来（M249 缺陷 428）。
 # 用法：./verify.sh
 # ============================================================
 set -u
@@ -21,11 +23,28 @@ chk() {  # chk <条件> <描述>
     if [ "$1" = "0" ]; then echo "  ✅ $2"; else echo "  ❌ $2"; fail=1; fi
 }
 
+# ---- 自带 mock（M249 · 缺陷 428）：起在 127.0.0.1:18080，EXIT 收尾 ----
+MOCKLOG=/tmp/m63_mock.log
+rm -f "$MOCKLOG"
+"$PXC" build --no-quic m63_mock.px >/dev/null 2>&1 || { echo "❌ m63_mock.px 编译失败"; exit 1; }
+# ⚠ 必须 exec：否则 $! 是子 shell，服务端活着占端口，下一轮起不来（M201 教训）
+( exec ./build/m63_mock > "$MOCKLOG" 2>&1 ) &
+MOCK_PID=$!
+trap 'kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null' EXIT
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do
+    grep -q 'm63mock: listening' "$MOCKLOG" 2>/dev/null && break
+    sleep 0.2
+done
+if ! grep -q 'm63mock: listening' "$MOCKLOG" 2>/dev/null; then
+    echo "❌ mock 未能监听 18080 —— 日志："; cat "$MOCKLOG"; exit 1
+fi
+echo "  ✅ mock 已监听 127.0.0.1:18080（随门自带）"
+
 echo "══════════ M63 L8-L11 验证 ══════════"
 
 echo "── L11: pxc/pxi --version"
 v=$("$BPXC" --version 2>&1); chk $? "bootstrap/pxc --version exit 0"
-echo "$v" | grep -q "pxc 0.1.0" && vok=0 || vok=1; chk $vok "bootstrap/pxc --version 文本 (pxc 0.1.0 ...)"
+echo "$v" | grep -qE "pxc [0-9]+\.[0-9]+\.[0-9]+" && vok=0 || vok=1; chk $vok "bootstrap/pxc --version 文本 (pxc <semver> ...)"
 v=$("$PXI" --version 2>&1); chk $? "pxi --version exit 0"
 
 echo "── L9: float roundtrip 全精度（双模式）"
