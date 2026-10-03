@@ -27,8 +27,8 @@
       反例：`three_tracks.py` 末尾是**模块级** `sys.exit(main())`
       ⇒ `from three_tracks import norm_err, run` **执行了整个对拍并 `sys.exit`**
       ⇒ 新脚本的后续代码根本没跑（**症状：日志里出现的是被 import 方的输出**）。
-      ⭐ **本仓是系列复用模式**（`three_tracks.py` 同名 12 份、`gen_probes.py` 5 份、
-      `negctl.py` 7 份 …），「新门复用同族 runner」正是踩这个坑的动作
+      ⭐ **本仓是系列复用模式**（`three_tracks.py` 同名 12 份、`gen_probes.py` 12 份、
+      `negctl.py` 14 份 …），「新门复用同族 runner」正是踩这个坑的动作
       ⇒ 已由守卫机械化（§七）。**截至 M247 实测：判红 0 个**（唯一被指向的那份已有守卫），
       但**潜伏面 30 个**（顶层有 `sys.exit`、当前没被指向）—— 它们是「**复用前先加守卫**」的清单，
       跑 `python3 selfhost/check_pymain_guard.py` 即得最新名单（**不判红**，见该脚本头注的取舍理由）。
@@ -107,5 +107,9 @@
 | 419 | 1092 次 spawn 串行 | >120s 被终止 ⇒ 改用 `pmap_records` |
 | 420 | 负控注入点错（打桩编译器源码却用入库件跑） | **打桩成功但门仍绿** ⇒ 假绿 |
 
-> M247 的处置：§二 那条**机械化**为 `check_pymain_guard.sh`，并**清理全仓同族潜伏面**
-> （11 份 `three_tracks.py` 加守卫）—— 否则「新门复用同族 runner」这个动作**迟早再踩一次**。
+> M247 的处置：§二 那条**机械化**为 `check_pymain_guard.py`，并**登记**全仓同族潜伏面
+> （30 个：`three_tracks.py` 12 · `negctl.py` 14 · `gen_probes.py` 4 等）——
+> ⚠ **本轮没有给它们加守卫**：那 11 份 `three_tracks.py` 的 `parse_args()` 在**模块级**、
+> 函数依赖全局 ⇒ 修 = 重构 11 个文件 + 逐个跑门（m227 571s/ m231 485s…）；
+> 而判据在**正确时机**（真被 `import` 那一刻）会当场判红 ⇒ 不需要提前改。
+> 若日后真要复用某个 runner，**复用前先加守卫**（拿上面的名单对）。

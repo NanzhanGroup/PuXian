@@ -938,6 +938,10 @@ run m122 bash examples/m122_builtin_args/verify.sh
 run pkg_guard_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
 run pkg_make_release bash packaging/selftest_make_release.sh
 run pkg_tag_guard bash packaging/selftest_tag_guard.sh
+# M248（用户令 2026-10-03「tag 不要使用 s1 这样的标签，影响镜像同步」）：
+#   把规则从**事后检查**推到**创建时刻**（make_tag.sh 不合规名打不出来）
+#   + 构建时刻响亮拒绝（build_rpm.sh / make_release.sh 的 MILESTONE 校验）。
+run pkg_make_tag bash packaging/selftest_make_tag.sh
 # M238：镜像器判据离线自测（原来**从未注册** ⇒ 只在我手动跑时有效 —— 缺陷 375 同族）
 run pkg_pxrepo_mirror bash packaging/selftest_pxrepo_mirror.sh
 # M168（用户报障）：安装脚本的发行版矩阵（openEuler 认脸 + 字面目录 + 不支持组合给替代路线）

@@ -61,6 +61,20 @@ if [ -z "$MILESTONE" ]; then
     [ -n "$MILESTONE" ] || MILESTONE="dev"
     MILESTONE="$(echo "$MILESTONE" | tr 'A-Z' 'a-z')"
 fi
+# ---- M248 第 ② 道防线：MILESTONE 必须是 m<数字>（或本地无 tag 时的 dev）----
+#   来源有二：命令行参数、tag 后缀。两者此前都不校验 ⇒ 2026-10-03 实测，
+#   `git tag v0.2.0-m245s1` 会让发布包名/资产名带上补丁后缀
+#   （puxian-0.2.0-m245s1-<sha>.tar.gz；rpm 侧更严重 ⇒ 镜像同步停摆）。
+#   ⇒ 在这里统一**响亮拒绝**（可见、可查），而不是把污染名推出去（静默、难查）。
+#   ⚠ 判据必须用**完整锚定正则**：首版写 `case … in m[0-9]*`，而 glob 的 `*`
+#     匹配任意串 ⇒ `m245s1` 也命中（m + 2 + 45s1）⇒ 闸门形同虚设（自测当场照出，
+#     实测 `make_release.sh m245s1` 真的打出了污染包名）。**看起来对的判据 ≠ 有牙的判据。**
+if [ "$MILESTONE" != "dev" ] && ! printf '%s' "$MILESTONE" | grep -qE '^m[0-9]+$'; then
+    echo "❌ 里程碑不合规：'$MILESTONE'（规则: m<数字>，例 m248；本地无 tag 时为 dev）" >&2
+    echo "   后果：发布包名/资产名与 rpm 包名被污染 ⇒ pxrepo_mirror.sh 的版本交叉校验判红 ⇒ 镜像停摆。" >&2
+    echo "   整改：用合规 tag（packaging/make_tag.sh），或把里程碑参数写成 m<数字>。" >&2
+    exit 1
+fi
 SHA="$(git rev-parse --short HEAD)"
 NAME="puxian-${VER}-${MILESTONE}-${SHA}"
 STAGE="/tmp/${NAME}.stage"

@@ -41,13 +41,23 @@ git push --force origin v0.2.0-m237        # ⚠ 用 --force 重定向
 3. 同一刻镜像脚本的**回退分支也坏了**（GitHub API 的 `"name": "…"` 冒号后小空格没吃掉，
    叠加 `set -euo pipefail` ⇒ 命令替换非零 ⇒ **脚本静默退出、连 `die` 的 ❌ 都打不出来**）。
 
-**两道守卫**（已落地，见 `packaging/README.md`）：
+**三道防线**（M248 起 · 见 `packaging/README.md`）——从「事后检查」推到「事前不可写错」：
 
-- `packaging/tag_guard.sh` **③ tag 命名合规** —— 未登记的违规 tag ⇒ **判红（exit 3）**；
-- `packaging/pxrepo_mirror.sh` —— 未登记的违规 tag ⇒ **响亮告警**
-  （`PXREPO_STRICT_TAGS=1` 时判红）；资产名改为**以 GitHub API 为真值**（不再猜短 SHA 位数）。
+| # | 时刻 | 载体 | 作用 |
+|---|---|---|---|
+| ① | **创建** | **`packaging/make_tag.sh`**（**唯一入口**） | 不合规的名字**根本打不出来**（exit 3）；补丁后缀形态直接给出合规名与 `--move` 出路；`--dry-run` 是无副作用的只读入口 |
+| ② | **构建** | `packaging/build_rpm.sh` · `tools/make_release.sh` | tag 派生的 MILESTONE 必须是 `^m[0-9]+$` ⇒ 否则**响亮 die**（宁可 Release 红，也不把污染包名推出去） |
+| ③ | **事后** | `packaging/tag_guard.sh` **③** · `packaging/pxrepo_mirror.sh` | 未登记的违规 tag ⇒ 判红（exit 3）/ 响亮告警（`PXREPO_STRICT_TAGS=1` 时判红）；rpm 树若含 `.m<NNN>s<N>.` 形态 ⇒ **指名判红** |
+
 - 历史遗留（规则确立前）登记在 `packaging/tag_name_exempt.txt` —— **只减不增**，
   且表里出现**已不存在的 tag** 也会判红（防豁免额度永久漂着掩盖新违规）。
+- 自测：`bash packaging/selftest_make_tag.sh`（**71 断言** · 覆盖三道防线 · 含负控：
+  拆掉判据 ⇒ 必须真的建出/构建出不合规产物）。已注册进 `selfhost/gates.registry.sh` 与 `ci.yml`。
+
+> ⚠ **为什么要有 ①**（2026-10-03 实测差距）：规则此前**只有事后检查** ⇒ 我可以随手
+> `git tag v0.2.0-m245s1`，直到 CI / 镜像侧才发现。那次让 gh-pages 出现
+> `puxian-0.2.0-1.m245s1.el9.x86_64.rpm` ⇒ 镜像的 `xcheck-rpm-tree` 判红 ⇒ **同步停摆**。
+> 事后检查能**发现**，但那时的污染包名**已经在仓库里**了。
 
 > ⚠ **不要「删 tag 再重推」**：GitHub 会把对应 Release **转成草稿**，而 `gh release view`
 > 看不到草稿（M206 实测 ⇒ 空壳 release）。要改指向就用 `git push --force` 重定向。
@@ -55,8 +65,13 @@ git push --force origin v0.2.0-m237        # ⚠ 用 --force 重定向
 ## 一键发布（推荐）
 
 ```bash
-git tag v0.2.0-m167         # 版本决策：tag 指向当前 HEAD（main 应已含待发代码）
-git push origin v0.2.0-m167 # 触发 .github/workflows/release.yml
+# 推荐（M248 起）：唯一入口 —— 名字不合规会被**创建时刻**拦下
+packaging/make_tag.sh --push        # 自动取 CHANGELOG 最高里程碑 → 建 tag → 推 main+tag（同一次 push）
+packaging/make_tag.sh --dry-run     # 先看它打算做什么（只读、无副作用）
+
+# 等价的手工方式（**名字必须自己保证合规**）：
+git tag -a v0.2.0-m167 <该里程碑最终提交> -m "M167：摘要"
+git push origin main v0.2.0-m167    # ⚠ main 与 tag **同一次** push（消 push 竞态）
 ```
 
 `release.yml` 两个 job：
