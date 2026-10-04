@@ -149,6 +149,13 @@ def check(root):
                 for a, b in (("px_root_depth", "px_root_restore"),
                              ("px_root_iso_mark", "px_root_restore_iso")):
                     na, nb = _cnt(body, a, fname), _cnt(body, b, fname)
+                    if a == "px_root_iso_mark":
+                        # M259：**桥级**入口 `px_root_iso_mark_deep` 也是「记」的一种
+                        #   （J5 保证它记 marks）⇒ 配对计数必须把它算进来，否则桥级函数
+                        #   会被误报「归还了没记的深度」。
+                        #   ⚠️ 它**不会**被上面的 `\bpx_root_iso_mark\s*\(` 正则重复计入
+                        #     （后面紧跟 `_deep(` 而非 `(`）⇒ 显式相加是安全的。
+                        na += _cnt(body, "px_root_iso_mark_deep", fname)
                     calls += na + nb
                     if na and not nb:
                         bad.append(("J2", base, l0, "函数 %s 调用 %s 但无 %s（作用域不归还）" % (fname, a, b)))
@@ -167,6 +174,39 @@ def check(root):
                     bad.append(("J3", base, l0,
                                 "函数 %s 有 px_root_pop 但整函数无 px_root_push* ⇒ 必然弹到外层作用域条目" % fname))
 
+            # ---- J5（M259）：**两类隔离点必须分开** ----
+            #   `px_root_iso_mark/restore_iso` 有 5 个调用点，分两类：
+            #     · 协程/信号级（跨让出）：px_spawn_isolate_begin · spawn_thread ·
+            #       px_sig_isolate_begin ⇒ 作用域内别的执行流会 push marks 条目
+            #       ⇒ **不得**收缩（M170 实测 7/20 SIGSEGV）
+            #     · 桥级（不让出，native 桥 yield_ok=0）：px_native_call_capture ·
+            #       bi_json_parse_opt ⇒ 被 longjmp 跳过的 push 的 marks 条目必须归还
+            #       （缺陷 463：否则每次隔离错误 +1 层，永久泄漏）
+            if fname == "px_root_restore_iso":
+                if not re.search(r"g_px_root_marks_n\s*=\s*t_iso_marks", body):
+                    bad.append(("J5", base, l0,
+                                "px_root_restore_iso 未归还 marks（t_iso_marks）⇒ 桥级隔离点会把"
+                                "被 longjmp 跳过的 marks 条目**永久留在栈里**（缺陷 463）"))
+            if fname == "px_root_iso_mark_deep":
+                if "t_iso_marks" not in body:
+                    bad.append(("J5", base, l0, "px_root_iso_mark_deep 未记 marks 深度"))
+            if fname == "px_root_iso_mark":
+                if re.search(r"t_iso_marks\s*=\s*g_px_root_marks_n", body):
+                    bad.append(("J5", base, l0,
+                                "px_root_iso_mark（协程/信号级）**不得**记 marks —— 它跨让出，"
+                                "归还 marks 会弹掉别的执行流的条目（M170 实测 7/20 SIGSEGV）"))
+
+            # ---- J6（M259）：失衡时必须放弃收缩（缺陷 462）----
+            #   修前「夹到 roots_n - 1」仍会让下一次 keep 把最顶一个条目从根面删掉
+            #   （那正是刚登记的、可能仍活跃的对象）。over-approximate = 安全 ⇒ 不入队。
+            if fname == "px_root_pop":
+                if re.search(r"mark\s*=\s*g_px_roots_n\s*>\s*0\s*\?", body):
+                    bad.append(("J6", base, l0,
+                                "px_root_pop 的失衡分支仍用「夹值」⇒ 下一次 keep 会删掉活跃帧的根"
+                                "（缺陷 462）—— 必须改为「放弃收缩」（g_px_trunc_pending = -1; return;）"))
+                elif "g_px_trunc_pending = -1;" not in body:
+                    bad.append(("J6", base, l0, "px_root_pop 缺「放弃收缩」路径"))
+
     if len(files) < ANCHORS["min_files"]:
         anchor_bad.append("扫描文件数 %d < %d" % (len(files), ANCHORS["min_files"]))
     if nfuncs < ANCHORS["min_funcs"]:
@@ -183,6 +223,8 @@ def report(res, verbose=True):
     if verbose:
         print("扫描：文件 %d · 函数 %d · 作用域 API 调用点 %d"
               % (res["files"], res["funcs"], res["calls"]))
+        print("判据：J1 延迟收缩 · J2 成对 · J3 无孤弹 · J4 锚点 · "
+              "J5 两类隔离点分开（桥级归还 marks / 协程级不归还）· J6 失衡放弃收缩")
         print("J1 豁免：%s" % ", ".join(sorted(J1_IMMEDIATE_OK)))
         for j, f, ln, msg in res["bad"]:
             print("❌ [%s] %s:%d  %s" % (j, f, ln, msg))
@@ -205,11 +247,16 @@ void px_root_restore(int rd, int rm) {
     if (g_px_roots_n > rd) g_px_trunc_pending = rd;
 }
 void px_root_iso_mark(void) { t_iso_roots = g_px_roots_n; }
+void px_root_iso_mark_deep(void) { t_iso_roots = g_px_roots_n; t_iso_marks = g_px_root_marks_n; }
 void px_root_restore_iso(void) {
     if (t_iso_roots >= 0 && g_px_roots_n > t_iso_roots) g_px_roots_n = t_iso_roots;
+    if (t_iso_marks >= 0 && g_px_root_marks_n > t_iso_marks) g_px_root_marks_n = t_iso_marks;
     g_px_trunc_pending = -1;
 }
-void px_root_pop(void) { (void)0; }
+void px_root_pop(void) {
+    if (mark > g_px_roots_n) { g_px_trunc_pending = -1; return; }
+    g_px_trunc_pending = mark;
+}
 static int qp_dec_fields(void) {
     int rm = 0; int rd = px_root_depth(&rm);
     px_root_push(); px_root_pop();
@@ -234,12 +281,25 @@ static int iso_one(void) { px_root_iso_mark(); px_root_restore_iso(); return 0; 
         ANCHORS["min_funcs"] = 10 ** 6
         d = run(good) == 3
         ANCHORS["min_funcs"] = saved["min_funcs"]
+        # NC-E(J5)：撤掉 restore_iso 的 marks 归还 ⇒ 必红
+        e = run(good.replace(
+            "    if (t_iso_marks >= 0 && g_px_root_marks_n > t_iso_marks) g_px_root_marks_n = t_iso_marks;\n",
+            "")) == 1
+        # NC-E2(J5)：让协程级入口也记 marks ⇒ 必红
+        e2 = run(good.replace(
+            "void px_root_iso_mark(void) { t_iso_roots = g_px_roots_n; }",
+            "void px_root_iso_mark(void) { t_iso_roots = g_px_roots_n; t_iso_marks = g_px_root_marks_n; }")) == 1
+        # NC-F(J6)：失衡分支改回「夹值」⇒ 必红
+        f = run(good.replace(
+            "    if (mark > g_px_roots_n) { g_px_trunc_pending = -1; return; }",
+            "    if (mark > g_px_roots_n) { mark = g_px_roots_n > 0 ? g_px_roots_n - 1 : 0; }")) == 1
     finally:
         ANCHORS.clear()
         ANCHORS.update(saved)
-    print("自证：好样本 %s · NC-A(J1) %s · NC-B(J2) %s · NC-C(J3) %s · NC-D(J4) %s"
-          % ("✅" if ok else "❌", a, b, c, d))
-    return 0 if (ok and a and b and c and d) else 1
+    print("自证：好样本 %s · NC-A(J1) %s · NC-B(J2) %s · NC-C(J3) %s · NC-D(J4) %s · "
+          "NC-E(J5-归还) %s · NC-E2(J5-协程级) %s · NC-F(J6) %s"
+          % ("✅" if ok else "❌", a, b, c, d, e, e2, f))
+    return 0 if (ok and a and b and c and d and e and e2 and f) else 1
 
 
 def main():

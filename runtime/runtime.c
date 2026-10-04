@@ -3051,7 +3051,13 @@ void px_root_pop(void) {
             if (n > 0) (void)write(2, b, (size_t)n);
         }
         skew_hits++;
-        mark = g_px_roots_n > 0 ? g_px_roots_n - 1 : 0;   // 夹到安全值，绝不收缩掉活跃根
+        // M259（缺陷 462）：**放弃收缩** —— 修前「夹到 roots_n - 1」仍会让下一次
+        //   keep 把最顶一个条目从根面删掉（那正是刚登记的、可能仍活跃的对象）。
+        //   over-approximate = 安全：不入队待收缩 ⇒ 根栈保持超集，只是这一轮不收缩
+        //   （下一次有**全新配对**的 pop 时会自然收缩）。
+        g_px_trunc_pending = -1;
+        gc_unblock_stop(&old);
+        return;
     }
     // M183（缺陷 197）：**延迟收缩**（只记待收缩深度，物理根条目留到调用方 PX_KEEP）。
     //   病灶：native 桥的惯用法是 `px_root_push(); PX_KEEP(x); …; px_root_pop(); return x;`，
@@ -3161,15 +3167,30 @@ void px_root_restore(int roots_depth, int marks_depth) {
 //   ⇒ 结论：归还**只作用于根栈**（`g_px_roots_n`），marks 栈条目留给原有 push/pop 配对逻辑。
 //   ③ 哨兵 `-1` = 本线程无记录（记录点与落点不同线程 ⇒ 不动作）：宁可不修，也不误伤。
 static __thread int t_iso_roots = -1;
+static __thread int t_iso_marks = -1;   // M259：**桥级**隔离点的 marks 深度（-1 = 非桥级/无记录）
 
 // 隔离点进入（setjmp 之前调用）：记录当前根栈深度。
+//   ⚠️ **协程/信号级**隔离点（`px_spawn_isolate_begin` / `spawn_thread` /
+//     `px_sig_isolate_begin`）走本入口：**只记 roots**。它们的作用域**跨让出** ⇒ 期间
+//     别的执行流会 push marks 条目 ⇒ **不得**收缩（M170 实测：收缩 marks ⇒ 7/20 SIGSEGV）。
 void px_root_iso_mark(void) { t_iso_roots = g_px_roots_n; }
+
+// M259（决策项 · 缺陷 463）：**桥级**隔离点专用 —— 额外记 marks 深度，落点一并归还。
+//   适用前提：native 桥执行期间 `yield_ok=0`（`px_vm_run_func`：主线程/嵌套 native
+//   回调**不可让出**）⇒ 作用域内**不会有别的执行流** push 条目 ⇒ 收缩安全。
+//   修前：被 longjmp 跳过的 `px_root_push` 的 marks 条目**永久留在栈里** ⇒ 每次隔离
+//   错误 +1 层 ⇒ ① 栈无界增长（`g_px_root_marks` 反复 xrealloc）；② 后续
+//   `px_root_pop` 会弹到**别的层** ⇒ 记下的待收缩深度指向错误的帧。
+void px_root_iso_mark_deep(void) { t_iso_roots = g_px_roots_n; t_iso_marks = g_px_root_marks_n; }
 
 // 隔离点落点（longjmp 落点调用）：归还到记录的深度并清哨兵。
 //   只收缩、不扩张；同线程才动作；打印格式与 px_root_restore 一致（门据此断言）。
 void px_root_restore_iso(void) {
     int r0 = g_px_roots_n, m0 = g_px_root_marks_n;
     if (t_iso_roots >= 0 && g_px_roots_n > t_iso_roots) g_px_roots_n = t_iso_roots;
+    // M259（决策项 · 缺陷 463）：**桥级**隔离点一并归还 marks。
+    //   哨兵 -1 = 本线程无桥级记录（协程/信号级、或跨线程）⇒ 不动手（宁可不修，也不误伤）。
+    if (t_iso_marks >= 0 && g_px_root_marks_n > t_iso_marks) g_px_root_marks_n = t_iso_marks;
     g_px_trunc_pending = -1;   // M183：隔离点已直接收缩过 ⇒ 清掉待收缩（防后续意外再收缩）
     if (g_gc_debug) {
         char dbg[128];
@@ -3179,6 +3200,7 @@ void px_root_restore_iso(void) {
         (void)write(2, dbg, (size_t)dn);
     }
     t_iso_roots = -1;
+    t_iso_marks = -1;   // M259：与 t_iso_roots 同生命周期（桥级/非桥级都在此清）
 }
 
 int px_root_peak(void) { return g_px_roots_peak; }
@@ -11257,7 +11279,7 @@ static LXValue bi_json_parse_opt(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str("json_parse_opt 不支持嵌套调用"));
     g_json_opt_msg[0] = 0;
     g_json_opt_active = 1;
-    px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
+    px_root_iso_mark_deep();   // M259（缺陷 463）：**桥级** ⇒ 同时记 marks（落点归还）
     if (setjmp(g_json_opt_jb) == 0) {
         LXValue r = bi_json_parse(args, nargs, ctx);
         g_json_opt_active = 0;
@@ -14893,7 +14915,7 @@ void px_spawn_isolate_end(void) {
 //   -O1/-O2 下此类 helper 返回分支可能被优化错判 —— 最小复现证实 → 必须同函数消化）。
 int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
                            LXValue* out, char* errbuf, int errbuf_sz) {
-    px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
+    px_root_iso_mark_deep();   // M259（缺陷 463）：**桥级** ⇒ 同时记 marks（落点归还）
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
         t_isolate_kind = 1;          // M126：外包调用隔离点 = 请求/协程级
