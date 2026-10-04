@@ -149,10 +149,19 @@ chk_199() {          # ③b 199 判据：px_exec 的 env/srv 登记
     #   ⚠️ **不能写 `|| return 1`（要求 rc=0）**：CI 实测判红 —— 同一段代码在 runner 上
     #      可能因超时（rc=124）等**环境原因**非零退出，而那不是本缺陷的症状
     #      （本缺陷的症状是**信号致死**：SIGSEGV=139 / SIGABRT=134）。⇒ 用 `rc < 128` 判「未被信号杀死」。
+    # ⚠️ **M257 连带更新（第 134 轮 · 缺陷 459 同批）**：M257 给容器操作加了「存储已失效」自检
+    #   （`px_dict_set`/`px_list_push`/`px_dict_get` 类型不符 ⇒ **响亮报告并拒绝触碰**）⇒ 本处打桩
+    #   造成的「容器存储被回收后复用」**不再崩溃**，而是打印 `[M257-CTR]` 后拒绝
+    #   ⇒ 只看「未被信号杀死」已**失去牙**（全量门实测：负控 D 报「未判红」）。
+    #   ⇒ 判据补上「**不得出现 `[M257-CTR]` 响亮报告**」—— 该报告本身就是「容器存储已失效」的
+    #      一等信号（守卫只报不改、不会自愈），因此它出现即等价于缺陷复现。
+    #   📌 这条同时是一条**独立佐证**：它证明 M257 的守卫**真的能抓住真实的失效容器**
+    #      （不是只在注入式正判据里可触发）。
     build "$WORK/m32_hot_reload.px" m32 || return 1
     env PX_GC_UAFDET=1 PX_GC_STRESS=1 PX_GC_INLINE=1 timeout 300 "$WORK/bm32/build/m32_hot_reload" > "$WORK/m32.out" 2>&1
     local rc=$?
     [ "$rc" -lt 128 ] || return 1
+    grep -q 'M257-CTR' "$WORK/m32.out" && return 1
     ! grep -q 'PX_GC_UAFDET' "$WORK/m32.out"
 }
 chk_handover_inline() {
