@@ -552,7 +552,7 @@ LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx) {
         px_error("ws_serve: listen 失败");
     }
     for (;;) {
-        int cfd = accept(sfd, NULL, NULL);
+        int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
         if (cfd < 0) continue;
         LXValue arg = px_int(cfd);
         px_spawn(ws_conn_worker, &arg, 1);
@@ -967,7 +967,7 @@ static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
     g_ws_conns[idx].active = 0;
     pthread_mutex_unlock(&g_ws_mu);
     struct timespec ts = { rms / 1000, (rms % 1000) * 1000000L };
-    nanosleep(&ts, NULL);
+    px_io_sleep_ms(rms);   // M256（缺陷 456）
     pthread_mutex_lock(&g_ws_mu);
     // 重连窗口期 slot 保持 id（active 已清），直接用原 slot
     int s2 = idx;
@@ -1046,7 +1046,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             struct pollfd pfd;
             pfd.fd = c->fd;
             pfd.events = POLLIN;
-            int pr = poll(&pfd, 1, timeout_ms);
+            int pr = px_io_poll(&pfd, 1, timeout_ms);   // M256（缺陷 456）：EINTR 曾静默返回 null（丢帧）
             if (pr == 0) {
                 // 超时：不标记关闭，连接完好
                 if (msg) free(msg);
@@ -1258,7 +1258,7 @@ static void* ws_heartbeat_thread(void* arg) {
         struct timespec ts;
         ts.tv_sec = interval / 1000;
         ts.tv_nsec = (long)(interval % 1000) * 1000000L;
-        nanosleep(&ts, NULL);
+        px_io_sleep_ms(interval);   // M256（缺陷 456）
         pthread_mutex_lock(&g_ws_mu);
         int idx = ws_find(conn);
         if (idx < 0 || g_ws_conns[idx].closed) {

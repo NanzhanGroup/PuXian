@@ -11,6 +11,11 @@
 #include <pthread.h>
 #include <signal.h>      // M93-S2: sigset_t（协程 worker GC 信号屏蔽导出 API 参数）
 #include <sys/types.h>   // ssize_t（PxConn 读写返回）
+#include <poll.h>        // M256：px_io_poll 的 struct pollfd（IO 原语声明，跨 TU）
+#include <sys/epoll.h>   // M256：px_io_epoll_wait 的 struct epoll_event
+#include <sys/socket.h>  // M256：px_io_recvfrom/accept/connect 的 struct sockaddr（**必须**在此声明，
+                         //        否则参数表里的 struct sockaddr 会成为「原型作用域」的新类型 ⇒ 与
+                         //        runtime.c 的定义冲突：conflicting types for 'px_io_recvfrom'）
 
 #ifdef __cplusplus
 extern "C" {
@@ -870,6 +875,27 @@ int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key);
 int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct, int* out_dropped);
 // 是否在拒绝名单内（大小写不敏感）
 int px_hdr_blocked(const char* k);
+
+// ==================== M256（第 120 轮）：EINTR 族 —— IO 原语（一条语义、一份实现） ====================
+// 病灶：并发 GC 的 stop-the-world 给**每个活跃线程**发 SIG_GC_STOP；线程若阻塞在系统调用上，
+//   调用被**打断**并返回 -1/EINTR —— 而「被打断 != 失败」。
+// ⚠️ SIG_GC_STOP 装了 SA_RESTART，但 signal(7) 有一张「**永不重启**」清单，两类正是热路径：
+//   · 设了 SO_RCVTIMEO/SO_SNDTIMEO 的 socket 系统调用（本运行时用户面 fd **都设了**）；
+//   · poll / select / epoll_wait / nanosleep / usleep / sigsuspend。
+// 实现见 runtime.c 同名函数；静态守卫 selfhost/check_eintr.sh。
+int px_io_poll(struct pollfd* fds, nfds_t n, int timeout_ms);
+int px_io_epoll_wait(int epfd, struct epoll_event* evs, int maxev, int timeout_ms);
+void px_io_sleep_ns(int64_t ns);       // 睡够 ns（被打断则续睡剩余）
+void px_io_sleep_ms(int64_t ms);
+void px_io_sleep_us(int64_t us);
+ssize_t px_io_read(int fd, void* buf, size_t n);
+ssize_t px_io_write(int fd, const void* buf, size_t n);
+ssize_t px_io_recv(int fd, void* buf, size_t n, int flags);
+ssize_t px_io_send(int fd, const void* buf, size_t n, int flags);
+ssize_t px_io_recvfrom(int fd, void* buf, size_t n, int flags, struct sockaddr* sa, socklen_t* sl);
+ssize_t px_io_sendto(int fd, const void* buf, size_t n, int flags, const struct sockaddr* sa, socklen_t sl);
+int px_io_accept(int fd, struct sockaddr* sa, socklen_t* sl);
+int px_io_connect(int fd, const struct sockaddr* sa, socklen_t sl);
 
 #ifdef __cplusplus
 }

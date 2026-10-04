@@ -521,7 +521,7 @@ static int h2_read_exact(PxConn* c, const unsigned char** pending, int* plen, un
         if (r == 0) return -1; // EOF
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             struct timespec ts = { 0, 5000000 };
-            nanosleep(&ts, NULL);
+            px_io_sleep_ms(5);   // M256（缺陷 456）
             continue;
         }
         return -1;
