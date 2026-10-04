@@ -1155,7 +1155,19 @@ void* xmalloc(size_t n) {
                 uaf_report("槽内首字 ≠ 释放时的链表值", ci, s, slot, *(void**)slot);
         }
     }
-    size_t idx = ((const char*)slot - ((const char*)s->base + header)) / cs;
+    // M257（缺陷 458）：**与 xfree 同款**的槽位一致性检查。旧代码直接用
+    //   `idx = (slot - (base+header)) / cs` 读位图，而 xfree 早有 `aligned/idx<slot_count`
+    //   校验 —— 两处不对称 ⇒ 空闲链表一旦被写坏（链首落在 slab 之外），这里读到未映射页
+    //   ⇒ **SIGSEGV，且错误信息指不到根因**（实测 2 份 core 落在此处：
+    //   `xmalloc ← px_root_push ← offload_run_task` 与 `xmalloc ← px_dict ← vm_run_loop`）。
+    size_t off = (size_t)((const char*)slot - ((const char*)s->base + header));
+    if (cs == 0 || (off % cs) != 0 || off / cs >= s->slot_count) {
+        fprintf(stderr,
+            "SLAB BUG: bad-alloc s=%p base=%p slot=%p class=%zu off=%zu slot_count=%zu free_head=%p\n",
+            (void*)s, s->base, slot, cs, off, s->slot_count, s->free_head);
+        abort();
+    }
+    size_t idx = off / cs;
     if (s->in_use[idx]) { fprintf(stderr, "SLAB BUG: double-alloc slot %zu class %zu\n", idx, cs); abort(); }
     s->in_use[idx] = 1;
     s->free_head = *(void**)slot;
@@ -3023,6 +3035,24 @@ void px_root_pop(void) {
     gc_block_stop(&old);
     if (g_px_root_marks_n <= 0) { gc_unblock_stop(&old); return; }
     int mark = g_px_root_marks[--g_px_root_marks_n];
+    // M257（诊断）：**失衡自检** —— `mark` 是本次 push 记下的逻辑基，正常必有
+    //   `mark <= g_px_roots_n`（推送时 base 不超过当时深度，弹出时深度只会更大）。
+    //   实测病灶形态：**多弹一次**（某帧 push 被 longjmp 跳过而 pop 到了外层 marks 条目）
+    //   ⇒ 记下偏低的 trunc_pending ⇒ 下一次 keep 收缩掉**活跃帧自己的根** ⇒ 该对象失去
+    //   根面 ⇒ 被 GC 回收 ⇒ 存储被复用（缺陷 459 的实测表现）。旧行为**完全静默**。
+    if (mark > g_px_roots_n) {
+        static long skew_hits = 0;
+        if (skew_hits < 4) {
+            char b[256];
+            int n = snprintf(b, sizeof(b),
+                "\n[M257-ROOT] **根登记栈失衡：mark=%d > roots_n=%d**（marks_n=%d）"
+                " ⇒ 存在未配对的 push/pop ⇒ 后续 keep 会收缩掉活跃帧的根。\n",
+                mark, g_px_roots_n, g_px_root_marks_n);
+            if (n > 0) (void)write(2, b, (size_t)n);
+        }
+        skew_hits++;
+        mark = g_px_roots_n > 0 ? g_px_roots_n - 1 : 0;   // 夹到安全值，绝不收缩掉活跃根
+    }
     // M183（缺陷 197）：**延迟收缩**（只记待收缩深度，物理根条目留到调用方 PX_KEEP）。
     //   病灶：native 桥的惯用法是 `px_root_push(); PX_KEEP(x); …; px_root_pop(); return x;`，
     //   而 pop 的出口（gc_unblock_stop → gc_pause_if_requested）是一个**协作式安全点**
@@ -5294,9 +5324,69 @@ static void px_list_push_locked(LXValue list, LXValue val) {
     pthread_mutex_unlock(&g_gc_mu);
 }
 
+
+// ==================== M257（缺陷 459）：容器「存储已被回收/复用」的响亮自检 ====================
+// 病灶（实测 2026-10-04）：`bi_udp_recv` 的容器 r 在**仍在作用域内**时其存储被 GC 回收，并被
+//   紧接着的下一次分配复用（实测复用者 = `px_bytes_len(buf,4)` 造的 bytes 对象：对象头 type=5，
+//   偏移 16 的 `{len, rune_len}` = {4, -1} ⇒ 拼成 0xffffffff00000004）。随后 `px_dict_set` 的
+//   扩容分支按「旧 dict」解释这段内存 ⇒ `xfree(旧 vals)` 收到垃圾指针 ⇒ 既不在任何 slab、
+//   也不像 mmap 块 ⇒ `*(p-8)` 读未映射页 ⇒ **SIGSEGV**（实测 3 份 core 落同一 PC：
+//   `xfree ← px_dict_set+0x39894 ← bi_udp_recv`；另有 2 份 core 是**下游**表现：
+//   `xmalloc ← px_root_push`，即空闲链表已被写坏）。
+//   ⇒ 旧行为把「存储已失效」**静默**升级为「按失效内存改写 + 释放垃圾指针」= 堆空闲链表写坏，
+//     下游报错**指不到根因**。
+// 契约（本函数）：**检测到即响亮报告 + 拒绝触碰该存储**（不读、不写、不释放）⇒ 把「静默堆损坏」
+//   降级为「响亮 + 该次容器操作成为空操作」。判据：容器操作的目标类型必须与操作相符。
+static long g_ctr_guard_hits = 0;
+// ⚠️ M257 自伤教训：**报告函数里绝不能调用 px_type_name** —— 它内部走 px_dict_get，
+//   而 px_dict_get 本身就有守卫 ⇒ 互递归 ⇒ 栈溢出 SIGSEGV（实测：crash 栈
+//   `px_dict_get ← px_type_name ← px_ctr_guard_fail`，是本门 [3] 注入正判据当场照出来的）。
+//   ⇒ 这里用**纯 switch 的裸名字表**：不分配、不碰容器、不做任何可能触发守卫的调用。
+static const char* px_ctr_type_name_raw(int t) {
+    switch (t) {
+        case PX_NULL:  return "null";
+        case PX_BOOL:  return "bool";
+        case PX_INT:   return "int";
+        case PX_FLOAT: return "float";
+        case PX_STR:   return "string";
+        case PX_BYTES: return "bytes";
+        case PX_LIST:  return "list";
+        case PX_DICT:  return "dict";
+        case PX_FUNC:  return "function";
+        case PX_NATIVE: return "native";
+        case PX_STRUCT: return "struct";
+        case PX_ENUM:  return "enum";
+        case PX_TUPLE: return "tuple";
+        case PX_CHAN:  return "chan";
+        case PX_MUTEX: return "mutex";
+        case PX_RWLOCK: return "rwlock";
+        case PX_GEN:   return "generator";
+        case PX_RESULT: return "result";
+        default:       return "unknown";
+    }
+}
+static void px_ctr_guard_fail(LXObject* o, int want, const char* what) {
+    if (g_ctr_guard_hits < 8) {
+        char b[352];
+        int n = snprintf(b, sizeof(b),
+            "\n[M257-CTR] **容器存储已失效：%s 的目标类型是 %d(%s)，期望 %d(%s)** ptr=%p\n"
+            "  该存储已被 GC 回收并被复用（旧行为：按失效内存改写 + xfree 垃圾指针 ⇒ 堆空闲链表写坏）\n"
+            "  本次操作已拒绝（不触碰该存储）。请连同同时刻 core / PX_GC_* 报告一并上报。\n",
+            what, (int)o->type, px_ctr_type_name_raw((int)o->type),
+            want, px_ctr_type_name_raw(want), (void*)o);
+        if (n > 0) (void)write(2, b, (size_t)n);
+    } else if (g_ctr_guard_hits == 8) {
+        (void)write(2, "[M257-CTR] （后续同类报告已省略，计数继续累计）\n", 40);
+    }
+    g_ctr_guard_hits++;
+}
+// 供门/诊断查询（0 = 从未命中）
+long px_ctr_guard_count(void) { return g_ctr_guard_hits; }
+
 void px_list_push(LXValue list, LXValue val) {
     LXObject* o = list.as.obj;
-    PX_UAFCHK(o, "px_list_push(list)");   // M183：写已回收对象 → 响亮（PX_GC_LIVECHK=1）
+    PX_UAFCHK(o, "px_list_push(list)");
+    if (o->type != PX_LIST) { px_ctr_guard_fail(o, PX_LIST, "px_list_push"); return; }   // M257（缺陷 459）   // M183：写已回收对象 → 响亮（PX_GC_LIVECHK=1）
     // M11：对象结构修改与 GC 标记/清扫通过 g_gc_mu 互斥（消除数据竞争）。
     // 必须先拿锁再屏蔽信号：等锁期间若屏蔽 SIG_GC_STOP，GC 无法暂停本线程
     // （信号 pending），导致 stop-the-world 空转、GC 降级、栈漏扫描（use-after-free）。
@@ -5381,7 +5471,8 @@ static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
 
 void px_dict_set(LXValue dict, const char* key, LXValue val) {
     LXObject* o = dict.as.obj;
-    PX_UAFCHK(o, "px_dict_set(dict)");   // M183：写已回收对象 → 响亮（PX_GC_LIVECHK=1）
+    PX_UAFCHK(o, "px_dict_set(dict)");
+    if (o->type != PX_DICT) { px_ctr_guard_fail(o, PX_DICT, "px_dict_set"); return; }   // M257（缺陷 459）   // M183：写已回收对象 → 响亮（PX_GC_LIVECHK=1）
     // M11：与 GC 通过 g_gc_mu 互斥（见 px_list_push 注释）。先拿锁再屏蔽信号。
     // M128：键副本与扩容数组都在临界区外备好（两阶段，见本文件 M128 段）——锁内只做指针发布。
     int maxr = m128_retry_max();
@@ -5493,7 +5584,8 @@ void px_dict_set_checked(LXValue dict, LXValue k, LXValue v) {
 
 LXValue px_dict_get(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
-    PX_UAFCHK(o, "px_dict_get(dict)");   // M183：读已回收对象 → 响亮（PX_GC_LIVECHK=1）
+    PX_UAFCHK(o, "px_dict_get(dict)");
+    if (o->type != PX_DICT) { px_ctr_guard_fail(o, PX_DICT, "px_dict_get"); return px_null(); }   // M257（缺陷 459）   // M183：读已回收对象 → 响亮（PX_GC_LIVECHK=1）
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
     }

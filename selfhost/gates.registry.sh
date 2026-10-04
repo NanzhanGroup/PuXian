@@ -948,6 +948,16 @@ step "M256 EINTR 族收口（缺陷 456 · 裸 IO 必须重试 —— 被 GC 暂
 #   门本身：静态守卫自证 9 条 + 正常/压力两档逐字节一致 + 负控 3 道（各自独立判红）。
 run m256_eintr bash examples/m256_eintr/verify.sh
 run eintr_guard python3 selfhost/check_eintr.py
+step "M257 容器「存储已被回收/复用」的响亮自检 + 分配器一致性检查（缺陷 458/459）"
+#   病灶（实测 2026-10-04）：`bi_udp_recv` 的容器 r 在**仍在作用域内**时其存储被 GC 回收、
+#   并被紧接着的分配复用（复用者 = `px_bytes_len(buf,4)` 的 bytes 对象）⇒ `px_dict_set`
+#   扩容分支按「旧 dict」解释失效内存 ⇒ `xfree` 收到垃圾指针 ⇒ SIGSEGV（3 份 core 同一 PC）。
+#   同日另 2 份 core 是**下游**表现（`xmalloc ← px_root_push` / `xmalloc ← px_dict`）：
+#   空闲链表已被写坏 ⇒ 报错**指不到根因**。本门把这两条都变成响亮 + 可诊断。
+#   判据：静态四处修复在位 + 基线不误伤 + **注入正判据**（期望类型改错 ⇒ 守卫必须拦住并响亮）
+#   + 负控 3 道（各自独立判红）+ 源逐字节还原。CI 用 --neg-skip（跳过注入与负控）。
+#   ⚠️ 根因（存储为何在作用域内被回收）本轮**未定论** —— 守卫是缓解不是根治，见 CHANGELOG。
+run m257_alloc_integrity bash examples/m257_alloc_integrity/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
