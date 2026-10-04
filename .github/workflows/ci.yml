@@ -595,7 +595,7 @@ jobs:
           bash examples/m207_gcstress/verify.sh --neg-skip > /tmp/v_m207.log 2>&1 || { echo "❌ m207_gcstress verify 失败"; grep -E '^(  FAIL|===|  通过)' /tmp/v_m207.log | tail -30; sed -n '/^  FAIL/,$p' /tmp/v_m207.log | head -20; exit 1; }
           echo "── M208（VM 解释循环「构造 → 登记」窗口 · 缺陷 268/269/270）──"
           bash examples/m208_vm_c_local_roots/verify.sh --neg-skip > /tmp/v_m208.log 2>&1 || { echo "❌ m208_vm_c_local_roots verify 失败"; grep -E '^(  FAIL|===|  ✅|  ❌)' /tmp/v_m208.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  ✅|  ❌|===)' /tmp/v_m208.log | tail -30
+          grep -E '^(  ✅|  ❌|===)' /tmp/v_m208.log | tail -30 || true
           echo "✅ m208_vm_c_local_roots verify（静态 S13/S14 + 两档动态 + m93 压力档回归）PASS"
           # M209（缺陷 279–282）：审计器「触发点」更正（触发点 = 会 gc_register 的构造器；
           #   push/dict_set **不是**触发点）+ 三条排除规则（覆盖 / 作用域按块身份 / deref 交棒）。
@@ -603,7 +603,7 @@ jobs:
           #   必须命中）· 两档动态 · 负控 3 道（其中一道撤 bi_map 的 keep ⇒ 压力档 rc=134+LIVECHK）。
           echo "── M209（GC 根面审计器：触发点更正 + 三条排除规则 · 缺陷 279–282）──"
           bash examples/m209_gcroot_rules/verify.sh --neg-skip > /tmp/v_m209.log 2>&1 || { echo "❌ m209_gcroot_rules verify 失败"; grep -E '^(  FAIL|===|  ✅|  ❌)' /tmp/v_m209.log | tail -30; sed -n '/^  FAIL/,$p' /tmp/v_m209.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  ✅|  ❌|===)' /tmp/v_m209.log | tail -30
+          grep -E '^(  ✅|  ❌|===)' /tmp/v_m209.log | tail -30 || true
           echo "✅ m209_gcroot_rules verify（自证 19/19 + 派生集合候选 4 + 旧规则对照 11 + 判据回放 + 两档动态）PASS"
           # M210（缺陷 283）：保留字作**形参名**漏拦截 —— `expect_name` 是形参名/成员名两条路径
           #   共用的取名字入口，其「放行整张 is_name_kind 列表」的后门让形参面也宽松：
@@ -615,7 +615,7 @@ jobs:
           #   负控 3 道（退回共用放行路径 / 形参面传 true / 去 self 例外）。
           echo "── M210（保留字形参名漏拦截 · 缺陷 283）──"
           bash examples/m210_param_kw/verify.sh --neg-skip > /tmp/v_m210.log 2>&1 || { echo "❌ m210_param_kw verify 失败"; grep -E '^(  FAIL|===|  PASS|  OK)' /tmp/v_m210.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  PASS|  FAIL|══)' /tmp/v_m210.log | tail -32
+          grep -E '^(  PASS|  FAIL|══)' /tmp/v_m210.log | tail -32 || true
           echo "✅ m210_param_kw verify（静态+拒绝侧三轨+放行侧+真实文件+全仓普查 HIT=0）PASS"
           # M211（缺陷 265 收口 · 284–287）：`px_serve` 读路径 = px_conn_worker → **px_conn_read**
           #   明文分支原为裸 `return recv(...)` —— 并发 GC 的 STW（gc_stop_handler）发 SIG_GC_STOP
@@ -627,7 +627,7 @@ jobs:
           #   负控 3 道（撤回 EINTR / 撤回 TLS / 判据自伤）。
           echo "── M211（GC STW 打断 recv ⇒ 误判对端关闭 · 缺陷 265）──"
           bash examples/m211_conn_read_eintr/verify.sh --neg-skip > /tmp/v_m211.log 2>&1 || { echo "❌ m211_conn_read_eintr verify 失败"; grep -E '^(  FAIL|══|  PASS)' /tmp/v_m211.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  PASS|  FAIL|══)' /tmp/v_m211.log | tail -34
+          grep -E '^(  PASS|  FAIL|══)' /tmp/v_m211.log | tail -34 || true
           echo "✅ m211_conn_read_eintr verify（正常档/压力档 8 连裸 TCP 全 3335 + 两档一致）PASS"
           # ── M212（第 91 轮）：审计器「触发点集合」**必须源码派生**（缺陷 288/289/290/291）──
           #   背景：M209 把判据定成「触发点 = 调用链上会 gc_register 的入口」，而审计器里那份
@@ -638,7 +638,7 @@ jobs:
           #   撤缺陷 290 判据 ⇒ 候选 ≥4）。
           echo "── M212（触发点集合源码派生 · 缺陷 288/289/290/291）──"
           bash examples/m212_gcroot_derive/verify.sh --neg-skip > /tmp/v_m212.log 2>&1 || { echo "❌ m212_gcroot_derive verify 失败"; grep -E '^(  FAIL|===|  ✅|  ❌)' /tmp/v_m212.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  ✅|  ❌|===)' /tmp/v_m212.log | tail -30
+          grep -E '^(  ✅|  ❌|===)' /tmp/v_m212.log | tail -30 || true
           echo "✅ m212_gcroot_derive verify（派生 TRIGGER=524/PRODUCER=316 · legacy 0 ⇄ derived 4 · 逐条对齐）PASS"
           #   M213（第 92 轮 · 缺陷 293–298）：审计器的**判据诚实度 + 覆盖面**。
           #   ① 覆盖面：显式 GC 入口族（px_gc_collect/px_gc_poll/bi_gc）必须进 TRIGGER（此前只靠
@@ -647,13 +647,13 @@ jobs:
           #      （消 3 条候选）；④ 缺陷 298 的 push/pop 平衡静态判据；⑤ 负控 3 道。
           echo "── M213（GC 审计器判据诚实度 + 覆盖面 · 缺陷 293–298）──"
           bash examples/m213_gcroot_precision/verify.sh --neg-skip > /tmp/v_m213.log 2>&1 || { echo "❌ m213_gcroot_precision verify 失败"; grep -E '^(  FAIL|===|  ✅|  ❌)' /tmp/v_m213.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  ✅|  ❌|===)' /tmp/v_m213.log | tail -30
+          grep -E '^(  ✅|  ❌|===)' /tmp/v_m213.log | tail -30 || true
           echo "✅ m213_gcroot_precision verify（分诊 loose 4 候选 / tight 4 · F1 A/B 4⇄7 · push/pop 平衡）PASS"
           # M214（第 93 轮）：GC 审计器三条豁免规则（R-A 提前返回 / R-B 全局根 / R-C &实参+先读参后分配）
           #   —— 把 M213 剩下的 4 条**人工判定**下沉为判据（候选 4 → 0）；自证 19 → **25** 锚点。
           echo "── M214（GC 审计器三条豁免规则 · 缺陷 302/303/304）──"
           bash examples/m214_audit_exempt/verify.sh --neg-skip > /tmp/v_m214.log 2>&1 || { echo "❌ m214_audit_exempt verify 失败"; grep -E '^(  |===)' /tmp/v_m214.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  |===)' /tmp/v_m214.log | tail -26
+          grep -E '^(  |===)' /tmp/v_m214.log | tail -26 || true
           echo "✅ m214_audit_exempt verify（候选 0 · R-A/R-B/R-C 各 1/2/1 · A/B 1/2/1/4 · 判据回放 params@379）PASS"
           # M215（第 94 轮）：整数运算符**逐值真值对拍** —— 主题是「三轨一致 ≠ 正确」（缺陷 305/306/307）
           #   ⚠️ 305/306 的病灶在**运行时原语内部**，且 pxc_vm 的 PXOP_IDIV/PXOP_MOD 快路径
@@ -663,7 +663,7 @@ jobs:
           #      本地全门用 M215_REQUIRE_GO=1 强制三份齐。
           echo "── M215（整数运算符逐值真值对拍 · 缺陷 305/306/307）──"
           bash examples/m215_int_truth/verify.sh --neg-skip > /tmp/v_m215.log 2>&1 || { echo "❌ m215_int_truth verify 失败"; grep -E '^(  |===)' /tmp/v_m215.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(  |===)' /tmp/v_m215.log | tail -26
+          grep -E '^(  |===)' /tmp/v_m215.log | tail -26 || true
           echo "✅ m215_int_truth verify（929 对整除/取模 + 929 对比较 · 三轨==独立真值 · 陷阱回归 5 条 · 不变量 0）PASS"
           # M216（第 95 轮 · 缺陷 308）：浮点→int 转换族 —— `(int64_t)f` 越界/非有限是 C11 6.3.1.4p1 的 UB
           #   （x86 cvttsd2si ⇒ INT64_MIN · aarch64 fcvtzs ⇒ 饱和）⇒ 平台相关且静默；
@@ -672,7 +672,7 @@ jobs:
           #   另有**指令级平台举证**（两架构 objdump）。负控要重编 runtime 两次 ⇒ CI 用 --neg-skip。
           echo "── M216（浮点→int 转换族 · 缺陷 308）──"
           bash examples/m216_float_to_int/verify.sh --neg-skip > /tmp/v_m216.log 2>&1 || { echo "❌ m216_float_to_int verify 失败"; grep -E '^(   |── )' /tmp/v_m216.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m216.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m216.log | tail -30 || true
           echo "✅ m216_float_to_int verify（22 例 × 三轨一致 + Python 独立真值 + 平台指令级举证）PASS"
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
@@ -689,22 +689,22 @@ jobs:
         timeout-minutes: 30
         run: |
           bash examples/m217_shift_count/verify.sh --neg-skip > /tmp/v_m217.log 2>&1 || { echo "❌ m217_shift_count verify 失败"; grep -E '^(   |── )' /tmp/v_m217.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m217.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m217.log | tail -20 || true
           bash examples/m218_logic_value/verify.sh --neg-skip > /tmp/v_m218.log 2>&1 || { echo "❌ m218_logic_value verify 失败"; grep -E '^(   |── )' /tmp/v_m218.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m218.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m218.log | tail -20 || true
           bash examples/m219_link_flags/verify.sh --neg-skip > /tmp/v_m219.log 2>&1 || { echo "❌ m219_link_flags verify 失败"; grep -E '^(   |── )' /tmp/v_m219.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m219.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m219.log | tail -30 || true
           # M220（第 99 轮 · 缺陷 315/316/317/318/319/320）：`?` / `!` / `?.` 语义收口。
           #   语料是**每例一个独立小程序**（不用驱动器分派）—— 病根就在「模块体 vs 函数体」
           #   的上下文差别上，驱动器会把用例塞进函数体 ⇒ 恰好把要测的差别测没了。
           #   负控要重编 devbuild 四次 ⇒ CI 用 --neg-skip。
           bash examples/m220_result_ops/verify.sh --neg-skip > /tmp/v_m220.log 2>&1 || { echo "❌ m220_result_ops verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m220.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m220.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m220.log | tail -30 || true
           # M221（第 100 轮）：`devbuild.sh` **产物指纹短路** —— 23 门 × ≈45s 的重复构建。
           #   这是**能隐藏重建需求**的机制 ⇒ 自带门守两条不变量 + 冷启动连跑两次 + 负控 3 道。
           #   负控要反复重建 pxc ⇒ CI 用 --neg-skip（也正因如此，CI 上源码不被改 ⇒ 缓存稳定）。
           bash examples/m221_devbuild_cache/verify.sh --neg-skip > /tmp/v_m221.log 2>&1 || { echo "❌ m221_devbuild_cache verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m221.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m221.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m221.log | tail -30 || true
           echo "✅ m217_shift_count / m218_logic_value / m219_link_flags / m220_result_ops verify（PIE 环境依赖 + 门漏注册 + Result 三运算符语义收口）PASS"
           echo "✅ m221_devbuild_cache verify（冷启动连跑第二次全 ⏭ · 改 runtime.c 必重建 · 负控 3 道）PASS"
           # M222（第 100 轮 · 晨曦 QA 生产报障）：`px_serve` 请求体契约 —— 「静默丢体」类收口。
@@ -712,7 +712,7 @@ jobs:
           #   64KB 栈缓冲当累积区 + 边界判据漏扣 body_off ⇒ 栈越界写 + 静默丢字节）。
           #   负控 A/B 各要完整重建一次 runtime ⇒ CI 用 --neg-skip。
           bash examples/m222_http_body/verify.sh --neg-skip > /tmp/v_m222.log 2>&1 || { echo "❌ m222_http_body verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m222.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m222.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m222.log | tail -30 || true
           echo "✅ m222_http_body verify（CL 5 档跨阈值 + 落盘文件 sha 逐字节 · chunked 5 档 · 开关/阈值 · 拒绝侧 400/400/413）PASS"
 
           # M223（第 101 轮）：devbuild 源码链指纹的稳定源（缺陷 323/324/325）。
@@ -720,7 +720,7 @@ jobs:
           #   ⚠️ 门内会**临时**改 selfhost/parser.px 作探针 —— EXIT trap 保证还原
           #     （内容与 mtime 同时回基线），故后续门仍能命中缓存。
           bash examples/m223_devbuild_fingerprint/verify.sh --neg-skip > /tmp/v_m223.log 2>&1 || { echo "❌ m223_devbuild_fingerprint verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m223.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m223.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m223.log | tail -30 || true
           echo "✅ m223_devbuild_fingerprint verify（touch 不触发重建 · 改内容必重建+归因指名 · 回退响亮可判定）PASS"
 
           # M224（第 102 轮）：HTTP gzip 内容协商口径（缺陷 326 · 晨曦 QA P1-2 续）。
@@ -728,7 +728,7 @@ jobs:
           #   另新增 `opts{"gzip": false}` 服务级总闸（修前 runtime 这层**无法关闭**）。
           #   用例走**裸 TCP + hex 魔数**断言（`http_request` 会自己 gunzip ⇒ 只看头验不出真压没压）。
           bash examples/m224_gzip_negotiate/verify.sh --neg-skip > /tmp/v_m224.log 2>&1 || { echo "❌ m224_gzip_negotiate verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m224.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m224.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m224.log | tail -30 || true
           echo "✅ m224_gzip_negotiate verify（q 值/子串/通配/大小写四面 + opts.gzip 服务级开关）PASS"
 
           # M225（第 103 轮）：H3 连接槽位复用「会话状态串味」（缺陷 327 · 晨曦 QA P3 阻塞级 续）。
@@ -738,7 +738,7 @@ jobs:
           #   本机实测：**不需要"非优雅断开"**，连接正常关闭 + 槽位复用即复现。
           #   用例用 PX_H3_IDLE_MS=300 加速（生产默认 2×8000ms 不变）；负控要重编 runtime。
           bash examples/m225_h3_conn_reuse/verify.sh --neg-skip > /tmp/v_m225.log 2>&1 || { echo "❌ m225_h3_conn_reuse verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m225.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m225.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m225.log | tail -30 || true
           echo "✅ m225_h3_conn_reuse verify（同槽复用 6 连全通 + 钩子/身份双层兜底 + 负控 3 道）PASS"
 
       - name: "M226 · 方法面「逐位置 × 错类型 + 错 arity」全量对拍（缺陷 328–335）"
@@ -752,7 +752,7 @@ jobs:
           #     333 join 文案 · 334 remove 缺键 R1008 ⇄ null · 335 get 放过多余实参
           #   ⚠️ 清单期望集**从源码派生**（不许手抄 —— M212 缺陷 288）；差集 ⇄ UNPAIRED.tsv 精确相等。
           bash examples/m226_method_surface/verify.sh --neg-skip > /tmp/v_m226.log 2>&1 || { echo "❌ m226_method_surface verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m226.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m226.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m226.log | tail -30 || true
           echo "✅ m226_method_surface verify（222 例三轨分叉 0 + 清单派生对拍 + 崩溃回归）PASS"
 
       - name: M227 · 「同名两门」全量对拍（函数面 ⇄ 方法面 · 缺陷 336–341）
@@ -766,7 +766,7 @@ jobs:
           #   339 方法面 tuple 缺 contains/join · 340 `str.join` 刻意不补（XALLOW.tsv 登记）
           #   341 R 码分歧 3 形状登记在 RCODE.tsv（双向判据）
           bash examples/m227_two_faces/verify.sh --neg-skip > /tmp/v_m227.log 2>&1 || { echo "❌ m227_two_faces verify 失败"; grep -E '^(   |── |❌|  FAIL|  ✖)' /tmp/v_m227.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m227.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m227.log | tail -30 || true
           echo "✅ m227_two_faces verify（197 例 × 两面 × 三轨 · 跨轨 0 · 跨面硬分叉 0 · 登记双向）PASS"
 
       # M228（第 106 轮）：**成员运算 in / not in 三轨落地 + 「三个门」全量对拍**
@@ -779,7 +779,7 @@ jobs:
         if: always()
         run: |
           bash examples/m228_membership/verify.sh --neg-skip > /tmp/v_m228.log 2>&1 || { echo "❌ m228_membership verify 失败"; grep -E '^(   |── |❌|  FAIL|  ✖)' /tmp/v_m228.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m228.log | tail -30
+          grep -E '^(   |── )' /tmp/v_m228.log | tail -30 || true
           echo "✅ m228_membership verify（81 例 × 4 门 × 3 轨 = 972 次 · 跨轨 0 · 跨门 0 · 与独立真值一致）PASS"
 
       # M229（第 107 轮）：**门锚点哨兵** + **tuple/result 方法面全量对拍**
@@ -791,44 +791,44 @@ jobs:
         if: always()
         run: |
           python3 selfhost/check_gate_anchors.py > /tmp/v_m229anchor.log 2>&1 || { echo "❌ 门锚点哨兵失败（有过期锚点）"; grep -E '^(──|❌|   )' /tmp/v_m229anchor.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(──|✅)' /tmp/v_m229anchor.log | tail -5
+          grep -E '^(──|✅)' /tmp/v_m229anchor.log | tail -5 || true
           bash examples/m229_result_tuple/verify.sh --neg-skip > /tmp/v_m229.log 2>&1 || { echo "❌ m229_result_tuple verify 失败"; grep -E '^(   |── |❌|  FAIL|  ✖)' /tmp/v_m229.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m229.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m229.log | tail -20 || true
           echo "✅ m229_result_tuple verify（35 例 × 3 轨 = 105 次 · 跨轨 0 · arity 0 · 措辞 0）PASS"
 
       - name: M230 索引/切片族三轨全量对拍（缺陷 345）
         if: always()
         run: |
           bash examples/m230_index_slice/verify.sh --neg-skip > /tmp/v_m230.log 2>&1 || { echo "❌ m230_index_slice verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m230.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m230.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m230.log | tail -20 || true
           echo "✅ m230_index_slice verify（56 例 × 3 轨 = 168 次 · 跨轨 0 · 期望 0 · MODEL 双向）PASS"
 
       - name: m231_op_matrix（运算符 × 逐类型组合全量矩阵 · 315 例）
         if: always()
         run: |
           bash examples/m231_op_matrix/verify.sh --neg-skip > /tmp/v_m231.log 2>&1 || { echo "❌ m231_op_matrix verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m231.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m231.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m231.log | tail -20 || true
           echo "✅ m231_op_matrix verify（315 例 × 3 轨 = 945 次 · 跨轨 0 · MODEL 双向 · 形状 12/12）PASS"
 
       - name: m232_truthiness（真值性表 + 短路族全量对拍 · 46 例）
         if: always()
         run: |
           bash examples/m232_truthiness/verify.sh --neg-skip > /tmp/v_m232.log 2>&1 || { echo "❌ m232_truthiness verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m232.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m232.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m232.log | tail -20 || true
           echo "✅ m232_truthiness verify（46 例 × 3 轨 · 真值性 5 个观察点 · 源码派生「专门分支集逐个相等」· 逐轨 MODEL 双向 · 形状层）PASS"
 
       - name: m233_text_cstr（文本语义接口 × 逐类型实参全量对拍 · 125 例）
         if: always()
         run: |
           bash examples/m233_text_cstr/verify.sh --neg-skip > /tmp/v_m233.log 2>&1 || { echo "❌ m233_text_cstr verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m233.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m233.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m233.log | tail -20 || true
           echo "✅ m233_text_cstr verify（125 例 × 3 轨 · 三轨一致 + 对齐 + 确定性 · 源码派生「兜底渲染器已统一」）PASS"
 
       - name: m234_bytes_family（bytes 族 × 逐类型实参全量对拍 · 209 例）
         if: always()
         run: |
           bash examples/m234_bytes_family/verify.sh --neg-skip > /tmp/v_m234.log 2>&1 || { echo "❌ m234_bytes_family verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m234.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m234.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m234.log | tail -20 || true
           echo "✅ m234_bytes_family verify（209 例 × 3 轨 · 三轨一致 + 确定性 · 源码派生「px_type_name 标记识别在位」）PASS"
 
       # M235（第 113 轮 · 缺陷 353）：**ws 连接「关闭 vs 并发使用」竞态（UAF）** ——
@@ -839,7 +839,7 @@ jobs:
         if: always()
         run: |
           bash examples/m235_ws_conn_uaf/verify.sh --neg-skip > /tmp/v_m235.log 2>&1 || { echo "❌ m235_ws_conn_uaf verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m235.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m235.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m235.log | tail -20 || true
           echo "✅ m235_ws_conn_uaf verify（形态一 12 次 + 形态二 6 次「崩溃 0」· 元信息 path/peer/header 4 项 · 静态 8 项）PASS"
 
       # M236（第 114 轮 · 晨曦 ws-edge 特性请求）：**HTTP 请求 → WebSocket 升级接管**。
@@ -850,7 +850,7 @@ jobs:
         if: always()
         run: |
           bash examples/m236_ws_stream/verify.sh --neg-skip > /tmp/v_m236.log 2>&1 || { echo "❌ m236_ws_stream verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m236.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m236.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m236.log | tail -20 || true
           echo "✅ m236_ws_stream verify（三轨一致 C/VM/解释 · 元信息 path/header/peer · manual 两条路 · 拒绝侧 4 例 · 未注册路径落回普通 HTTP）PASS"
       # M237（第 115 轮 · 缺陷 364–371）：**字段访问 / 构造 / 变体族**全量对拍（38 例）。
       #   主题：x.f / x.f = v / T(...) / E.V / E("V") 这一族从来没做过清单级全量对拍 ——
@@ -860,7 +860,7 @@ jobs:
         if: always()
         run: |
           bash examples/m237_field_enum/verify.sh --neg-skip > /tmp/v_m237.log 2>&1 || { echo "❌ m237_field_enum verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m237.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m237.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m237.log | tail -20 || true
           echo "✅ m237_field_enum verify（38 例 · 三轨一致 + 拒绝侧 + struct/enum/dict 字段族）PASS"
 
 
@@ -871,7 +871,7 @@ jobs:
         if: always()
         run: |
           bash examples/m239_match_case/verify.sh --neg-skip > /tmp/v_m239.log 2>&1 || { echo "❌ m239_match_case verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m239.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m239.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m239.log | tail -20 || true
           echo "✅ m239_match_case verify（80 例 · guard/绑定/tuple/非穷尽/控制流传播）PASS"
 
 
@@ -901,7 +901,7 @@ jobs:
         if: always()
         run: |
           bash examples/m246_compound_assign/verify.sh --neg-skip > /tmp/v_m246.log 2>&1 || { echo "❌ m246_compound_assign verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m246.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m246.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m246.log | tail -20 || true
           echo "✅ m246_compound_assign verify（364 例 × 3 轨 · 跨轨 0 · MODEL 双向 · 形态等价性 182 对）PASS"
 
       # M250（第 127 轮 · 缺陷 433）：**ONNX 张量助手族全量对拍 + native 覆盖面台账** ——
@@ -914,12 +914,12 @@ jobs:
         if: always()
         run: |
           bash examples/m250_onnx_tensor/verify.sh --neg-skip > /tmp/v_m250.log 2>&1 || { echo "❌ m250_onnx_tensor verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m250.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m250.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m250.log | tail -20 || true
           echo "✅ m250_onnx_tensor verify（193 例 × 3 轨 · 分叉 0 · 边界 34 例全响亮 + 反向判据 · 独立真值 20 · 确定性 · 覆盖面台账五判据）PASS"
       - name: m253_bcorpus（10 个「从未被任何门语料触碰过」的 [B 类] native · 缺陷 444/445/446）
         run: |
           bash examples/m253_bcorpus/verify.sh --neg-skip > /tmp/v_m253.log 2>&1 || { echo "❌ m253_bcorpus verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m253.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^(   |── )' /tmp/v_m253.log | tail -20
+          grep -E '^(   |── )' /tmp/v_m253.log | tail -20 || true
           echo "✅ m253_bcorpus verify（87 例 × 3 轨 · 分叉 0 · 期望值 55 · 边界面 32 · 覆盖边界 6 条）PASS"
 
       - name: m255_ws_takeover_rst（晨曦 WS P0 三缺陷 · 接管 + 连上即撤 RST · 缺陷 395/399/414）
@@ -936,7 +936,7 @@ jobs:
           python3 selfhost/check_eintr.py --self-test > /tmp/v_m256g.log 2>&1 || { echo "❌ check_eintr.py 自证失败"; tail -20 /tmp/v_m256g.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           python3 selfhost/check_eintr.py . > /tmp/v_m256g2.log 2>&1 || { echo "❌ check_eintr.py 实检有违例（裸 IO 未重试）"; tail -20 /tmp/v_m256g2.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           bash examples/m256_eintr/verify.sh --neg-skip > /tmp/v_m256.log 2>&1 || { echo "❌ m256_eintr verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m256.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^── ' /tmp/v_m256.log | tail -8
+          grep -E '^── ' /tmp/v_m256.log | tail -8 || true
           echo "✅ m256_eintr verify（守卫自证 9 + 实检 A0/B0 + 两档逐字节一致）PASS"
 
       - name: m257_alloc_integrity（容器存储失效自检 · 缺陷 458/459）
@@ -944,7 +944,7 @@ jobs:
         run: |
           set -uo pipefail
           bash examples/m257_alloc_integrity/verify.sh --neg-skip > /tmp/v_m257.log 2>&1 || { echo "❌ m257_alloc_integrity verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m257.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^── ' /tmp/v_m257.log | tail -6
+          grep -E '^── ' /tmp/v_m257.log | tail -6 || true
           echo "✅ m257_alloc_integrity verify（静态 8 + 基线不误伤 + 计数入口）PASS"
 
       - name: m258_root_restore（收缩必须走延迟语义 · 缺陷 460）
@@ -954,7 +954,7 @@ jobs:
           python3 selfhost/check_root_contract.py --self-test > /tmp/v_m258g.log 2>&1 || { echo "❌ check_root_contract.py 自证失败"; tail -20 /tmp/v_m258g.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           python3 selfhost/check_root_contract.py --root . > /tmp/v_m258g2.log 2>&1 || { echo "❌ GC 根栈契约有违例"; tail -20 /tmp/v_m258g2.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           bash examples/m258_root_restore/verify.sh --neg-skip > /tmp/v_m258.log 2>&1 || { echo "❌ m258_root_restore verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m258.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^── ' /tmp/v_m258.log | tail -8
+          grep -E '^── ' /tmp/v_m258.log | tail -8 || true
           echo "✅ m258_root_restore verify（守卫自证 5 + 全仓 0 违例 + 窗口正判据 + 修复判据）PASS"
 
       - name: m259_root_trunc（根栈隔离点两类语义显式分开 + 失衡放弃收缩 · 缺陷 462/463）
@@ -964,7 +964,7 @@ jobs:
           python3 selfhost/check_root_contract.py --self-test > /tmp/v_m259g.log 2>&1 || { echo "❌ check_root_contract.py 自证失败（J5/J6 判据）"; tail -20 /tmp/v_m259g.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           python3 selfhost/check_root_contract.py --root . > /tmp/v_m259g2.log 2>&1 || { echo "❌ GC 根栈契约有违例（J5 两类隔离点 / J6 失衡处置）"; tail -20 /tmp/v_m259g2.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           bash examples/m259_root_trunc/verify.sh --neg-skip > /tmp/v_m259.log 2>&1 || { echo "❌ m259_root_trunc verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m259.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
-          grep -E '^── |^     ' /tmp/v_m259.log | tail -10
+          grep -E '^── |^     ' /tmp/v_m259.log | tail -10 || true
           echo "✅ m259_root_trunc verify（J5/J6 在位 + 桥级 marks 归还 200/200 + 缺陷 462 静态判据）PASS"
 
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
