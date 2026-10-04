@@ -12,7 +12,6 @@
 #   期望单 worker = sum(even x*2) + 15*GKC = 420 + 15*1 = 435；K=6 → 2610。
 # 用法：PX_GC_THRESHOLD=<阈值> 产物（低阈值高频并发 GC 放大窗口）。
 GKC = 1
-
 def worker(id: int, waves: int, ch):
     sentinel = "GW" + str(id) + "-s3d4-sentinel"
     base = []
@@ -34,7 +33,7 @@ def worker(id: int, waves: int, ch):
             m += 1
         # 部分消费 1 项（前 waves 波 = 10 项），gen 内部游标/闭包跨 GC 存活
         if w < 10:
-            var v = gen_next(glazy)   # M260：同帧后文 `v = gen_next(glazy)` 重新赋值 ⇒ 需 var（M169 起 let 帧内 hoist 且不可变）
+            var v = gen_next(glazy)  # M260：同帧后文 `v = gen_next(glazy)` 重新赋值 ⇒ 需 var（M169 起 let 帧内 hoist 且不可变）
             if v != null:
                 p1 += v
         # 活引用校验：sentinel 仅存于本 worker 帧槽
@@ -53,12 +52,11 @@ def worker(id: int, waves: int, ch):
         bad = 2
     if bad != 0:
         print("WORKER-" + str(id) + " FAILED bad=" + str(bad) + " total=" + str(total))
-    ch.send(total)
-
+    ch.send (total)
 def main():
     k = 6
     waves = 12
-    ch = chan[int](32)
+    ch = chan [int](32)
     i = 0
     while i < k:
         spawn worker(i, waves, ch)
@@ -66,7 +64,7 @@ def main():
     totalsum = 0
     j = 0
     while j < k:
-        let tok = ch.recv()
+        let tok = ch.recv ()
         totalsum += tok
         j += 1
     print("workers:", k, "waves:", waves)
