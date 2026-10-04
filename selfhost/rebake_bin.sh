@@ -115,13 +115,15 @@ check_neg_residue() {
         echo "ℹ️  selfhost/*.px 有未提交改动（请确认是**有意修改**而非负控补丁残留）：" >&2
         echo "$dirty" | sed 's/^/     /' >&2
     fi
-    local marks
-    marks="$(grep -rlE '_m[0-9]+_neg|NEGCTL|__NEG' \
-             --include='*.px' --include='*.c' \
-             "$ROOT/selfhost" "$ROOT/runtime" "$ROOT/tools" "$ROOT/stdlib" 2>/dev/null || true)"
-    if [ -n "$marks" ]; then
-        echo "❌ 拒烘：源码里发现**负控残留标记**：" >&2
-        echo "$marks" | sed 's/^/     /' >&2
+    # M254（缺陷 448）：扫描面从「.px/.c」扩到「.px/.c/.h/.py/.sh/.go」，
+    #   并**下沉为独立守卫** `selfhost/check_neg_residue.sh`（单一事实源 + 自证 + 豁免表）。
+    #   理由：门内并行执行器 `selfhost/gate_par.py`（**.py**）正是 `m244_gate_parallel`
+    #   负控的**打桩目标**，旧扫描面**看不见它** —— 本轮实测该残留逃过自检，
+    #   靠 `git status` 肉眼才发现（若此时重烘，就会把「恒串行」的执行器带进后续判据）。
+    local out
+    if ! out="$(bash "$ROOT/selfhost/check_neg_residue.sh" 2>&1)"; then
+        echo "❌ 拒烘：负控残留自检判红 ——" >&2
+        printf '%s\n' "$out" | sed 's/^/     /' >&2
         bad=1
     fi
     if [ "$bad" = "1" ]; then
@@ -132,7 +134,7 @@ check_neg_residue() {
         echo "     （教训全文见 docs/spec.md §17.10 检测器小节与本脚本头部注释）" >&2
         return 1
     fi
-    echo "✅ 负控残留自检通过（selfhost/*.px 无未提交改动 · 无负控标记）"
+    echo "✅ 负控残留自检通过（selfhost/*.px 无未提交改动 · 负控标记扫描面 .px/.c/.h/.py/.sh/.go）"
     return 0
 }
 # ---- M201：**烘前/烘后源码快照**（防"烘到一半源码被改"）----

@@ -1,0 +1,19 @@
+# 负控残留守卫 · 豁免表（selfhost/neg_residue_exempt.txt）
+# ------------------------------------------------------------
+# 允许含负控标记（_m<N>_neg / NEGCTL / __NEG）的文件。
+# 只有一类东西可以登记：**会写下标记的东西** —— 运行器 / 守卫自身，
+#   它们的注释里必须写出标记名（否则实现与说明脱节）。
+#
+# 纪律（三条都由 selfhost/check_neg_residue.sh 机械执行）：
+#   ① 每条**必须**带理由（TAB 分隔）；
+#   ② **只许缩小**：文件被删/改名/标记被清 ⇒ 守卫判「过期」红；
+#   ③ 规模上限 8 条（守卫里硬编码），超限判红。
+#
+# ⛔ **被打桩的目标绝不登记** —— 例如 selfhost/*.px、runtime/*.c、selfhost/gate_par.py。
+#    它们出现标记**就是**残留，必须 git checkout 还原。
+#
+# 格式：<相对仓库根的路径><TAB><理由>
+selfhost/rebake_bin.sh	负控残留自检的实现处（注释里必须写出标记名）
+selfhost/check_neg_residue.sh	本守卫自身（判据/自证里必须引用标记正则）
+selfhost/run_gates.sh	全量运行器（注释里说明负控打桩与还原口径）
+selfhost/m117_gates.sh	门运行器（同上）

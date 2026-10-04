@@ -2,11 +2,16 @@
 # ============================================================
 # packaging/selftest_pxrepo_mirror.sh —— pxrepo_mirror.sh 判据离线回归
 # ------------------------------------------------------------
-# 只测「版本交叉校验」判据（不联网、不下载、不写站点）：
-#   从 pxrepo_mirror.sh 的 `# >>> xcheck-rpm-tree >>>` ~ `# <<< xcheck-rpm-tree <<<`
-#   之间**逐字抽取**真实代码段执行 ⇒ 无副本漂移。
+# 只测**离线判据**（不联网、不下载、不写站点）：按标记从 pxrepo_mirror.sh
+# **逐字抽取**真实代码段执行 ⇒ 无副本漂移。当前覆盖四段：
+#   [1] xcheck-rpm-tree   版本交叉校验（gh-pages 树 ⇄ tag）
+#   [2] rootfiles-fresh   站点根文件指纹（版本不变也要比内容）
+#   [3] tag-name-guard    tag 命名护栏（不合规 tag 必须响亮）
+#   [4] rpm-tree-layout   ★镜像树布局（rpm/<dist>/x86_64/…）—— M254 补 §⑤ 的判据缺口
 # 回归对象（晨曦 2026-09-16 干跑发现）：原判据用 gh-pages **tip 提交信息**判定，
 #   tip 为「站点文件同步」提交时必然误判 ⇒ 改为以 rpm 树内 `.mNNN` 为真值。
+# 回归对象（晨曦 2026-10-02 干跑发现 · 10-04 第 2 次催办）：§⑤ 丢了 arch 层 ⇒ 真实站点必 die，
+#   而 §⑤ 原本**没有任何判据覆盖** ⇒ [4] 段即为此而设。
 # 用法：bash packaging/selftest_pxrepo_mirror.sh   （退出码 0 = 全过）
 # ============================================================
 set -uo pipefail
@@ -146,6 +151,74 @@ chk_tag "F4 全合规 + STRICT=1 → 仍放行" 'v0.2.0-m236' 0 '' '拒绝继续
 mk_repo e "puxian-0.2.0-1.m237s3.el9.x86_64.rpm"
 tip_msg e "rpm: 发布 PuXian v0.2.0-m237"
 check "G rpm 树含违规标记(.m237s3.) → 拦住且**指名**不合规" 1 "不合规" "$W/e" "v0.2.0-m237"
+
+echo "== [4] rpm 树布局判据（抽取自 $SCRIPT 的 rpm-tree-layout 段）=="
+# 背景：M168 把 §⑤ 的 arch 层丢了（find "$STAGING/rpm/$d"、…/repodata/repomd.xml.asc 都缺 /x86_64）
+#   ⇒ 任何按本脚本部署的镜像器都在 §⑤ 直接 die，而且是在**已经拉完数百 MB 资产之后**。
+#   晨曦 2026-10-02 干跑发现（上游原件 sha256 76a3579…，我 2026-10-04 核对：与当时 HEAD 逐字节相同）、
+#   2026-10-04 第 2 次催办。长期没被拦住的原因 = §⑤ **没有任何判据覆盖**（既有三段都不执行 §⑤）。
+BLOCK4="$W/rpmtree.sh"
+cat > "$BLOCK4" <<'HDR'
+log() { printf '   [log] %s\n' "$*"; }
+die() { printf '   [die] %s\n' "$*"; exit 1; }
+HDR
+sed -n '/^# >>> rpm-tree-layout >>>/,/^# <<< rpm-tree-layout <<<$/p' "$SCRIPT" >> "$BLOCK4"
+grep -q 'rpm_tree_dir()' "$BLOCK4" || { echo "❌ 抽取失败：$SCRIPT 里的 rpm-tree-layout 标记行缺失或被改"; exit 2; }
+
+# fixture = **真实镜像树布局**（dist 层 + arch 层 + repodata + 签名文件），4 个 dist 覆盖 x86 与 openEuler
+RT="$W/rt"; RMBIN="$W/rmbin"; mkdir -p "$RMBIN"
+rmk() { # $1=dist 名
+  mkdir -p "$RT/rpm/$1/x86_64/repodata"
+  : > "$RT/rpm/$1/x86_64/puxian-0.9.9-1.m999.x86_64.rpm"
+  : > "$RT/rpm/$1/x86_64/repodata/repomd.xml.asc"
+}
+rmk 7; rmk 9; rmk openeuler/22.03; rmk openeuler/24.03
+: > "$RT/rpm/PUXIAN-GPG-KEY.asc"
+printf '#!/bin/sh\nexit 0\n' > "$RMBIN/rpm"; chmod +x "$RMBIN/rpm"   # 桩：只为让 --import/-Kv 通过
+
+rt_run() { STAGING="$RT" PATH="$RMBIN:$PATH" bash "$BLOCK4" 2>&1; }
+
+# ④ 正例：真实布局必须**全过**（保证判据不是恒绿）
+o="$(rt_run)"; rtc=$?
+ok=1
+[ "$rtc" = 0 ] || ok=0
+printf '%s' "$o" | grep -q '目录集合：7 9 openeuler/22.03 openeuler/24.03' || ok=0
+[ "$(printf '%s' "$o" | grep -c '✅')" = 4 ] || ok=0
+if [ "$ok" = 1 ]; then
+  echo "✅ ④ 真实布局（4 dist × arch 层）→ 全过"; PASS=$((PASS+1))
+else
+  echo "❌ ④ rc=$rtc；输出: $(printf '%s' "$o" | tr '\n' ' ')"; FAIL=$((FAIL+1))
+fi
+
+# ④b 反向判据：摘掉一个 dist 的 repomd.xml.asc ⇒ **必须**响亮（否则「一律通过」也能让 ④ 变绿）
+mv "$RT/rpm/openeuler/24.03/x86_64/repodata/repomd.xml.asc" "$W/kept.asc"
+o="$(rt_run)"; rtc=$?
+if [ "$rtc" != 0 ] && printf '%s' "$o" | grep -q 'openeuler/24.03/x86_64 缺少 repomd.xml.asc'; then
+  echo "✅ ④b 缺 repomd.xml.asc → 响亮，且路径**含 arch 层**"; PASS=$((PASS+1))
+else
+  echo "❌ ④b rc=$rtc；输出: $(printf '%s' "$o" | tr '\n' ' ')"; FAIL=$((FAIL+1))
+fi
+mv "$W/kept.asc" "$RT/rpm/openeuler/24.03/x86_64/repodata/repomd.xml.asc"
+
+# ④c 缺陷真实性（直接证据，无打桩）：**旧形态**（缺 arch）在真实布局上**必然**找不到 .rpm
+oldf="$(find "$RT/rpm/9" -maxdepth 1 -name '*.rpm' | head -1)"
+if [ -z "$oldf" ]; then
+  echo "✅ ④c 旧形态（find rpm/9，缺 arch）在真实布局上必然为空 ⇒ M168 的 §⑤ 必 die"; PASS=$((PASS+1))
+else
+  echo "❌ ④c 旧形态竟找到了「$oldf」—— fixture 不是真实布局"; FAIL=$((FAIL+1))
+fi
+
+# ④d 静态：路径拼接**不许散落回调用点** + version.json 的 rpm_repo 必须含 arch 层
+# ⚠️ 只查**代码行**：§⑤ 的注释里**故意保留**缺陷原形（`find "$STAGING/rpm/$d"`）当历史说明，
+#    把注释算进来会**假红**（本仓 M221/M223 同款教训 —— 判据的输入 ≠ 人读的文本）。
+_hits="$(grep -nE '\$\{?STAGING\}?/rpm/\$d(/|"|$)' "$SCRIPT" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vc '/x86_64' || true)"
+_repo="$(grep -cF 'rpm/$d/x86_64/' "$SCRIPT" || true)"   # 不带引号：§6 里是转义后的 \" … \"
+_dec="$(grep -c 'rpm_tree_dir "\$STAGING"' "$SCRIPT" || true)"
+if [ "$_hits" = 0 ] && [ "$_repo" -ge 1 ] && [ "$_dec" -ge 1 ]; then
+  echo "✅ ④d 静态：无「缺 arch」拼接 · find 经 rpm_tree_dir · rpm_repo 含 /x86_64/"; PASS=$((PASS+1))
+else
+  echo "❌ ④d 缺 arch 拼接 $_hits 处 · rpm_repo 命中 $_repo · 经访问器 $_dec"; FAIL=$((FAIL+1))
+fi
 
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
 [ "$FAIL" = 0 ] || exit 1

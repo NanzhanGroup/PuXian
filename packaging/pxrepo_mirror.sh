@@ -265,21 +265,43 @@ log "   ✅ tarball sha256 = $SUM（与 sha256sums.txt 一致）"
 # M168：目录集合由「写死 7/9」改为「7/9 + 实际存在的 openeuler/<ver>」——
 #   镜像侧若只认 RHEL 系，新铺的 openEuler 目录会被**静默漏掉**（用户装到 404 元数据）。
 log "④ 校验 rpm 仓库"
-RPM_DIRS="7 9"
-for _d in "$STAGING"/rpm/openeuler/*/x86_64; do
-  [ -d "$_d" ] || continue
-  _v="$(basename "$(dirname "$_d")")"
-  RPM_DIRS="$RPM_DIRS openeuler/$_v"
-done
+# >>> rpm-tree-layout >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
+# ★ 镜像树布局（**唯一事实源**）：
+#       rpm/<dist>/x86_64/<文件>
+#         dist ∈ {7, 9, openeuler/<ver>}   ← 发行版维度
+#         arch  = x86_64                   ← **必须显式拼出**，不许省略
+#   ★ 事故（M168 引入 · 晨曦 2026-10-02 干跑发现 · 2026-10-04 第 2 次催办）：
+#     M168 改造时丢了 arch 层 ⇒ find "$STAGING/rpm/$d" 与 …/repodata/repomd.xml.asc
+#     都指向**不存在**的路径 ⇒ 任何按本脚本部署的镜像器都在 §⑤ 直接 die，
+#     而且是在「已经拉完数百 MB 资产之后」才死。
+#     对照：M168 之前的版本（4127306）此处写的是 "$STAGING/rpm/$d/x86_64" ⇒ 是**回退**，不是设计。
+#   ★ 为什么长期没被拦住：§⑤ **没有任何判据覆盖** —— selftest 只造 rpm/9/x86_64 树，
+#     但它抽取的三段里没有一段执行 §⑤。⇒ 下面两个访问器 + selftest 的 [4] 段补上这个缺口。
+#   ★ 纪律：路径拼接**只在这里**（访问器是唯一入口）⇒ 调用点不许自己拼路径。
+rpm_dist_dirs() {   # $1=站点根 ⇒ 输出 dist 名列表（空格分隔，顺序稳定）
+  local root="$1" _d _v out="7 9"
+  for _d in "$root"/rpm/openeuler/*/x86_64; do
+    [ -d "$_d" ] || continue
+    _v="$(basename "$(dirname "$_d")")"
+    out="$out openeuler/$_v"
+  done
+  printf '%s\n' "$out"
+}
+rpm_tree_dir() {    # $1=站点根 $2=dist 名 ⇒ 输出该 dist 的 **arch 层**路径
+  printf '%s/rpm/%s/x86_64\n' "$1" "$2"
+}
+RPM_DIRS="$(rpm_dist_dirs "$STAGING")"
 log "   目录集合：$RPM_DIRS"
 for d in $RPM_DIRS; do
-  rpmf="$(find "$STAGING/rpm/$d" -maxdepth 1 -name '*.rpm' | head -1)"
-  [ -n "$rpmf" ] || die "rpm/$d 下没有 .rpm"
+  _rdir="$(rpm_tree_dir "$STAGING" "$d")"
+  rpmf="$(find "$_rdir" -maxdepth 1 -name '*.rpm' | head -1)"
+  [ -n "$rpmf" ] || die "rpm/$d/x86_64 下没有 .rpm"
   rpm --import "$STAGING/rpm/PUXIAN-GPG-KEY.asc" 2>/dev/null || true
   rpm -Kv "$rpmf" >/dev/null 2>&1 || die "$(basename "$rpmf") 签名校验失败"
-  [ -f "$STAGING/rpm/$d/repodata/repomd.xml.asc" ] || die "rpm/$d 缺少 repomd.xml.asc"
+  [ -f "$_rdir/repodata/repomd.xml.asc" ] || die "rpm/$d/x86_64 缺少 repomd.xml.asc"
   log "   ✅ $d：$(basename "$rpmf") 验签通过"
 done
+# <<< rpm-tree-layout <<<
 
 # ---------- 6. 镜像自证文件 ----------
 # M168：rpm_repo 按**实际目录集合**生成（新增 openEuler 后版本对账口径同步）
@@ -292,7 +314,11 @@ for d in $RPM_DIRS; do
     *)  k="$d" ;;
   esac
   [ -n "$RPM_REPO_JSON" ] && RPM_REPO_JSON="$RPM_REPO_JSON, "
-  RPM_REPO_JSON="$RPM_REPO_JSON\"$k\": \"rpm/$d/\""
+  # M254：仓库基址必须含 arch 层（与 §⑤ 的树布局同口径）——
+  #   M168 后曾退化为 "rpm/$d/"，任何按 version.json 的 rpm_repo 配 baseurl 的第三方都会 404
+  #   （实测 https://soft.xiusoft.cn/puxian/rpm/9/repodata/repomd.xml → 404；真实在 rpm/9/x86_64/ 下）。
+  #   现网客户端不受影响（/etc/yum.repos.d/puxian.repo 用 $releasever/$basearch 自己拼）。
+  RPM_REPO_JSON="$RPM_REPO_JSON\"$k\": \"rpm/$d/x86_64/\""
 done
 cat > "$STAGING/version.json" <<JSON
 {
