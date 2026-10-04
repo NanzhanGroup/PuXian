@@ -1,0 +1,46 @@
+# ============================================================
+# m255 复现器 · 服务端：ws_stream 接管 + heartbeat + **handler 内 spawn 后立即返回**
+#
+# 为什么必须是这个形状（晨曦报障 · 缺陷 B 的必要条件）：
+#   ① takeover 注册槽 g_ws_conns[slot].conn = c（c 是 HTTP 侧创建的 PxConn）
+#   ② 语言层 handler 被调；**handler 内 spawn 出中继协程后立即返回**
+#      ⇒ 中继协程（M93 M/N 调度可能落到另一线程）开始 ws_recv(conn)
+#         ⇒ ws_get_conn() 锁内取裸指针 c，解锁后使用
+#   ③ handler 已返回 ⇒ 泵循环读到 EOF
+#   ④ 注销槽
+#   ⑤ 调用方 px_pxpend_close(fd) ⇒ px_conn_owner_free(c) ⇒ xfree(c)
+#   ⑥ 中继协程继续 ws_read_frame(c) ⇒ px_conn_read(c) ⇒ px_conn_acquire(c)
+#         ⇒ pthread_mutex_lock(&c->mu) ⇒ **SIGSEGV**（c 已 free）
+#   ⇒ **同步 handler（不 spawn、不返回）不会崩** —— 形状是必要条件（M240 已实测）。
+#   ⚠️ 本文件**故意**用 spawn 形态；改动它会让门下 [2] 层失去意义。
+#
+# 与 Ma 的行为对齐点：① takeover 路由（/agent/x）② ws_heartbeat 独立线程
+# 环境变量：无（命令行参数 <port> [heartbeat_ms]）
+# ============================================================
+var port = 18801
+let av = args()
+if len(av) > 1:
+    port = int(av[1])
+
+var hb_ms = 5
+if len(av) > 2:
+    hb_ms = int(av[2])
+
+def relay(conn):
+    n = 0
+    while true:
+        m = ws_recv(conn, 1500)
+        if m == null:
+            break
+        ws_send(conn, "e:" + m)
+        n = n + 1
+    print("RELAY done n=" + str(n))
+
+def agent(conn, req):
+    print("SRV accept path=" + ws_conn_path(conn))
+    ws_heartbeat(conn, hb_ms, 1000)
+    spawn relay(conn)
+    print("SRV handler-return")
+
+ws_stream("/agent/x", agent, {})
+px_serve(port, ".", 30000, {})

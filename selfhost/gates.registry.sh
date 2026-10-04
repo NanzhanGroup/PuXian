@@ -931,6 +931,15 @@ run m246_compound_assign bash examples/m246_compound_assign/verify.sh
 run m250_onnx_tensor bash examples/m250_onnx_tensor/verify.sh
 step "M253 [B 类] native 补门（10 个从未被触碰的 API · 缺陷 444/445/446）"
 run m253_bcorpus bash examples/m253_bcorpus/verify.sh
+step "M255 晨曦 WS P0 三缺陷的修复有效性（接管 + 连上即撤 RST · 缺陷 395/399/414）"
+#   来历：晨曦（wsa-chenxi）2026-10-02 报障 Mahesvara「WS 统一入口一次真实中转即崩」，
+#   给 A（gethostbyname 非线程安全）/ B（takeover 连接的 PxConn 双所有权）两处 + 一份
+#   证书热加载 UAF 补丁（C）。三处已在 M240 / M245 修复，**但此前没有任何门**覆盖
+#   「WS 接管 + 客户端连上即撤（SO_LINGER=0 ⇒ RST）」这个晨曦的真实复现形态
+#   （M235 门形态二用的是温和 ws_client，3 轮）。⇒ 本门把它固化。
+#   判据：静态（三处修复在位）+ 动态（16 并发 RST 压测 · 崩溃 0）+ 会话形态自证
+#   （必须真返回 101）+ 负控双向（必崩/必活替身）。CI 用 --neg-skip。
+run m255_ws_takeover_rst bash examples/m255_ws_takeover_rst/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
