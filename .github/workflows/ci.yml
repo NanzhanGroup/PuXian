@@ -957,6 +957,16 @@ jobs:
           grep -E '^── ' /tmp/v_m258.log | tail -8
           echo "✅ m258_root_restore verify（守卫自证 5 + 全仓 0 违例 + 窗口正判据 + 修复判据）PASS"
 
+      - name: m259_root_trunc（根栈隔离点两类语义显式分开 + 失衡放弃收缩 · 缺陷 462/463）
+        if: always()
+        run: |
+          set -uo pipefail
+          python3 selfhost/check_root_contract.py --self-test > /tmp/v_m259g.log 2>&1 || { echo "❌ check_root_contract.py 自证失败（J5/J6 判据）"; tail -20 /tmp/v_m259g.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          python3 selfhost/check_root_contract.py . > /tmp/v_m259g2.log 2>&1 || { echo "❌ GC 根栈契约有违例（J5 两类隔离点 / J6 失衡处置）"; tail -20 /tmp/v_m259g2.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m259_root_trunc/verify.sh --neg-skip > /tmp/v_m259.log 2>&1 || { echo "❌ m259_root_trunc verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m259.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── |^     ' /tmp/v_m259.log | tail -10
+          echo "✅ m259_root_trunc verify（J5/J6 在位 + 桥级 marks 归还 200/200 + 缺陷 462 静态判据）PASS"
+
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。

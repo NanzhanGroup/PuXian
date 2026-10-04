@@ -22,7 +22,7 @@
 import "jsonrpc_core.px"
 import "lsp_core.px"
 # ---------- 全局状态 ----------
-let PXLSP_VER = "0.2.8"
+let PXLSP_VER = "0.2.9"
 let PXLSP_MS = "M65-S3"
 var g_docs = jr_dnew()  # uri → text 缓存
 var g_seq = 0  # 临时文件序号（防并发覆盖）

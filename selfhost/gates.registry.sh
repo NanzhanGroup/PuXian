@@ -966,6 +966,7 @@ step "M258 · 「收缩必须走延迟语义」（缺陷 460 · 与 M183 缺陷 
 #   **免改源码的窗口正判据**（用等价「立即收缩」API 造同一窗口 ⇒ 必须丢容器）+
 #   修复判据 + 负控 3 道。CI 用 --neg-skip。
 run m258_root_restore bash examples/m258_root_restore/verify.sh
+run m259_root_trunc bash examples/m259_root_trunc/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
