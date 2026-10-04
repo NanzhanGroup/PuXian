@@ -139,6 +139,13 @@ tag 推送同时触发 `release.yml` 的 rpm 链（**GPG secrets 未配置时各
 `$releasever/$basearch`）、`rpm/openeuler/<ver>/x86_64`（openEuler，repo 文件写**字面**目录；
 元数据 gz，兼容各版本 libdnf）。
 
+> ⚠ **这段布局有判据守着**（M254）：`packaging/selftest_pxrepo_mirror.sh` 的 **[4] rpm 树布局**段 ——
+> 真实布局 fixture（4 个 dist × arch 层）必须全过 · 摘掉 `repomd.xml.asc` 必须响亮 ·
+> 旧形态（缺 arch）在**同一 fixture 上必然失败** · 静态断言「拼接只许发生在 `rpm_tree_dir()`」。
+> **来历**：M168 改这里时**丢了 arch 层**，而 §⑤ **没有任何门覆盖**（本文件明写了布局、实现没照做、
+> 也没人守着）⇒ 裸奔 **2 天 23 小时**，直到下游（晨曦）干跑一遍才撞到 —— 而且是在
+> 「已经拉完数百 MB 资产之后」才死。**改这一段之前先看门的 [4] 段。**
+
 > ⚠ **为什么必须真跑一次 `px build`**：M168 前 el7 终验只跑 `pxc --version` —— 走的是 C 轨
 > 静态件，恰好正常；而**用户面默认 VM 轨**用的 `bootstrap/pxc_vm` 当时是动态件（需 GLIBC_2.34），
 > 在 el7（glibc 2.17）上一执行就崩 ⇒ 整类缺陷看不见。现在两个终验脚本都真编译 + 运行，
