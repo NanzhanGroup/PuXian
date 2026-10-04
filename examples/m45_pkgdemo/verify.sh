@@ -36,7 +36,7 @@ PKG_TOOL="$PKG"
 $PKG_TOOL init --name demoapp >/dev/null 2>&1
 $PKG_TOOL add mylib@^1.2.0 >/dev/null 2>&1
 $PKG_TOOL add other@0.1.0 >/dev/null 2>&1
-echo 'def local_helper(): return "local"' > "${DEMO}/local_helper.px"
+printf 'def local_helper():\n    return "local"\n' > "${DEMO}/local_helper.px"
 $PKG_TOOL add "${DEMO}/local_helper.px" --name helper >/dev/null 2>&1
 chk "$(grep -c 'mylib\|other\|helper' px.toml)" "3" "px.toml 记录 3 个依赖"
 

@@ -967,6 +967,18 @@ step "M258 · 「收缩必须走延迟语义」（缺陷 460 · 与 M183 缺陷 
 #   修复判据 + 负控 3 道。CI 用 --neg-skip。
 run m258_root_restore bash examples/m258_root_restore/verify.sh
 run m259_root_trunc bash examples/m259_root_trunc/verify.sh
+step "M260 · GC 压力档台账（分批常态化）+ 持锁可失败分配守卫 + 缺陷 267 复现装置"
+#   三件事：① 台账把「哪些语料跑过压力档 / 结论是什么 / 何时跑的」变成**只增不减的账**
+#   （M207 建了筛子，但 425 候选在压力档下是 O(n²) ⇒ 从来没完整跑过第二轮）；
+#   ② `check_lock_alloc.py` 守卫「持锁临界区内的可失败分配」（M127→M128→M260 缺陷 439 同一条线）；
+#   ③ 复现装置（同一探针 × N + 三条判据 + 可对照另一棵树）。
+run gcstress_ledger python3 selfhost/check_gcstress_ledger.py --root .
+run lock_alloc python3 selfhost/check_lock_alloc.py --root .
+run m260_gc_repro bash examples/m260_gc_repro/verify.sh
+step "M128 · 扩容分配移出临界区（C1–C12 · 缺陷 439 修好后**收编**为正式门）"
+#   为什么现在才收编：M251 的孤儿门体检把它判为**真回归**（缺陷 439）⇒ 它是「不在任何运行器里
+#   的历史资产」。M260 修掉 439 之后，它第一次可以进运行器（实测 pass=86 / fail=0）。
+run m128_unlock_grow bash examples/m128_unlock_grow/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

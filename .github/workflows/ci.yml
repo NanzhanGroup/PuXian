@@ -967,6 +967,26 @@ jobs:
           grep -E '^── |^     ' /tmp/v_m259.log | tail -10 || true
           echo "✅ m259_root_trunc verify（J5/J6 在位 + 桥级 marks 归还 200/200 + 缺陷 462 静态判据）PASS"
 
+      - name: m260_gc_repro（GC 压力档台账 + 持锁可失败分配守卫 + 缺陷 267 复现装置）
+        if: always()
+        run: |
+          python3 selfhost/check_gcstress_ledger.py --self-test > /tmp/v_m260a.log 2>&1 || { echo "❌ check_gcstress_ledger.py 自证失败"; tail -20 /tmp/v_m260a.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          python3 selfhost/check_gcstress_ledger.py --root . > /tmp/v_m260b.log 2>&1 || { echo "❌ GC 压力档台账判红（格式/定性/只增不减/SKIP_NORM 未定性）"; grep -E '^   · ' /tmp/v_m260b.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^✅|^⚠️|^ℹ️' /tmp/v_m260b.log || true
+          python3 selfhost/check_lock_alloc.py --self-test > /tmp/v_m260c.log 2>&1 || { echo "❌ check_lock_alloc.py 自证失败"; tail -20 /tmp/v_m260c.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          python3 selfhost/check_lock_alloc.py --root . > /tmp/v_m260d.log 2>&1 || { echo "❌ 持锁临界区内出现**新增**可失败分配"; grep -E '^   · ' /tmp/v_m260d.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^✅|^⚠️' /tmp/v_m260d.log || true
+          bash examples/m260_gc_repro/verify.sh --neg-skip > /tmp/v_m260.log 2>&1 || { echo "❌ m260_gc_repro verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m260.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── |^  PASS' /tmp/v_m260.log | tail -8 || true
+          echo "✅ m260（台账 423 条 100% 覆盖 + 18 处已知欠账不新增 + 复现装置 5/5）PASS"
+
+      - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
+        if: always()
+        run: |
+          bash examples/m128_unlock_grow/verify.sh > /tmp/v_m128.log 2>&1 || { echo "❌ m128_unlock_grow verify 失败"; grep -E '^(  ❌|== )' /tmp/v_m128.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^== M128 门结束' /tmp/v_m128.log || true
+          echo "✅ m128_unlock_grow（C1–C12 · 五个站点注入全绿 · C5 对象表扩容已在锁外）PASS"
+
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。
