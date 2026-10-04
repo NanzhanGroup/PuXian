@@ -922,6 +922,13 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m253.log | tail -20
           echo "✅ m253_bcorpus verify（87 例 × 3 轨 · 分叉 0 · 期望值 55 · 边界面 32 · 覆盖边界 6 条）PASS"
 
+      - name: m255_ws_takeover_rst（晨曦 WS P0 三缺陷 · 接管 + 连上即撤 RST · 缺陷 395/399/414）
+        if: always()
+        run: |
+          set -uo pipefail
+          bash examples/m255_ws_takeover_rst/verify.sh --neg-skip > /tmp/v_m255.log 2>&1 || { echo "❌ m255_ws_takeover_rst verify 失败"; grep -E '^(   |── |❌|  FAIL|      )' /tmp/v_m255.log | tail -40; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m255_ws_takeover_rst verify（静态 7 + 动态 6000 会话崩溃 0 + 形态自证 2 + 负控 2）PASS"
+
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。
