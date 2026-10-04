@@ -1,5 +1,5 @@
 # hello.px - GET 参数演示（/hello.px?name=东月）
-var name = GET.get("name")   # M260：`let` 自 M166 起不可变 ⇒ 本示例（后文重新赋值）需用 `var`
+var name = GET.get("name")  # M260：`let` 自 M166 起不可变 ⇒ 本示例（后文重新赋值）需用 `var`
 if name == null or name == "":
     name = "世界"
 print("你好，" + name)
