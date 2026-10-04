@@ -929,6 +929,16 @@ jobs:
           bash examples/m255_ws_takeover_rst/verify.sh --neg-skip > /tmp/v_m255.log 2>&1 || { echo "❌ m255_ws_takeover_rst verify 失败"; grep -E '^(   |── |❌|  FAIL|      )' /tmp/v_m255.log | tail -40; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m255_ws_takeover_rst verify（静态 7 + 动态 6000 会话崩溃 0 + 形态自证 2 + 负控 2）PASS"
 
+      - name: m256_eintr（EINTR 族收口 · 缺陷 456 · 含守卫 selfhost/check_eintr.py）
+        if: always()
+        run: |
+          set -uo pipefail
+          python3 selfhost/check_eintr.py --self-test > /tmp/v_m256g.log 2>&1 || { echo "❌ check_eintr.py 自证失败"; tail -20 /tmp/v_m256g.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          python3 selfhost/check_eintr.py . > /tmp/v_m256g2.log 2>&1 || { echo "❌ check_eintr.py 实检有违例（裸 IO 未重试）"; tail -20 /tmp/v_m256g2.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m256_eintr/verify.sh --neg-skip > /tmp/v_m256.log 2>&1 || { echo "❌ m256_eintr verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m256.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── ' /tmp/v_m256.log | tail -8
+          echo "✅ m256_eintr verify（守卫自证 9 + 实检 A0/B0 + 两档逐字节一致）PASS"
+
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。

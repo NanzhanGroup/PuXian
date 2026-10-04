@@ -940,6 +940,14 @@ step "M255 晨曦 WS P0 三缺陷的修复有效性（接管 + 连上即撤 RST 
 #   判据：静态（三处修复在位）+ 动态（16 并发 RST 压测 · 崩溃 0）+ 会话形态自证
 #   （必须真返回 101）+ 负控双向（必崩/必活替身）。CI 用 --neg-skip。
 run m255_ws_takeover_rst bash examples/m255_ws_takeover_rst/verify.sh
+step "M256 EINTR 族收口（缺陷 456 · 裸 IO 必须重试 —— 被 GC 暂停信号打断的不是失败）"
+#   来历：M211 缺陷 265（px_conn_read 裸 recv）· M152 缺陷 146（sock_send_all 裸 send）·
+#   M256 缺陷 456 —— **同一形状反复出现**：某处的裸 IO 忘了重试 EINTR。
+#   本轮把「一条语义」收成**一份实现**（runtime.h 的 px_io_* 族）+ **常设守卫**：
+#   `selfhost/check_eintr.py` 让**新增**的裸 IO 当场判红（A 段无例外族 + B 段用户面 fd 原语）。
+#   门本身：静态守卫自证 9 条 + 正常/压力两档逐字节一致 + 负控 3 道（各自独立判红）。
+run m256_eintr bash examples/m256_eintr/verify.sh
+run eintr_guard python3 selfhost/check_eintr.py
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

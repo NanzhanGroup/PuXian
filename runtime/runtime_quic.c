@@ -805,13 +805,13 @@ static void* quic_srv_router(void* arg) {
     if (!ql) return NULL;
     struct pollfd pfd = { .fd = ql->fd, .events = POLLIN };
     while (!ql->router_stop) {
-        int pr = poll(&pfd, 1, 200);
+        int pr = px_io_poll(&pfd, 1, 200);   // M256（缺陷 456）
         if (pr <= 0) continue;
         uint8_t pkt[QUIC_PKT_BUF];
         struct sockaddr_storage from;
         socklen_t fromlen = sizeof(from);
-        ssize_t rl = recvfrom(ql->fd, pkt, sizeof(pkt), 0,
-                              (struct sockaddr*)&from, &fromlen);
+        ssize_t rl = px_io_recvfrom(ql->fd, pkt, sizeof(pkt), 0,   // M256（缺陷 456）
+                                    (struct sockaddr*)&from, &fromlen);
         if (rl <= 0) continue;
         int is_long = (pkt[0] & 0x80) != 0;
         if (is_long) {
@@ -1163,13 +1163,13 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         int64_t remain = deadline - quic_now();
         if (remain <= 0) return px_int(-1);
         int ms = (int)((remain + NGTCP2_MILLISECONDS - 1) / NGTCP2_MILLISECONDS);
-        int pr = poll(&pfd, 1, ms);
+        int pr = px_io_poll(&pfd, 1, ms);   // M256（缺陷 456）：EINTR 曾判成「等不到 Initial 包」
         if (pr <= 0) return px_int(-1);
         uint8_t pkt[QUIC_PKT_BUF];
         struct sockaddr_storage from;
         socklen_t fromlen = sizeof(from);
-        ssize_t rl = recvfrom(ql->fd, pkt, sizeof(pkt), 0,
-                              (struct sockaddr*)&from, &fromlen);
+        ssize_t rl = px_io_recvfrom(ql->fd, pkt, sizeof(pkt), 0,   // M256（缺陷 456）
+                                    (struct sockaddr*)&from, &fromlen);
         if (rl <= 0) continue;
         // 解析 QUIC 长头包
         ngtcp2_version_cid vc;
@@ -1812,7 +1812,7 @@ static LXValue bi_quic_migrate(LXValue* args, int nargs, void* ctx) {
         close(nfd);
         return px_bool(false);
     }
-    if (connect(nfd, (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa)) != 0) {
+    if (px_io_connect(nfd, (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa)) != 0) {   // M256（缺陷 456）
         fprintf(stderr, "[quic] migrate: connect fail\n");
         close(nfd);
         return px_bool(false);

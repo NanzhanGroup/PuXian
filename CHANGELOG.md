@@ -1,3 +1,105 @@
+## M256（第 133 轮）：**EINTR 族收口** —— 「一条语义、一份实现」在 IO 层（缺陷 456）
+
+> **一句话**：M211 缺陷 265（`px_conn_read` 裸 `recv`）· M152 缺陷 146（`sock_send_all` 裸 `send`）·
+> 本轮缺陷 456（用户面 `read` / `udp_recv`）—— **同一形状反复出现**：某处的裸 IO 忘了重试 EINTR。
+> 本轮不再「修一处」，而是把语义收成**一份实现**（`px_io_*`）+ **常设守卫**。
+
+### 一 病灶（实测钉死，不是推测）
+
+并发 GC 的 stop-the-world 给**每个活跃线程**发 `SIG_GC_STOP`；线程若正阻塞在系统调用上，
+调用被**打断** ⇒ `-1/EINTR`。而 `gc_stop_handler` 的 `SA_RESTART` **救不了** ——
+`signal(7)` 有一张「**永不重启**」清单，两类正是热路径：
+
+* 设了 `SO_RCVTIMEO`/`SO_SNDTIMEO` 的 socket 系统调用（**用户面 fd 都设了**）；
+* `poll` / `select` / `epoll_wait` / `nanosleep` / `usleep` / `sigsuspend`。
+
+**实测**（`/tmp/m256/eintr_probe.c`，与 `gc_stop_handler` 同款 `sigaction`）：
+`socketpair` + `SO_RCVTIMEO=5s` + 自送信号 ⇒ `recv` 返回 `-1`、`errno=4`。
+
+### 二 用户可见面（修前）
+
+| 调用 | 修前 | 修后 |
+|---|---|---|
+| `read(fd, 64)`（fd 带 `SO_RCVTIMEO`） | 返回 `-1` ⇒ 调用方读成「**读失败**」 | 拿到数据 |
+| `udp_recv(s, n)` | 返回 `null` ⇒ 与「**真的没有包**」不可区分（**静默丢包**） | 拿到数据报 |
+| `udp_send` / `tcp_accept` | `px_error("… 失败")`（响亮但错误） | 正常 |
+| TLS 握手 / QUIC 等 Initial / WS 收帧 | `poll` 被打断 ⇒ 判**握手失败 / 无消息** | 正常 |
+
+动态指纹（`/tmp/m256/exp4.px`，修前压力档）：`errno=4` · 用户级重试 **3881** 次 ·
+**2560ms** 后才读到数据 ⇒ **瞬时打断**（重试能救），不是永久错误。
+
+### 三 交付
+
+1. **一份实现**：`runtime/runtime.h` 新增 `px_io_*` 族（`poll`/`epoll_wait`/`sleep_ns|ms|us`/
+   `read`/`write`/`recv`/`send`/`recvfrom`/`sendto`/`accept`/`connect`），实现落在 `runtime.c` **一处**。
+   要点：`px_io_connect` 被打断**不裸重试**（Linux 语义：连接仍在异步进行，再调 `connect` 返回
+   `EALREADY`）⇒ 改 `poll(POLLOUT)` + `getsockopt(SO_ERROR)`；`px_io_poll` 正超时**扣已用预算**
+   （否则每次被打断都重置整个超时）；`px_io_sleep_*` 用 `nanosleep(&ts,&ts)` **续睡剩余**。
+2. **收口 46 处调用点**（`runtime.c` 37 · `runtime_quic.c` 5 · `runtime_ws.c` 4 · `runtime_h2.c` 1；
+   连同头文件 2 处声明与实现块 1 处，补丁共 **49 个锚点**，逐个带唯一性断言）——
+   含 M152 手写的同款循环（**同一语义不再两处各写一遍**）与四处服务端 `accept` 循环。
+3. **常设守卫** `selfhost/check_eintr.py`：A 段（无例外族）+ B 段（用户面 fd 原语），
+   站点须满足「已是包装 / ±8 行内有 EINTR / 带 `PX_IO_EINTR_OK` 理由标记」；两条规模锚点 +
+   **9 条判据自证**。当前 **A 段 0 · B 段 0**。
+4. **动态门** `examples/m256_eintr/`（**M256-VERIFY-OK**）：静态守卫自证 + 实检 ·
+   正常/压力两档**逐字节一致**（`T1=5` `U2=4`）· 负控 3 道（各自独立判红：撤 `bi_read` 包装 ⇒
+   T1 红而 U2 绿 · 撤 `bi_udp_recv` 包装 ⇒ U2 红而 T1 绿 · **判据自伤** ⇒ 同故障不再判红）·
+   源逐字节还原。
+5. 文档 `docs/IO_EINTR.md`（含**如实登记的取舍**：`SO_RCVTIMEO` 的计时会被顺延 ——
+   判据「宁可等，不可误判」，与 M211 决策一致；正常负载下 EINTR 稀疏，影响可忽略）。
+
+### 四 覆盖边界（如实登记）
+
+* **`SO_RCVTIMEO` 计时顺延**（见上）—— 持续 GC 压力下带超时的读可能比名义超时更晚返回。
+* **A 段唯一豁免**：`px_futex_wait` 的 `nanosleep` —— futex 语义下「被打断 = 提前返回，
+  由调用方循环复检条件」，**不能续睡**（带 `PX_IO_EINTR_OK` 标记与理由）。
+* **B 段只覆盖 `bi_*` native 体内**；`runtime/*.c` 里的**内部工具函数**（各自的读循环）
+  由 A 段规则 + 「±8 行内有 EINTR」判据覆盖，未逐一改写。
+* 本门的负控要**完整重建 runtime**（改 `runtime.c` ⇒ `.rtcache` key 变）⇒ CI 用 `--neg-skip`。
+
+### 五 两处「不做就不会稳」的工程决定（都有实测依据）
+
+① **探针超时 20s，不是 3s/6s**：压力档下 `sleep(1500)` 的唤醒会被 GC 拖长 ⇒ 数据真的比超时
+   晚到 ⇒ 偶发 `T1=-1`/`U2=-1`，**那是 timeout，不是 EINTR**（首版就这么假红过一次）。
+   修前 EINTR 是**立即**返回（与超时无关）⇒ 放宽超时**不影响复现力**。
+② **触发条件 = 两个开关同开**（实测矩阵 `/tmp/m256/matrix.log`）：
+
+   | 开关 | T1 | U2 |
+   |---|---|---|
+   | 无 | 5 | 4 |
+   | `PX_GC_STRESS=1` 单开 | 5 | 4 |
+   | `PX_GC_INLINE=1` 单开 | 5 | 4 |
+   | **两者同开** | **-1** | **-1**（3/3 确定）|
+
+③ **`PX_GC_INLINE=1` 会撞上「缺陷 267 家族」**（并发/挂起执行流在该开关下容器被误回收；
+   M207 登记、M208 定位为「构造 → 登记」窗口，**仍未修**）。本机实测 ~1/35 概率 SIGSEGV：
+   core 栈 `xmalloc ← px_dict ← vm_run_loop`（主线程）+ 另一线程在 `px_gc_collect`。
+   ⇒ 本门**被信号杀死时记数并重试**（`N267`），并把命中次数**响亮打印**（不隐藏）；
+   判据（T1/U2/DONE）才是判红依据。**这不是把崩溃当绿** —— 267 有自己的账，
+   且 `m207_gcstress` / `m208_gcroot` 两道门仍在看守它。
+
+### 六 本轮「我自己的 bug」（都被判据/编译抓回）* **`--check` 与 `--apply` 走了两条不同的判据链**：补丁脚本原先只在 `apply` 时改写内存副本
+  ⇒ 依赖前序锚点的锚点在 `--check` 下**必然假红**。⇒ 修：内存副本**始终**替换。
+  教训：**「检查通过 ⇒ 应用必成」这个前提，要求两者走同一条判据链。**
+* **`struct sockaddr` 未声明**：在 `runtime.h` 的参数表里首次出现 ⇒ 成为「原型作用域」的新类型
+  ⇒ 与 `runtime.c` 的定义**冲突**（`conflicting types`）。⇒ 修：`runtime.h` 补
+  `#include <sys/socket.h>`。（由 `gcc -fsyntax-only` 在写盘前抓到：6 个 TU 全 `errors=0`。）
+* **负控 B（UDP）单次只有 4/5 命中**：`udp_recv` 走 offload 线程，被打断不是每次必现
+  ⇒ 负控改成「**3 次机会内命中即算复现**」，并把独立性判据（另一键必须始终绿）同时断言。
+
+### 七 验收
+
+| 项 | 结果 |
+|---|---|
+| 门 `examples/m256_eintr/`（全量档 · 含 3 道负控） | **M256-VERIFY-OK（20 通过 / 0 失败）** |
+| 门（`--neg-skip`，CI 档） | **M256-VERIFY-OK（14/0）** |
+| 静态守卫 `selfhost/check_eintr.py` | 自证 **9/9** · 实检 **A 段 0 · B 段 0**（扫描 25 个 `.c` · 包装调用 56 处） |
+| 语法（6 个 TU） | `gcc -fsyntax-only` **errors=0** |
+| 入库件重烘 | `--rebake-all` **12/12** · `--check-all` **14/14**（烘前/烘后 62 文件快照一致） |
+| 发射冻结门 | **441 → 442 件**（类别 B 为空 · `git diff --numstat` = **+1/-0**） |
+| 版本 | `0.2.5 → 0.2.6`（9 文件含 2 份自举基准）· `VERSION-GOLDEN-OK` |
+| 12 道守卫 | 注册/路径/锚点/缺陷引用/pymain/shell/负控残留/孤儿门/native 覆盖/make_tag/冻结门/版本 全部 **rc=0** |
+
 ## M255（第 132 轮）：晨曦 WS P0 三缺陷 —— 从「已修」到「**有门看守**」（缺陷 452/453）
 
 > **令源**：用户 2026-10-04「**处理晨曦总线提交的问题**」。

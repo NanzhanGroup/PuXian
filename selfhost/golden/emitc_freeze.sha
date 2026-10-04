@@ -255,6 +255,7 @@ examples/m246_compound_assign/drv.px src=9d2625fa6f373310 rc=0 out=855d822c3724f
 examples/m250_onnx_tensor/surface.px src=5458387bf9a5e86e rc=0 out=b0d9938eb6ccf109252acbe40fce4e99 err=e3b0c44298fc1c14
 examples/m253_bcorpus/surface.px src=8daec923cfcec395 rc=0 out=9222a7deba5a8e6b240f05749b8be721 err=e3b0c44298fc1c14
 examples/m255_ws_takeover_rst/srv.px src=390c3b99cefa33d2 rc=0 out=cf8e1b332985512204236d4ec072754c err=e3b0c44298fc1c14
+examples/m256_eintr/probe_eintr.px src=07e8a9594d987d56 rc=0 out=967738bfa2216b14468563ed2a4fce8e err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

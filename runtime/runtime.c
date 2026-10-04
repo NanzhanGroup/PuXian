@@ -58,6 +58,112 @@
 #include "mbedtls/pkcs5.h"    // M150：PBKDF2-HMAC-SHA256（SCRAM-SHA-256 的 Hi）
 #include "mbedtls/md.h"       // M202：HMAC-SHA1（RFC 4226/6238 的默认算法；与 runtime_zip 同一原语）
 
+// ==================== M256（第 120 轮）：EINTR 族 —— IO 原语（一条语义、一份实现） ====================
+// 病灶（M207 缺陷 264 与 M211 缺陷 265 的同族，在别处反复复发）：并发 GC 的 stop-the-world 会给**每个活跃
+//   线程**发 SIG_GC_STOP（实时信号）。该线程若正阻塞在系统调用上，调用被**打断**并返回
+//   -1/EINTR —— 而「被打断 != 失败」，重试即可。
+//
+// ⚠️ **为什么不能依赖 SA_RESTART**：gc_stop_handler 的 sigaction 用了 SA_RESTART，注释写
+//   「被信号打断的系统调用自动重启」。但 **signal(7) 明确列了一张「永不重启」清单**，其中两类
+//   正是本运行时的热路径：
+//     · 设了 SO_RCVTIMEO/SO_SNDTIMEO 的 socket 系统调用（read/recv/send/accept/connect/…）；
+//     · poll / select / epoll_wait / nanosleep / usleep / sigsuspend。
+//   而用户面 fd（tcp_connect_ex(…,{timeout_ms}) / tcp_opt(…,{read_timeout_ms}) / px_serve 的连接）
+//   **都设了 SO_*TIMEO** ⇒ 那条注解对它们**不成立**。
+//   实测证据：/tmp/m256/eintr_probe.c（与 gc_stop_handler 同款 sigaction）⇒ recv 返回 -1/EINTR。
+//
+// 语义（唯一）：
+//   · 「被暂停信号打断的 IO 不是失败」⇒ 重试到**成功**或**真错误**为止；
+//   · **正超时的 poll 必须扣掉已过去的时间** —— 否则每次被打断都重置整个超时 ⇒ 超时语义被
+//     无限拉长（GC 压力下最明显）；预算耗尽 ⇒ 按**超时**返回（poll 返 0）；
+//   · connect 被打断**不能裸重试**：Linux 语义是「连接仍在异步进行」，再调 connect 返回
+//     EALREADY ⇒ 改用 poll(POLLOUT) 等完成 + getsockopt(SO_ERROR) 取结果。
+//
+// ⚠️ nanosleep 的续睡用 `nanosleep(&ts, &ts)`：内核对第二个参数写**剩余**时间（POSIX）。
+
+static int64_t px_io_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+int px_io_poll(struct pollfd* fds, nfds_t n, int timeout_ms) {
+    if (timeout_ms <= 0) {           /* 无限等 / 立即采样：无预算可扣，直接重试 */
+        int r;
+        do { r = poll(fds, n, timeout_ms); } while (r < 0 && errno == EINTR);
+        return r;
+    }
+    int64_t deadline = px_io_now_ms() + (int64_t)timeout_ms;
+    for (;;) {
+        int r = poll(fds, n, timeout_ms);
+        if (r >= 0 || errno != EINTR) return r;
+        int64_t left = deadline - px_io_now_ms();
+        if (left <= 0) return 0;      /* 预算耗尽 = 超时（poll 语义：0，不是错误） */
+        timeout_ms = (int)left;
+    }
+}
+
+int px_io_epoll_wait(int epfd, struct epoll_event* evs, int maxev, int timeout_ms) {
+    if (timeout_ms <= 0) {
+        int r;
+        do { r = epoll_wait(epfd, evs, maxev, timeout_ms); } while (r < 0 && errno == EINTR);
+        return r;
+    }
+    int64_t deadline = px_io_now_ms() + (int64_t)timeout_ms;
+    for (;;) {
+        int r = epoll_wait(epfd, evs, maxev, timeout_ms);
+        if (r >= 0 || errno != EINTR) return r;
+        int64_t left = deadline - px_io_now_ms();
+        if (left <= 0) return 0;
+        timeout_ms = (int)left;
+    }
+}
+
+void px_io_sleep_ns(int64_t ns) {
+    if (ns <= 0) return;
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ns / 1000000000LL);
+    ts.tv_nsec = (long)(ns % 1000000000LL);
+    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) { }   /* 续睡剩余 */
+}
+void px_io_sleep_ms(int64_t ms) { px_io_sleep_ns(ms * 1000000LL); }
+void px_io_sleep_us(int64_t us) { px_io_sleep_ns(us * 1000LL); }
+
+ssize_t px_io_read(int fd, void* buf, size_t n) {
+    for (;;) { ssize_t r = read(fd, buf, n); if (r >= 0 || errno != EINTR) return r; }
+}
+ssize_t px_io_write(int fd, const void* buf, size_t n) {
+    for (;;) { ssize_t r = write(fd, buf, n); if (r >= 0 || errno != EINTR) return r; }
+}
+ssize_t px_io_recv(int fd, void* buf, size_t n, int flags) {
+    for (;;) { ssize_t r = recv(fd, buf, n, flags); if (r >= 0 || errno != EINTR) return r; }
+}
+ssize_t px_io_send(int fd, const void* buf, size_t n, int flags) {
+    for (;;) { ssize_t r = send(fd, buf, n, flags); if (r >= 0 || errno != EINTR) return r; }
+}
+ssize_t px_io_recvfrom(int fd, void* buf, size_t n, int flags, struct sockaddr* sa, socklen_t* sl) {
+    for (;;) { ssize_t r = recvfrom(fd, buf, n, flags, sa, sl); if (r >= 0 || errno != EINTR) return r; }
+}
+ssize_t px_io_sendto(int fd, const void* buf, size_t n, int flags, const struct sockaddr* sa, socklen_t sl) {
+    for (;;) { ssize_t r = sendto(fd, buf, n, flags, sa, sl); if (r >= 0 || errno != EINTR) return r; }
+}
+int px_io_accept(int fd, struct sockaddr* sa, socklen_t* sl) {
+    for (;;) { int r = accept(fd, sa, sl); if (r >= 0 || errno != EINTR) return r; }
+}
+int px_io_connect(int fd, const struct sockaddr* sa, socklen_t sl) {
+    if (connect(fd, sa, sl) == 0) return 0;
+    if (errno != EINTR) return -1;
+    /* 被打断 ⇒ 连接仍在**异步**进行：轮询可写等它完成，再取 SO_ERROR。 */
+    struct pollfd p;
+    p.fd = fd; p.events = POLLOUT; p.revents = 0;
+    if (px_io_poll(&p, 1, -1) < 0) return -1;
+    int e = 0;
+    socklen_t l = sizeof(e);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &l) != 0) return -1;
+    if (e != 0) { errno = e; return -1; }
+    return 0;
+}
+
 // ==================== M127（qg-issue 84）：回卷的锁安全审计 ====================
 // 病灶与做法见 runtime/locktrack.h 头部说明。此处 = 存储（TLS，跨 TU 共享）+ 宏接管本 TU 的锁调用。
 // ⚠ 位置要求：必须在**最后一个系统/三方 include 之后** —— 下面的宏会把此后本 TU 内所有
@@ -1513,7 +1619,7 @@ static inline int px_futex_wait(volatile int* addr, int expect, long timeout_us)
     (void)addr; (void)expect;
     if (timeout_us > 0) {
         struct timespec ts = { timeout_us / 1000000, (timeout_us % 1000000) * 1000 };
-        nanosleep(&ts, NULL);
+        nanosleep(&ts, NULL);   /* PX_IO_EINTR_OK: futex 等待语义 —— 被打断 = 提前返回，调用方在循环里复检条件（不能续睡） */
     }
     return 0;
 }
@@ -7771,7 +7877,10 @@ static LXValue bi_read(LXValue* args, int nargs, void* ctx) {
     if (maxlen <= 0 || maxlen > (int64_t)INT_MAX - 1) px_error("R1002: read 的 maxlen 需要 1..INT_MAX-1");
     int fd = (int)args[0].as.i;
     char* buf = xmalloc((size_t)maxlen + 1);
-    ssize_t n = read(fd, buf, (size_t)maxlen);
+    // M256（缺陷 456）：经 px_io_read —— 用户面 fd（tcp_connect_ex/tcp_opt/服务端连接）
+    //   **都设了 SO_RCVTIMEO**，而这种 fd 上的 read **永不**被 SA_RESTART 重启
+    //   ⇒ GC 的 SIG_GC_STOP 把它打断成 -1/EINTR ⇒ 用户把「暂停」误读成「读失败」。
+    ssize_t n = px_io_read(fd, buf, (size_t)maxlen);
     if (n < 0) {
         int e = errno;
         xfree(buf);
@@ -7792,8 +7901,8 @@ static LXValue bi_write(LXValue* args, int nargs, void* ctx) {
     int fd = (int)args[0].as.i;
     const char* data = d.as.obj->as.str.data;
     int len = d.as.obj->as.str.len;
-    ssize_t n;
-    do { n = write(fd, data, (size_t)len); } while (n < 0 && errno == EINTR);
+    // M256（缺陷 456）：一律经 px_io_write（与 bi_read 同口径；同一语义不再两处各写一遍）。
+    ssize_t n = px_io_write(fd, data, (size_t)len);
     if (n < 0) return px_int(-1);
     return px_int((int64_t)n);
 }
@@ -8990,7 +9099,8 @@ static int dns_tcp_query(const char* ns, const unsigned char* q, int ql,
     tv.tv_sec = 3; tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+    // M256（缺陷 456）：DNS 链上的 fd 设了 SO_*TIMEO 3s ⇒ connect/send/recv 都属「永不重启」族。
+    if (px_io_connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
         close(fd); snprintf(msg, msgsz, "dns: tcp connect() failed"); return -1;
     }
     if (ql + 2 > 4096) { close(fd); snprintf(msg, msgsz, "dns: tcp query too large"); return -1; }
@@ -8998,13 +9108,13 @@ static int dns_tcp_query(const char* ns, const unsigned char* q, int ql,
     wb[0] = (unsigned char)((ql >> 8) & 0xFF);
     wb[1] = (unsigned char)(ql & 0xFF);
     memcpy(wb + 2, q, (size_t)ql);
-    if (send(fd, wb, (size_t)ql + 2, 0) != ql + 2) {
+    if (px_io_send(fd, wb, (size_t)ql + 2, 0) != ql + 2) {   // M256（缺陷 456）
         close(fd); snprintf(msg, msgsz, "dns: tcp send() failed"); return -1;
     }
     // TCP 是字节流：长度前缀与报文体都可能短读 → 循环读满
     int got = 0;
     while (got < 2) {
-        ssize_t n = recv(fd, wb + got, (size_t)(2 - got), 0);
+        ssize_t n = px_io_recv(fd, wb + got, (size_t)(2 - got), 0);   // M256（缺陷 456）
         if (n <= 0) { close(fd); snprintf(msg, msgsz, "dns: tcp length read failed"); return -1; }
         got += (int)n;
     }
@@ -9014,7 +9124,7 @@ static int dns_tcp_query(const char* ns, const unsigned char* q, int ql,
     }
     got = 0;
     while (got < rlen) {
-        ssize_t n = recv(fd, rb + got, (size_t)(rlen - got), 0);
+        ssize_t n = px_io_recv(fd, rb + got, (size_t)(rlen - got), 0);   // M256（缺陷 456）
         if (n <= 0) { close(fd); snprintf(msg, msgsz, "dns: tcp body read failed"); return -1; }
         got += (int)n;
     }
@@ -9085,16 +9195,16 @@ static LXValue bi_dns_txt(LXValue* args, int nargs, void* ctx) {
         snprintf(msg, sizeof(msg), "dns: %s: bad nameserver %s", host, ns);
         return px_err(px_str(msg));
     }
-    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+    if (px_io_connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {   // M256（缺陷 456）
         close(fd);
         return px_err(px_str("dns: connect() failed"));
     }
     struct timeval tv;
     tv.tv_sec = 3; tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    if (send(fd, q, ql, 0) != ql) { close(fd); return px_err(px_str("dns: send() failed")); }
+    if (px_io_send(fd, q, ql, 0) != ql) { close(fd); return px_err(px_str("dns: send() failed")); }   // M256（缺陷 456）
     unsigned char rb[4096];
-    int rl = (int)recv(fd, rb, sizeof(rb), 0);
+    int rl = (int)px_io_recv(fd, rb, sizeof(rb), 0);   // M256（缺陷 456）：曾把暂停报成「query timeout」
     close(fd);
     if (rl < 0) {
         snprintf(msg, sizeof(msg), "dns: %s: query timeout", host);
@@ -13400,7 +13510,7 @@ static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx) {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (px_io_connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {   // M256（缺陷 456）
         int e = errno;
         close(fd);
         errno = e;
@@ -14849,13 +14959,8 @@ typedef struct {
 
 // M198（缺陷 229）：定时器睡眠改**纳秒**粒度 —— `set_timeout(f, 1.5)` 的 1.5ms 真正生效。
 static void timer_sleep_ns(long long ns) {
-    struct timespec req, rem;
-    req.tv_sec = (time_t)(ns / 1000000000LL);
-    req.tv_nsec = (long)(ns % 1000000000LL);
-    while (req.tv_sec > 0 || req.tv_nsec > 0) {
-        if (nanosleep(&req, &rem) == 0) break;
-        req = rem;   // EINTR（含 GC 暂停信号）→ 继续睡剩余时间
-    }
+    // M256（缺陷 456）：经 px_io_sleep_ns（统一的「续睡剩余」实现，取代本处手写同款循环）。
+    px_io_sleep_ns((int64_t)ns);
 }
 
 // 查询定时器是否仍生效（1=继续，0=被取消/槽已释放）
@@ -15076,7 +15181,8 @@ static LXValue bi_tcp_accept(LXValue* args, int nargs, void* ctx) {
     int lfd = (int)args[0].as.i;
     struct sockaddr_in cli;
     socklen_t cli_len = sizeof(cli);
-    int cfd = accept(lfd, (struct sockaddr*)&cli, &cli_len);
+    // M256（缺陷 456）：裸 accept 被 GC 暂停信号打断 ⇒ px_error("accept 失败")（响亮但错误）。
+    int cfd = px_io_accept(lfd, (struct sockaddr*)&cli, &cli_len);
     if (cfd < 0) px_error("net: accept 失败");
     return px_int(cfd);
 }
@@ -15095,7 +15201,8 @@ static LXValue bi_tcp_connect(LXValue* args, int nargs, void* ctx) {
     if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) px_error("net: 解析主机失败 %s", host);
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); px_error("net: 创建 socket 失败"); }
-    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+    // M256（缺陷 456）：口径统一（tcp_connect 无超时 ⇒ EINTR 概率低，但规则不留例外）。
+    if (px_io_connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
         int e = errno;
         freeaddrinfo(res);
         close(fd);
@@ -15132,11 +15239,8 @@ static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx) {
     if (maxlen <= 0) maxlen = 1;
     char* buf = xmalloc(maxlen + 1);
     int n;
-    // M152（缺陷 146）：EINTR 重试（与 px_tcp_recv_ex 同口径）
-    for (;;) {
-        n = (int)recv(fd, buf, maxlen, 0);
-        if (n >= 0 || errno != EINTR) break;
-    }
+    // M256（缺陷 456）：重试逻辑收归 px_io_recv（M152 的手写同款循环退休）。
+    n = (int)px_io_recv(fd, buf, maxlen, 0);
     if (n <= 0) { xfree(buf); return px_str(""); }
     buf[n] = 0;
     LXValue r = px_str_len(buf, n);
@@ -15250,7 +15354,8 @@ static LXValue bi_udp_send(LXValue* args, int nargs, void* ctx) {
         memcpy(&dst, res->ai_addr, res->ai_addrlen);
         freeaddrinfo(res);
     }
-    int n = (int)sendto(fd, data, (size_t)len, 0, (struct sockaddr*)&dst, sizeof(dst));
+    // M256（缺陷 456）：同族 —— EINTR 会被报成「udp_send 失败 (errno=4)」。
+    int n = (int)px_io_sendto(fd, data, (size_t)len, 0, (struct sockaddr*)&dst, sizeof(dst));
     if (n < 0) px_error("udp_send 失败 (errno=%d)", errno);
     return px_int(n);
 }
@@ -15266,7 +15371,9 @@ static LXValue bi_udp_recv(LXValue* args, int nargs, void* ctx) {
     char* buf = xmalloc((size_t)maxlen + 1);
     struct sockaddr_in src;
     socklen_t slen = sizeof(src);
-    int n = (int)recvfrom(fd, buf, (size_t)maxlen, 0, (struct sockaddr*)&src, &slen);
+    // M256（缺陷 456 · **静默错值**）：裸 recvfrom 被打断 ⇒ 返回 null = 「没有包」——
+    //   与「真的没有包」不可区分 ⇒ 调用方静默丢包。
+    int n = (int)px_io_recvfrom(fd, buf, (size_t)maxlen, 0, (struct sockaddr*)&src, &slen);
     if (n < 0) {
         xfree(buf);
         return px_null();
@@ -15315,7 +15422,7 @@ static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx) {
     for (;;) {
         struct sockaddr_in src;
         socklen_t slen = sizeof(src);
-        int n = (int)recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr*)&src, &slen);
+        int n = (int)px_io_recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr*)&src, &slen);   // M256（缺陷 456）
         if (n < 0) continue;
         buf[n] = 0;
         char ip[64];
@@ -15339,7 +15446,7 @@ static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx) {
                 resp = px_to_string(r);
                 rlen = (int)strlen(resp);
             }
-            (void)sendto(fd, resp, (size_t)rlen, 0, (struct sockaddr*)&src, sizeof(src));
+            (void)px_io_sendto(fd, resp, (size_t)rlen, 0, (struct sockaddr*)&src, sizeof(src));   // M256（缺陷 456）
         }
         px_root_pop();   // M206：一对 pop（下一轮 recvfrom 前收缩）
     }
@@ -19063,7 +19170,7 @@ static ssize_t px_recv_wait(int fd, char* buf, size_t len, int tmo_ms) {
 static int px_fd_readable_now(int fd) {
     struct pollfd pfd;
     pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
-    int r = poll(&pfd, 1, 0);
+    int r = px_io_poll(&pfd, 1, 0);   // M256（缺陷 456）：EINTR 曾判成「无数据」
     return r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR));
 }
 
@@ -19105,7 +19212,7 @@ static int px_send_all(int fd, const char* data, size_t len) {
         // EAGAIN / 部分写 0：等可写（15s 写超时——对端持续不读 → 放弃，防 worker 无限挂）
         struct pollfd pfd;
         pfd.fd = fd; pfd.events = POLLOUT; pfd.revents = 0;
-        int r = poll(&pfd, 1, 15000);
+        int r = px_io_poll(&pfd, 1, 15000);   // M256（缺陷 456）：EINTR 曾判成写失败
         if (r <= 0) return -1;   // 超时 / poll 错误
         if (pfd.revents & (POLLERR | POLLNVAL)) return -1;
         if (pfd.revents & POLLOUT) continue;   // 可写 → 再 send
@@ -19143,7 +19250,7 @@ static int px_http_conn_alive_fd(int fd) {
     p.fd = fd;
     p.events = POLLIN | POLLRDHUP;
     p.revents = 0;
-    int pr = poll(&p, 1, 0);
+    int pr = px_io_poll(&p, 1, 0);   // M256（缺陷 456）：EINTR 曾判成「连接不可用」
     if (pr < 0) return 0;                                  // EBADF/ENOMEM：不可判定 → 0（不可用）
     if (p.revents & (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)) return 0;   // FIN/RST/异常
     char b[1];
@@ -19189,7 +19296,7 @@ static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, in
     {
         struct pollfd wp;
         wp.fd = fd; wp.events = POLLOUT; wp.revents = 0;
-        if (poll(&wp, 1, 0) > 0 && (wp.revents & (POLLHUP | POLLERR | POLLNVAL))) {
+        if (px_io_poll(&wp, 1, 0) > 0 && (wp.revents & (POLLHUP | POLLERR | POLLNVAL))) {  // M256（缺陷 456）
             px_evc_close(fd);
             return 0;
         }
@@ -20472,7 +20579,7 @@ static void* px_ev_loop(void* arg) {
             int keep = 0;
             struct pollfd pfd;
             pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
-            int pr = poll(&pfd, 1, 0);
+            int pr = px_io_poll(&pfd, 1, 0);   // M256（缺陷 456）：EINTR 曾漏掉「救回」
             if (pr > 0 && (pfd.revents & POLLIN) &&
                 !(pfd.revents & (POLLHUP | POLLERR | POLLNVAL))) {
                 keep = 1;                  // 在途数据：活跃连接被漏报 → 救回
@@ -20626,7 +20733,7 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     // M88-S2：接入连接线程池（取代每连接 px_spawn——高并发不再因 spawn 槽满而 exit）
     fserve_ensure();
     for (;;) {
-        int cfd = accept(sfd, NULL, NULL);
+        int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
         if (cfd < 0) continue;
         fserve_push(cfd, FSERVE_KIND_HTTP);
     }
@@ -20675,8 +20782,7 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
         if (cfd < 0) {
             // accept 循环错误容忍：EINTR 重试；EMFILE/ENFILE 等短暂让出避免忙循环
             if (errno == EINTR) continue;
-            struct timespec ts = {0, 50 * 1000 * 1000}; // 50ms
-            nanosleep(&ts, NULL);
+            px_io_sleep_ms(50);   // M256（缺陷 456）：accept 错误退避
             continue;
         }
         fserve_push(cfd, FSERVE_KIND_HTTP);
@@ -21391,7 +21497,7 @@ static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx) {
     // 见 sse_conn_worker 第 8 步与池注释）
     fserve_ensure();
     for (;;) {
-        int cfd = accept(sfd, NULL, NULL);
+        int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
         if (cfd < 0) continue;
         fserve_push(cfd, FSERVE_KIND_SSE);
     }
@@ -22628,7 +22734,7 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
             pthread_mutex_unlock(&g_sse_cli_mu);
             if (t2) https_close(t2); else close(fd);
             if (rms > 0 && url[0]) {
-                usleep((useconds_t)(rms * 1000));
+                px_io_sleep_ms((int64_t)rms);   // M256（缺陷 456）：退避被打断 ⇒ 续睡
                 // 注意：重连**复用** slot 内的 opts（sock/method/body/headers），不要在这里释放
                 if (sse_cli_connect_slot(idx, url, rms, eid) == 0) {
                     pthread_mutex_lock(&g_sse_cli_mu);
@@ -23459,7 +23565,9 @@ static int px_hs_poll_io(int fd, int want_write, int remain_ms) {
     p.fd = fd;
     p.events = want_write ? POLLOUT : POLLIN;
     p.revents = 0;
-    int r = poll(&p, 1, remain_ms);
+    // M256（缺陷 456）：poll 属「SA_RESTART 永不重启」清单 ⇒ 裸调用会把 GC 暂停
+    //   误判成 TLS 握手失败。px_io_poll 还会扣掉已用预算（超时语义不被拉长）。
+    int r = px_io_poll(&p, 1, remain_ms);
     if (r < 0) return -1;
     if (r == 0) return 0;
     if (p.revents & (POLLERR | POLLNVAL)) return -1;
@@ -23843,10 +23951,7 @@ static void px_tls_reload_gap(void) {
     int ms = atoi(e);
     if (ms <= 0) return;
     if (ms > 5000) ms = 5000;
-    struct timespec ts;
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
+    px_io_sleep_ms((int64_t)ms);   // M256（缺陷 456）：被打断要续睡（否则热加载窗口不足）
 }
 
 // tls_server(cert, key[, hostname])：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
@@ -27180,7 +27285,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
                 fprintf(stderr, "[px-serve] 池 worker #%d 滚动重建完成（防泄漏自愈）\n", i);
             }
         }
-        int cfd = accept(sfd, NULL, NULL);
+        int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
         if (cfd < 0) {
             if (g_px_stop) break;
             continue;
@@ -27224,8 +27329,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         long long jt0 = px_ev_now_ms();
         while (px_ev_now_ms() - jt0 < PX_SHUTDOWN_JOIN_TMO_MS) {
             if (__atomic_load_n(&g_pool_exited, __ATOMIC_RELAXED) >= g_pool_size) break;
-            struct timespec ts = {0, 20 * 1000 * 1000};
-            nanosleep(&ts, NULL);
+            px_io_sleep_ms(20);   // M256（缺陷 456）
         }
         int left = 0;
         for (int i = 0; i < g_pool_size; i++) {
@@ -27254,8 +27358,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     px_pxserve_ev_close_all();
     // 等待在途请求（最多 5s；连接线程池已 join + IDLE 已清，正常已归零）
     for (int i = 0; i < 100 && g_px_inflight > 0; i++) {
-        struct timespec ts = {0, 50 * 1000 * 1000};
-        nanosleep(&ts, NULL);
+        px_io_sleep_ms(50);   // M256（缺陷 456）
     }
     fprintf(stderr, "[px-serve] 优雅关闭完成（在途 %d）\n", g_px_inflight);
     // M36：进程池优雅关闭——清理 .px 执行进程池 worker（px --worker 子进程）
@@ -27275,8 +27378,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             }
             pthread_mutex_unlock(&g_px_pool_mu);
             if (!any) break;
-            struct timespec ts = {0, 50 * 1000 * 1000};
-            nanosleep(&ts, NULL);
+            px_io_sleep_ms(50);   // M256（缺陷 456）
         }
         // 强制清理残留
         pthread_mutex_lock(&g_px_pool_mu);
@@ -27420,8 +27522,7 @@ static void* px_pool_worker(void* argp) {
 static void* px_serve_watchdog(void* argp) {
     (void)argp;
     for (;;) {
-        struct timespec ts = {0, 200 * 1000 * 1000};
-        nanosleep(&ts, NULL);
+        px_io_sleep_ms(200);   // M256（缺陷 456）
         if (g_px_stop) break;
         long long now = px_ev_now_ms();
         if (now - __atomic_load_n(&g_diag_wd_last, __ATOMIC_RELAXED) < 1000) continue;
@@ -27968,8 +28069,7 @@ static void* cron_thread(void* p) {
     for (int i = 0; i < nargs; i++) args_stack[i] = job->args[i];
     int64_t id = job->id;
     for (;;) {
-        struct timespec ts = {1, 0};
-        nanosleep(&ts, NULL);
+        px_io_sleep_ms(1000);   // M256（缺陷 456）
         // 与 set_timeout/set_interval 同一取消机制（clear_timer 统一生效）
         if (!timer_still_active(id)) break;
         int64_t now = (int64_t)time(NULL);

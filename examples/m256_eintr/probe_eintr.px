@@ -1,0 +1,102 @@
+# ============================================================
+# M256 门 · 动态探针：**GC 暂停信号打断用户面 fd 原语 ⇒ 必须重试（不是失败）**
+# ------------------------------------------------------------
+# 病灶（缺陷 456）：`read(fd, n)` / `udp_recv` 走**裸系统调用**，而并发 GC 的
+#   stop-the-world 会给每个活跃线程发 SIG_GC_STOP **打断阻塞中的调用** ⇒ -1/EINTR。
+#   · 用户面 fd 设了 SO_RCVTIMEO（`tcp_opt(...,{read_timeout_ms})`）⇒ 落在 signal(7) 的
+#     「**永不重启**」族 ⇒ SA_RESTART 救不了。
+#   · 未修前：`read` 返回 int -1（调用方读成「读失败」）；`udp_recv` 返回 null
+#     ⇒ 与「真的没有包」不可区分（**静默丢包**）。
+#
+# 实测指纹（/tmp/m256/exp4.px，修前）：`E1=4`（errno=EINTR）· 用户级重试 **3881** 次 ·
+#   2560ms 后才读到数据 ⇒ **瞬时打断**（重试能救），不是永久错误。
+#
+# 触发条件：`PX_GC_STRESS=1 PX_GC_INLINE=1`（每次分配即 inline full GC ⇒ 信号高频）。
+#
+# ⚠️ 设计要点（首版曾被**饿死调度**判成 flake —— 见下）：
+#   · UDP 接收端**尽早 bind**（避免早发的包打空端口触发 ICMP ⇒ 发送端后续 sendto
+#     报 ECONNREFUSED ⇒ px_error 中止）；tcp_case 之后再**排空**已排队数据，
+#     使紧接着的那次 `udp_recv` **必然要阻塞等待**（= 可被打断）。
+#   · 发送端**持续发 60 次 × 100ms**（长窗口）—— 否则 GC 压力把协程饿死时，
+#     接收端会因**真的没有包**而超时（那是 timeout，不是 EINTR）。
+# ⚠️ stdout 必须**确定性**（门对两档逐字节对拍）⇒ 只打结果行，不打诊断。
+# ============================================================
+
+PORT = 18420
+UPORT = 18421
+D = "/tmp/px_m256_probe"
+
+# TCP 服务端：accept 一次 → 等 1500ms → 发 5 字节 → 关
+def srv():
+    let l = tcp_listen(PORT)
+    let c = tcp_accept(l)
+    sleep(1500)
+    tcp_send(c, "HELLO")
+    sleep(300)
+    tcp_close(c)
+    tcp_close(l)
+
+# UDP 发送端：1000ms 后开始，每 100ms 发一次（共 6s 窗口）
+def usrv():
+    let s = udp_open(0)
+    sleep(1000)
+    var i = 0
+    while i < 60:
+        udp_send(s, "127.0.0.1", UPORT, "PING")
+        sleep(100)
+        i += 1
+    udp_close(s)
+
+# GC 压力：持续分配（每次分配都触发 full GC）
+def press(n):
+    var i = 0
+    var acc = 0
+    while i < n:
+        let s = "p" + str(i) + "q"
+        acc += len(s)
+        i += 1
+    return acc
+
+mkdir(D)
+spawn srv()
+spawn usrv()
+spawn press(120000)
+spawn press(120000)
+
+# 接收端**尽早 bind**（此后早发的包会排队，不会触发 ICMP）
+let u = udp_open(UPORT)
+
+# ── 用例 T1：TCP read(fd, 64)（fd 带 SO_RCVTIMEO = 3000ms）──
+var fd = -1
+var k = 0
+while k < 200:
+    let c = tcp_connect_ex("127.0.0.1", PORT)
+    if c["ok"]:
+        fd = c["fd"]
+        k = 9999
+    else:
+        sleep(20)
+        k += 1
+if fd < 0:
+    print("T1=CONNFAIL")
+else:
+    tcp_opt(fd, {"read_timeout_ms": 20000})
+    let d = read(fd, 64)
+    var n = -1
+    if d != -1:
+        n = len(d)
+    print("T1=" + str(n))
+    tcp_close(fd)
+
+# ── 用例 U2：UDP udp_recv（先排空，使这一发**必然阻塞**）──
+tcp_opt(u, {"read_timeout_ms": 1})
+while udp_recv(u, 64) != null:
+    0
+tcp_opt(u, {"read_timeout_ms": 20000})
+let r = udp_recv(u, 64)
+var m = -1
+if r != null:
+    m = len(r["data"])
+print("U2=" + str(m))
+udp_close(u)
+print("M256-PROBE-DONE")
