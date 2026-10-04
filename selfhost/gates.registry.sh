@@ -52,6 +52,9 @@ step "里程碑↔缺陷编号 一致性门（引用的编号必须落在该里�
 #   `M<m>（…缺陷 <n>…）` 的 n 必须 ∈ CHANGELOG 里 M<m> **自带标题**声明的编号集合。
 #   门自带 --self-test（11 条夹具，含判据自身踩过的 4 个坑）。
 run check_defect_refs python3 selfhost/check_defect_refs.py
+# M254（缺陷 448）：负控残留守卫 —— 扫描面 .px/.c → .px/.c/.h/.py/.sh/.go。
+#   门内并行执行器 selfhost/gate_par.py（.py）是 m244 负控的打桩目标，旧扫描面看不见它。
+run neg_residue bash selfhost/check_neg_residue.sh
 step "全件源码链门"
 run check_all ./selfhost/rebake_bin.sh --check-all
 step "C 轨重烘门"

@@ -227,6 +227,14 @@ jobs:
         #   这一类（M235 缺陷 355 同形）在 CI 上无人发现。本步补上。
         run: |
           bash selfhost/check_gate_registry.sh
+      - name: 负控残留守卫（工作树卫生 · M254 / 缺陷 448）
+        #   原 selfhost/rebake_bin.sh 的 check_neg_residue() 扫描面写死 --include='*.px' --include='*.c'
+        #   ⇒ 漏掉 .h/.py/.sh/.go；而门内并行执行器 selfhost/gate_par.py（**.py**）正是
+        #   m244_gate_parallel 负控的**打桩目标** ⇒ 门被中断时残留**逃过自检**（实测发生）。
+        #   本守卫下沉为独立脚本（单一事实源 + 自证），rebake_bin.sh 改为调用它。
+        run: |
+          bash selfhost/check_neg_residue.sh --self-test
+          bash selfhost/check_neg_residue.sh
       - name: 里程碑↔缺陷编号 一致性（M241）
         #   M240 的注释里 4 处把 399 写成 341 ⇒ 按号去查会落到完全无关的里程碑（同 M185 家族）。
         #   判据：源码每条 `M<m>（…缺陷 <n>…）` 的 n 必须 ∈ CHANGELOG 里 M<m> 自带标题的声明集合。

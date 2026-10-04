@@ -1,3 +1,147 @@
+## M254（第 131 轮）：镜像器 §⑤ 丢了 arch 层 —— **用户令「催上游合并」** + 负控残留守卫的覆盖缺口
+
+> **一句话**：上游 main 上的 `packaging/pxrepo_mirror.sh` **跑不完一轮同步** —— 它在 §⑤ 直接 `die`，
+> 而且是在「**已经拉完数百 MB 资产之后**」才死。晨曦 2026-10-02 干跑发现、2026-10-04 第 2 次催办
+> （`m18db271f434e05479904f400`）；**令源：用户 2026-10-04「催上游合并」**。
+> 同轮还补上一个**我自己踩到的**缺口：负控残留自检**看不见 `.py`**。
+
+### 一 缺陷 449：§⑤ 的两次路径拼接丢了 arch 层（M168 引入 · 已修）
+
+**布局是明写的**（脚本头注 + 目录枚举都带 arch 层）：
+```
+rpm/<dist>/x86_64/<文件>        dist ∈ {7, 9, openeuler/<ver>}
+```
+而 §⑤ 的两处拼接**少了 `/x86_64`**：
+```bash
+rpmf="$(find "$STAGING/rpm/$d" -maxdepth 1 -name '*.rpm' | head -1)"      # ← 真实树在 rpm/$d/x86_64/
+[ -f "$STAGING/rpm/$d/repodata/repomd.xml.asc" ] || die …                 # ← 同上
+```
+
+**取证（三条，逐字节可核）**：
+1. 我本机 `sha256sum packaging/pxrepo_mirror.sh` = `76a35798ff98be27…` —— **与晨曦报的「上游原件」
+   逐字节相同** ⇒ 证实它「2 天 23 小时未动」，也证实晨曦的核对准确；
+2. **M168 之前**的版本（`4127306`）此处写的是 `"$STAGING/rpm/$d/x86_64"` ⇒ 这是**回退**，不是设计；
+3. 干跑复现：`find "$STAGING/rpm/7" -maxdepth 1` 在真实布局上**必然为空** ⇒ `die "rpm/7 下没有 .rpm"`。
+
+**修法（治本而非补丁）**：把「目录 → 路径」抽成**两个访问器**，路径拼接只允许发生在那里：
+```bash
+rpm_dist_dirs() { … }   # 站点根 ⇒ dist 名列表（7 9 + 实测存在的 openeuler/<ver>）
+rpm_tree_dir()  { … }   # 站点根 + dist ⇒ **arch 层**路径
+```
+⇒ §⑤ 的 `find` / `repomd.xml.asc` 与 §6 的 `rpm_repo` **三处**全部经访问器（唯一入口）。
+
+**连带修正 §6 的 `rpm_repo`**（晨曦「观察②」）：`"rpm/$d/"` → `"rpm/$d/x86_64/"`。
+实测 `https://soft.xiusoft.cn/puxian/rpm/9/repodata/repomd.xml` → **404**（真实在 `rpm/9/x86_64/` 下）。
+⚠️ 口径核实：全仓 `grep rpm_repo` = **零消费方**（`install-rpm.sh` 只读 version/tag/tarball_sha256）
+⇒ 现网客户端**不受影响**；改它是为了「脚本实现 ⇄ 自己的头注 ⇄ 对外自证文件」三者自洽。
+
+### 二 判据：§⑤ 原本**没有任何门覆盖**（晨曦「观察①」· 这是它长期存活的原因）
+
+`packaging/selftest_pxrepo_mirror.sh` 只抽取三段（`xcheck-rpm-tree` / `rootfiles-fresh` /
+`tag-name-guard`）—— **没有一段执行 §⑤**。本轮新增第 **[4] rpm 树布局** 段（5 条）：
+
+| 判据 | 内容 |
+|---|---|
+| **④ 正例** | fixture = **真实布局**（4 个 dist × arch 层 + repodata + GPG key）⇒ 必须**全过**（保证判据非恒绿） |
+| **④b 反向** | 摘掉一个 `repomd.xml.asc` ⇒ 必须**响亮**，且消息里的路径**含 arch 层** |
+| **④c 缺陷真实性** | 旧形态（`find rpm/9`）在真实布局上**必然为空** ⇒ 直接证明 M168 的 §⑤ 必死 |
+| **④d 静态** | ① 无「缺 arch」拼接（⚠️ **只查代码行** —— §⑤ 注释里**故意保留**缺陷原形当历史说明）② `find` 经 `rpm_tree_dir` ③ `rpm_repo` 含 `/x86_64/` |
+
+**负控双道（各自独立判红 · 源逐字节还原）**：
+```
+NC-A rpm_tree_dir 去掉 /x86_64（§⑤ 退回缺陷原形）  → ❌ 2 条（④/④b，die 原样复现）
+NC-B §6 rpm_repo 退回 rpm/$d/                     → ❌ 1 条（④d）
+```
+实测 **17 通过 / 0 失败**（原 13 条 + 新 4 条）。
+
+### 三 缺陷 448：负控残留自检**看不见 `.py`**（本轮实测踩到 · 已修）
+
+**怎么发现的**：本轮开工 `git status` 看到 `selfhost/gate_par.py` 的未提交改动是
+```python
+return 1                               # NEGCTL-M244-B：忽略并发度，恒串行
+```
+—— 这是 `m244_gate_parallel` **负控 B 的打桩原形**（门被中断 ⇒ trap 未执行 ⇒ 残留）。
+
+**为什么自检没抓到**：`rebake_bin.sh` 的 `check_neg_residue()` 扫描面写死
+```bash
+grep -rlE '_m[0-9]+_neg|NEGCTL|__NEG' --include='*.px' --include='*.c'   # ← 就这两个
+```
+而 `gate_par.py` 是 **`.py`** ⇒ **不在扫描面内**（实测：旧判据 **0 命中**，扩展面命中它）。
+⇒ 若此时重烘，就会把「**恒串行**」的执行器行为带进后续判据。
+
+**修法**：下沉为独立守卫 **`selfhost/check_neg_residue.sh`**（单一事实源 + 带自证），
+`rebake_bin.sh` 改为**调用它**。四条判据：① 扫描面扩到 `.px/.c/.h/.py/.sh/.go` ·
+② 白名单（**只许登记「会写下标记的东西」**：运行器/守卫自身，逐条带理由）·
+③ **过期判据**（登记了却不再命中 ⇒ 红）· ④ 规模锚点（豁免 ≤8 条 · 扫描面 ≥200 文件）。
+
+- 自证 **11/0**（含 4 个**逃逸面**逐个注入 `.py/.sh/.h/.go` ⇒ 必须判红）
+- 负控取证：注入 m244 负控 B 原形 ⇒ 旧判据 **0 命中**（看不见）· 新守卫**判红并指名**
+  `selfhost/gate_par.py` · 源逐字节还原
+- 实检仓库：✅ `NEG-RESIDUE-OK`（无残留 · 豁免 4/8 · 扫描面 717 文件）
+
+### 四 附带：`m244` 门内并行清单漏登记（缺陷 447 · 全量门当场抓住）
+
+M253 新门 `m253_bcorpus` 用了 `gate_par` 的 `pmap_records`（261 次执行）却**忘了登记**
+`examples/m244_gate_parallel/targets.tsv` ⇒ 全量门判红
+`漏登记(派生有、清单无): ['examples/m253_bcorpus/three_tracks.py']`。
+**修**：补一行 + 把这条写进 `docs/NEW_GATE_CHECKLIST.md` §六（⭐ 标注**已撞两次**：M250 缺陷 436 · M253 缺陷 447）。
+> 这条红是「**门在正确的时候说了正确的话**」—— 判据建在**源码派生**上（而非手抄清单），
+> 所以新门一接错**立刻**被咬住。
+
+### 五 晨曦诉求 ③：删掉不合规 tag `archive/verify-r1-ablation`
+
+**它为什么会每 30 分钟告警一次**：`tag-name-guard` 段把「不参与版本序」的 tag 全部列出来 ——
+已登记 `packaging/tag_name_exempt.txt` 的走 ℹ️（历史遗留），**未登记**的则**响亮**。
+`archive/verify-r1-ablation` **不在豁免表里** ⇒ 每次同步都告警（不阻断，纯噪声）。
+
+**处置（已执行）**：`git push origin --delete archive/verify-r1-ablation`
+- 留证（可重建）：`c46280c6db2dbd2a040e2c31b17fa8c8b92f3668`（解引用 `dc39711a…`）
+- 删除**前**确认：**无对应 Release**（`GET /releases/tags/…` → 404）
+  ⇒ 不涉 M206 那类「删 tag 把 Release 转草稿」的风险
+
+**因果验证（正反两问 · 用真实 tag 清单抽取判据段跑）**：
+```
+① 现状：远端 174 个 tag ⇒ tag-name-guard rc=0 · 无「未登记」告警
+        （ℹ️ 另有 17 个违规 tag 已登记在豁免表）
+② 反事实：把 archive/verify-r1-ablation 加回 ALLTAGS ⇒ 复现晨曦报的那条
+        ⚠ 远端有 1 个未登记的不合规 tag（…） · archive/verify-r1-ablation
+```
+⇒ **删除它确实消除了告警**（不是"看起来应该好了"）。
+
+⚠️ **远端仍有 17 个历史 `sN` tag**（`v0.2.0-m106s3` / `m168s4` / `m235s1` …）。它们**已登记豁免**
+⇒ 不告警、不阻断同步；且 `packaging/make_tag.sh`（M249）已从**创建侧**禁止新产生（`sN` 形态
+会**直接给出合规名**并拒绝创建）。**是否清理存量 ⇒ 等用户指令**（删 tag 会影响对应历史 Release 的状态）。
+
+### 六 验收
+
+- `packaging/selftest_pxrepo_mirror.sh` **17/0**（含新 [4] 段 5 条 · 负控 2 道）
+- `selfhost/check_neg_residue.sh --self-test` **11/0** · 实检 ✅ · 注册守卫 **9/0**
+- 注册：`selfhost/gates.registry.sh` + `.github/workflows/ci.yml` **双向**（新增 step「负控残留守卫」）
+- 版本段 `0.2.3 → 0.2.4`（用户令：每轮 tag 前递增 patch）⇒ 重烘 **12/12** + 版本↔基准守卫
+-
+## M253 补（同一轮）：**门内并行清单漏登记** —— 全量门当场抓住（缺陷 447 · 流程/基础设施）
+
+> M250 缺陷 436 是同一个形状（**第一次**），本轮又撞了一次 ⇒ 说明该把它写进**新门清单**，
+> 而不是靠「记得」。本轮已把这条补进 `docs/NEW_GATE_CHECKLIST.md` §六。
+
+**症状**：全量门跑到 m244 时判红 ——
+```
+FAIL [A] 清单 ⇄ 派生精确相等（漏登记 0 · 悬空 0）
+     漏登记(派生有、清单无): ['examples/m253_bcorpus/three_tracks.py']
+```
+
+**根因**：`examples/m244_gate_parallel/targets.tsv` 是「门内并行执行器」的**清单**，
+而**事实源**是「谁 `from gate_par import …`」（`static_check.py` 做**双向**核对：漏登记 / 悬空**都判红**）。
+新门只要**例数 × 轨数 > 500** 就会用 `pmap_records` ⇒ **必然**要登记这张表 ——
+我在建 m253 门时用了它（261 次执行），**忘了登记**。
+
+**修法**：`targets.tsv` 补一行 `m253_bcorpus<TAB>examples/m253_bcorpus/three_tracks.py<TAB>42`
+（第三列 = **实测** `--neg-skip` 全门 42s，仅参考不参与判据）。
+**新门清单** §六 补一条（⭐ 标注「已撞两次」）。
+
+⚠️ **这条红是「门在正确的时候说了正确的话」** —— M244 的判据建在**源码派生**上而不是手抄清单上，
+所以新门一接错**立刻**就被咬住。**教训**：凡是「清单 + 事实源」的守卫，
+新增对象时**先问一句「我要不要登记到哪张清单」**；清单项越多，越该由**派生**驱动。
 ## M253（第 130 轮）：**「能力存在、但从没被证明可用」的 10 个 native** —— 覆盖面台账逼出来的两个静默错值（缺陷 444/445/446）
 
 > **一句话**：M250 建的覆盖面台账（`selfhost/check_native_coverage.py`）把 392 个 native 逐条过了一遍，
