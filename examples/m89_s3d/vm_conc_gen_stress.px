@@ -34,7 +34,7 @@ def worker(id: int, waves: int, ch):
             m += 1
         # 部分消费 1 项（前 waves 波 = 10 项），gen 内部游标/闭包跨 GC 存活
         if w < 10:
-            let v = gen_next(glazy)
+            var v = gen_next(glazy)   # M260：同帧后文 `v = gen_next(glazy)` 重新赋值 ⇒ 需 var（M169 起 let 帧内 hoist 且不可变）
             if v != null:
                 p1 += v
         # 活引用校验：sentinel 仅存于本 worker 帧槽

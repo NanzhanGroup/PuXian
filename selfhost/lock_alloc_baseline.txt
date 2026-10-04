@@ -1,0 +1,18 @@
+# M260 · 持锁临界区内可失败分配 —— **已知欠账**清单（基线）
+# 由 selfhost/check_lock_alloc.py --update 生成；判据 = **只减不增**：
+#   实测 − 基线 非空 ⇒ 判红（新增，必须当场处理或论证）；
+#   基线 − 实测 非空 ⇒ 提示收口（不判红）。
+# 列：文件:行 <TAB> 被调函数 <TAB> DIRECT/INDIRECT
+runtime/runtime.c:20203	xcalloc	DIRECT
+runtime/runtime.c:20204	xcalloc	DIRECT
+runtime/runtime.c:20523	xrealloc	DIRECT
+runtime/runtime.c:23006	xmalloc	DIRECT
+runtime/runtime.c:2397	xcalloc	DIRECT
+runtime/runtime.c:2463	xcalloc	DIRECT
+runtime/runtime.c:27096	xmalloc	DIRECT
+runtime/runtime.c:27100	xmalloc	DIRECT
+runtime/runtime.c:3297	xrealloc	DIRECT
+runtime/runtime.c:5412	xrealloc	DIRECT
+runtime/runtime_route.c:196	px_dict	INDIRECT
+runtime/runtime_route.c:207	px_str	INDIRECT
+runtime/runtime_route.c:215	px_str	INDIRECT

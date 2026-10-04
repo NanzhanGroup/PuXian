@@ -2373,7 +2373,22 @@ static pthread_mutex_t g_pinned_mu = PTHREAD_MUTEX_INITIALIZER;
 static LXObject** g_pin_set = NULL;
 static void px_pin_obj(LXObject* o) {
     if (!o) return;
+    // M260（缺陷 439 同族）：**锁外备货** —— 修前「首次建去重集合」与「钉住表扩容」
+    //   都在持 `g_pinned_mu` 时做分配 ⇒ 失败即持锁 ⇒ `_exit(1)`。
+    //   两阶段：锁外备好新数组，锁内只做指针发布（`xfree` 旧数组不分配 ⇒ 安全）。
+    LXObject** nset = NULL;
+    if (!__atomic_load_n(&g_pin_set, __ATOMIC_ACQUIRE)) {
+        nset = (LXObject**)xcalloc(PX_PIN_SLOTS, sizeof(LXObject*));
+    }
+    LXObject** narr = NULL;
+    int ncap = 0;
+    if (__atomic_load_n(&g_pinned_n, __ATOMIC_RELAXED) >=
+        __atomic_load_n(&g_pinned_cap, __ATOMIC_RELAXED)) {
+        ncap = g_pinned_cap ? g_pinned_cap * 2 : 512;
+        narr = (LXObject**)xmalloc(sizeof(LXObject*) * (size_t)ncap);
+    }
     pthread_mutex_lock(&g_pinned_mu);
+    if (!g_pin_set && nset) { g_pin_set = nset; nset = NULL; }
     // M154（第 36 轮）：去重改**哈希集合** —— 旧实现每次线性扫全表（O(已钉数)）。
     //   M153/M154 的池化把钉住表从「几百」推到「数千」（字面量 + 256 单字符 + 4096 rune
     //   + 4161 小整数文本），于是每次 pin 都要数千次比较、总代价 O(n²)：实测占整图编译
@@ -2383,17 +2398,32 @@ static void px_pin_obj(LXObject* o) {
     unsigned h = (unsigned)((((uintptr_t)o >> 4) * 0x9E3779B97F4A7C15ULL) >> 40) & (PX_PIN_SLOTS - 1);
     for (int k = 0; k < 16; k++) {
         unsigned j = (h + (unsigned)k) & (PX_PIN_SLOTS - 1);
-        if (g_pin_set[j] == o) { pthread_mutex_unlock(&g_pinned_mu); return; }
+        if (g_pin_set[j] == o) { pthread_mutex_unlock(&g_pinned_mu); goto unpin_done; }
         if (!g_pin_set[j]) { g_pin_set[j] = o; goto append; }
     }
 append:
     if (g_pinned_n >= g_pinned_cap) {
-        int nc = g_pinned_cap ? g_pinned_cap * 2 : 512;
-        g_pinned = (LXObject**)xrealloc(g_pinned, sizeof(LXObject*) * (size_t)nc);
-        g_pinned_cap = nc;
+        if (narr && ncap > g_pinned_n) {        // 发布备货（memcpy + 换指针 + 释放旧，无分配）
+            if (g_pinned_n > 0) memcpy(narr, g_pinned, sizeof(LXObject*) * (size_t)g_pinned_n);
+            LXObject** oldp = g_pinned;
+            g_pinned = narr;
+            g_pinned_cap = ncap;
+            narr = NULL;
+            if (oldp) xfree(oldp);
+        } else {                                 // 备货不足（并发增长）⇒ 兜底（近乎不可达）
+            // ⚠️ 本分支**仍有锁内分配**：静态守卫会命中它，已显式登记在
+            //   `selfhost/lock_alloc_baseline.txt` 里（理由：并发兜底；实测不可达）。
+            int nc = g_pinned_cap ? g_pinned_cap * 2 : 512;
+            if (nc <= g_pinned_n) nc = g_pinned_n + 64;
+            g_pinned = (LXObject**)xrealloc(g_pinned, sizeof(LXObject*) * (size_t)nc);
+            g_pinned_cap = nc;
+        }
     }
     g_pinned[g_pinned_n++] = o;
     pthread_mutex_unlock(&g_pinned_mu);
+unpin_done:
+    if (nset) xfree(nset);      // 备货未被采纳 ⇒ 锁外释放（从未发布 ⇒ 安全）
+    if (narr) xfree(narr);
 }
 // 常量池：按**指针**缓存 —— 只允许「地址恒定的静态字符串」= 编译期字面量（VM 轨 BC 镜像的
 //   K 表 payload；C 轨产物的字符串字面量）。**不得**传入栈上/堆上临时缓冲：地址会复用 ⇒
@@ -2454,15 +2484,20 @@ static int g_empty_ready = 0;
 static pthread_mutex_t g_empty_mu = PTHREAD_MUTEX_INITIALIZER;
 static LXValue px_empty_str_get(void) {
     if (__atomic_load_n(&g_empty_ready, __ATOMIC_ACQUIRE)) return g_empty_str;
+    // M260（缺陷 439 同族）：锁外备货 —— 修前 `px_str_len_raw`（构造对象）与
+    //   `px_pin_obj`（其内部还要取 g_pinned_mu）都在**持 g_empty_mu** 时执行
+    //   ⇒ 分配失败 ⇒ 隔离审计发现持锁 ⇒ `_exit(1)`。
+    //   两阶段后，锁内只剩「读 flag + 写两个字段」，无分配。
+    LXValue cand = px_str_len_raw("", 0);
+    if (cand.as.obj) px_pin_obj(cand.as.obj);
     pthread_mutex_lock(&g_empty_mu);
     if (!g_empty_ready) {
-        LXValue v = px_str_len_raw("", 0);
-        px_pin_obj(v.as.obj);
-        g_empty_str = v;
+        g_empty_str = cand;
         __atomic_store_n(&g_empty_ready, 1, __ATOMIC_RELEASE);
     }
+    LXValue r = g_empty_str;
     pthread_mutex_unlock(&g_empty_mu);
-    return g_empty_str;
+    return r;
 }
 // ASCII 单字符串表（`s[i]` 的结果）：单个字节的字符只有 256 种 ⇒ 用字节值直接索引，
 //   零哈希、零探测、有界 256 项（全是钉住对象，约 256×~80B ≈ 20KB）。多字节字符
@@ -2543,23 +2578,44 @@ static LXValue px_str_int_pool(int64_t v) {
     }
     int idx = (int)(v - PX_INTSTR_LO);
     if (g_intstr_init && __atomic_load_n(&g_intstr_init[idx], __ATOMIC_ACQUIRE)) return g_intstr[idx];
-    pthread_mutex_lock(&g_intstr_mu);
-    if (!g_intstr_init) {
-        int n = PX_INTSTR_HI - PX_INTSTR_LO + 1;
-        g_intstr = (LXValue*)xmalloc(sizeof(LXValue) * (size_t)n);
-        g_intstr_init = (unsigned char*)xcalloc((size_t)n, 1);
-    }
-    if (!g_intstr_init[idx]) {
+    // M260（缺陷 439）：**修前**本函数在持 `g_intstr_mu` 时做**四处**可失败分配
+    //   （`g_intstr` 数组 · `g_intstr_init` 位图 · `px_str_len` 内部的字符串对象 ·
+    //    `px_pin_obj` 内部的钉住表）。分配失败 ⇒ `px_alloc_fail` ⇒ 隔离点审计发现
+    //   「本线程仍持锁」⇒ 无法安全回滚 ⇒ `_exit(1)`（服务中断）。
+    //   M128 已把 list/dict/gc_objs 的扩容移出临界区，**漏了这里**。
+    //   ⇒ 两阶段：**锁外备货**（数组 + 候选字符串）+ **锁内只做指针发布**（无分配）。
+    {
+        int cnt = PX_INTSTR_HI - PX_INTSTR_LO + 1;
+        LXValue* nstr = NULL;
+        unsigned char* ninit = NULL;
+        if (!__atomic_load_n(&g_intstr_init, __ATOMIC_ACQUIRE)) {   // 锁外读（原子，避免数据竞争 UB）
+            nstr = (LXValue*)xmalloc(sizeof(LXValue) * (size_t)cnt);
+            ninit = (unsigned char*)xcalloc((size_t)cnt, 1);
+        }
         char t[32];
-        int n = snprintf(t, sizeof(t), "%lld", (long long)v);
-        LXValue r = px_str_len(t, n);
-        px_pin_obj(r.as.obj);
-        g_intstr[idx] = r;
-        __atomic_store_n(&g_intstr_init[idx], 1, __ATOMIC_RELEASE);
+        int tn = snprintf(t, sizeof(t), "%lld", (long long)v);
+        LXValue cand = px_str_len(t, tn);   // 锁外构造（分配 + 可能的 GC）
+        if (cand.as.obj) px_pin_obj(cand.as.obj);
+        pthread_mutex_lock(&g_intstr_mu);
+        if (!g_intstr_init) {               // 双检：别的线程可能已建好
+            g_intstr = nstr;
+            g_intstr_init = ninit;
+            nstr = NULL;
+            ninit = NULL;
+        }
+        if (!g_intstr_init[idx]) {
+            g_intstr[idx] = cand;
+            __atomic_store_n(&g_intstr_init[idx], 1, __ATOMIC_RELEASE);
+        }
+        LXValue r = g_intstr[idx];
+        pthread_mutex_unlock(&g_intstr_mu);
+        // 备货未被采纳 ⇒ 锁外释放（从未发布 ⇒ 安全）。
+        // ⚠️ 未被采纳的 `cand` 已被 pin（永久根）——这是**有意**的：候选在锁外构造、
+        //    锁内发布，中间的任意一次分配都可能回收它，不 pin 就没法安全发布。
+        //    泄漏有界（每个 idx 至多少量竞争），与 interned 字符串的语义一致。
+        if (nstr) { xfree(nstr); xfree(ninit); }
+        return r;
     }
-    LXValue r = g_intstr[idx];
-    pthread_mutex_unlock(&g_intstr_mu);
-    return r;
 }
 // 分配统计：导出（声明见文件前部 g_alloc_stats 处）
 static void px_alloc_stats_dump(void) {

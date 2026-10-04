@@ -9,7 +9,9 @@
 # M251 实测（跑一遍全部 50 个孤儿门 · 逐门记录 rc/耗时/失败原因）：
 #   **40 OK · 10 FAIL** —— 10 个 FAIL 逐个定性后的结论：
 #     · 9 个是**判据/装置腐烂**（已修）—— 修法见 CHANGELOG M251 各节
-#     · 1 个是**真回归**（m128_unlock_grow ⇒ 缺陷 439，本轮登记不修）
+#     · 1 个是**真回归**（m128_unlock_grow ⇒ 缺陷 439）—— **M260 已修并收编进运行器**
+#       （`px_str_int_pool` / `px_empty_str_get` / `px_pin_obj` 三处两阶段化；m128 门实测
+#        pass=86/fail=0）⇒ 按纪律**从本表移除**（它不再是孤儿门）。
 #
 # 列：gate <TAB> deps <TAB> rc <TAB> sec <TAB> class <TAB> note
 #   deps  = 依赖分类（纯自包含 / 需 Go / 体积基线 / 大内存 / 起服务 / 需外部命令 / 需 pyzipper）
@@ -29,7 +31,6 @@ m123_http_conn_alive	起服务	0	15	OK	实测通过（判据仍然有效）
 m125_alloc_fail	大内存	0	3	OK	实测通过（判据仍然有效）
 m126_signal_isolate	起服务	0	36	OK	实测通过（判据仍然有效）
 m127_unwind_lock	起服务	0	56	OK	实测通过（判据仍然有效）
-m128_unlock_grow	起服务	1	28	FAIL	已登记（缺陷 439 · 真回归）：daemon 日志「隔离点无法安全回滚 … 仍持有运行时锁 &g_intstr_mu」⇒ _exit(1)。C1–C4 全绿、仅 C5 站点（gc_objs_grow）如此 ⇒ 对象表扩容路径掉进了 int↔str 锁的临界区（M128 的目标正是消除它）。本轮登记不修（需深入 GC 对象表 + 锁结构）。
 m45_pkgdemo	纯自包含	0	2	OK	实测通过（判据仍然有效）
 m62_langfix	纯自包含	0	2	OK	实测通过（判据仍然有效）
 m64_bench	纯自包含	0	1	OK	实测通过（判据仍然有效）

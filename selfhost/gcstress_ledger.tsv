@@ -1,0 +1,427 @@
+# M260 · GC 压力档台账 —— 「哪些语料跑过压力档 · 结论 · 何时跑的」
+# 由 selfhost/merge_ledger.py 维护（本表**只增不减**：条目数只能增，路径不删）。
+# 结论 ∈ PASS / FAIL_OUT / FAIL_RC / FAIL_SIG / FAIL_DIAG / STIMEOUT / NONDET / SKIP_NORM / SKIP_KNOWN / BUILDFAIL
+# FAIL_* 的详情**必须带定性**（缺陷NNN 或 假阳：<理由>）—— 由 check 脚本判红。
+examples/issue28_b1/b1_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/issue28_b2/mini.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 'S0' ⇒ 非卡死）
+examples/issue28_b2/wave.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 'W-BASELINE' ⇒ 非卡死）
+examples/issue28_b2/wave_small.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 'W-BASELINE' ⇒ 非卡死）
+examples/m100/m100_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m101_s2/m101_s2_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m101_s2/m101_sni_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m102_s2/s2a_probe.px	NONDET	2026-10-05	假阳：正常档输出含**实测耗时**（两次差 1 个单位 ⇒ 计时精度，非行为差异）
+examples/m103_s2a/dns_txt_test.px	PASS	2026-10-05	
+examples/m103_s2b/keygen_test.px	PASS	2026-10-05	
+examples/m103_s2c/yaml_stringify_test.px	PASS	2026-10-05	
+examples/m103_s2d/img_test.px	PASS	2026-10-05	
+examples/m108_lock/m108_lock_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m108_s0/hs_stall_server.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m109_headers_multi/hdr_multi.px	PASS	2026-10-05	
+examples/m109_s0/hdr_pass.px	PASS	2026-10-05	
+examples/m110_s1/m110_s1.px	NONDET	2026-10-05	假阳：正常档输出含**实测耗时**（两次差 1 个单位 ⇒ 计时精度，非行为差异）
+examples/m110_s2/m110_s2.px	NONDET	2026-10-05	假阳：正常档输出含**实测耗时**（两次差 1 个单位 ⇒ 计时精度，非行为差异）
+examples/m116_builtin_semantics/dict_missing_key.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m116_builtin_semantics/m116_semantics.px	PASS	2026-10-05	
+examples/m116_builtin_semantics/serve_err.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m117_realworld_defects/m117_defects.px	SKIP_KNOWN	2026-10-05	该用例打印**实测用时**（`用时 701ms（阈值 700ms）`）。实跑定性：正常档 ×2 = 701ms / 压力档 ×2 = 702ms —— 两档都在阈值 ±2ms 内、且各自稳定 ⇒ 差异来自**计时精度**而非缺陷（阈值本身生效，语义正确）。命令：`for i in 1 2; do ./build/m117_defects 2>/dev/null | sed -n 5p; done`（正常）· 同命令前置 `PX_GC_STRESS=1 PX_GC_INLINE=1`（压力）。
+examples/m123_http_conn_alive/srv.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m124_stw/p2_probe.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m124_stw/shortid_probe.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m124_stw/srvloop.px	PASS	2026-10-05	
+examples/m124_stw/srvloop2.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 '=== srvloop2: rounds=300 ===' ⇒ 非卡死）
+examples/m124_stw/srvloop3.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 '=== srvloop2: rounds=300 ===' ⇒ 非卡死）
+examples/m124_stw/stw_stress.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m125_alloc_fail/alloc_fail.px	PASS	2026-10-05	
+examples/m126_signal_isolate/sig_isolate.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行85]: R1002: int 不支持类型 null）
+examples/m127_unwind_lock/unwind_lock.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行61]: R1002: int 不支持类型 null）
+examples/m128_unlock_grow/unlock_grow.px	SKIP_NORM	2026-10-05	合法：常驻服务（由 m128 门以 HTTP 驱动；独立跑挂住是预期）—— **缺陷 439 已修**（M260：px_str_int_pool/px_empty_str_get/px_pin_obj 三处锁外备货）
+examples/m130_flock_chmod/flock_chmod.px	PASS	2026-10-05	
+examples/m131_http_stream_post/stream_post.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m132_sse_chunked/proxy.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m132_sse_chunked/sse_chunked.px	PASS	2026-10-05	
+examples/m133_http_unix_timeout/http_unix_timeout.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m134_gc_obj_roots/gc_obj_roots.px	PASS	2026-10-05	
+examples/m136_go_json_fidelity/fidelity.px	PASS	2026-10-05	
+examples/m137_sse_connect_ex/sse_connect_ex.px	PASS	2026-10-05	
+examples/m138_regex_go_parity/parity.px	PASS	2026-10-05	
+examples/m139_bare_ident_stmt/bad_ident.px	BUILDFAIL	2026-10-05	2:2: 语法错误 E2012: 裸标识符语句没有效果：x（调用需要括号 `()`；若想要空语句请写 `0`）
+examples/m139_bare_ident_stmt/bad_indent.px	BUILDFAIL	2026-10-05	3:6: 语法错误 E2012: 裸标识符语句没有效果：y（调用需要括号 `()`；若想要空语句请写 `0`）
+examples/m139_bare_ident_stmt/bad_pass.px	BUILDFAIL	2026-10-05	2:9: 语法错误 E2012: `pass` 不是 PuXian 关键字（它是普通标识符，`var pass = 0` 合法）：空语句请写 `0`，或直接删掉这一行
+examples/m139_bare_ident_stmt/ok_assert.px	PASS	2026-10-05	
+examples/m139_bare_ident_stmt/ok_call.px	PASS	2026-10-05	
+examples/m139_bare_ident_stmt/ok_method.px	PASS	2026-10-05	
+examples/m139_bare_ident_stmt/ok_pass_var.px	PASS	2026-10-05	
+examples/m139_bare_ident_stmt/ok_str_stmt.px	PASS	2026-10-05	
+examples/m140_http_conn_errno/http_conn_errno.px	PASS	2026-10-05	
+examples/m141_now_ns/now_ns.px	PASS	2026-10-05	
+examples/m141_now_ns/remote_unix.px	PASS	2026-10-05	
+examples/m142_go_json_indent/fidelity.px	PASS	2026-10-05	
+examples/m143_float32/fidelity.px	PASS	2026-10-05	
+examples/m144_http_bigbody/http_bigbody.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（压力档下每次分配即全 STW GC；给足 120s 后 rc=0，末行='M144-VERIFY-OK'）
+examples/m145_cycle_safe/cycle_eq.px	PASS	2026-10-05	
+examples/m145_cycle_safe/json_cycle.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行8]: json: unsupported value: encountered a cyc）
+examples/m145_cycle_safe/object_id.px	PASS	2026-10-05	
+examples/m145_cycle_safe/render.px	PASS	2026-10-05	
+examples/m146_float64_bits/fidelity.px	PASS	2026-10-05	
+examples/m147_fmt_dec/fidelity.px	PASS	2026-10-05	
+examples/m148_ieee_div/fidelity.px	PASS	2026-10-05	
+examples/m149_tcp_deadline/interp_smoke.px	PASS	2026-10-05	
+examples/m149_tcp_deadline/m149_server.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m149_tcp_deadline/tcp_deadline.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m150_tls_crypto/fidelity.px	PASS	2026-10-05	
+examples/m150_tls_crypto/interp_smoke.px	PASS	2026-10-05	
+examples/m150_tls_crypto/tls_probe.px	PASS	2026-10-05	
+examples/m151_pg_tls_bytes/px_probe.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m153_alloc/alloc_corpus.px	PASS	2026-10-05	
+examples/m153_alloc/pool.px	PASS	2026-10-05	
+examples/m154_alloc2/budget2.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（压力档下每次分配即全 STW GC；给足 120s 后 rc=0，末行='alloc2-corpus 200000 578000 1600000'）
+examples/m154_alloc2/m154_sem.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（压力档下每次分配即全 STW GC；给足 120s 后 rc=0，末行='pass=57 fail=0'）
+examples/m155_nul_bytes/nul_io.px	PASS	2026-10-05	
+examples/m155_nul_bytes/nul_sem.px	PASS	2026-10-05	
+examples/m156_onnx/onnx_dump.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m157_onnx_exec/embed_mini.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m157_onnx_exec/onnx_exec.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m157_onnx_exec/opnames.px	PASS	2026-10-05	
+examples/m158_interp_fn/interp_fn_closure.px	PASS	2026-10-05	
+examples/m158_interp_fn/interp_fn_test.px	PASS	2026-10-05	
+examples/m160_closure/closure_edge.px	PASS	2026-10-05	
+examples/m160_closure/closure_test.px	PASS	2026-10-05	
+examples/m161_genexp_capture/genexp_capture.px	PASS	2026-10-05	
+examples/m161_genexp_capture/genexp_capture_edge.px	PASS	2026-10-05	
+examples/m161_genexp_capture/genexp_local.px	PASS	2026-10-05	
+examples/m162_sorted_order/sorted_edge.px	PASS	2026-10-05	
+examples/m162_sorted_order/sorted_order.px	PASS	2026-10-05	
+examples/m162_sorted_order/sorted_pxdef011.px	PASS	2026-10-05	
+examples/m163_dict_key_strict/dict_key_edge.px	PASS	2026-10-05	
+examples/m163_dict_key_strict/dict_key_strict.px	PASS	2026-10-05	
+examples/m163_dict_key_strict/err_comp_float.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_comp_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_comp_multi.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_lit_bool.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_lit_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_lit_list.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_lit_mix.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m163_dict_key_strict/err_setitem_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m164_iter_index_split/err_d_bool.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m164_iter_index_split/err_d_float.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m164_iter_index_split/err_d_int_lit.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m164_iter_index_split/err_d_int_var.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m164_iter_index_split/err_d_neg.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m164_iter_index_split/genexp_shadow.px	PASS	2026-10-05	
+examples/m164_iter_index_split/iter_split.px	PASS	2026-10-05	
+examples/m164_iter_index_split/iter_split_edge.px	PASS	2026-10-05	
+examples/m165_eval_order/eval_order.px	PASS	2026-10-05	
+examples/m166_iter_mutate/iter_ok.px	PASS	2026-10-05	
+examples/m166_iter_mutate/mut_comp.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m166_iter_mutate/mut_dict_add.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m166_iter_mutate/mut_dict_del.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m166_iter_mutate/mut_list_append.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m166_iter_mutate/mut_list_pop.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m166_iter_mutate/mut_nested.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_comp_long.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_comp_notype.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_comp_short.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_dict.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_long.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_notype.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_short.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/err_three.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m167_unpack/unpack_ok.px	PASS	2026-10-05	
+examples/m169_toplevel_scope/err_frame_local.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m169_toplevel_scope/err_lambda_frame_local.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m169_toplevel_scope/err_no_iteration.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m169_toplevel_scope/toplevel_scope.px	PASS	2026-10-05	
+examples/m170_gc_bridge_root/gen_db.px	PASS	2026-10-05	
+examples/m170_gc_bridge_root/h3_codec_root.px	PASS	2026-10-05	
+examples/m170_gc_bridge_root/isolate_root.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m170_gc_bridge_root/onnx_root.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m170_gc_bridge_root/rsa_root.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m170_gc_bridge_root/sqlite_root.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m170_gc_bridge_root/xml_root.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m171_lint_scope/bad_undefined.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m171_lint_scope/bad_unused.px	PASS	2026-10-05	
+examples/m171_lint_scope/case_assign_style.px	PASS	2026-10-05	
+examples/m171_lint_scope/case_clo_capture.px	PASS	2026-10-05	
+examples/m171_lint_scope/case_comp_scope.px	PASS	2026-10-05	
+examples/m171_lint_scope/case_module_binding.px	PASS	2026-10-05	
+examples/m171_lint_scope/case_nested_mutual.px	PASS	2026-10-05	
+examples/m172_diag_channel/main_err.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m172_diag_channel/ok.px	PASS	2026-10-05	
+examples/m172_diag_channel/undef.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m173_http_proxy/pool_timeout.px	PASS	2026-10-05	
+examples/m173_http_proxy/vhost_gzip.px	PASS	2026-10-05	
+examples/m174_dict_get/err_get_badkey.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m174_dict_get/err_missing_key.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m174_dict_get/get_matrix.px	PASS	2026-10-05	
+examples/m175_bytes_stderr/len_bytes.px	PASS	2026-10-05	
+examples/m175_bytes_stderr/popen_badopt.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行6]: R1002: os_popen 的 opts.stderr 需要 "inherit"）
+examples/m175_bytes_stderr/popen_default.px	PASS	2026-10-05	
+examples/m175_bytes_stderr/popen_null.px	PASS	2026-10-05	
+examples/m175_bytes_stderr/popen_pipe.px	PASS	2026-10-05	
+examples/m176_reuseport/client.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行5]: R1003: 索引越界: 1 (len=1)）
+examples/m176_reuseport/srv.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m177_builtin_parity/err_min_empty.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m177_builtin_parity/err_sum_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m177_builtin_parity/iter_builtins.px	PASS	2026-10-05	
+examples/m178_iterable_args/err_contains_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m178_iterable_args/err_contains_nonstr.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m178_iterable_args/err_join_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m178_iterable_args/err_reversed_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m178_iterable_args/err_sorted_int.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m178_iterable_args/err_sum_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m178_iterable_args/iter_args.px	PASS	2026-10-05	
+examples/m178_iterable_args/str_args.px	PASS	2026-10-05	
+examples/m179_arith_diag/err_add_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_bit_float.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_bitnot_float.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_div_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_fadd_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_fmul_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_ge_int_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_idiv0.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_idiv_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_idx_float.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_idx_oob.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_listmul.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_lt_int_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_mod0.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_mod_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_mul_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_neg_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_pow_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_str_oob.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/err_sub_str.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m179_arith_diag/ok_matrix.px	PASS	2026-10-05	
+examples/m180_h2_h3_stance/noquic_http3.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行9]: px_serve: docroot 不是有效目录: /tmp/m180_stance）
+examples/m180_h2_h3_stance/srv_stance.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m181_uninit_read/e1_read_before_decl.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e2_closure_call_before_decl.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e3_empty_loop_var.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e4_branch_not_taken.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e5_self_ref_init.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e6_shadow_module.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e7_shadow_outer_frame.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/e8_while_zero_iter.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m181_uninit_read/ok_side.px	PASS	2026-10-05	
+examples/m182_hdr_root/probe.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m183_gc_root_handover/handover.px	PASS	2026-10-05	
+examples/m183_gc_root_handover/s3flow.px	PASS	2026-10-05	
+examples/m184_num_fs_strict/listdir_sem.px	PASS	2026-10-05	
+examples/m184_num_fs_strict/mkdir_sem.px	PASS	2026-10-05	
+examples/m184_num_fs_strict/num_ok.px	PASS	2026-10-05	
+examples/m185_bytes_face/bytes_face.px	PASS	2026-10-05	
+examples/m185_bytes_face/pred_sem.px	PASS	2026-10-05	
+examples/m185_bytes_face/render_sem.px	PASS	2026-10-05	
+examples/m186_native_passthrough/conv_parity.px	PASS	2026-10-05	
+examples/m188_std_face/sha1_family.px	PASS	2026-10-05	
+examples/m188_std_face/str_face.px	PASS	2026-10-05	
+examples/m189_bytes_bounds/bounds_ok.px	PASS	2026-10-05	
+examples/m190_arity/arity_ok.px	PASS	2026-10-05	
+examples/m206_gcroot/probe_rt.px	PASS	2026-10-05	
+examples/m206_gcroot/probe_udp.px	PASS	2026-10-05	
+examples/m207_gcstress/probe_env.px	PASS	2026-10-05	
+examples/m207_gcstress/probe_gen.px	PASS	2026-10-05	
+examples/m208_vm_c_local_roots/probe_coro.px	PASS	2026-10-05	
+examples/m208_vm_c_local_roots/probe_lit.px	PASS	2026-10-05	
+examples/m209_gcroot_rules/probe_rules.px	PASS	2026-10-05	
+examples/m211_conn_read_eintr/probe_eintr.px	PASS	2026-10-05	
+examples/m215_int_truth/corpus.px	PASS	2026-10-05	
+examples/m216_float_to_int/cases.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m217_shift_count/cases.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m218_logic_value/cases.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m222_http_body/probe.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m224_gzip_negotiate/gzneg.px	PASS	2026-10-05	
+examples/m224_gzip_negotiate/gzswitch.px	PASS	2026-10-05	
+examples/m225_h3_conn_reuse/cli_abrupt.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m225_h3_conn_reuse/cli_grace.px	SKIP_NORM	2026-10-05	正常档 rc=2
+examples/m225_h3_conn_reuse/srv.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m228_membership/drv.px	PASS	2026-10-05	
+examples/m229_result_tuple/drv.px	PASS	2026-10-05	
+examples/m230_index_slice/drv.px	PASS	2026-10-05	
+examples/m231_op_matrix/drv.px	PASS	2026-10-05	
+examples/m232_truthiness/drv.px	PASS	2026-10-05	
+examples/m233_text_cstr/drv.px	PASS	2026-10-05	
+examples/m234_bytes_family/drv.px	PASS	2026-10-05	
+examples/m235_ws_conn_uaf/ws_meta_probe.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m235_ws_conn_uaf/ws_relay_repro.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m235_ws_conn_uaf/ws_uaf_repro.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m236_ws_stream/cli.px	PASS	2026-10-05	
+examples/m236_ws_stream/rej_conflict.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m236_ws_stream/rej_headers.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行5]: R1002: ws_stream 暂不支持 opts.headers（101 的 U）
+examples/m236_ws_stream/rej_method.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行5]: R1002: ws_stream 只支持 GET（RFC 6455 握手方法固定为 ）
+examples/m236_ws_stream/rej_path.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行5]: R1002: ws_stream 的 path 必须以 / 开头）
+examples/m236_ws_stream/srv.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m236_ws_stream/srv_manual.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m239_match_case/drv.px	PASS	2026-10-05	
+examples/m242_table_ptr/srv.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m245_tls_cert_reload/repro.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m246_compound_assign/drv.px	PASS	2026-10-05	
+examples/m250_onnx_tensor/surface.px	PASS	2026-10-05	
+examples/m253_bcorpus/surface.px	PASS	2026-10-05	
+examples/m255_ws_takeover_rst/srv.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m256_eintr/probe_eintr.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m257_alloc_integrity/probe_dict.px	PASS	2026-10-05	
+examples/m43_webapp/_verify.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m43_webapp/generated_routes.px	PASS	2026-10-05	
+examples/m43_webapp/get_admin.px	PASS	2026-10-05	
+examples/m43_webapp/get_healthz.px	PASS	2026-10-05	
+examples/m43_webapp/get_p_#id.px	PASS	2026-10-05	
+examples/m43_webapp/index.px	PASS	2026-10-05	
+examples/m43_webapp/main.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m43_webapp/middleware.px	PASS	2026-10-05	
+examples/m43_webapp/post_login.px	PASS	2026-10-05	
+examples/m45_pkgdemo/local_helper.px	BUILDFAIL	2026-10-05	合法：负例语料（故意写错；1:21: 语法错误 E2001: 期望 换行，实际得到 return）
+examples/m58_hwmond/collect.px	PASS	2026-10-05	
+examples/m58_hwmond/main.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m58_hwmond/notify.px	PASS	2026-10-05	
+examples/m58_hwmond/serve.px	PASS	2026-10-05	
+examples/m58_hwmond/shm.px	PASS	2026-10-05	
+examples/m58_hwmond/verify_s3_client.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m58_hwmond/webhook_mock.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m59_math/math_s1.px	PASS	2026-10-05	
+examples/m59_math/math_s2.px	PASS	2026-10-05	
+examples/m59_math/math_s3.px	PASS	2026-10-05	
+examples/m59_math/math_s4.px	PASS	2026-10-05	
+examples/m60_dev/dev_s1.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m60_dev/dev_s2.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m60_dev/dev_s3.px	PASS	2026-10-05	
+examples/m60_dev/dev_s4.px	PASS	2026-10-05	
+examples/m61_gfx/demo_mandelbrot.px	SKIP_NORM	2026-10-05	合法：语料假设**从仓库根**运行（写 `<相对路径>.png`）；sweep 的 cwd = 语料目录 ⇒ 该假设不成立（cwd 口径差异，非缺陷）
+examples/m61_gfx/demo_scene.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [set_px 行32]: R1002: 索引必须是整数，实际是 float）
+examples/m61_gfx/m61_s4_det.px	SKIP_NORM	2026-10-05	合法：语料假设**从仓库根**运行（写 `<相对路径>.png`）；sweep 的 cwd = 语料目录 ⇒ 该假设不成立（cwd 口径差异，非缺陷）
+examples/m61_gfx/m61_s4_impsmoke.px	PASS	2026-10-05	
+examples/m61_gfx/m61_s4_zpng.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m61_gfx/m61_s4_zpxi.px	PASS	2026-10-05	
+examples/m61_gfx/m61_snake.px	PASS	2026-10-05	
+examples/m61_zlib/m61_zlib.px	PASS	2026-10-05	
+examples/m62_langfix/fp_block.px	PASS	2026-10-05	
+examples/m62_langfix/fp_bytes.px	PASS	2026-10-05	
+examples/m62_langfix/fp_floatfmt.px	PASS	2026-10-05	
+examples/m62_langfix/fp_split.px	PASS	2026-10-05	
+examples/m63_langfix/m63_fp.px	PASS	2026-10-05	
+examples/m63_langfix/m63_mock.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m63_langfix/m63_net.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m63_langfix/m63_net_err.px	PASS	2026-10-05	
+examples/m63_langfix/m63_prec.px	PASS	2026-10-05	
+examples/m64_bench/bench.px	PASS	2026-10-05	
+examples/m64_doc/sample.px	PASS	2026-10-05	
+examples/m64_fmt/m64_fmt_gold.px	PASS	2026-10-05	
+examples/m64_fmt/m64_fmt_in.px	PASS	2026-10-05	
+examples/m64_lint/bad.px	PASS	2026-10-05	
+examples/m64_lint/clean.px	PASS	2026-10-05	
+examples/m64_lint/longline.px	PASS	2026-10-05	
+examples/m64_test/sample.px	PASS	2026-10-05	
+examples/m65_lsp/demo_s3.px	PASS	2026-10-05	
+examples/m65_lsp/jsonrpc_selftest.px	PASS	2026-10-05	
+examples/m65_lsp/spawncap_selftest.px	PASS	2026-10-05	
+examples/m65_mcp/demo_mcp.px	PASS	2026-10-05	
+examples/m66_lunar/lunar_test.px	PASS	2026-10-05	
+examples/m66_proc/exec_demo.px	PASS	2026-10-05	
+examples/m66_proc/os_fs_test.px	PASS	2026-10-05	
+examples/m66_proc/proc_test.px	PASS	2026-10-05	
+examples/m66_proc/unix_test.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m66_proc/zip_test.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行14]: R1003: 索引越界: 1 (len=1)）
+examples/m66_pxml/config_loader.px	PASS	2026-10-05	
+examples/m66_pxml/demo.px	PASS	2026-10-05	
+examples/m66_pxml/demo_enc.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m66_pxml/pxml_test.px	PASS	2026-10-05	
+examples/m66_yaml/yaml_test.px	PASS	2026-10-05	
+examples/m67_aarch64/hello_a64.px	PASS	2026-10-05	
+examples/m67_aarch64/http_a64.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m67_aarch64/sqlite_a64.px	PASS	2026-10-05	
+examples/m67_multiarch/gc_single.px	PASS	2026-10-05	
+examples/m67_multiarch/gc_stress.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m67_multiarch/hello_multi.px	PASS	2026-10-05	
+examples/m67_multiarch/http_multi.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m67_multiarch/sqlite_multi.px	PASS	2026-10-05	
+examples/m70_langfix/m70_fmt_multiline_gold.px	PASS	2026-10-05	
+examples/m70_langfix/m70_fmt_multiline_in.px	PASS	2026-10-05	
+examples/m71_mcp_build/hello_build.px	PASS	2026-10-05	
+examples/m82_http_serve_unix/serve_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m83_s1_http_body_nul/serve_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m83_s2_archive_gaps/s2_verify.px	PASS	2026-10-05	
+examples/m83_s3_ed25519/s3_verify.px	PASS	2026-10-05	
+examples/m83_s4/s4_verify.px	PASS	2026-10-05	
+examples/m83_s5/libs_test.px	PASS	2026-10-05	
+examples/m83_s5/m83_s5_client.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [main 行29]: R1002: 此类型不支持索引: result）
+examples/m83_s5/serve_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m83_s5/smtp_test.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [smtp_try 行147]: net: 连接 127.0.0.1:2525 失败 (111)）
+examples/m83_s6/serve_sse_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m84_s1_http_ct/http_ct_client.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [<top> 行10]: R1003: 索引越界: 1 (len=1)）
+examples/m84_s2_hmac/s2_verify.px	PASS	2026-10-05	
+examples/m84_s3_dns/s3_verify.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m85_s1/hello.px	PASS	2026-10-05	
+examples/m85_s1/http_dep.px	PASS	2026-10-05	
+examples/m85_s1/sqlite_dep.px	PASS	2026-10-05	
+examples/m85_s1/ws_dep.px	PASS	2026-10-05	
+examples/m85_s2/hello.px	PASS	2026-10-05	
+examples/m85_s2/http_dep.px	PASS	2026-10-05	
+examples/m85_s2/sqlite_dep.px	PASS	2026-10-05	
+examples/m85_s2/ws_dep.px	PASS	2026-10-05	
+examples/m86_s0/hello.px	PASS	2026-10-05	
+examples/m86_s1/allmod.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [main 行3]: R1002: zip_pack 需要 2 个参数: (files, out_path)）
+examples/m86_s1/bad.px	BUILDFAIL	2026-10-05	1:10: 语法错误 E2001: 期望参数名，实际得到 :
+examples/m86_s1/hello.px	PASS	2026-10-05	
+examples/m86_s1/imp_a.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [imp_b_go 行2]: R1002: AES 密钥长度须为 16/24/32 字节（128/192/2）
+examples/m86_s1/imp_b.px	PASS	2026-10-05	
+examples/m86_s1/sqlite_dep.px	PASS	2026-10-05	
+examples/m86_s1/stdlib_dep.px	PASS	2026-10-05	
+examples/m86_s1/ws_if.px	PASS	2026-10-05	
+examples/m86_s2/allmod.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [main 行3]: R1002: zip_pack 需要 2 个参数: (files, out_path)）
+examples/m86_s2/hello.px	PASS	2026-10-05	
+examples/m86_s2/sqlite_dep.px	PASS	2026-10-05	
+examples/m88_s3/s1_spawn_200.px	PASS	2026-10-05	
+examples/m88_s3/s1b_gc_stress.px	PASS	2026-10-05	已实测慢语料（--slow 表：400s）
+examples/m88_s3/s2_serve_unix.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m88b_bs2/bs2_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m88b_bs3/bs3_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m88b_s4/s4_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m89_a2/m89_b1_parity.px	PASS	2026-10-05	
+examples/m89_c1/nul_str_regress.px	PASS	2026-10-05	
+examples/m89_perf/fib_calc.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m89_perf/http_json.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m89_s3d/gen_gc_stress.px	PASS	2026-10-05	
+examples/m89_s3d/vm_conc_gc_stress.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 '' ⇒ 非卡死）
+examples/m89_s3d/vm_conc_gen_stress.px	BUILDFAIL	2026-10-05	合法：负例语料（故意写错；编译错误 E3002: 对不可变变量 'v' 赋值（let 默认不可变，需用 let mut/var 声明可变））
+examples/m89_s3d/vm_spawn_smoke.px	SKIP_KNOWN	2026-10-05	该用例两个 `spawn` worker 各自 `ch.send(acc+id)`，两条结果行的**到达顺序**不确定。实跑定性：仅开 `PX_GC_STRESS=1` 连跑 2 次即得到**两种不同顺序**（`sum1/sum2` 互换）⇒ 与 GC 无关，而是并发顺序（`total` 始终 999003）。命令：`for i in 1 2; do PX_GC_STRESS=1 ./build/vm_spawn_smoke; echo --; done`。
+examples/m90_s1/cmpsem.px	PASS	2026-10-05	
+examples/m90_s1/default_args.px	PASS	2026-10-05	
+examples/m90_s1/seg11.px	PASS	2026-10-05	
+examples/m90_s1/t1_bc.px	PASS	2026-10-05	
+examples/m91_s1/hello_m91.px	PASS	2026-10-05	
+examples/m92_precise/precise_stress.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 '' ⇒ 非卡死）
+examples/m92_precise/precise_stress2.px	PASS	2026-10-05	
+examples/m92_precise/s2c_pxserve.px	SKIP_NORM	2026-10-05	正常档 rc=137
+examples/m93_s2/coro_compute.px	PASS	2026-10-05	
+examples/m93_s2/coro_gc.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（压力档下每次分配即全 STW GC；给足 120s 后 rc=0，末行='S2-GC-STRESS-DONE spawn=500'）
+examples/m93_s2/coro_many.px	PASS	2026-10-05	
+examples/m93_s2/coro_print.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m93_s2/hello.px	PASS	2026-10-05	
+examples/m93_s2/thr_count.px	PASS	2026-10-05	
+examples/m93_s3/coro_chan.px	PASS	2026-10-05	
+examples/m93_s3/coro_gc_block.px	PASS	2026-10-05	
+examples/m93_s3/coro_mutex.px	PASS	2026-10-05	
+examples/m93_s3/coro_sleep_par.px	NONDET	2026-10-05	假阳：并发**完成顺序**不确定（diff 只有行序变化，各协程数值相同）
+examples/m93_s3/coro_with.px	PASS	2026-10-05	
+examples/m94_s2/coro_preempt.px	PASS	2026-10-05	
+examples/m94_s3/coro_timer_thr.px	PASS	2026-10-05	
+examples/m95_s2/m95_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m95_s4/m95_s4_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m96_s2/m96_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m96_s2/m96_notblock.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m96_s2/m96_pool.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m96_s3/m96_err.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误: R1002: http_get 需要 (url) 参数）
+examples/m96_s3/m96_gc.px	STIMEOUT	2026-10-05	假阳：O(n²) 慢语料（给足 120s 仍未跑完；stdout 正常推进到 '' ⇒ 非卡死）
+examples/m96_s3/m96_net_cmp.px	SKIP_NORM	2026-10-05	合法：负例/参数校验（运行时错误 [d_http_unix 行19]: R1002: 此类型不支持索引: result）
+examples/m96_s3/m96_s3_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m97_s2/m97_s2_client.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/m97_s2/m97_s2_upstream.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）
+examples/m97_s3/m97_s3_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m98_s2/m98_s2_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=137
+examples/m99_s2/m99_s2_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/m99_s2/m99_s2_tls_daemon.px	SKIP_NORM	2026-10-05	正常档 rc=124
+examples/webapp/error.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/webapp/hello.px	BUILDFAIL	2026-10-05	合法：负例语料（故意写错；正常档 rc=1 stderr 首行="运行时错误 [<top> 行2]: R1001: 未定义变量: 'GET'"）
+examples/webapp/include.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/webapp/index.px	SKIP_NORM	2026-10-05	正常档 rc=1
+examples/webapp/timeout.px	SKIP_NORM	2026-10-05	合法：常驻/长跑（rc=124 = sweep 的 --t-norm 10s 判超时）

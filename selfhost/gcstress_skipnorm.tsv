@@ -1,0 +1,52 @@
+# M260 · GC 压力档台账 —— **SKIP_NORM 的逐条定性**
+# ------------------------------------------------------------
+# 为什么需要本表（本轮实测教训）：
+#   `gcstress_sweep.sh` 把「正常档就通不过」的语料记为 `SKIP_NORM` 并**跳过压力档**。
+#   这在多数情况下是对的 —— 负例语料（预期报错）、常驻服务（正常档本就该挂住）、
+#   聚合驱动器（不带参数时 rc=2）本来就跑不通。
+#   **但 `examples/m128_unlock_grow/unlock_grow.px` 的 rc=1 不是设计，而是缺陷 439**
+#   （持 `g_intstr_mu` 做可失败分配 ⇒ 分配失败 ⇒ 隔离审计发现持锁 ⇒ `_exit(1)`）。
+#   ⇒ 「正常档不通」有**两种**：设计如此，与坏掉了。台账必须能区分，否则真缺陷会
+#     永远躺在 SKIP_NORM 里没人看。
+#
+# 判据（`selfhost/check_gcstress_ledger.py` 第 ⑥ 条）：
+#   · 路径匹配 `SKIP_AUTO_RE`（命名即契约：err_/e1_/error/bad/neg_/daemon/server/srv/
+#     serve/_diag/_strict/_bounds/_uaf/_probe/_mutate/cases.px/driver/tiny/mini.px）
+#     ⇒ 自动合法，不必在本表登记；
+#   · 其余 SKIP_NORM **必须**在本表里（否则判红并指名）—— 逼着人**看一眼再放过**。
+#
+# 格式：路径 <TAB> 类别 <TAB> 理由（类别 ∈ 合法 / 欠账）
+#   · `合法` —— 跑不通是**设计**（负例 / 需宿主 / 需环境变量 / 探针）；
+#   · `欠账` —— **真缺陷**（理由里必须带缺陷号）。条目会以「⚠️ 已登记欠账」打印，
+#              且**数量只减不增**（修好后从本表删掉）。
+examples/m116_builtin_semantics/dict_missing_key.px	合法	负控语料：文件头第一行即写明「字典缺键下标必须在两条轨上都报 R1008」⇒ rc=1 是契约
+examples/m128_unlock_grow/unlock_grow.px	合法	常驻服务（由 m128 门以 HTTP 驱动；独立跑挂住是预期）。**原记为「欠账 · 缺陷 439」，M260 已修**（见 CHANGELOG M260 §四）
+examples/m131_http_stream_post/stream_post.px	合法	需外部 HTTP 服务端（客户端断言主体）⇒ 正常档 rc=124 是预期
+examples/m132_sse_chunked/proxy.px	合法	需外部 SSE 服务端（代理断言主体）⇒ rc=1 是预期
+examples/m149_tcp_deadline/tcp_deadline.px	合法	客户端断言主体（文件头明写「客户端断言主体」）⇒ 需服务端配合
+examples/m170_gc_bridge_root/isolate_root.px	合法	探针：由 `verify.sh` 以特定注入环境驱动（独立跑不代表缺陷面）
+examples/m170_gc_bridge_root/onnx_root.px	合法	探针：同上（需 `PX_GC_STRESS` 等注入）
+examples/m222_http_body/probe.px	合法	探针：需 `px_serve` 宿主（正常档 rc=124 是预期）
+examples/m236_ws_stream/rej_conflict.px	合法	需 ws 服务端（冲突拒绝场景的客户端）⇒ 正常档 rc=1 是预期
+examples/m256_eintr/probe_eintr.px	合法	探针：压力档专用（M256 门只在 `PX_GC_STRESS=1 PX_GC_INLINE=1` 下驱动它）
+examples/m43_webapp/_verify.px	合法	应用验证器：需 `px_serve` 宿主 + 站点 fixture ⇒ 独立跑必失败
+examples/m58_hwmond/verify_s3_client.px	合法	客户端断言主体（需 hwmond 服务端）
+examples/m58_hwmond/webhook_mock.px	合法	mock 服务端（常驻）⇒ 正常档 rc=124 是预期
+examples/m61_gfx/m61_s4_zpng.px	合法	需 zlib FFI（`extern zlib_compress`）；在未启用该 native 的构建里 rc=1 是预期
+examples/m66_pxml/demo_enc.px	合法	需环境变量 `PXML_MASTER_KEY`（文件头用法段明写）⇒ 未设时 rc=1 是预期
+examples/webapp/error.px	合法	负例：内容是 `panic("故意的运行时错误")`（演示 500 而非崩溃）
+examples/webapp/include.px	合法	需宿主注入全局（`px_exec` 内嵌执行演示，`name`/`count` 由宿主提供）
+examples/m156_onnx/onnx_dump.px	合法	驱动器：需命令行参数（无参时 rc=2 = 用法错，设计如此 —— M199 起的「聚合驱动器」范式）
+examples/m157_onnx_exec/onnx_exec.px	合法	驱动器：同上（M157 的 ONNX 执行驱动器）
+examples/m170_gc_bridge_root/rsa_root.px	合法	模板语料：`__N__` 占位符由 `verify.sh` 替换后才有意义 ⇒ 独立跑必报 R1001（设计）
+examples/m170_gc_bridge_root/sqlite_root.px	合法	模板语料：同上
+examples/m170_gc_bridge_root/xml_root.px	合法	模板语料：同上
+examples/m182_hdr_root/probe.px	合法	探针：需 `PX_GC_*` 注入 + 特定 fixture（独立跑报 R1007 是预期）
+examples/m225_h3_conn_reuse/cli_abrupt.px	合法	需 QUIC/H3 服务端（`Connection refused` ⇒ rc=2）
+examples/m225_h3_conn_reuse/cli_grace.px	合法	需 QUIC/H3 服务端（同上）
+examples/m63_langfix/m63_net.px	合法	需本地 mock 服务端（:18080）；独立跑 `FAIL: http_post body`
+examples/m66_proc/unix_test.px	合法	需 `verify.sh` 前置 AF_UNIX daemon（/tmp/m66_test.sock）
+examples/m89_perf/fib_calc.px	合法	慢语料：正常档 >10s（sweep 的 `--t-norm` 判超时），30s 内可完成 ⇒ 非缺陷
+examples/m97_s2/m97_s2_client.px	合法	客户端断言主体（需 `m97_s2_upstream` 服务端）
+examples/webapp/index.px	合法	需宿主注入（`REQUEST` 由 `px_serve` 提供）
+examples/m45_pkgdemo/local_helper.px	合法	被 `verify.sh` 以 `pxpkg add` 消费的辅助件（非独立程序）；其**单行 def** 语料腐烂已在 M260 修
