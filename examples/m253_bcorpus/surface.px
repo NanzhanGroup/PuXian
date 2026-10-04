@@ -1,0 +1,45 @@
+# M253 覆盖面**冒烟件（入库）** —— 让 native 覆盖面台账（selfhost/check_native_coverage.py）
+#   看见这 10 个 API **真的被普贤语料调用过**。
+#
+# ⚠️ 为什么必须单独入库一份：
+#   本门的正式语料 `drv.px` 是 **gen_cases.py 运行期生成**到临时目录的（不入库）
+#   ⇒ 台账**扫不到**它 ⇒ 这 10 个 API 会一直停在「从未被触碰」。
+#   台账的约定（M250 定）：**语料若是运行期生成的，必须另提交一份 `.px` 冒烟**。
+#   （同例：`examples/m250_onnx_tensor/surface.px`。）
+#
+# 本件由 verify.sh 的第 [1] 层**真的跑一遍**（不是只放着给人看），判据 = 输出 `M253-SURFACE-OK`。
+def main():
+    k16 = hex_to_bytes("30313233343536373839616263646566")
+    iv16 = hex_to_bytes("6162636465666768696a6b6c6d6e6f70")
+    nc12 = hex_to_bytes("6162636465666768696a6b6c")
+
+    # ── AES bytes 族：CBC 与 GCM 的往返 ──
+    raw = base64_to_bytes("AP//w5r7sAABAQ==")
+    ct = aes_encrypt_bytes(raw, k16, iv16)
+    assert(bytes_to_hex(aes_decrypt_bytes(ct, k16, iv16)) == bytes_to_hex(raw), "CBC bytes 往返")
+    g = aes_gcm_encrypt_bytes(raw, k16, nc12)
+    assert(bytes_to_hex(aes_gcm_decrypt_bytes(g, k16, nc12)) == bytes_to_hex(raw), "GCM bytes 往返")
+    # 空明文（缺陷 444 的回归位）：加密 16 字节 ⇒ 解回空
+    g0 = aes_gcm_encrypt_bytes(bytes(""), k16, nc12)
+    assert(bytes_len(g0) == 16, "GCM 空明文密文长度")
+    p0 = aes_gcm_decrypt_bytes(g0, k16, nc12)
+    assert(p0 != null, "GCM 空明文必须能解回（缺陷 444）")
+    assert(bytes_len(p0) == 0, "GCM 空明文解回空 bytes")
+
+    # ── AES hex 族：ECB 已知向量（Go crypto/aes 算出）──
+    assert(aes_decrypt_ecb("3bfd04cc0d7ed55358e2cbe19de21383377222e061a924c591cd9c27ea163ed4",
+                           "0123456789abcdef") == "AAAAAAAAAAAAAAAA", "ECB 已知向量")
+
+    # ── 工具族 ──
+    assert(go_errno_string(2) == "no such file or directory", "errno 文案")
+    assert(go_errno_string(4294967297) == "errno 4294967297", "errno 大值不截断（缺陷 445）")
+    assert(print_err("M253 surface smoke") == null, "print_err 返回 null")
+
+    # ── 会话 / 时区（无会话上下文）──
+    assert(session_id() == null, "无会话时 session_id 为 null")
+    assert(session_destroy() == false, "无会话时 session_destroy 为 false")
+    t = tz_local()
+    assert(t >= (0 - 50400) and t <= 50400, "时区偏移在 ±14h 内")
+
+    print("M253-SURFACE-OK")
+    exit(0)

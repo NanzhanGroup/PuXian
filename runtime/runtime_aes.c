@@ -187,7 +187,10 @@ LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx) {
     if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* all = (unsigned char*)malloc(hlen / 2 + 1);
     int alllen = aes_unhex(hs, hlen, all);
-    if (alllen < 17) { free(all); return px_null(); }
+    // M253（缺陷 444）：GCM 的密文长度域是 [0, ∞) —— 空明文 ⇒ 恰好 16 字节 tag。
+    //   修前判据 `< 17`（= 至少 1 字节密文）⇒ **自己加密的 16 字节自己解不开**，
+    //   且与 Go crypto/aes-gcm 在空明文上不互通（aead.Seal(pt=[]) 恰好 16 字节）。
+    if (alllen < 16) { free(all); return px_null(); }
     int ctlen = alllen - 16;
     unsigned char* out = (unsigned char*)malloc(ctlen + 1);
     mbedtls_gcm_context gcm;
@@ -267,7 +270,8 @@ LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     const char* iv = vbytes(args[2], &ivlen);
     if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
-    if (ctlen < 17) return px_null();  // 至少 1 字节密文 + 16 字节 tag
+    // M253（缺陷 444）：同 A-1 —— 密文可为 0 字节（空明文），只需 ≥16 字节 tag。
+    if (ctlen < 16) return px_null();
     int n = ctlen - 16;
     unsigned char* out = (unsigned char*)malloc(n > 0 ? n : 1);
     if (!out) px_error("内存不足");

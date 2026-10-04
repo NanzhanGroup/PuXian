@@ -908,6 +908,12 @@ jobs:
           bash examples/m250_onnx_tensor/verify.sh --neg-skip > /tmp/v_m250.log 2>&1 || { echo "❌ m250_onnx_tensor verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m250.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^(   |── )' /tmp/v_m250.log | tail -20
           echo "✅ m250_onnx_tensor verify（193 例 × 3 轨 · 分叉 0 · 边界 34 例全响亮 + 反向判据 · 独立真值 20 · 确定性 · 覆盖面台账五判据）PASS"
+      - name: m253_bcorpus（10 个「从未被任何门语料触碰过」的 [B 类] native · 缺陷 444/445/446）
+        run: |
+          bash examples/m253_bcorpus/verify.sh --neg-skip > /tmp/v_m253.log 2>&1 || { echo "❌ m253_bcorpus verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m253.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m253.log | tail -20
+          echo "✅ m253_bcorpus verify（87 例 × 3 轨 · 分叉 0 · 期望值 55 · 边界面 32 · 覆盖边界 6 条）PASS"
+
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。

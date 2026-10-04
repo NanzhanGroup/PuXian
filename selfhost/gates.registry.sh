@@ -926,6 +926,8 @@ run m246_compound_assign bash examples/m246_compound_assign/verify.sh
 #   覆盖面台账（selfhost/check_native_coverage.py）把 M248 的一次性分析变成常设判据。
 #   负控要重编解释轨 + 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
 run m250_onnx_tensor bash examples/m250_onnx_tensor/verify.sh
+step "M253 [B 类] native 补门（10 个从未被触碰的 API · 缺陷 444/445/446）"
+run m253_bcorpus bash examples/m253_bcorpus/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

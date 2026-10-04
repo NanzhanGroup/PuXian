@@ -556,7 +556,7 @@ timeout_ms **含连接阶段**，默认 30000；`http_get`/`http_post` 无 opts 
 `sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid`
 
 ### 加密 / 哈希 / 压缩 / XML / ZIP
-AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· ⚠️ **bytes 版参数序是 `(data, key, iv)`，数据在前**，返回 `密文||tag`（nonce 要调用方自己拼，才能与 Go `aead.Seal(nonce, nonce, pt, nil)` 互通）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · **M83-S4 标准签名（PKCS1v15-SHA256 + DigestInfo，与 Go `rsa.SignPKCS1v15`/openssl 互通；PEM 入参 `pk_parse` 自动 PKCS8/PKCS1/SPKI；msg str\|bytes 二进制安全、超长自动 sha256 无长度限制；不支持加密 PEM）**：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)`→sig_hex `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`→bool · **M83-S3 ed25519（RFC8032，与 Go crypto/ed25519 互通，确定性签名同 seed 同 msg 逐字节一致；PEM 收 Go x509 PKCS8/SPKI）**：`ed25519_sign(priv, msg)`→sig_hex（priv 收 hex seed32/sk64 或 PKCS8 PEM；msg 收 str|bytes）`ed25519_verify(pub, msg, sig)`→bool（pub 收 hex 或 SPKI PEM）· **M84-S2 HMAC-SHA256（RFC4231 官方向量 / 腾讯云 TC3 / SigV4 / webhook / JWT HS256；key/msg 均 str\|bytes 二进制安全可含 NUL，key>64B 自动先哈希）**：`hmac_sha256(key, msg)`→hex · `sha256(s)`（M84-S2 增强：收 str\|bytes 含 NUL 全哈希，不再 strlen 截断）`xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
+AES：`aes_encrypt(data, key, iv)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· **bytes 版参数序同为 `(data, key, iv)`**（M253 更正：此处此前写作 `(key, iv, data)`，与实现和错误消息**都不符** —— 实测 `aes_encrypt("A","0123456789abcdef","abcdefghijklmnop")` = `3d2563c01803626cc2da598bb7a558f9`，与 Go crypto/aes-cbc-pkcs7 逐字节一致），返回 `密文||tag`（nonce 要调用方自己拼，才能与 Go `aead.Seal(nonce, nonce, pt, nil)` 互通）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · **M83-S4 标准签名（PKCS1v15-SHA256 + DigestInfo，与 Go `rsa.SignPKCS1v15`/openssl 互通；PEM 入参 `pk_parse` 自动 PKCS8/PKCS1/SPKI；msg str\|bytes 二进制安全、超长自动 sha256 无长度限制；不支持加密 PEM）**：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)`→sig_hex `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`→bool · **M83-S3 ed25519（RFC8032，与 Go crypto/ed25519 互通，确定性签名同 seed 同 msg 逐字节一致；PEM 收 Go x509 PKCS8/SPKI）**：`ed25519_sign(priv, msg)`→sig_hex（priv 收 hex seed32/sk64 或 PKCS8 PEM；msg 收 str|bytes）`ed25519_verify(pub, msg, sig)`→bool（pub 收 hex 或 SPKI PEM）· **M84-S2 HMAC-SHA256（RFC4231 官方向量 / 腾讯云 TC3 / SigV4 / webhook / JWT HS256；key/msg 均 str\|bytes 二进制安全可含 NUL，key>64B 自动先哈希）**：`hmac_sha256(key, msg)`→hex · `sha256(s)`（M84-S2 增强：收 str\|bytes 含 NUL 全哈希，不再 strlen 截断）`xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
 
 ### Web 应用平台
 Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, pass)` · `route(method, pattern, fn)`（:id 参数 / * 通配）· `middleware(fn)` `rate_limit` `vhost` `sandbox_enter` · 上下文 `ctx_set/get/clear` · 消息总线 `bus_new/subscribe/publish/unsubscribe` · `event_bus` · `gen_next`（生成器取下一项）· `list(xs)`（生成器→list）
@@ -3211,3 +3211,28 @@ set_timeout(fn (): print("once after 2s"), 2000)
      任何普贤语料触碰）。⚠️ 它**只扫 `.px`**：门脚本是**装置**不是语料，计进来会**自我污染**
      （首跑实测：门里用文字列了未覆盖名字 ⇒ 立刻被判「已覆盖」）。
      ⇒ 约定：**语料运行期生成时，必须另提交一份 `.px` 冒烟**。
+265. **「能力存在、但从没被证明可用」的 10 个 native —— 覆盖面台账逼出来的两个静默错值（第 130 轮 · M253 · 缺陷 444/445/446）**：
+     **一句话**：M250 建的覆盖面台账把 392 个 native 逐条过了一遍，留下 19 条「从未被任何普贤语料触碰过」，
+     其中 **10 条是真·用户面 API**（`[B 类·欠账]`）；本轮给它们补上门 —— **当场照出两个产品缺陷**。
+     · **缺陷 444（AES-GCM 空明文）**：**GCM 的密文长度域是 `[0, ∞)`** —— 空明文 ⇒ 恰好 **16 字节**（纯 tag）。
+       修前判据 `ctlen < 17`（把「至少 1 字节密文」当成不变量）⇒ `aes_gcm_decrypt[_bytes]` **拒解**
+       自己刚加密的 16 字节（**往返不闭合**），且与 Go `aead.Seal(nonce, nonce, []byte{}, nil)` **不互通**。
+       定稿：**下界 16**（`< 16 ⇒ null`；`== 16 ⇒ 空串 / 空 bytes`）。
+       ⚠️ **CBC 族不要照抄**：`aes_encrypt_bytes`/`aes_decrypt_bytes` 恒有 PKCS7 padding ⇒ 密文**至少 16 字节**，
+       `ctlen == 0 || ctlen % 16 != 0` 判据**不变**。
+     · **缺陷 445（errno 截断）**：`go_errno_string` 的 `(int)px_arg_int(...)` ⇒ `2^32+1` 截成 1
+       ⇒ 回「operation not permitted」（**用户从未问过**的 errno）；`2^31` ⇒ 回 `errno -2147483648`；
+       `2^32` / `2^62` ⇒ 回 `errno 0`。定稿：**全链路 `int64_t` + `%lld`**；
+       同规则的**第二处实现** `px_go_errno_into`（TCP `*_ex` 的 errno 文案）**一并统一**（M230 的教训）。
+     · **缺陷 446（文档）**：速查表把 `aes_encrypt` 的参数序写作 `(key, iv, data)` ——
+       **实现与错误消息都是 `(data, key, iv)`**（bytes 版亦同）。实测钉死：
+       `aes_encrypt("A","0123456789abcdef","abcdefghijklmnop")` = `3d2563c01803626cc2da598bb7a558f9`
+       （与 Go `crypto/aes` + `cipher.NewCBCEncrypter`（PKCS7）**逐字节一致**）。
+     **判别力提醒**：这 10 个 API **三轨共用同一份 C 实现** ⇒「三轨对拍」**按定义看不见**这两个缺陷
+     （本仓第 **5** 次撞到同一形状：M215 缺陷 305 · M226 缺陷 329 · M230 缺陷 345 · M250 缺陷 433）。
+     真正的牙是**期望值层** —— 真值由 **Go 标准库**独立算出（AES 向量 + errno 全表 `0..140` + 越界 + 大值），
+     与实现（C + mbedtls）**跨语言、零代码共享**。
+     ⭐ 负控设计：**撤回修复后「三轨层必须仍然绿」** —— 这是「**期望值层不可省**」的**当场实证**
+     （不是引用历史，是这一轮自己构造出来的）。
+     ⚠️ 覆盖面台账**只扫 `.px`**（门脚本是**装置**不是语料）；语料若运行期生成，**必须另提交一份 `.px` 冒烟**。
+     判据见 §6.21 · 门 `examples/m253_bcorpus/`（87 例 × 3 轨 · 期望值 55 · 边界面 32 · 负控 A/B/C · 覆盖边界 6 条）。
