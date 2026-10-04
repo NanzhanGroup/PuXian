@@ -31,6 +31,14 @@ PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL + 1)); }
 NEG_SKIP="${M260_NEG_SKIP:-0}"
+# M260 自身修正：本门首版只认 `M260_NEG_SKIP=1` 环境变量，而**本仓门的惯例是 `--neg-skip`**
+#   （CI 传的正是后者）⇒ 参数会被静默忽略、负控照跑。此处对齐惯例（两种写法都支持）。
+for _a in "$@"; do
+    case "$_a" in
+        --neg-skip) NEG_SKIP=1 ;;
+        --keep) : ;;
+    esac
+done
 
 PROBE="$ROOT/examples/m256_eintr/probe_eintr.px"
 LEDGER="$ROOT/selfhost/gcstress_ledger.tsv"

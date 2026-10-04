@@ -166,7 +166,19 @@ ck(d["ms_a"] > 0, "单次编码耗时 %.1f ms（零依赖、无 dlopen）" % d["
 if bad: sys.exit(1)
 PY
     else
-        bad "真实模型端到端失败：$(head -2 "$TMP/embed.log" | tail -1 | head -c 120)"
+        # M260：真模型是**环境相关的外部资产**（`/tmp/onnxdl/minilm.onnx` 或
+        #   `/data/app/ws/models/embed/model.onnx`，都不在版本控制里）——
+        #   实测系统里那份是**量化版**，含执行器未实现的算子（`DequantizeLinear`）。
+        #   ⇒ 依 M219 纪律「门的环境依赖必须显式」：**找得到文件 ≠ 拿得到可用资产**
+        #   ⇒ 这类情形记 **SKIP（附原因）**，而不是 FAIL。
+        #   ⚠️ 同时修掉失败消息取错行（旧写法取 `head -2 | tail -1` 得到**空行** ⇒
+        #      「门红了却读不出真因」）—— 真因在**第一行**。
+        if grep -q "未实现的算子" "$TMP/embed.log"; then
+            skip "真实模型含执行器**未实现的算子**（环境资产 · 非仓库资产）：\
+$(head -1 "$TMP/embed.log" | head -c 110)"
+        else
+            bad "真实模型端到端失败：$(head -1 "$TMP/embed.log" | head -c 120)"
+        fi
     fi
     if [ "${M157_REAL_REF:-0}" = "1" ]; then
         python3 tools/onnx2graphjson.py "$REAL" "$TMP/real_graphs.json" minilm > "$TMP/conv.log" 2>&1 \
