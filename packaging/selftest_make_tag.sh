@@ -310,6 +310,21 @@ else
     chkn "R6 ★负控：拆掉递增后**不再**给出 v0.2.1-m247" "$got" "v0.2.1-m247"
 fi
 
+# ── V 段：packaging 工具链的执行位一致性（M254 · 缺陷 450）──
+#   来历：M249 建 make_tag.sh 时漏了执行位 ⇒ `packaging/make_tag.sh --milestone N` 报
+#   Permission denied，而 bump_version.sh / pxrepo_mirror.sh 是 755、能直接跑 —— **同类工具不一致**
+#   （文档里也是以 `packaging/xxx.sh` 不带 bash 的形式写的）。
+#   范围刻意限定 packaging/：examples/ 下的门语料惯例是 `bash <file>` 调用，**不要求**执行位。
+_n="$(git -C "$SELF_DIR/.." ls-files -s 'packaging/*.sh' 2>/dev/null | wc -l | tr -d ' ')"
+_modes="$(git -C "$SELF_DIR/.." ls-files -s 'packaging/*.sh' 2>/dev/null | awk '$1!="100755"{print $4}' | tr '\n' ' ')"
+if [ "${_n:-0}" -lt 10 ]; then
+  bad "V1 判据自伤：git ls-files 只取到 $_n 个 packaging/*.sh（应有 18 个）—— 判据静默失效"
+elif [ -n "$_modes" ]; then
+  bad "V1 有 packaging 脚本缺执行位：$_modes"
+else
+  ok "V1 packaging/*.sh 全部 100755（$_n 个 · 同类工具一致）"
+fi
+
 echo
 echo "══ selftest_make_tag: 通过 $pass / 失败 $fail ══"
 [ "$fail" = 0 ] || exit "$fail"
