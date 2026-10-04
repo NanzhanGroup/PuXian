@@ -177,7 +177,12 @@ TAG=$(tag_for "$TOP")
 # ------------------------------------------------------------
 if [ -z "$TAG" ] && [ "${TAG_GUARD_NO_FETCH:-0}" != "1" ] && [ -n "$(git remote 2>/dev/null | head -1)" ]; then
     say "ℹ️ 本地 tag 快照里没有 -m$TOP ⇒ 补取一次远端 tag（push 竞态兜底）…"
-    if git fetch --tags --quiet 2>/dev/null; then
+    # M256（缺陷 457 · 2026-10-04 实测事故）：**无 TTY 时 `git fetch` 会挂住** ——
+    #   它要凭据时会去读 stdin，而后台/CI 的 stdin 是不关闭的管道 ⇒ 守卫**无限等待**
+    #   （实测：后台跑 `tag_guard.sh --ref HEAD` 3 分 17 秒仍未返回；同一条命令加
+    #    `< /dev/null` 立刻出结果）。⇒ ① `GIT_TERMINAL_PROMPT=0`（禁止交互提示）；
+    #   ② `timeout 20`（有界）；两者缺一都还可能在别的环境下挂。
+    if GIT_TERMINAL_PROMPT=0 timeout 20 git fetch --tags --quiet 2>/dev/null; then
         ALL_TAGS=$(git tag -l "$TAG_GLOB")
         TAG=$(tag_for "$TOP")
         if [ -n "$TAG" ]; then
