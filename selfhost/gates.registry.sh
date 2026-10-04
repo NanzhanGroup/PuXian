@@ -958,6 +958,14 @@ step "M257 容器「存储已被回收/复用」的响亮自检 + 分配器一�
 #   + 负控 3 道（各自独立判红）+ 源逐字节还原。CI 用 --neg-skip（跳过注入与负控）。
 #   ⚠️ 根因（存储为何在作用域内被回收）本轮**未定论** —— 守卫是缓解不是根治，见 CHANGELOG。
 run m257_alloc_integrity bash examples/m257_alloc_integrity/verify.sh
+step "M258 · 「收缩必须走延迟语义」（缺陷 460 · 与 M183 缺陷 197 同族）"
+#   病灶：`px_root_restore`（M170 的「出口归一」入口）**立即**收缩 `g_px_roots_n`
+#   ⇒ `return <容器>;` 的返回值在「函数返回 → 调用方 PX_KEEP」窗口里只由 C 局部持有
+#   ⇒ VM 轨默认 precise GC（不扫 C 栈）下被回收（缺陷 459 同形态）。
+#   判据：守卫 4 条（J1 延迟收缩 / J2 作用域成对 / J3 无孤弹 / J4 规模锚点）+
+#   **免改源码的窗口正判据**（用等价「立即收缩」API 造同一窗口 ⇒ 必须丢容器）+
+#   修复判据 + 负控 3 道。CI 用 --neg-skip。
+run m258_root_restore bash examples/m258_root_restore/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

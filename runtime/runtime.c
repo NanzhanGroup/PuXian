@@ -3116,8 +3116,22 @@ int px_root_depth(int* marks_out) {
 
 void px_root_restore(int roots_depth, int marks_depth) {
     int r0 = g_px_roots_n, m0 = g_px_root_marks_n;
-    if (g_px_roots_n > roots_depth) g_px_roots_n = roots_depth;
     if (g_px_root_marks_n > marks_depth) g_px_root_marks_n = marks_depth;
+    // M258（缺陷 460）：**延迟收缩** —— 与 px_root_pop（M183 缺陷 197）同款语义。
+    //   病灶：本函数是 M170 给「同一函数内多处早退」定的出口归一入口，调用形态是
+    //     `rd = px_root_depth(&rm); …; px_root_restore(rd, rm); return <容器>;`
+    //   （`runtime_h3_qpack.c` / `runtime_h3_qpack_dyn.c` 的三个解码函数即此形态）。
+    //   **立即收缩**在这一瞬就把 `return` 的那个容器从根面摘掉，而
+    //   「本函数返回 → 调用方 PX_KEEP」这个窗口里它**只由 C 局部持有**（VM 轨产物默认
+    //   precise GC，**不扫 C 栈**）⇒ 窗口内任何一次分配都可能回收它 ⇒ 调用方拿到
+    //   **已回收对象**（缺陷 459 的实测形态：容器存储被回收后立刻被复用）。
+    //   M183 只把 `px_root_pop` 改成了延迟收缩 ⇒ **同一个洞在另一个入口上留着**。
+    //   修法同源：只记待收缩深度，物理回收推迟到调用方 `PX_KEEP`（= 接住动作）那一刻，
+    //   并由本帧逻辑基钳制（见 px_root_keep）⇒ 窗口内物理根栈是**超集**
+    //   （只多标不少标 = over-approximate = 安全）。
+    //   ⚠️ **隔离点落点不走本函数**（走 px_root_restore_iso）—— 那里必须**立即**作废被
+    //     longjmp 跳过的登记（否则成野根），语义不同，见该函数注释。
+    if (roots_depth >= 0 && g_px_roots_n > roots_depth) g_px_trunc_pending = roots_depth;
     // M170：观测点（PX_GC_DEBUG=1）—— 门据此断言「每次被隔离的错误都归还了登记深度」。
     //   打印发生在**被隔离线程自己**的日志里 ⇒ 与线程生命周期无关（长跑线程也能看到）。
     if (g_gc_debug) {

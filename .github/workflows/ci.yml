@@ -947,6 +947,16 @@ jobs:
           grep -E '^── ' /tmp/v_m257.log | tail -6
           echo "✅ m257_alloc_integrity verify（静态 8 + 基线不误伤 + 计数入口）PASS"
 
+      - name: m258_root_restore（收缩必须走延迟语义 · 缺陷 460）
+        if: always()
+        run: |
+          set -uo pipefail
+          python3 selfhost/check_root_contract.py --self-test > /tmp/v_m258g.log 2>&1 || { echo "❌ check_root_contract.py 自证失败"; tail -20 /tmp/v_m258g.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          python3 selfhost/check_root_contract.py . > /tmp/v_m258g2.log 2>&1 || { echo "❌ GC 根栈契约有违例"; tail -20 /tmp/v_m258g2.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m258_root_restore/verify.sh --neg-skip > /tmp/v_m258.log 2>&1 || { echo "❌ m258_root_restore verify 失败"; grep -E '^(   |── |❌|  PASS|  FAIL)' /tmp/v_m258.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── ' /tmp/v_m258.log | tail -8
+          echo "✅ m258_root_restore verify（守卫自证 5 + 全仓 0 违例 + 窗口正判据 + 修复判据）PASS"
+
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
         # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
         #   不告诉你**为什么**（⇒ 注解是**第一眼**通道，通道里必须自带证据）。
