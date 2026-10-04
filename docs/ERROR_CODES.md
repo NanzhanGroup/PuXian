@@ -1262,3 +1262,59 @@ M230（负索引消息，三处各写一遍归一化）、M226/M227（同名两�
 MODEL.tsv 双向（漏登记/过期/不符都判红）· 负控 A/B/C/D 各自独立判红 + 源逐字节还原 ·
 覆盖边界 5 条。CI 用 `--neg-skip`。
 
+
+### 6.21 M253（第 130 轮 · 缺陷 444/445/446）：**两个「三轨一致地错」的静默面**（GCM 空明文 / errno 截断）
+
+#### 6.21.1 为什么它们能长期不被发现
+
+被测实现是**一份 C 代码**（`runtime/runtime_aes.c` / `runtime/runtime.c`），三条轨（解释 / VM / C）
+**共用它** ⇒ **任何「三轨对拍」按定义看不见「三轨一致地错」**。本轮两个缺陷都属于这一类；
+只有**独立真值**（Go 标准库）能看见。这是本仓第 **5** 次撞到同一形状
+（M215 缺陷 305 · M226 缺陷 329 · M230 缺陷 345 · M250 缺陷 433）。
+
+#### 6.21.2 定稿口径①：AES-GCM 的密文长度域是 `[0, ∞)`
+
+```
+GCM 输出 = 密文 || tag(16)，而密文可以是 **0 字节**（空明文）。
+⇒ 解密的输入**下界是 16**（纯 tag），不是 17。
+⇒ 与 Go `crypto/aes-gcm` 互通：`aead.Seal(nonce, nonce, []byte{}, nil)` 恰好 16 字节，`Open` 返回空明文。
+⇒ 判定：`aes_gcm_decrypt(x, …)` / `aes_gcm_decrypt_bytes(x, …)`
+        len(x) < 16  ⇒ `null`
+        len(x) == 16 ⇒ **空串 / 空 bytes**（修前误判为 `null`）
+```
+
+⚠️ **CBC 族不要照抄**：`aes_encrypt_bytes` / `aes_decrypt_bytes` 恒有 PKCS7 padding
+⇒ 密文**至少 16 字节**，判据 `ctlen == 0 || ctlen % 16 != 0 ⇒ null` **保持不变**。
+
+#### 6.21.3 定稿口径②：errno 文案的实参域是 **int64**（不是 int）
+
+`go_errno_string(n)`：`n ∈ [0, GO_ERRNO_STR_N)` 且表内有名字 ⇒ 返回 Go `syscall.Errno(n).Error()` 的文案；
+否则 —— **在任何阶段都不许截断** —— 返回 `"errno <n>"`，`n` 按 **int64 原值**打印。
+
+| 实参 | 修前 | 修后（= Go 真值） |
+|---|---|---|
+| `4294967297`（2³²+1） | `operation not permitted`（截成 1） | `errno 4294967297` |
+| `4294967296`（2³²） | `errno 0` | `errno 4294967296` |
+| `2147483648`（2³¹） | `errno -2147483648` | `errno 2147483648` |
+| `4611686018427387904`（2⁶²） | `errno 0` | `errno 4611686018427387904` |
+| `-1` / `-22` | `errno -1` / `errno -22` | 不变 |
+
+⚠️ **同一条规则有两处实现**：`bi_go_errno_string`（用户面 API）与 `px_go_errno_into`
+（TCP `*_ex` 家族的 errno 文案）。两处**必须同域**（本轮一并改 `int64_t` + `%lld`）——
+只收口一处就是结构性漂移（M230 的教训）。
+
+#### 6.21.4 判据（`examples/m253_bcorpus/`）
+
+```bash
+bash examples/m253_bcorpus/verify.sh            # 全量（含负控 A/B/C）
+bash examples/m253_bcorpus/verify.sh --neg-skip # CI 用（负控要重编两轨驱动器）
+```
+
+**87 例 × 3 轨 = 261 次执行** · 期望值 **55 例**（真值由 **Go** 独立算出：AES 向量 + errno 全表
+`0..140` + 越界 + 大值）· 边界面 **32 例**（逐位置 × 错类型 ∪ 错 arity，必须响亮）·
+负控 A/B 各自独立判红 · **负控 A/B 各带一条关键判据：撤回修复后「三轨层必须仍然绿」**
+—— 这是「期望值层不可省」的**当场实证**（不是引用历史，是这一轮自己构造出来的）。
+
+真值来源：`examples/m253_bcorpus/truth/gen_truth.go`（Go 标准库 `crypto/aes` + `crypto/cipher` +
+`syscall`）⇒ 与实现（C + mbedtls）**跨语言、零代码共享**。
+⚠️ 本仓 CI **没有 Go 步骤**（口径同 m136/m138）⇒ CI 只用已入库的 `aes_truth.tsv` / `errno_truth.tsv`。

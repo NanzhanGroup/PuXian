@@ -8197,10 +8197,12 @@ static const int GO_ERRNO_STR_N = (int)(sizeof(GO_ERRNO_STR) / sizeof(GO_ERRNO_S
 static LXValue bi_go_errno_string(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: go_errno_string 需要 (errno) 参数");
-    int n = (int)px_arg_int(args[0], "go_errno_string", "errno");
-    if (n >= 0 && n < GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') return px_str(GO_ERRNO_STR[n]);
+    // M253（缺陷 445）：`(int)` 截断 ⇒ 2^32+1 被截成 1 ⇒ 回「operation not permitted」
+    //   （用户从未问过的 errno）；2^31 回「errno -2147483648」。全链路 int64_t。
+    int64_t n = px_arg_int(args[0], "go_errno_string", "errno");
+    if (n >= 0 && n < (int64_t)GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') return px_str(GO_ERRNO_STR[n]);
     char buf[32];
-    snprintf(buf, sizeof(buf), "errno %d", n);
+    snprintf(buf, sizeof(buf), "errno %lld", (long long)n);
     return px_str(buf);
 }
 
@@ -16569,10 +16571,12 @@ static void px_net_conn_fail(char* errbuf, int errcap, const char* host, int por
 //   tcp_send_ex(fd, data) → {ok, n, timeout, errno, err}
 //     循环写完（EINTR 续写）；失败时 n = **已写出**字节数（对齐 Go `Conn.Write` 的 n）。
 // ⚠️ 边界：解析（getaddrinfo）阶段**不受 timeout_ms 约束**（libc 解析无异步取消入口）。
-static void px_go_errno_into(char* buf, int cap, int n) {
+// M253（缺陷 445）：与 bi_go_errno_string 同一规则的第二处实现 ⇒ 同改 int64_t
+//   （M230 的教训：一条语义分落两处 ⇒ 只收口一处就是结构性漂移）。
+static void px_go_errno_into(char* buf, int cap, int64_t n) {
     if (!buf || cap <= 0) return;
-    if (n >= 0 && n < GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') snprintf(buf, (size_t)cap, "%s", GO_ERRNO_STR[n]);
-    else snprintf(buf, (size_t)cap, "errno %d", n);
+    if (n >= 0 && n < (int64_t)GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') snprintf(buf, (size_t)cap, "%s", GO_ERRNO_STR[n]);
+    else snprintf(buf, (size_t)cap, "errno %lld", (long long)n);
 }
 
 static const char* px_conn_stage_name(int stage) {
