@@ -1038,6 +1038,13 @@ jobs:
           grep -E '^  P_loose|^  ✅' /tmp/v_m269b.log | head -6 || true
           echo "✅ m269_gcroot_coverage（P=325/T=543/Tt=374 ⇒ STRONG 295 / WEAK 30 · 台账只减不增 · 自证 5/5）PASS"
 
+      - name: m271_run_fast（run 层三形态对齐 · 晨曦 D1 五点收口）
+        if: always()
+        run: |
+          bash examples/m271_run_fast/verify.sh --neg-skip > /tmp/v_m271.log 2>&1 || { echo "❌ m271_run_fast 门失败（三形态不一致 / 缓存改变语义 / 污染未检出）"; grep -E '^  ❌' /tmp/v_m271.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── 结果' /tmp/v_m271.log | tail -2 || true
+          echo "✅ m271_run_fast（25/0 · 三形态 stdout+rc 逐字节 · 污染检出 · key 敏感 · 运行器契约）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

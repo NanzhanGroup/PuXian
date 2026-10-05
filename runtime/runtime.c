@@ -3395,7 +3395,49 @@ static LXValue px_str_len_raw(const char* s, int len) {
     return v;
 }
 
+// M270（第 148 轮）：**单次分配**的两段拼接。
+//   为什么需要：`px_add` 的 STR+STR 原是「xmalloc 中间缓冲 → 两次 memcpy → px_str_len(再分配+再整串拷贝)
+//   → xfree」，即 **2 次分配 + 2×(la+lb) 字节拷贝**。本函数把两份数据直接写进
+//   「LXObject + 内联 data」的同一块内存 ⇒ **1 次分配 + 1×(la+lb) 拷贝**。
+//   ⚠️ 只改常数，**不改复杂度** —— 内联 data + 「PX_STR 恒不可变」这条不变量决定了
+//     本运行时**无法**做原地扩容（详见 docs/PERF_BASELINE_V2.md §七）。
+//   语义：与 px_str_len_raw 完全一致（含 len<=0 返回空串单例、惰性 rune 缓存初值、gc_register 同尺寸）。
+static LXValue px_str_concat2(const char* sa, int la, const char* sb, int lb) {
+    int n = la + lb;
+    if (n <= 0) return px_empty_str_get();
+    LXObject* o = xmalloc(sizeof(LXObject) + (size_t)n + 1);
+    o->type = PX_STR;
+    char* d = (char*)o + sizeof(LXObject);
+    if (la > 0) memcpy(d, sa, (size_t)la);
+    if (lb > 0) memcpy(d + la, sb, (size_t)lb);
+    d[n] = 0;
+    o->as.str.data = d; o->as.str.len = n;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;
+    LXValue v; v.type = PX_STR; v.as.obj = o;
+    gc_register(o, sizeof(LXObject) + (size_t)n + 1);
+    return v;
+}
+
 LXValue px_str(const char* s) { return px_str_len(s, (int)strlen(s)); }
+// M270（同上）：**单次分配**的重复串（`str * int`）。
+//   原路径：xmalloc 中间缓冲 → n 次 memcpy → px_str_len（再分配 + 再整串拷贝）→ xfree
+//   ⇒ 2 次分配 + (n+1) 段拷贝；本函数 = 1 次分配 + n 段拷贝。
+//   语义与 px_mul 的旧分支逐条一致：n<=0 或 len<=0 ⇒ 空串单例；其余同 px_str_len_raw。
+static LXValue px_str_repeat(const char* s, int len, int n) {
+    if (n <= 0 || len <= 0) return px_empty_str_get();
+    size_t total = (size_t)len * (size_t)n;
+    LXObject* o = xmalloc(sizeof(LXObject) + total + 1);
+    o->type = PX_STR;
+    char* d = (char*)o + sizeof(LXObject);
+    for (int i = 0; i < n; i++) memcpy(d + (size_t)i * (size_t)len, s, (size_t)len);
+    d[total] = 0;
+    o->as.str.data = d; o->as.str.len = (int)total;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;
+    LXValue v; v.type = PX_STR; v.as.obj = o;
+    gc_register(o, sizeof(LXObject) + total + 1);
+    return v;
+}
+
 
 // M153：空串单例（len <= 0 一律返回同一对象）—— 见本文件 M153 段
 LXValue px_str_len(const char* s, int len) {
@@ -4585,14 +4627,11 @@ static void px_req_num2(LXValue a, LXValue b, const char* opname, const char* sy
 
 LXValue px_add(LXValue a, LXValue b) {
     if (a.type == PX_STR && b.type == PX_STR) {
-        int la = a.as.obj->as.str.len, lb = b.as.obj->as.str.len;
-        char* d = xmalloc(la + lb + 1);
-        memcpy(d, a.as.obj->as.str.data, la);
-        memcpy(d + la, b.as.obj->as.str.data, lb);
-        d[la + lb] = 0;
-        LXValue r = px_str_len(d, la + lb);
-        xfree(d);   // ISSUE28-B2 修复：中间缓冲 px_str_len 已深拷贝，用毕即还 slab（原泄漏每拼接 1 缓冲）
-        return r;
+        // M270：单次分配（原路径见 px_str_concat2 注释 —— 2 分配 + 2 整串拷贝 ⇒ 1 分配 + 1 拷贝）。
+        //   ISSUE28-B2 的中间缓冲在**本路径上不再存在**（那条泄漏修复本身仍然有效：
+        //   其它仍走 px_str_len 的站点照旧）。字符串 `+=` 的 O(n²) 复杂度**未变**（见 §七）。
+        return px_str_concat2(a.as.obj->as.str.data, a.as.obj->as.str.len,
+                              b.as.obj->as.str.data, b.as.obj->as.str.len);
     }
     if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i + b.as.i);
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
@@ -4630,14 +4669,8 @@ LXValue px_mul(LXValue a, LXValue b) {
         return px_float(num_val(a) * num_val(b));
     }
     if (a.type == PX_STR && b.type == PX_INT) {
-        int n = (int)b.as.i;
-        int len = a.as.obj->as.str.len;
-        char* d = xmalloc((size_t)len * (size_t)(n > 0 ? n : 0) + 1);
-        for (int i = 0; i < n; i++) memcpy(d + i * len, a.as.obj->as.str.data, len);
-        d[len * (n > 0 ? n : 0)] = 0;
-        LXValue r = px_str_len(d, len * (n > 0 ? n : 0));
-        xfree(d);   // ISSUE28-B2 修复：同上，重复串中间缓冲用毕即还
-        return r;
+        // M270：单次分配（同 px_add 的 STR+STR 分支；见 px_str_repeat 注释）。
+        return px_str_repeat(a.as.obj->as.str.data, a.as.obj->as.str.len, (int)b.as.i);
     }
     px_error("R1002: 无法相乘: %s * %s", px_type_name(a), px_type_name(b));
     return px_null();

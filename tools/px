@@ -954,49 +954,82 @@ run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产�
         "$PXC_SELF" --version 2>/dev/null | head -1
         "$PXC_SELF" rtkey "" gcc 0 2>/dev/null | head -1      # runtime 源内容哈希（不编译）
         sha256sum "$PXC_HOME/bootstrap/pxc_vm" 2>/dev/null | cut -c1-16
+        # M271（晨曦 D1 第 1 条）：**运行器契约** = Mini 子集判据自身。
+        #   子集判据是**代码**（selfhost/istmt.px 的 Spawn/Chan/Send/Recv/Select、
+        #   selfhost/iexpr.px 的 chan/mutex/rwlock 构造），其载体就是 bootstrap/pxi
+        #   ⇒ 取其哈希 = 「这一版运行器到底接受什么」的身份。
+        #   ⚠️ 为什么必须含它：若将来放宽/收紧 MINI_SUBSET 而 key 不含此项，
+        #     老缓存条目会按**旧契约**命中 ⇒ 本应被响亮拒绝的脚本悄悄跑起来
+        #     （= 缓存改变了语义）。与 .rtcache 的教训同构：
+        #     **key 必须由「真正决定行为的输入」驱动**。
+        sha256sum "$PXC_HOME/bootstrap/pxi" 2>/dev/null | cut -c1-16
         echo "engine=${PX_BUILD_ENGINE:-vm}"
     } | sha256sum | cut -c1-16
 }
 
 cmd_run_fast() {
     local file="$1"; shift
-    [ -f "$file" ] || { echo "读取文件失败: $file" >&2; return 1; }
+    [ -f "$file" ] || { echo "[px run --fast] 读取文件失败: $file" >&2; return 1; }
     if [ -n "${PX_RUN_NOCACHE:-}" ]; then "$PXI_BIN" "$@" "$file"; return $?; fi
 
     local abs; abs="$(readlink -f "$file" 2>/dev/null || echo "$file")"
-    local key; key="$(run_cache_key "$abs")"
-    local dir="$RUN_CACHE/$key"
-    local prog="$dir/prog"
 
-    if [ -x "$prog" ]; then
-        exec "$prog" "$@"
-    fi
-
-    # 未命中 ⇒ 先做子集守卫（**语义不可因缓存而变**）
+    # ── M271（晨曦 D1 第 2 条）：**先判源码，再查缓存** ──────────────────────
+    #   为什么顺序要紧：若「命中 ⇒ 直接 exec」，则子集判据一旦收紧，老缓存会按
+    #   **旧契约**命中 ⇒ 本应被响亮拒绝的脚本悄悄跑起来 = 缓存改变了语义。
+    #   契约：一个脚本在任一次运行里「是否被拒」**只由源码决定**（＋运行器契约）。
+    #   ⚠️ 代价：每次 --fast 多一次 AST 解析（毫秒级），换的是语义中性 —— 值得。
     local viol
     if ! viol="$(run_subset_ok "$abs")"; then
         echo "[px run --fast] 本脚本含 Mini 子集之外的构造（$viol）⇒ **回落解释轨**" >&2
-        echo "  · 理由：缓存只许影响快慢，不许影响语义（解释轨会拒绝这些构造）" >&2
+        echo "  · 理由：缓存只许影响快慢，不许影响语义（解释轨同样会拒绝这些构造）" >&2
         "$PXI_BIN" "$@" "$file"
         return $?
+    fi
+
+    local key; key="$(run_cache_key "$abs")"
+    local dir="$RUN_CACHE/$key"
+    local prog="$dir/prog"
+    local progsum="$dir/prog.sha256"
+    # ── M271（晨曦 D1 第 4 条）：**缓存完整性** ─────────────────────────────
+    #   命中前校验产物哈希。没有这一步时，「手工写坏/替换缓存条目」会**静默产出
+    #   不同的结果** —— 而缓存只许影响快慢。
+    #   不符 ⇒ 当作**未命中** ⇒ 重建（重建同样满足契约，且比「响亮失败」体验好）。
+    if [ -x "$prog" ] && [ -f "$progsum" ] \
+       && [ "$(sha256sum "$prog" 2>/dev/null | cut -c1-16)" = "$(cat "$progsum" 2>/dev/null)" ]; then
+        exec "$prog" "$@"
     fi
 
     echo "[px run --fast] 首次运行：编译并缓存（此后命中缓存直接 exec，约 30 ms）" >&2
     local work; work="$(mktemp -d "${TMPDIR:-/tmp}/pxrun.XXXXXX")"
     local base; base="$(basename "$abs")"
     cp "$abs" "$work/$base"
+    # ── M271（晨曦 D1 第 3 条）：编译失败**响亮失败**，禁止回落解释轨 ────────
+    #   到这里脚本已确认**在子集内** ⇒ 编译本应成功 ⇒ 失败就是真故障
+    #   （编译器 bug / 工具链缺失 / 磁盘）⇒ 回落会把「故障」静默成「慢但正确」
+    #   ⇒ 同一个 flag 两种行为、CI 结果随机器状态变化。口径照 `px build`。
     if ! ( cd "$work" && "$PXC_SELF" build "$base" ) >"$work/build.log" 2>&1; then
-        echo "[px run --fast] 编译失败 ⇒ **回落解释轨**（日志 $work/build.log）" >&2
-        tail -5 "$work/build.log" >&2
-        "$PXI_BIN" "$@" "$file"
-        local rc=$?; rm -rf "$work"; return $rc
+        echo "[px run --fast] ❌ 编译失败（脚本在 Mini 子集内，本应编译成功）—— **不回落解释轨**" >&2
+        echo "  · 日志：$work/build.log（保留供排查）" >&2
+        tail -8 "$work/build.log" >&2
+        echo "  · 若要强制走解释轨：px run --interp $file" >&2
+        return 1
     fi
     local out="$work/build/${base%.px}"
-    [ -x "$out" ] || { echo "[px run --fast] 产物缺失（$out）⇒ 回落解释轨" >&2; "$PXI_BIN" "$@" "$file"; local r=$?; rm -rf "$work"; return $r; }
-    mkdir -p "$dir"
-    cp "$out" "$prog.tmp" && mv "$prog.tmp" "$prog" && chmod +x "$prog"
+    if [ ! -x "$out" ]; then
+        echo "[px run --fast] ❌ 产物缺失（$out）—— 同上，**不回落解释轨**" >&2
+        echo "  · 日志：$work/build.log（保留供排查）" >&2
+        return 1
+    fi
+    if ! mkdir -p "$dir" || ! { cp "$out" "$prog.tmp" && mv "$prog.tmp" "$prog" && chmod +x "$prog"; }; then
+        # 缓存写不进去（只读 FS / 配额）⇒ 直接跑编译产物：**语义与 --fast 完全一致**
+        # （编译产物就是 --fast 的语义），只是下次还要重编。
+        # ⚠️ 这**不是**「回落解释轨」—— 回落到解释轨才是语义改变。
+        echo "[px run --fast] ⚠️ 缓存写入失败（$dir）⇒ 直接执行编译产物（语义不变）" >&2
+        exec "$out" "$@"
+    fi
+    sha256sum "$prog" 2>/dev/null | cut -c1-16 > "$progsum.tmp" && mv "$progsum.tmp" "$progsum"
     rm -rf "$work"
-    [ -x "$prog" ] || { echo "[px run --fast] 缓存写入失败 ⇒ 回落解释轨" >&2; "$PXI_BIN" "$@" "$file"; return $?; }
     exec "$prog" "$@"
 }
 
@@ -1024,7 +1057,19 @@ cmd_run() {
     #   数据文件，`VAR=$(px run p.px)` 会把警告吃进变量。编译轨（pxc）从不合并
     #   （Issue 45：诊断走 stderr ⇒ 不污染 .c 产物），同一工具链两条入口不该两套口径。
     #   需要合并的调用方自己写 `2>&1`（仓库内既有脚本本来就是这么写的）。
-    "$PXI_BIN" "$@" "$file"
+    #
+    # M271（晨曦 D1 第 5 条）：**发现性提示** —— 默认关会留一个缺口：
+    #   那 378× 只有「已经读过文档的人」能拿到，而「跑得慢」的人恰恰最不会去翻文档。
+    #   本提示**不改默认、不编译、不影响 CI 计时**，只把能力放到需要它的人眼前。
+    #   实现用 bash 内建 `SECONDS`（**零 fork**）—— 秒起场景（4.7 ms）多 fork 一次
+    #   `date` 就是 +40% 开销，这条提示不能自己变成瓶颈。
+    local _t0=$SECONDS _rc=0 _el=0
+    "$PXI_BIN" "$@" "$file"; _rc=$?
+    _el=$((SECONDS - _t0))
+    if [ "$_el" -ge "${PX_RUN_HINT_SEC:-2}" ]; then
+        echo "提示：本脚本解释执行耗时 ${_el}s。可用 px run --fast 或 px build 获得约 378×（首次编译 +0.5–1 s）" >&2
+    fi
+    return $_rc
 }
 
 cmd_lex() {

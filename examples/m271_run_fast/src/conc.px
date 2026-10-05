@@ -1,0 +1,5 @@
+def f():
+    var c = chan(1)
+    c.send(7)
+    print(c.recv())
+f()

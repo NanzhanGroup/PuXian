@@ -1,0 +1,5 @@
+var s = ""
+for i in [0, 1, 2, 3, 4]:
+    s = s + str(i)
+print(s)
+print(len(s))

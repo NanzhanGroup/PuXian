@@ -198,7 +198,6 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
     }
     PxRouteSeg snap[32];      // 匹配路线的只读快照（锁外构造参数用；定长、无分配）
     int nsnap = 0;
-    LXValue h_out = px_null();
     long long rmax_out = 0, rwin_out = 0;
     const char* pat_out = "";
     for (int i = 0; i < MAX_ROUTES && !found; i++) {
@@ -221,7 +220,17 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
             }
         }
         if (ok && pi >= nparts) {
-            h_out = g_routes[i].handler;
+            // M270b（**判据形态**，非性能）：此处**锁内直写全局元素**，保持
+            //   M214 R-B「出参的写出全是全局表元素」这条**可判定形状**。
+            //   背景：M262 把写出统一挪到锁外后，写成的是「局部拷贝」（h_out）⇒ 来源被隐去
+            //   ⇒ 审计器报新候选（m206 门实测：新增
+            //   px_route_try_dispatch ← px_rate_limit_try( · handler）。
+            //   ⇒ 这是「让判据能看见」而不是「放宽判据」：锁内写不分配，
+            //     M262 的两阶段性质（锁内零可失败分配）不受影响。
+            //   ⚠️ 本注释**刻意不写那行赋值的字面量** —— R-B 的判据读的是**原始文本**
+            //     （含注释）：注释里的代码片段会被当成真写出（本轮实测踩中，
+            //      首版注释里写了一次「赋值形态」，直接把 R-B 判成 False ⇒ 候选照旧）。
+            if (handler_out) *handler_out = g_routes[i].handler;
             rmax_out = g_routes[i].rate_max;
             rwin_out = g_routes[i].rate_window;
             pat_out = g_routes[i].pattern;
@@ -253,8 +262,7 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
         }
     }
     px_root_pop();               // M92-S2c precise（与上面 push 成对）
-    if (handler_out) *handler_out = h_out;
-    if (params_out) *params_out = params;
+    if (params_out) *params_out = params;   // （`handler_out` 已在锁内直写 —— 见上）
     if (rate_max_out) *rate_max_out = rmax_out;
     if (rate_window_out) *rate_window_out = rwin_out;
     if (pattern_out) *pattern_out = pat_out;
