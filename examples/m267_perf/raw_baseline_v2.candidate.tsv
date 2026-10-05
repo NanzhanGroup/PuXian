@@ -1,0 +1,15 @@
+# 性能基线 v2 —— 采集候选（collect_baseline_v2.sh + baseline_v2_json.py 生成）
+# ⚠️ 候选件：人工核对后固化进 examples/m267_perf/baseline.tsv（本文件不自动覆盖）
+# 来源 3 次独立采集：raw_baseline_v2.rep1.json / raw_baseline_v2.rep2.json / raw_baseline_v2.rep3.json
+# 取值：各次采集的最小值（口径『取无干扰下界』）
+# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>
+fib28_vm       run      s      1.0377     纯递归 fib(28)x5 —— 纯计算最坏情形（VM 轨）
+fib28_c        run      s      0.261      纯递归 fib(28)x5 —— C 轨（比值锚）
+while_sum_vm   run      s      0.3319     纯算术/比较/JMP 3M —— 专盯每指令固定开销漂移（VM 轨）
+while_sum_c    run      s      0.065      纯算术 3M —— C 轨（比值锚）
+mixed_vm       run      s      0.4957     dict+list+str 20 万次 —— 生产形态 IO/字典型（VM 轨）
+mixed_c        run      s      0.4984     dict+list+str 20 万次 —— C 轨（比值锚）
+jsonwb_vm      run      s      1.4235     JSON 2 万对象 构→串→解 —— 生产形态（VM 轨）
+jsonwb_c       run      s      1.416      JSON 2 万对象 —— C 轨（比值锚）
+startup_exec   startup  s      0.001463   空程序连跑 200 次 / 200（进程启动开销）
+hot_build      build    s      0.4646     px build 热缓存（空程序，含自动裁剪）

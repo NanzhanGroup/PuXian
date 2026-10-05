@@ -1,0 +1,43 @@
+ident	fib28	vm	0
+ident	fib28	c	2
+ident	while_sum	vm	0
+ident	while_sum	c	1
+ident	mixed	vm	0
+ident	mixed	c	1
+ident	jsonwb	vm	0
+ident	jsonwb	c	1
+anchor	fib28	1589055	1589055	true
+anchor	while_sum	998500000	998500000	true
+anchor	mixed	200000 1178000	200000 1178000	true
+anchor	jsonwb	894075 20000	894075 20000	true
+run	fib28_vm	1.0541,1.0508,1.0757,1.0892,1.0672
+run	fib28_c	0.2695,0.2628,0.2706,0.2693,0.2638
+run	while_sum_vm	0.3397,0.3491,0.3329,0.3498,0.3396
+run	while_sum_c	0.0657,0.0654,0.0665,0.0668,0.0650
+run	mixed_vm	0.4957,0.5006,0.5028,0.5048,0.5102
+run	mixed_c	0.5139,0.5092,0.4984,0.5070,0.5104
+run	jsonwb_vm	1.4393,1.4466,1.4478,1.4769,1.4525
+run	jsonwb_c	1.4802,1.4796,1.4418,1.4684,1.5056
+startup	startup_exec	0.309477	0.001547	200
+build	hot_build	0.5157	2
+env	host	dongyue
+env	cpu_model	AMD EPYC 7K62
+env	nproc	8
+env	mem_gib	15
+env	os	Rocky Linux 9.8
+env	kernel	5.14.0-687.48.1.el9_8.x86_64
+env	gcc	11.5.0
+env	px	0.2.17
+env	px_path	tools/px
+env	pin	taskset -c 3
+env	loadavg_before	1.58 1.59 1.29
+env	loadavg_after	1.82 1.65 1.33
+env	gates_before	3
+env	gates_after	4
+env	quiet	false
+meta	tag	rep3
+meta	started_at	2026-10-05T05:30:53Z
+meta	ended_at	2026-10-05T05:31:40Z
+meta	duration_s	47
+meta	spec_sha256	0dc65700dc7a7d79ea7da86cd26ff27c4071fdc39967c16e6352dd94179f2447
+meta	reps	5

@@ -1,0 +1,360 @@
+{
+  "schema": "raw_baseline_v2/1",
+  "tag": "rep2",
+  "spec": {
+    "path": "docs/PERF_BASELINE_METRICS_SPEC.md",
+    "sha256": "0dc65700dc7a7d79ea7da86cd26ff27c4071fdc39967c16e6352dd94179f2447"
+  },
+  "meta": {
+    "started_at": "2026-10-05T05:29:34Z",
+    "ended_at": "2026-10-05T05:30:20Z",
+    "duration_s": 46,
+    "reps": 5
+  },
+  "env": {
+    "host": "dongyue",
+    "cpu_model": "AMD EPYC 7K62",
+    "nproc": "8",
+    "mem_gib": "15",
+    "os": "Rocky Linux 9.8",
+    "kernel": "5.14.0-687.48.1.el9_8.x86_64",
+    "gcc": "11.5.0",
+    "px": "0.2.17",
+    "px_path": "tools/px",
+    "pin": "taskset -c 3",
+    "loadavg_before": "1.83 1.58 1.26",
+    "loadavg_after": "1.96 1.65 1.30",
+    "gates_before": "3",
+    "gates_after": "3",
+    "quiet": "false"
+  },
+  "params": {
+    "pin": "taskset -c 3",
+    "run_reps": 5,
+    "run_stat": "min",
+    "startup_runs": 200,
+    "startup_stat": "mean",
+    "build_warmups": 2,
+    "build_stat": "single",
+    "warn_ratio": 1.25,
+    "fail_ratio": 2.0,
+    "gate_loads": "fib28 while_sum mixed jsonwb"
+  },
+  "identity": [
+    {
+      "load": "fib28",
+      "track": "vm",
+      "fn_symbols": 0,
+      "expected": "==0",
+      "ok": true
+    },
+    {
+      "load": "fib28",
+      "track": "c",
+      "fn_symbols": 2,
+      "expected": ">=1",
+      "ok": true
+    },
+    {
+      "load": "while_sum",
+      "track": "vm",
+      "fn_symbols": 0,
+      "expected": "==0",
+      "ok": true
+    },
+    {
+      "load": "while_sum",
+      "track": "c",
+      "fn_symbols": 1,
+      "expected": ">=1",
+      "ok": true
+    },
+    {
+      "load": "mixed",
+      "track": "vm",
+      "fn_symbols": 0,
+      "expected": "==0",
+      "ok": true
+    },
+    {
+      "load": "mixed",
+      "track": "c",
+      "fn_symbols": 1,
+      "expected": ">=1",
+      "ok": true
+    },
+    {
+      "load": "jsonwb",
+      "track": "vm",
+      "fn_symbols": 0,
+      "expected": "==0",
+      "ok": true
+    },
+    {
+      "load": "jsonwb",
+      "track": "c",
+      "fn_symbols": 1,
+      "expected": ">=1",
+      "ok": true
+    }
+  ],
+  "anchor": [
+    {
+      "load": "fib28",
+      "vm_stdout": "1589055",
+      "c_stdout": "1589055",
+      "match": true
+    },
+    {
+      "load": "while_sum",
+      "vm_stdout": "998500000",
+      "c_stdout": "998500000",
+      "match": true
+    },
+    {
+      "load": "mixed",
+      "vm_stdout": "200000 1178000",
+      "c_stdout": "200000 1178000",
+      "match": true
+    },
+    {
+      "load": "jsonwb",
+      "vm_stdout": "894075 20000",
+      "c_stdout": "894075 20000",
+      "match": true
+    }
+  ],
+  "metrics": {
+    "fib28_vm": {
+      "name": "fib28_vm",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        1.0377,
+        1.0544,
+        1.0555,
+        1.0627,
+        1.0388
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 1.0377
+    },
+    "fib28_c": {
+      "name": "fib28_c",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        0.261,
+        0.2704,
+        0.2715,
+        0.2619,
+        0.2628
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 0.261
+    },
+    "while_sum_vm": {
+      "name": "while_sum_vm",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        0.3321,
+        0.332,
+        0.3331,
+        0.3319,
+        0.3365
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 0.3319
+    },
+    "while_sum_c": {
+      "name": "while_sum_c",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        0.0676,
+        0.0682,
+        0.067,
+        0.0673,
+        0.0671
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 0.067
+    },
+    "mixed_vm": {
+      "name": "mixed_vm",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        0.4988,
+        0.4988,
+        0.5035,
+        0.5098,
+        0.503
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 0.4988
+    },
+    "mixed_c": {
+      "name": "mixed_c",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        0.515,
+        0.5011,
+        0.5263,
+        0.5357,
+        0.5218
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 0.5011
+    },
+    "jsonwb_vm": {
+      "name": "jsonwb_vm",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        1.481,
+        1.4728,
+        1.4721,
+        1.4299,
+        1.4235
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 1.4235
+    },
+    "jsonwb_c": {
+      "name": "jsonwb_c",
+      "kind": "run",
+      "unit": "s",
+      "rounds": [
+        1.4874,
+        1.453,
+        1.4545,
+        1.4414,
+        1.4477
+      ],
+      "n_rounds": 5,
+      "stat": "min",
+      "value": 1.4414
+    },
+    "startup_exec": {
+      "name": "startup_exec",
+      "kind": "startup",
+      "unit": "s",
+      "runs": 200,
+      "total_s": 0.299847,
+      "stat": "mean",
+      "value": 0.001499
+    },
+    "hot_build": {
+      "name": "hot_build",
+      "kind": "build",
+      "unit": "s",
+      "warmups": 2,
+      "stat": "single",
+      "value": 0.4646
+    }
+  },
+  "pair_ratios": {
+    "fib28": {
+      "vm": 1.0377,
+      "c": 0.261,
+      "vm_over_c": 3.976
+    },
+    "while_sum": {
+      "vm": 0.3319,
+      "c": 0.067,
+      "vm_over_c": 4.954
+    },
+    "mixed": {
+      "vm": 0.4988,
+      "c": 0.5011,
+      "vm_over_c": 0.995
+    },
+    "jsonwb": {
+      "vm": 1.4235,
+      "c": 1.4414,
+      "vm_over_c": 0.988
+    }
+  },
+  "baseline_candidate": [
+    {
+      "name": "fib28_vm",
+      "kind": "run",
+      "unit": "s",
+      "value": 1.0377,
+      "note": "纯递归 fib(28)x5 —— 纯计算最坏情形（VM 轨）"
+    },
+    {
+      "name": "fib28_c",
+      "kind": "run",
+      "unit": "s",
+      "value": 0.261,
+      "note": "纯递归 fib(28)x5 —— C 轨（比值锚）"
+    },
+    {
+      "name": "while_sum_vm",
+      "kind": "run",
+      "unit": "s",
+      "value": 0.3319,
+      "note": "纯算术/比较/JMP 3M —— 专盯每指令固定开销漂移（VM 轨）"
+    },
+    {
+      "name": "while_sum_c",
+      "kind": "run",
+      "unit": "s",
+      "value": 0.067,
+      "note": "纯算术 3M —— C 轨（比值锚）"
+    },
+    {
+      "name": "mixed_vm",
+      "kind": "run",
+      "unit": "s",
+      "value": 0.4988,
+      "note": "dict+list+str 20 万次 —— 生产形态 IO/字典型（VM 轨）"
+    },
+    {
+      "name": "mixed_c",
+      "kind": "run",
+      "unit": "s",
+      "value": 0.5011,
+      "note": "dict+list+str 20 万次 —— C 轨（比值锚）"
+    },
+    {
+      "name": "jsonwb_vm",
+      "kind": "run",
+      "unit": "s",
+      "value": 1.4235,
+      "note": "JSON 2 万对象 构→串→解 —— 生产形态（VM 轨）"
+    },
+    {
+      "name": "jsonwb_c",
+      "kind": "run",
+      "unit": "s",
+      "value": 1.4414,
+      "note": "JSON 2 万对象 —— C 轨（比值锚）"
+    },
+    {
+      "name": "startup_exec",
+      "kind": "startup",
+      "unit": "s",
+      "value": 0.001499,
+      "note": "空程序连跑 200 次 / 200（进程启动开销）"
+    },
+    {
+      "name": "hot_build",
+      "kind": "build",
+      "unit": "s",
+      "value": 0.4646,
+      "note": "px build 热缓存（空程序，含自动裁剪）"
+    }
+  ]
+}
