@@ -1,0 +1,11 @@
+# m267_perf/src/while_sum.px —— 纯算术/比较/JMP 3M
+# 专盯「每指令/每次分配都要付」的固定开销漂移（M240-M259 那批根面/隔离点/锁改动的形态）。
+def main():
+    var s = 0
+    var i = 0
+    while i < 3000000:
+        s = s + i
+        if s > 1000000000:
+            s = s - 1000000000
+        i = i + 1
+    print(str(s))

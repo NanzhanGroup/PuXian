@@ -1,0 +1,12 @@
+# m267_perf/src/fib28.px —— 纯递归热点（CPU 密集最坏情形）
+# 负载：fib(28) × 5 次递归求和。为**性能门**的固定负载之一；输出固定（作双轨正确性锚点）。
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def main():
+    var s = 0
+    for i in range(5):
+        s = s + fib(28)
+    print(str(s))

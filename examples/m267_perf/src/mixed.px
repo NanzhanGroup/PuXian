@@ -1,0 +1,13 @@
+# m267_perf/src/mixed.px —— dict + list + str 混合 20 万次（生产形态：IO/字典型）
+def main():
+    var d = json_parse("{}")
+    var xs = []
+    var acc = 0
+    var i = 0
+    while i < 200000:
+        var k = "key" + str(i % 1000)
+        d.set(k, i)
+        xs.append(i)
+        acc = acc + len(k)
+        i = i + 1
+    print(str(len(xs)) + " " + str(acc))

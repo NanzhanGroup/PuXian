@@ -1022,6 +1022,13 @@ jobs:
           grep -E '^── M264' /tmp/v_m264.log | tail -2 || true
           echo "✅ m264_gate_shared_tmp（守卫自证 4/4 + 白名单 6 条各带理由 + M256_PROBE_D 隔离）PASS"
 
+      - name: m267_perf（性能回归门 · 清歌提案 P0-1 · 首个性能判据门）
+        if: always()
+        run: |
+          bash examples/m267_perf/verify.sh > /tmp/v_m267.log 2>&1 || { echo "❌ m267_perf 性能门失败（相对基线退化 > 2.0x）"; grep -E '^(  [❌⚠️]|  [a-z0-9_]+ +[0-9.]+ +[0-9.]+)' /tmp/v_m267.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── M267|^  ✅ 8/8|^  ✅ 每条' /tmp/v_m267.log | tail -4 || true
+          echo "✅ m267_perf（8 负载 x 双轨 x min-of-5 · 身份自检 8/8 · 相对基线 1.0x ± 噪声）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
