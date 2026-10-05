@@ -36,6 +36,11 @@ BLOCK2="$W/rootfiles.sh"
 sed -n '/^# >>> rootfiles-fresh >>>/,/^# <<< rootfiles-fresh <<<$/p' "$SCRIPT" > "$BLOCK2"
 grep -q 'rootfiles_stale()' "$BLOCK2" || { echo "❌ 抽取失败：$SCRIPT 里的 rootfiles-fresh 标记行缺失或被改"; exit 2; }
 
+# M277：资产挑选块（主包 ⇄ aarch64 引导包）—— 单独抽一份（纯函数，无 log/die 依赖）
+BLOCK6="$W/assets.sh"
+sed -n '/^# >>> asset-select >>>/,/^# <<< asset-select <<<$/p' "$SCRIPT" > "$BLOCK6"
+grep -q 'pick_release_assets()' "$BLOCK6" || { echo "❌ 抽取失败：$SCRIPT 里的 asset-select 标记行缺失或被改"; exit 2; }
+
 PASS=0; FAIL=0
 mk_repo() { # $1=名 $2..=rpm文件名列表
   local d="$W/$1" f; shift
@@ -307,6 +312,53 @@ esac
 case "$(cat "$SCRIPT")" in
     *'"registry": { "included"'*) ok_r "version.json 登记 registry 状态（下游可判定）" ;;
     *) bad_r "version.json 未登记 registry ⇒ 下游无法判定镜像是否含 registry" ;;
+esac
+
+# ══════════════════════════════════════════════════════════════
+# M277 · 资产挑选（用户 2026-10-06 报障「aarch64 包不在镜像上」）
+#   修前：`grep ... | head -1` 只取**第一个** .tar.gz ⇒ aarch64 包**从未进过镜像**。
+#   本段用两个夹具证明「两类资产被分开挑出」，并**反向**断言 a64 ≠ main（旧行为必判红）。
+# ══════════════════════════════════════════════════════════════
+mk_json() {   # $1=输出文件；$2..=资产名
+  local f="$1"; shift
+  { printf '{\n  "tag_name": "v0.2.277",\n  "assets": [\n'
+    local first=1 n
+    for n in "$@"; do
+      [ "$first" = 1 ] || printf ',\n'; first=0
+      printf '    { "name": "%s", "size": 1 }' "$n"
+    done
+    printf '\n  ]\n}\n'
+  } > "$f"
+}
+as_ok() {   # $1=用例名 $2=0/1（**缺省 1 = 通过** —— `set -u` 下漏传 $2 会直接炸，本仓第 N 次踩）
+  if [ "${2:-1}" = 1 ]; then echo "✅ $1"; PASS=$((PASS+1)); else echo "❌ $1"; FAIL=$((FAIL+1)); fi
+}
+# 夹具 1：真实发布（主包 + aarch64 引导包 + sha256，且 aarch64 排在**后面**）
+mk_json "$W/rel1.json" "puxian-0.2.277-b2c4c7c.tar.gz" "puxian-bootstrap-aarch64-v0.2.277.tar.gz.sha256" "puxian-bootstrap-aarch64-v0.2.277.tar.gz" "sha256sums.txt"
+OUT1="$(bash -c ". \"$BLOCK6\"; pick_release_assets \"$W/rel1.json\"")"
+M1="$(printf '%s\n' "$OUT1" | awk -F'\t' '$1=="main"{print $2}')"
+A1="$(printf '%s\n' "$OUT1" | awk -F'\t' '$1=="a64"{print $2}')"
+[ "$M1" = "puxian-0.2.277-b2c4c7c.tar.gz" ] && as_ok "主包挑中（未被 aarch64 顶掉）" 1 || as_ok "主包挑中（实得「$M1」）" 0
+[ "$A1" = "puxian-bootstrap-aarch64-v0.2.277.tar.gz" ] && as_ok "aarch64 引导包挑中（**.sha256 不被误选**）" 1 || as_ok "aarch64 挑中（实得「$A1」）" 0
+[ -n "$A1" ] && [ "$A1" != "$M1" ] && as_ok "A ≠ MAIN（旧行为 head -1 必判红）" 1 || as_ok "A ≠ MAIN（旧行为未修）" 0
+# 夹具 2：老 tag（只有主包）⇒ a64 必须为空且**不 die**
+mk_json "$W/rel2.json" "puxian-0.2.0-m122-abc1234.tar.gz" "sha256sums.txt"
+OUT2="$(bash -c ". \"$BLOCK6\"; pick_release_assets \"$W/rel2.json\"")"
+A2="$(printf '%s\n' "$OUT2" | awk -F'\t' '$1=="a64"{print $2}')"
+[ -z "$A2" ] && as_ok "老 tag（无 aarch64 资产）⇒ a64 为空（不 die）" 1 || as_ok "老 tag ⇒ a64 空（实得「$A2」）" 0
+
+# 静态：镜像脚本必须真的**下载 + 校验 + 登记** aarch64
+case "$(cat "$SCRIPT")" in
+  *'aarch64 引导包'*'sha256 = $A64_SUM'*) as_ok "镜像脚本：aarch64 下载后**校验** sha256" ;;
+  *) as_ok "镜像脚本：缺 aarch64 sha256 校验" 0 ;;
+esac
+case "$(cat "$SCRIPT")" in
+  *'"bootstrap_aarch64_tarball"'*) as_ok "version.json 登记 aarch64 坐标（下游可判定）" ;;
+  *) as_ok "version.json 未登记 aarch64 坐标" 0 ;;
+esac
+case "$(cat "$SCRIPT")" in
+  *'落地后 aarch64 引导包 sha256 不一致'*) as_ok "落地后**再验一次**（DEST 上真在且一致）" ;;
+  *) as_ok "缺落地后 aarch64 自证" 0 ;;
 esac
 
 echo "== 结果：通过 $PASS / 失败 $FAIL =="

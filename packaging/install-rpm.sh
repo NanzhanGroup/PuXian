@@ -31,6 +31,10 @@
 #   -h|--help
 # 环境变量：PUXIAN_RPM_BASE / PUXIAN_OS_RELEASE / PUXIAN_REPO_FILE / PUXIAN_ARCH /
 #           PUXIAN_OFFLINE=1（禁网络探测，自测用）
+#           PUXIAN_VERSION_JSON='<json>'（**注入** version.json，离线自测 aarch64 镜像分支用 —— M277）
+# M277（用户 2026-10-06 报障）：aarch64 引导包此前**只给 GitHub URL**（国内机器下不动），
+#   而镜像侧 `pxrepo_mirror.sh` 又**从未同步**过它 ⇒ 现在两端都收口：镜像带 `releases/` 下的
+#   aarch64 包 + `version.json` 登记 `bootstrap_aarch64_*`，本脚本**优先**给镜像 URL。
 # 双活（两处仓库内容等价，public 资产同一发布产物）：
 #   国内镜像  https://soft.xiusoft.cn/puxian/rpm     ← 默认优先（探测通过即用）
 #   上游兜底  https://nanzhangroup.github.io/PuXian/rpm
@@ -135,20 +139,37 @@ repo_baseurl() {   # $1=BASE $2=MODE $3=DIR $4=ARCH
 # 读站点自证文件 version.json（含 tag / tarball / sha256）⇒ 打印**精确**命令；
 # 取不到（离线/镜像不可达）则退回 Releases 页面指引。
 fallback_hint() {   # $1=arch
-  local arch="$1" vj="" tag="" rel="" sha=""
+  local arch="$1" vj="" tag="" rel="" sha="" a64="" a64sha=""
   say ""
   say "── 替代路线（本组合暂无 rpm 仓库，但 PuXian 有两条官方装机路径）──"
-  if [ "${PUXIAN_OFFLINE:-0}" != 1 ] && command -v curl >/dev/null 2>&1; then
+  # M277：允许**注入** version.json（离线自测用 —— 与 `--os-release` / `--repo-file` 同类的测试钩子）。
+  #   没有它，「镜像 URL 必须出现在 aarch64 分支」这条判据在离线自测里**无法构造** ⇒ 只能靠人工看。
+  if [ -n "${PUXIAN_VERSION_JSON:-}" ]; then
+    vj="$PUXIAN_VERSION_JSON"
+  elif [ "${PUXIAN_OFFLINE:-0}" != 1 ] && command -v curl >/dev/null 2>&1; then
     vj="$(curl -fsS -m 5 "$MIRROR_ROOT/version.json" 2>/dev/null || true)"
   fi
   if [ -n "$vj" ]; then
     tag="$(printf '%s' "$vj" | sed -n 's/.*"tag" *: *"\([^"]*\)".*/\1/p')"
     rel="$(printf '%s' "$vj" | sed -n 's/.*"tarball" *: *"\([^"]*\)".*/\1/p')"
     sha="$(printf '%s' "$vj" | sed -n 's/.*"tarball_sha256" *: *"\([^"]*\)".*/\1/p')"
+    # M277：aarch64 引导包的**镜像**坐标（镜像侧从未同步过它 —— 用户 2026-10-06 报障）。
+    # ⚠️ 字段名刻意**扁平**（`bootstrap_aarch64_tarball`）而不是嵌套对象：
+    #   本函数用 sed 取值，嵌套对象里的 `"tarball"` 会被上面那条 `.*"tarball"` **误命中**。
+    a64="$(printf '%s' "$vj" | sed -n 's/.*"bootstrap_aarch64_tarball" *: *"\([^"]*\)".*/\1/p' | head -1)"
+    a64sha="$(printf '%s' "$vj" | sed -n 's/.*"bootstrap_aarch64_sha256" *: *"\([^"]*\)".*/\1/p' | head -1)"
   fi
   if [ "$arch" = aarch64 ]; then
     say "  ① aarch64 官方引导包（**包内工具链为静态件、零 glibc 依赖**，解压即用）："
-    if [ -n "$tag" ]; then
+    if [ -n "$a64" ]; then
+      # M277：**国内镜像优先**（修前只给 GitHub ⇒ 国内机器下不动，正是用户撞到的现象）
+      say "       curl -fsSLO $MIRROR_ROOT/$a64"
+      if [ -n "$a64sha" ]; then
+        say "       echo '$a64sha  $(basename "$a64")' | sha256sum -c"
+      fi
+      say "       tar xzf $(basename "$a64") && cd \$(basename $(basename "$a64") .tar.gz)"
+    elif [ -n "$tag" ]; then
+      say "       ⚠️ 镜像暂未同步该包 ⇒ 走上游 GitHub（国内可能较慢）："
       say "       curl -fsSLO https://github.com/$GH_REPO/releases/download/${tag}/puxian-bootstrap-aarch64-${tag}.tar.gz"
       say "       sha256sum -c puxian-bootstrap-aarch64-${tag}.tar.gz.sha256   # 可选校验"
       say "       tar xzf puxian-bootstrap-aarch64-${tag}.tar.gz && cd puxian-bootstrap-aarch64-${tag}"

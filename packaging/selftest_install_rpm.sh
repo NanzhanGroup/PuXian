@@ -120,6 +120,29 @@ check "aarch64+oe22.03：rc≠0" "$([ "$(cat "$WORK/rc")" != 0 ] && echo 1 || ec
 check "aarch64：指路 puxian-bootstrap-aarch64 引导包" "$(has 'puxian-bootstrap-aarch64' && echo 1 || echo 0)"
 check "aarch64：点明包内为静态件" "$(has '静态件' && echo 1 || echo 0)"
 check "aarch64：同时给自举路线（native_bootstrap --portable）" "$(has 'native_bootstrap.sh --portable' && echo 1 || echo 0)"
+
+# ---------- 5b) aarch64 + **注入** version.json ⇒ 必须给**国内镜像** URL（M277） ----------
+#   用户 2026-10-06 报障：「在 openEuler aarch64 上装 PuXian，提示 aarch64 包不在 xiusoft 镜像上」。
+#   实测两个缺口：① 镜像侧**从未同步**过 aarch64 引导包；② 本脚本的 aarch64 分支**只给 GitHub URL**。
+#   本段用 `PUXIAN_VERSION_JSON` 注入坐标 ⇒ 断言**镜像 URL 必须出现**、且 **GitHub 不得出现**
+#   （反向对照放最后：不注入时**必须**回到 GitHub 兜底 ⇒ 证明前一条不是恒成立）。
+echo "── [5b] aarch64 + 注入 version.json（M277 用户报障）"
+_VJ='{"tag":"v0.2.277","tarball":"releases/puxian-0.2.277-b2c4c7c.tar.gz","tarball_sha256":"aaaa",'\
+'"bootstrap_aarch64_tarball":"releases/puxian-bootstrap-aarch64-v0.2.277.tar.gz",'\
+'"bootstrap_aarch64_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","bootstrap_aarch64_size":22774577}'
+export PUXIAN_VERSION_JSON="$_VJ"
+ARCH_OVERRIDE=aarch64 run "$WORK/os-oe2203.release" --dry-run
+unset PUXIAN_VERSION_JSON
+check "aarch64+镜像坐标：给**国内镜像** URL（soft.xiusoft.cn/puxian/releases/…）" \
+      "$(has 'soft.xiusoft.cn/puxian/releases/puxian-bootstrap-aarch64-' && echo 1 || echo 0)"
+check "aarch64+镜像坐标：给 sha256 校验命令（含登记值）" "$(has 'bbbbbbbb' && echo 1 || echo 0)"
+check "aarch64+镜像坐标：**整条输出不得出现 GitHub**（镜像可用时）" \
+      "$(hasnt 'github.com/NanzhanGroup/PuXian' && echo 1 || echo 0)"
+check "aarch64+镜像坐标：仍给解压 + 试跑两步" "$(has 'tar xzf puxian-bootstrap-aarch64-' && echo 1 || echo 0)"
+# 反向对照（**必须有牙**）：离线且不注入 ⇒ 必须回到 GitHub 兜底
+ARCH_OVERRIDE=aarch64 run "$WORK/os-oe2203.release" --dry-run
+check "aarch64 无镜像坐标：回到 GitHub 兜底（证明上一条不是恒成立）" \
+      "$(has 'github.com/NanzhanGroup/PuXian' && echo 1 || echo 0)"
 ARCH_OVERRIDE=riscv64 run "$WORK/os-rocky9.release" --dry-run
 check "riscv64：同样走替代路线（不假装支持）" "$([ "$(cat "$WORK/rc")" != 0 ] && echo 1 || echo 0)"
 

@@ -241,11 +241,34 @@ SHORT="$(printf '%s' "$SHA" | cut -c1-8)"
 #   （晨曦 2026-10-01 报障）。故：**先 API（真值）**，API 不可用才退回猜（8/7 位各试）。
 REL_JSON="$WORK/rel-$TAG.json"
 TARBALL=""
+A64_TARBALL=""
+# >>> asset-select >>>
+# 从一个 GitHub Release JSON 里挑出**两类**资产名（M277 · 用户报障）：
+#   · main = 主发布包（`puxian-<ver>-<sha>.tar.gz`）
+#   · a64  = aarch64 官方引导包（`puxian-bootstrap-aarch64-<tag>.tar.gz`）
+# ⚠️ 修前只取「**第一个** .tar.gz」⇒ aarch64 包**从未进过镜像**
+#    （用户 2026-10-06 报障：openEuler aarch64 上提示「aarch64 包不在镜像上」）。
+# 本段被 `packaging/selftest_pxrepo_mirror.sh` **抽取**做离线回归（勿删标记行）。
+pick_release_assets() {   # $1=release JSON 路径 → 两行 "main\t<名>" / "a64\t<名>"
+  grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*\.tar\.gz"' "$1" 2>/dev/null \
+    | sed -E 's/^"name"[[:space:]]*:[[:space:]]*"//; s/"$//' \
+    | awk '
+        /^puxian-bootstrap-aarch64-/ { if (a64 == "") a64 = $0; next }
+        /\.tar\.gz$/                { if (main == "") main = $0 }
+        END { printf "main\t%s\na64\t%s\n", main, a64 }'
+}
+# <<< asset-select <<<
 if curl -fsSL -o "$REL_JSON" "https://api.github.com/repos/$REPO_SLUG/releases/tags/$TAG" 2>/dev/null; then
-  TARBALL="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*\.tar\.gz"' "$REL_JSON" \
-             | head -1 | sed -E 's/^"name"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-  [ -n "$TARBALL" ] || die "GitHub API 响应里没有 .tar.gz 资产（tag=$TAG，原始响应留在 $REL_JSON）"
+  _assets="$(pick_release_assets "$REL_JSON")"
+  TARBALL="$(printf '%s\n' "$_assets" | awk -F'\t' '$1=="main"{print $2}')"
+  A64_TARBALL="$(printf '%s\n' "$_assets" | awk -F'\t' '$1=="a64"{print $2}')"
+  [ -n "$TARBALL" ] || die "GitHub API 响应里没有主 .tar.gz 资产（tag=$TAG，原始响应留在 $REL_JSON）"
   log "   资产名（API 真值）= $TARBALL"
+  if [ -n "$A64_TARBALL" ]; then
+    log "   aarch64 引导包（API 真值）= $A64_TARBALL"
+  else
+    log "   ℹ️ 该 Release 无 aarch64 引导包资产（老 tag 可能确实没有）"
+  fi
 else
   log "   ⚠ GitHub API 不可用（限流/离线）⇒ 退回按短 SHA 猜资产名（8 位 / 7 位各试一次）"
   for _n in 8 7; do
@@ -254,6 +277,13 @@ else
   done
   [ -n "$TARBALL" ] || die "取不到 $TAG 的 tarball 资产名（API 不可用，短 SHA 8/7 位猜测均 404）"
   log "   猜中资产名 = $TARBALL"
+  # aarch64 引导包**按 tag 命名**（不含短 SHA）⇒ 猜法固定；取不到只记 ℹ️（老 tag 可能没有）
+  _a64="puxian-bootstrap-aarch64-${TAG}.tar.gz"
+  if curl -fsS -L -r 0-0 -o /dev/null "$DL_BASE/$TAG/$_a64" 2>/dev/null; then
+    A64_TARBALL="$_a64"; log "   aarch64 引导包（按 tag 猜中）= $_a64"
+  else
+    log "   ℹ️ aarch64 引导包探测 404（老 tag 可能没有）"
+  fi
 fi
 TAR_URL="$DL_BASE/$TAG/$TARBALL"
 mkdir -p "$STAGING/releases"
@@ -267,6 +297,25 @@ GOT="$(grep -F "$TARBALL" "$STAGING/releases/sha256sums.txt" | awk '{print $1}' 
 [ -n "$GOT" ] || die "sha256sums.txt 中没有 $TARBALL 的登记值"
 [ "$SUM" = "$GOT" ] || die "tarball 校验失败：实测 $SUM ≠ 登记 $GOT"
 log "   ✅ tarball sha256 = $SUM（与 sha256sums.txt 一致）"
+
+# ── 4b. aarch64 官方引导包（M277 · 用户报障「aarch64 包不在镜像上」）──────────
+#   存在 ⇒ **必须**下载并校验（判定不了不许放行）；不存在 ⇒ ℹ️ 记一行继续。
+A64_SUM=""; A64_SIZE=""
+if [ -n "$A64_TARBALL" ]; then
+  curl -fsSL --retry 3 --retry-delay 5 -o "$STAGING/releases/$A64_TARBALL" "$DL_BASE/$TAG/$A64_TARBALL" \
+    || die "下载 aarch64 引导包 $A64_TARBALL 失败（资产存在但取不下来）"
+  A64_SUM="$(sha256sum "$STAGING/releases/$A64_TARBALL" | awk '{print $1}')"
+  A64_SIZE="$(stat -c%s "$STAGING/releases/$A64_TARBALL" 2>/dev/null || echo 0)"
+  # 校验值来源**两选一**：优先同名 .sha256 资产；否则查 sha256sums.txt
+  A64_GOT=""
+  if curl -fsSL --retry 2 -o "$WORK/$A64_TARBALL.sha256" "$DL_BASE/$TAG/$A64_TARBALL.sha256" 2>/dev/null; then
+    A64_GOT="$(awk 'NF>=1{print $1; exit}' "$WORK/$A64_TARBALL.sha256" 2>/dev/null || true)"
+  fi
+  [ -n "$A64_GOT" ] || A64_GOT="$(grep -F "$A64_TARBALL" "$STAGING/releases/sha256sums.txt" | awk '{print $1}' | head -1)"
+  [ -n "$A64_GOT" ] || die "aarch64 引导包**在发布里**却**找不到校验值**（既无 .sha256 资产、也不在 sha256sums.txt）⇒ 拒绝放行"
+  [ "$A64_SUM" = "$A64_GOT" ] || die "aarch64 引导包校验失败：实测 $A64_SUM ≠ 登记 $A64_GOT"
+  log "   ✅ aarch64 引导包 sha256 = $A64_SUM（$(( A64_SIZE / 1048576 )) MB）"
+fi
 
 # ---------- 5. 校验 RPM 仓库（签名 + 元数据） ----------
 # M168：目录集合由「写死 7/9」改为「7/9 + 实际存在的 openeuler/<ver>」——
@@ -337,7 +386,10 @@ cat > "$STAGING/version.json" <<JSON
   "tarball": "releases/$TARBALL",
   "tarball_sha256": "$SUM",
   "rpm_repo": { $RPM_REPO_JSON },
-  "registry": { "included": $REG_FOUND, "files": $REG_N, "base": "registry/" }
+  "registry": { "included": $REG_FOUND, "files": $REG_N, "base": "registry/" },
+  "bootstrap_aarch64_tarball": "$A64_TARBALL",
+  "bootstrap_aarch64_sha256": "$A64_SUM",
+  "bootstrap_aarch64_size": ${A64_SIZE:-0}
 }
 JSON
 log "⑤ version.json 就绪（rpm_repo: $RPM_REPO_JSON）"
@@ -394,4 +446,13 @@ rsync -a --delete "${REG_EXCL[@]}" --exclude=/rpm/ "$STAGING/" "$DEST/"
 log "⑦ 落地复核"
 [ "$(sha256sum "$DEST/releases/$TARBALL" | awk '{print $1}')" = "$SUM" ] || die "落地后 tarball sha256 不一致"
 grep -q "\"$TAG\"" "$DEST/version.json" || die "落地后 version.json 不含 $TAG"
+# M277：aarch64 引导包若本轮同步了，**落地后**必须真在 DEST 上且 sha256 一致
+#   （只报「同步成功」不够 —— M275 的教训：判定不了不许放行）
+if [ -n "$A64_TARBALL" ]; then
+  [ -f "$DEST/releases/$A64_TARBALL" ] || die "aarch64 引导包未落到 DEST：$A64_TARBALL"
+  [ "$(sha256sum "$DEST/releases/$A64_TARBALL" | awk '{print $1}')" = "$A64_SUM" ] \
+    || die "落地后 aarch64 引导包 sha256 不一致"
+  grep -q "\"bootstrap_aarch64_tarball\": \"releases/$A64_TARBALL\"" "$DEST/version.json" \
+    || die "落地后 version.json 未登记 aarch64 引导包"
+fi
 log "✅ 完成：$DEST ← $TAG（rpm 7/9 + tarball + version.json）"
