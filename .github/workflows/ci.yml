@@ -1053,6 +1053,15 @@ jobs:
           grep -E '通过 [0-9]+ · 失败' /tmp/v_m276.log | tail -1 || true
           echo "✅ m276_gate_lock（194 门 source + runner 持锁 · 并发拒启 · 陈旧自愈 · 无 fd 泄漏 · 竞态恰 1）PASS"
 
+      - name: realhost_smoke（真机冒烟脚本的**离线自证** · M277）
+        # 该脚本连外部节点（跑不进 CI），但参数校验/dry-run 产物/分支展开**能**离线判 ——
+        # 「跑不进 CI」不是「不要判据」的理由。真机跑法见脚本头注。
+        if: always()
+        run: |
+          bash packaging/realhost_smoke.sh --self-test > /tmp/v_rhs.log 2>&1 || { echo "❌ realhost_smoke 自证失败"; tail -20 /tmp/v_rhs.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '自证：通过' /tmp/v_rhs.log | tail -1 || true
+          echo "✅ realhost_smoke（离线自证 12/0：参数校验 · dry-run 合法 bash · 六段锚点 · 变量已展开 · 档位分支）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

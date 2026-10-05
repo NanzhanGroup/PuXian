@@ -1092,3 +1092,8 @@ step "M276 · 门级互斥锁（晨曦 2026-10-05 回馈：门「就地改仓库
 #      —— 那会**盖掉门自己的 EXIT 陷阱**。
 run gate_lock_guard bash selfhost/check_gate_lock.sh
 run m276_gate_lock bash examples/m276_gate_lock/verify.sh
+# M277：**真机冒烟脚本**的离线自证 —— 该脚本本身连外部节点（跑不进 CI），
+#   但它**能**离线自证：参数校验 · dry-run 产物是合法 bash · 六段判据锚点齐 ·
+#   本地变量已展开 · 档位分支按档展开（8 组 12 断言）。
+#   ⇒ 「新产物必须有判据」这条不因为「它跑不进 CI」而豁免。
+run realhost_smoke bash packaging/realhost_smoke.sh --self-test
