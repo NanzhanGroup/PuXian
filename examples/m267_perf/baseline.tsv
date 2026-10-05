@@ -1,0 +1,17 @@
+# M267 性能回归基线 —— 由 verify.sh --update 生成
+# 生成机：dongyue · AMD EPYC 7K62 · 8 核 · gcc 11.5.0 · Rocky 9.8
+# 工具链：px 0.2.17
+# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>
+# ⚠️ 绝对值只对**同机同工具链**有意义；判据是**相对变化**。刷新前须人工确认。
+# ⚠️ 换机器 / 换 gcc / 换 px 版本 ⇒ 必须 --update 重定基（否则比值无意义）
+# 依据：docs/PERF_BASELINE_V2.md（M266 建立）
+fib28_vm       run     s      0.961      纯递归 fib(28)x5 —— 纯计算最坏情形（VM 轨）
+fib28_c        run     s      0.264      纯递归 fib(28)x5 —— C 轨（比值锚）
+while_sum_vm   run     s      0.333      纯算术/比较/JMP 3M —— 专盯每指令固定开销漂移（VM 轨）
+while_sum_c    run     s      0.064      纯算术 3M —— C 轨（比值锚）
+mixed_vm       run     s      0.505      dict+list+str 20 万次 —— 生产形态 IO/字典型（VM 轨）
+mixed_c        run     s      0.524      dict+list+str 20 万次 —— C 轨（比值锚）
+jsonwb_vm      run     s      1.380      JSON 2 万对象 构→串→解 —— 生产形态（VM 轨）
+jsonwb_c       run     s      1.440      JSON 2 万对象 —— C 轨（比值锚）
+startup_exec   startup s      0.001500   空程序连跑 200 次 / 200（进程启动开销）
+hot_build      build   s      0.540     px build 热缓存（空程序，含自动裁剪）

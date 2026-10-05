@@ -1,0 +1,14 @@
+# m267_perf/src/jsonwb.px —— 2 万对象 构造 → 序列化 → 再解析（生产形态）
+def main():
+    var items = []
+    var i = 0
+    while i < 20000:
+        var o = json_parse("{}")
+        o.set("id", i)
+        o.set("name", "user" + str(i))
+        o.set("score", i * 3)
+        items.append(o)
+        i = i + 1
+    var s = json_stringify(items)
+    var back = json_parse(s)
+    print(str(len(s)) + " " + str(len(back)))
