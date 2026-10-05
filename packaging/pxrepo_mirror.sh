@@ -336,7 +336,8 @@ cat > "$STAGING/version.json" <<JSON
   "source": "https://github.com/$REPO_SLUG",
   "tarball": "releases/$TARBALL",
   "tarball_sha256": "$SUM",
-  "rpm_repo": { $RPM_REPO_JSON }
+  "rpm_repo": { $RPM_REPO_JSON },
+  "registry": { "included": $REG_FOUND, "files": $REG_N, "base": "registry/" }
 }
 JSON
 log "⑤ version.json 就绪（rpm_repo: $RPM_REPO_JSON）"
@@ -346,13 +347,48 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
+# ---------- 6.5 registry/（W3：镜像侧 …/puxian/registry/ 可达） ----------
+# 令源：用户 2026-10-05「pxpkg sync 的 A / W3，做」· docs/PXPKG_SYNC_PLAN.md §五 W3。
+# 背景（晨曦实测）：发布段是 `rsync -a --delete --exclude=/rpm/` ⇒ DEST 下**除 rpm/ 外的
+#   内容**都会被 STAGING 覆盖；registry/ 若不在 STAGING 里，上一轮放进去的会被**静默删掉**
+#   （覆盖率无声下降 —— M235 缺陷 355 同族）。
+# 口径：**以发布 tarball 为唯一事实源**（不另取 gh-pages，避免双源漂移）。
+# >>> registry-mirror >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
+REG_FOUND=0
+REG_N=0
+if tar -tzf "$STAGING/releases/$TARBALL" 2>/dev/null | grep -q '/registry/README\.md$'; then
+  if tar -xzf "$STAGING/releases/$TARBALL" -C "$STAGING" --strip-components=1 \
+        --wildcards '*/registry/*' 2>/dev/null; then
+    REG_N="$(find "$STAGING/registry" -type f 2>/dev/null | wc -l)"
+    if [ "$REG_N" -gt 0 ]; then
+      REG_FOUND=1
+      log "⑤ registry/ 已提取：$REG_N 件（镜像侧将提供 …/puxian/registry/）"
+    else
+      die "registry/ 提取后为空（tarball 结构可能变了）"
+    fi
+  else
+    die "registry/ 提取失败（tarball=$TARBALL）"
+  fi
+else
+  log "   ℹ tarball 内不含 registry/（老版本资产）⇒ 本轮不提供，且**保护** DEST 现役内容"
+fi
+# <<< registry-mirror <<<
+
 # ---------- 7. 发布（先新 rpm，再 repodata，最后删旧） ----------
 log "⑥ 发布到 $DEST"
 mkdir -p "$DEST/rpm" "$DEST/releases"
 rsync -a --exclude='repodata/' "$STAGING/rpm/" "$DEST/rpm/"
 rsync -a                "$STAGING/rpm/" "$DEST/rpm/"
 rsync -a --delete       "$STAGING/rpm/" "$DEST/rpm/"
-rsync -a --delete --exclude=/rpm/ "$STAGING/" "$DEST/"
+# registry/：STAGING 有时**随流同步**；无时**护住 DEST 现役**（--delete 会删掉它）
+REG_EXCL=()
+if [ "$REG_FOUND" = 1 ]; then
+  log "   registry/ 随 STAGING 同步（不排除）"
+else
+  REG_EXCL+=(--exclude=/registry/)
+  log "   registry/ 不在 STAGING ⇒ --exclude=/registry/ 保护 DEST 现役内容"
+fi
+rsync -a --delete "${REG_EXCL[@]}" --exclude=/rpm/ "$STAGING/" "$DEST/"
 
 # ---------- 8. 落地复核 ----------
 log "⑦ 落地复核"

@@ -34,7 +34,7 @@ ok()  { echo "  ✅ $1"; pass=$((pass+1)); }
 bad() { echo "  ❌ $1"; fail=$((fail+1)); }
 
 # ---- 期望条目数：以 git 索引为准（自适应，不写死数字，防日后目录增减导致假红）----
-N_TRACKED="$(git ls-files tools bootstrap stdlib runtime | wc -l)"
+N_TRACKED="$(git ls-files tools bootstrap stdlib runtime registry | wc -l)"
 #   − tools/make_release.sh、tools/install.sh（脚本自身不进包）
 #   + LICENSE、VERSION、RELEASE.md（组装期生成）
 N_EXPECT=$((N_TRACKED - 2 + 3))
@@ -85,7 +85,7 @@ if [ "$n_entry" = "$N_EXPECT" ]; then
 else
     bad "条目数 $n_entry != 期望 $N_EXPECT"
     printf '%s\n' "$LIST" | while IFS= read -r l; do case "$l" in */) ;; *) printf '%s\n' "$l";; esac; done | sort > "$TMP/have.txt"
-    { git ls-files tools bootstrap stdlib runtime \
+    { git ls-files tools bootstrap stdlib runtime registry \
         | grep -v '^tools/make_release.sh$' | grep -v '^tools/install.sh$'
       printf '%s\n' LICENSE VERSION RELEASE.md; } | sort | sed "s#^#$TOP/#" > "$TMP/want.txt"
     echo "       | 只在包内: $(comm -23 "$TMP/have.txt" "$TMP/want.txt" | head -8 | tr '\n' ' ')"
@@ -98,6 +98,56 @@ case "$LISTV" in
     *) bad "tools/pxc 未保持为符号链接" ;;
 esac
 
+# ---- ③b 包内含 registry/（A：registry 纳入发布物；
+#          防「白名单改了但目录其实不存在」这类静默）----
+case "$LIST" in
+    *"/registry/README.md"*) ok "包内含 registry/（A 生效）" ;;
+    *) bad "包内不含 registry/README.md ⇒ A 未生效" ;;
+esac
+# ---- ③c 包内 registry 回退：**解包内端到端**动态判据（A 的必要配套）----
+#   在**解包出来的发布物**里跑 —— 这才是用户拿到的形态（在仓库内跑验的是仓库，
+#   而仓库里 registry/ 本就在，**验不出「打包时漏了 registry」**）。
+#   ① 不设 PX_REGISTRY ⇒ `pxpkg install` 必须成功（回退生效）
+#   ② 显式设不存在的 PX_REGISTRY ⇒ 必须失败（证明回退**不覆盖用户意图**；
+#      缺此反证，① 可能只是「回退无条件接管」，那是另一种错）
+#   ⚠️ 三条实测教训（首版三条判据 **全错、且错得隐蔽**，勿"简化"回去）：
+#      · 必须先 `pxpkg init` —— 否则报「未找到 px.toml」；
+#        **错误的原因也能让 ① 「失败」** ⇒ 判据读不出真因
+#      · 必须用 `install` 而非 `add` —— `add` 只写 px.toml、**根本不碰 registry**
+#        ⇒ ① 因别的错假红、② 因别的错**假绿**（反向判据彻底失去意义）
+#      · 版本范围取 registry 里**真实存在**的（写 ^1.0.0 而库里只有 0.1.0 ⇒ 必失败）
+XDIR="$TMP/x"; mkdir -p "$XDIR"
+XROOT=""
+if tar xzf "$PKG_A" -C "$XDIR" 2>"$TMP/xerr.log"; then
+    XROOT="$(find "$XDIR" -maxdepth 1 -mindepth 1 -type d | head -1)"
+fi
+XPKG="$XROOT/tools/pxpkg"
+if [ -n "$XROOT" ] && [ -f "$XPKG" ] && [ -x "$XROOT/bootstrap/pxi" ]; then
+    reg_case() {   # $1=依赖 spec  $2=PX_REGISTRY 取值（空串=不设）  $3=install 日志
+        local d="$TMP/regt.$RANDOM"
+        mkdir -p "$d"
+        ( cd "$d" || exit 9
+          env -u PX_REGISTRY bash "$XPKG" init  >/dev/null 2>&1 || exit 8
+          env -u PX_REGISTRY bash "$XPKG" add "$1" >/dev/null 2>&1 || exit 7
+          if [ -n "$2" ]; then
+              PX_REGISTRY="$2" bash "$XPKG" install >"$3" 2>&1
+          else
+              env -u PX_REGISTRY bash "$XPKG" install >"$3" 2>&1
+          fi )
+    }
+    if reg_case "semver@^0.1.0" "" "$TMP/r1.log"; then
+        ok "解包内 · 不设 PX_REGISTRY ⇒ pxpkg install 成功（包内 registry 回退生效）"
+    else
+        bad "解包内 · 不设 PX_REGISTRY ⇒ pxpkg install 失败（回退未生效）：$(tail -1 "$TMP/r1.log")"
+    fi
+    if reg_case "uuid@^0.1.0" "/nonexistent-xyz" "$TMP/r2.log"; then
+        bad "解包内 · 显式设无效 PX_REGISTRY 却成功 ⇒ 回退**覆盖了**用户意图"
+    else
+        ok "解包内 · 显式设无效 PX_REGISTRY ⇒ 失败（回退不覆盖用户意图）"
+    fi
+else
+    echo "  ⏭ ③c 跳过（解包内 bootstrap/pxi 或 tools/pxpkg 不可用）"
+fi
 # ---- ④ 位级可复现：同 commit 再打一次 ----
 PKG_B="$TMP/b/pkg.tar.gz"
 if ! tools/make_release.sh --no-check -o "$PKG_B" >"$TMP/build2.log" 2>&1; then

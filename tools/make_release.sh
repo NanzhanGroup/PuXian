@@ -88,7 +88,7 @@ if [ "$MILESTONE" != "dev" ] && ! printf '%s' "$MILESTONE" | grep -qE '^m[0-9]+$
     exit 1
 fi
 SHA="$(git rev-parse --short HEAD)"
-NAME="puxian-${VER}-${MILESTONE}-${SHA}"
+NAME="puxian-${VER}-${SHA}"   # M274：里程碑号已在 version 第三段 ⇒ 不再重复
 STAGE="/tmp/${NAME}.stage"
 PKG="${OUT:-/tmp/${NAME}.tar.gz}"
 
@@ -123,7 +123,7 @@ copy_tracked() {
 }
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || { echo "❌ 不在 git 工作树内：发布物内容取自 git 索引，请在仓库内运行" >&2; exit 2; }
-for _d in tools bootstrap stdlib runtime; do copy_tracked "$_d"; done
+for _d in tools bootstrap stdlib runtime registry; do copy_tracked "$_d"; done
 copy_tracked LICENSE
 # 发布脚本自身不进发布包（依赖 git 仓库，且与"无源码树"目标冲突）
 rm -f "$STAGE/$NAME/tools/make_release.sh" "$STAGE/$NAME/tools/install.sh"
@@ -157,6 +157,7 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 | bootstrap/pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck | 自举工具链（fmt/lint/doc/test/bench/lsp/mcp/diagnostics） |
 | runtime/ | 构建必需 C 依赖（runtime*.c/h + mbedtls + miniz + sqlite3 + ngtcp2 + openssl，x86_64 与 aarch64 库均在） |
 | stdlib/ | 标准库（import std.* 必需） |
+| registry/ | 包库（import <包名> 用；`pxpkg add/install` 亦读取） |
 | RELEASE.md / LICENSE | 本说明 / Apache-2.0 |
 
 **不含**：selfhost/（编译器源码）、docs/、examples/、capability/、.git。

@@ -80,6 +80,36 @@ check "D 树内多版本共存 → 放行 + 告警" 0 "多个里程碑版本" "$
 
 check "E tag 无 -mNNN 后缀 → 跳过" 0 "跳过 rpm 树版本交叉校验" "$W/a" "v0.2.0"
 
+echo "== [6] 新形态 tag（M272 起）⇒ 交叉校验必须**真跑**（晨曦 2026-10-05 提出）=="
+# 背景：M272 把 tag 换成 v<次段>.<里程碑>（**无 -mNNN 后缀**）。修前 `grep -oE 'm[0-9]+$'`
+#   抓不到 ⇒ TAG_MS 为空 ⇒ 静默落到 else「跳过 rpm 树版本交叉校验」⇒ **覆盖率无声下降**
+#   （M235 缺陷 355 同族）。晨曦在他站上实测到该行（2026-10-05 17:51）：
+#       ⚠ tag 无 -mNNN 后缀（v0.2.272），跳过 rpm 树版本交叉校验
+#   ⇒ 修复后：新形态 tag **必须**派生里程碑号并**真校验**。
+#   用例逐字取自晨曦提交的 newform-xcheck-test.sh（2729 B · file_id f6aeba3b89b5211061f19ad7a）。
+#   ⚠️ 本段存在的意义：产品代码已修（v0.2.272），但**判据覆盖为 0** ⇒ 没有它，
+#      一次重构就能把「静默跳过」悄悄带回来，而 17 条既有断言**全部照绿**。
+mk_repo n1 "puxian-0.2.272-1.m272.el9.x86_64.rpm"
+check "N1 新形态 v0.2.272 ⇄ 树 .m272. → **真校验通过**（修前此处输出「跳过」）" 0 "交叉校验：rpm 树含 m272" "$W/n1" "v0.2.272"
+
+mk_repo n2 "puxian-0.2.271-1.m271.el9.x86_64.rpm"
+check "N2 负控：树只有 .m271. 而 tag v0.2.272 → 必须拦住（证明 N1 不是恒过）" 1 "不含 m272" "$W/n2" "v0.2.272"
+
+mk_repo n3 "puxian-0.2.272-1.m272.el9.x86_64.rpm" "puxian-0.2.271-1.m271.el9.x86_64.rpm"
+check "N3 树内多版本共存 → 放行 + 告警" 0 "多个里程碑版本" "$W/n3" "v0.2.272"
+
+mk_repo n4 "puxian-0.3.1-1.m1.el9.x86_64.rpm"
+check "N4 跨次段 v0.3.1（树 .m1.）→ 按 patch 段派生 m1 ⇒ 校验通过（次段升级不误判）" 0 "交叉校验：rpm 树含 m1" "$W/n4" "v0.3.1"
+
+mk_repo n5 "puxian-0.2.272-1.m272s1.el9.x86_64.rpm"
+check "N5 负控：新形态 tag 但树里违规标记 .m272s1. → 拦住且**指名**不合规" 1 "不合规" "$W/n5" "v0.2.272"
+
+mk_repo n6 "puxian-0.2.0-1.m122.el9.x86_64.rpm"
+check "N6 回归：旧形态 v0.2.0-m122 ⇄ 树 .m122. → 仍通过" 0 "交叉校验：rpm 树含 m122" "$W/n6" "v0.2.0-m122"
+check "N6b 回归负控：旧形态 tag 配新形态树 → 仍拦住" 1 "不含 m122" "$W/n1" "v0.2.0-m122"
+check "N7 tag v0.2.0（patch=0）→ 仍「跳过校验」，**不得**被派生成 m0" 0 "跳过 rpm 树版本交叉校验" "$W/n1" "v0.2.0"
+
+
 echo "== 站点根文件指纹判据（抽取自 $SCRIPT）=="
 # 背景：index.html / install-rpm.sh 与版本号无关，只比 version.json 会把「只改落地页」
 # 的更新永久挡住（2026-09-16 实测）。此判据决定「版本相同时是否还要继续同步」。
@@ -220,5 +250,65 @@ else
   echo "❌ ④d 缺 arch 拼接 $_hits 处 · rpm_repo 命中 $_repo · 经访问器 $_dec"; FAIL=$((FAIL+1))
 fi
 
+# ---- [5] registry 镜像段（W3）----
+#   本 selftest 不用 ok/bad 函数（全内联），这里补一对局部助手（与 PASS/FAIL 同作用域）
+ok_r()  { echo "  ✅ $1"; PASS=$((PASS+1)); }
+bad_r() { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
+echo "== [5] registry 镜像段（W3：抽取自 $SCRIPT 的 registry-mirror 段）=="
+# 判据：① 标记段可抽取（结构未破）② 桩环境下**真的把 registry/ 提取出来**
+#       ③ tarball 不含 registry 时**不 die**（向后兼容，且 rsync 要带 --exclude 保护现役）
+BLOCK5="$W/block5.sh"
+sed -n '/^# >>> registry-mirror >>>/,/^# <<< registry-mirror <<<$/p' "$SCRIPT" > "$BLOCK5"
+if grep -q 'REG_FOUND=' "$BLOCK5"; then
+    ok_r "registry-mirror 段可抽取（结构未破）"
+else
+    bad_r "抽取失败：$SCRIPT 里的 registry-mirror 标记行缺失或被改"
+fi
+
+# ② 动态：造一个小 tarball（含 registry/README.md），桩掉 die/log，跑抽取段
+W5="$W/reg"; mkdir -p "$W5/src/px-t/registry/sub" "$W5/staging/releases"
+printf 'r\n' > "$W5/src/px-t/registry/README.md"
+printf 'x\n' > "$W5/src/px-t/registry/sub/a.px"
+tar -czf "$W5/staging/releases/fake.tar.gz" -C "$W5/src" px-t
+cat > "$W5/run.sh" <<'RUNEOF'
+set -uo pipefail
+STAGING="$1/staging"; TARBALL=fake.tar.gz
+die(){ echo "DIE: $*" >&2; exit 9; }
+log(){ echo "$*"; }
+RUNEOF
+sed -n '/^# >>> registry-mirror >>>/,/^# <<< registry-mirror <<<$/p' "$SCRIPT" >> "$W5/run.sh"
+echo 'echo "REG_FOUND=$REG_FOUND REG_N=$REG_N"' >> "$W5/run.sh"
+OUT5="$(bash "$W5/run.sh" "$W5" 2>&1)"; RC5=$?
+case "$OUT5" in
+    *"REG_FOUND=1 REG_N=2"*) ok_r "含 registry 的 tarball ⇒ 提取 2 件（REG_FOUND=1）" ;;
+    *) bad_r "提取结果异常（rc=$RC5）：$(printf '%s' "$OUT5" | tail -2 | tr '\n' ' ')" ;;
+esac
+
+# ③ 反向：tarball 不含 registry ⇒ 必须**不 die**（老资产向后兼容）
+W5b="$W/regb"; mkdir -p "$W5b/src/px-t/stdlib" "$W5b/staging/releases"
+printf 'y\n' > "$W5b/src/px-t/stdlib/s.px"
+tar -czf "$W5b/staging/releases/fake.tar.gz" -C "$W5b/src" px-t
+sed "s#$W5#$W5b#" "$W5/run.sh" > "$W5b/run.sh"
+OUT5b="$(bash "$W5b/run.sh" "$W5b" 2>&1)"; RC5b=$?
+if [ "$RC5b" = 0 ]; then
+    case "$OUT5b" in
+        *"REG_FOUND=0"*) ok_r "不含 registry 的 tarball ⇒ 不 die 且 REG_FOUND=0（向后兼容）" ;;
+        *) bad_r "未 die 但 REG_FOUND 非 0：$(printf '%s' "$OUT5b" | tail -1)" ;;
+    esac
+else
+    bad_r "不含 registry 的 tarball ⇒ die 了（rc=$RC5b），老资产重放会整条红"
+fi
+
+# ④ 静态：rsync 必须有**条件**排除（无条件排除 ⇒ 正常的 registry 也同步不出去；无排除 ⇒ 会删现役）
+case "$(cat "$SCRIPT")" in
+    *'REG_EXCL+=(--exclude=/registry/)'*) ok_r "rsync 条件排除到位（保护 DEST 现役）" ;;
+    *) bad_r "rsync 缺 --exclude=/registry/ 分支 ⇒ 老资产轮次会删掉 DEST 现役 registry" ;;
+esac
+case "$(cat "$SCRIPT")" in
+    *'"registry": { "included"'*) ok_r "version.json 登记 registry 状态（下游可判定）" ;;
+    *) bad_r "version.json 未登记 registry ⇒ 下游无法判定镜像是否含 registry" ;;
+esac
+
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
+
 [ "$FAIL" = 0 ] || exit 1
