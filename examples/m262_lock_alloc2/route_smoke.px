@@ -1,0 +1,63 @@
+# M262 冒烟 · 路由匹配的**锁外参数构造**（段快照到栈）覆盖面
+# ------------------------------------------------------------
+# `route_match` 本轮改成「锁内只读匹配 → 段**快照到栈** → 锁外构造 params」。
+# 快照一旦错位（段数、段序、kind），params 就会失真 —— 而 params 是用户直接看到的东西。
+# 覆盖：单参数 / 多参数 / 纯通配 / 参数+通配混合 / 字面+参数混合。
+# 判据：每条路由的响应体逐字节确定（见 verify.sh 的 grep）。**不依赖耗时**。
+PORT = 18341
+D = "/tmp/px_m262_route"
+mkdir(D)
+
+def r_one(req, params):
+    return "id=" + str(params["id"])
+route("GET", "/p/:id", r_one)
+
+def r_two(req, params):
+    return "a=" + str(params["a"]) + ",b=" + str(params["b"])
+route("GET", "/two/:a/:b", r_two)
+
+def r_wild(req, params):
+    return "w=" + str(params["wildcard"])
+route("GET", "/w/*", r_wild)
+
+def r_mix(req, params):
+    return "k=" + str(params["k"]) + ",w=" + str(params["wildcard"])
+route("GET", "/mix/:k/*", r_mix)
+
+def r_lit(req, params):
+    return "v=" + str(params["v"])
+route("GET", "/lit/x/:v", r_lit)
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(400)
+
+let base = "http://127.0.0.1:" + str(PORT)
+
+let r1 = http_request(base + "/p/42", "GET")
+assert(r1["status"] == 200)
+print("route one: " + r1["body"])
+
+let r2 = http_request(base + "/two/x/y", "GET")
+assert(r2["status"] == 200)
+print("route two: " + r2["body"])
+
+let r3 = http_request(base + "/w/a/b/c", "GET")
+assert(r3["status"] == 200)
+print("route wild: " + r3["body"])
+
+let r4 = http_request(base + "/mix/K/a/b", "GET")
+assert(r4["status"] == 200)
+print("route mix: " + r4["body"])
+
+let r5 = http_request(base + "/lit/x/v9", "GET")
+assert(r5["status"] == 200)
+print("route lit: " + r5["body"])
+
+# 未注册路径 ⇒ 非 200（证明匹配真的失败，而不是命中错路由）
+let r6 = http_request(base + "/nope/zz", "GET")
+assert(r6["status"] != 200)
+print("route miss: " + str(r6["status"]))
+
+print("M262-ROUTE-SMOKE-DONE")

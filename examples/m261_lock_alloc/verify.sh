@@ -67,9 +67,9 @@ else
 fi
 
 echo
-echo "[3/7] 基线账（待收口 4 + 有意保留 2；ACCEPTED 必须带理由）"
+echo "[3/7] 基线账（**M262 后：待收口 0 + 有意保留 2**；ACCEPTED 必须带理由）"
 OUT=$(python3 selfhost/check_lock_alloc.py --root . 2>&1); RC=$?
-if [ "$RC" = 0 ] && echo "$OUT" | grep -q '待收口 4 + 有意保留 2'; then
+if [ "$RC" = 0 ] && echo "$OUT" | grep -q '待收口 0 + 有意保留 2'; then
   ok "实测与基线一致：$(echo "$OUT" | head -1)"
 else
   bad "基线账不符（rc=$RC）：$OUT"
@@ -150,8 +150,8 @@ echo "   · 本轮的锚点与守卫都是**静态**判据；「锁内分配真�
 echo "     由 m128 门（PX_ALLOC_FAIL_IN_LOCK 注入 + 锁审计行）承担，本门不重复。"
 echo "   · 余留字节路径（px_conn_pend_put）的动态覆盖在 HTTP 管线化门里"
 echo "     （m95_s2 / m97_s2 / m131 / m176 / m242）；本门只验 fserve/rate_limit 两条。"
-echo '   · route_match×3 与 bi_sse_read_line×1 **本轮未收口**（结构性重写：前者要'
-echo '     把段快照到栈、后者要「栈快路径 + 锁外备货」）⇒ 已在基线记为「待收口」，下一轮处理。'
+echo '   · route_match×3 与 bi_sse_read_line×1 —— **M262 已收口**（见 examples/m262_lock_alloc2/）。'
+echo '     本门如实保留当时的账（M261 交付时它们仍是「待收口」）。'
 echo '   · 2 条 ACCEPTED: 是**有意保留的兜底路径**（理由见基线文件），不是欠账。'
 echo '   ⚠️ 提示文本一律**单引号** —— 双引号里的反引号会触发命令替换（本仓第 6 次记）。'
 echo

@@ -172,6 +172,12 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
                        LXValue* params_out, long long* rate_max_out, long long* rate_window_out,
                        const char** pattern_out) {
     int found = 0;
+    // M262（缺陷 464）：**两阶段** —— 匹配（**只读、不分配**）在锁内；**参数构造**
+    //   （`px_dict` / `px_str` 都会分配）移到**锁外**。修前 params 的构造与
+    //   `px_root_push_keep` / `px_root_pop` 全落在 g_route_mu 临界区内 ⇒ OOM ⇒ 隔离点
+    //   无法回卷（线程持锁）⇒ `_exit(1)` **服务中断**（M127 → M128 → 439 → M261 同一条线）。
+    //   `PxRouteSeg.seg` 是定长 `char[256]`、段数上限 32 ⇒ 把匹配到的段**快照到栈**零成本。
+    //   注意：`len(cg_err_labels)==0` 那类「顶层判定」与本函数无关；这里的快照**不含指针**。
     pthread_mutex_lock(&g_route_mu);
     // 大写 method
     char mup[16];
@@ -190,44 +196,69 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
     for (char* t = strtok_r(pathcopy, "/", &save); t && nparts < 128; t = strtok_r(NULL, "/", &save)) {
         parts[nparts++] = t;
     }
+    PxRouteSeg snap[32];      // 匹配路线的只读快照（锁外构造参数用；定长、无分配）
+    int nsnap = 0;
+    LXValue h_out = px_null();
+    long long rmax_out = 0, rwin_out = 0;
+    const char* pat_out = "";
     for (int i = 0; i < MAX_ROUTES && !found; i++) {
         if (!g_routes[i].active) continue;
         if (strcmp(g_routes[i].method, "*") != 0 && strcmp(g_routes[i].method, mup) != 0) continue;
-        LXValue params = px_dict();
-        px_root_push_keep(params);   // M92-S2c precise：route 匹配 params 裸局部跨 px_dict_set/px_str
+        int ns = g_routes[i].nsegs;
+        if (ns > 32) ns = 32;
         int ok = 1;
         int pi = 0;
-        for (int s = 0; s < g_routes[i].nsegs; s++) {
+        for (int s = 0; s < ns; s++) {
             PxRouteSeg* seg = &g_routes[i].segs[s];
             if (seg->kind == SEG_LIT) {
                 if (pi >= nparts || strcmp(parts[pi], seg->seg) != 0) { ok = 0; break; }
                 pi++;
             } else if (seg->kind == SEG_PARAM) {
                 if (pi >= nparts || parts[pi][0] == 0) { ok = 0; break; }
-                px_dict_set(params, seg->seg, px_str(parts[pi]));
                 pi++;
             } else { // WILD
-                char rest[2048] = {0};
-                for (int j = pi; j < nparts; j++) {
-                    if (j > pi) strcat(rest, "/");
-                    strcat(rest, parts[j]);
-                }
-                px_dict_set(params, "wildcard", px_str(rest));
                 pi = nparts;
             }
         }
         if (ok && pi >= nparts) {
-            if (handler_out) *handler_out = g_routes[i].handler;
-            if (params_out) *params_out = params;
-            if (rate_max_out) *rate_max_out = g_routes[i].rate_max;
-            if (rate_window_out) *rate_window_out = g_routes[i].rate_window;
-            if (pattern_out) *pattern_out = g_routes[i].pattern;
+            h_out = g_routes[i].handler;
+            rmax_out = g_routes[i].rate_max;
+            rwin_out = g_routes[i].rate_window;
+            pat_out = g_routes[i].pattern;
+            nsnap = ns;
+            memcpy(snap, g_routes[i].segs, sizeof(PxRouteSeg) * (size_t)nsnap);
             found = 1;
         }
-        px_root_pop();   // M92-S2c precise
     }
     pthread_mutex_unlock(&g_route_mu);
-    return found;
+    if (!found) return 0;
+    // ---- 锁外：按快照构造 params（可失败 ⇒ 请求级 5xx；无锁在身 ⇒ 回卷安全）----
+    LXValue params = px_dict();
+    px_root_push_keep(params);   // M92-S2c precise：params 裸局部跨 px_dict_set/px_str
+    int pi2 = 0;
+    for (int s = 0; s < nsnap; s++) {
+        if (snap[s].kind == SEG_LIT) {
+            pi2++;
+        } else if (snap[s].kind == SEG_PARAM) {
+            if (pi2 < nparts) px_dict_set(params, snap[s].seg, px_str(parts[pi2]));
+            pi2++;
+        } else { // WILD
+            char rest[2048] = {0};
+            for (int j = pi2; j < nparts; j++) {
+                if (j > pi2) strcat(rest, "/");
+                strcat(rest, parts[j]);
+            }
+            px_dict_set(params, "wildcard", px_str(rest));
+            pi2 = nparts;
+        }
+    }
+    px_root_pop();               // M92-S2c precise（与上面 push 成对）
+    if (handler_out) *handler_out = h_out;
+    if (params_out) *params_out = params;
+    if (rate_max_out) *rate_max_out = rmax_out;
+    if (rate_window_out) *rate_window_out = rwin_out;
+    if (pattern_out) *pattern_out = pat_out;
+    return 1;
 }
 
 // ==================== 响应归一化 + 发送 ====================
