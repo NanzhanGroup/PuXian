@@ -1066,7 +1066,13 @@ cmd_run() {
     local _t0=$SECONDS _rc=0 _el=0
     "$PXI_BIN" "$@" "$file"; _rc=$?
     _el=$((SECONDS - _t0))
-    if [ "$_el" -ge "${PX_RUN_HINT_SEC:-2}" ]; then
+    # M271 补（缺陷 470）：发现性提示**只对 TTY 说话**。
+    #   修前无条件写 stderr ⇒ 任何 `px run x.px > out 2>&1` 的单流捕获都会多出一行
+    #   （实测：examples/m148_ieee_div 的「三轨输出逐字节一致」当场判红 —— 提示行混进
+    #    被 diff 的解释轨输出里）。**发现性提示的前提是不改变任何可观测输出** ——
+    #   它是给人看的，不是给脚本看的。
+    #   `PX_RUN_HINT=1` 可强制打开（供门做动态断言）；非 TTY 且未强制 ⇒ 不打。
+    if [ "$_el" -ge "${PX_RUN_HINT_SEC:-2}" ] && { [ -t 2 ] || [ "${PX_RUN_HINT:-0}" = "1" ]; }; then
         echo "提示：本脚本解释执行耗时 ${_el}s。可用 px run --fast 或 px build 获得约 378×（首次编译 +0.5–1 s）" >&2
     fi
     return $_rc
