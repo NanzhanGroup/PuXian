@@ -260,12 +260,25 @@ done
 NEWEST_M_TAG=$(printf '%s\n' "$ALL_TAGS" | grep -E -e '-m0*[0-9]+$' | sort -V | tail -1)
 SUGGEST_VER=$(printf '%s\n' "${NEWEST_M_TAG:-}" | sed -E 's/-m0*[0-9]+$//')
 [ -n "$SUGGEST_VER" ] || SUGGEST_VER="v0.0.0"
+# ── M274：新形态（v<次段>.<里程碑>）的建议名 ──────────────────────────────
+#   M272 只改了**校验正则**，没改这段建议 ⇒ 新形态 tag 不以 `-mNNN` 结尾，
+#   NEWEST_M_TAG 匹配不到 ⇒ SUGGEST_VER 退成 v0.0.0 ⇒ 建议出 `v0.0.0-m273` 畸形名。
+#   口径：次段沿用**最新的新形态 tag** 的前两段（如 v0.2.272 ⇒ v0.2），末段 = 当前 TOP。
+NEWEST_NEW_TAG=$(printf '%s\n' "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+if [ -n "$NEWEST_NEW_TAG" ]; then
+    SUGGEST_PREFIX="$(printf '%s' "$NEWEST_NEW_TAG" | sed -E 's/\.[0-9]+$//')"
+    SUGGEST_TAG="${SUGGEST_PREFIX}.${TOP}"
+    SUGGEST_WHY="次段沿用最新新形态 tag ${NEWEST_NEW_TAG}；末段 = 里程碑号"
+else
+    SUGGEST_TAG="v0.2.${TOP}"
+    SUGGEST_WHY="无新形态 tag 可继承 ⇒ 兜底 v0.2；末段 = 里程碑号"
+fi
 
 echo
 echo "⇒ 处置（二选一）:"
 echo "   a) 补打 tag（推荐）—— 发布由 tag 驱动，推 main 不触发任何发布:"
-echo "        git tag -a ${SUGGEST_VER}-m${TOP} ${SHORT}    # 版本段沿用最新里程碑 tag（${NEWEST_M_TAG:-无}）；要升主版本请自行判断"
-echo "        git push origin ${SUGGEST_VER}-m${TOP}"
+echo "        git tag -a ${SUGGEST_TAG} ${SHORT}    # ${SUGGEST_WHY}；要升次段请自行判断"
+echo "        git push origin ${SUGGEST_TAG}"
 echo "      → .github/workflows/release.yml 全自动出包 + 建 Release"
 echo "   b) 本次确实无需发布（纯文档/CI 等）:"
 echo "        TAG_GUARD_ALLOW_MISSING='<理由>' bash packaging/tag_guard.sh --ref $SHORT"

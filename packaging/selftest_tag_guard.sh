@@ -76,7 +76,8 @@ g --ref "$C1"; ck "A1 无 tag ⇒ rc=1" 1
 ckhas "A1 指出最高里程碑 M900" "M900"
 ckhas "A1 给出补打 tag 的处置" "git tag -a"
 ckhas "A1 标出名册缺 tag" "❌ 无 tag"
-ckhas "A2 建议的 tag 名沿用最新里程碑 tag 的版本段" "v0.2.0-m900"
+ckhas "A2 建议的 tag 名 = 新形态 v<次段>.<里程碑>（M274）" "v0.2.900"
+cksame "A2b 建议名不得退回旧形态 -m 后缀" "v0.2.0-m900"
 cksame "A3 未被非里程碑 tag v0.2.0-m114s2 污染" "m114s2"
 
 echo "── B 有 tag 必绿（且正文里的 M901 不带偏判据）──"

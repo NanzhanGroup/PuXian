@@ -1,3 +1,97 @@
+## M275（第 153 轮）· 制品名去冗余 + `pxpkg sync` 的 A / W3（用户令 2026-10-05）
+
+> **一句话**：用户三条指令的落地 —— ① 发布**制品名去掉冗余的 `-mNNN`**（里程碑号已在版本第三段）；
+> ② **A**：`registry/` 纳入发布物 + `pxpkg` 包内**自动回退**（不补回退，放进去等于没放）；
+> ③ **W3**：镜像侧 `…/puxian/registry/` 可达（并**护住** DEST 现役内容）。
+> ⚠️ 本轮最值钱的一条**不是**功能，而是**判据**：新写的三条动态断言**首版全错且错得隐蔽**（详见 §四）。
+
+### 一 制品名去冗余
+
+```
+修前  puxian-0.2.272-m272-<sha>.tar.gz      ← m272 是冗余（0.2.272 第三段就是里程碑号）
+修后  puxian-0.2.272-<sha>.tar.gz
+```
+
+| 文件 | 改动 |
+|---|---|
+| `tools/make_release.sh` | `NAME` 去掉 `${MILESTONE}`；`copy_tracked registry`；RELEASE.md 表格补 `registry/` 行 |
+| `packaging/puxian.spec` | `Source0` / `%setup -n` 同步（否则 rpmbuild 报 Source0 缺失） |
+| `.github/workflows/release.yml` / `docs/RELEASE_PROCESS.md` | 文案 |
+
+⭐ **`Release: 1.%{pxtag}%{dist}` 刻意保留 `.mNNN`** —— 它是 rpm 的**版本序载体**：
+改成 `1%{dist}` 会让「同 Version 的两个 Release」比较时 `1.el9 < 1.m272.el9`，
+已装机器的 `dnf upgrade` 判为**降级**而拒绝。跨里程碑不受影响（Version 才主序）⇒ 不值得冒险。
+
+### 二 A：`registry/` 进发布物 + 包内**自动回退**
+
+- `make_release.sh` / `puxian.spec` 的包含目录加 `registry/`（137 包 / 146 文件 / 原始 808 KB）。
+- ⭐ `tools/pxpkg` 新增**包内 registry 自动回退**：
+  ```sh
+  if [ -z "${PX_REGISTRY:-}" ] && [ -d "$PKG_HOME/registry" ]; then
+      PX_REGISTRY="$PKG_HOME/registry"; export PX_REGISTRY
+  fi
+  ```
+  口径：**仅当** ① 用户未设 **且** ② 包内确有 `registry/` 时才回退 ⇒ **不覆盖用户意图**；
+  未命中时**不 export**（`env()` 仍返回 null ⇒ `pxpkg` 原有守卫照旧）。
+  > 没有它，把 `registry/` 放进发布物**等于没放** —— 用户仍要 clone 或手设路径，
+  > 正是 `docs/PXPKG_SYNC_PLAN.md` §一 所说「缺的是**客户端消费远程目录**的能力」。
+
+### 三 W3：镜像侧 `…/puxian/registry/` 可达
+
+`packaging/pxrepo_mirror.sh`：
+- 从**发布 tarball**（唯一事实源，不另取 gh-pages —— 避免双源漂移）提取 `*/registry/*` 到 STAGING；
+- 发布段 `rsync -a --delete --exclude=/rpm/` **加条件排除**：
+  `REG_FOUND=1` ⇒ 随流同步；`REG_FOUND=0` ⇒ `--exclude=/registry/` **护住 DEST 现役内容**
+  （否则上一轮放进去的会被**静默删掉** —— 覆盖率无声下降，M235 缺陷 355 同族）；
+- `version.json` 新增 `"registry": {"included": N, "files": N, "base": "registry/"}` ⇒ 下游**可判定**；
+- 提取失败 / 提取后为空 ⇒ **`die`**（判定不了不许放行）。
+
+### 四 ⭐ 判据重写：首版三条动态断言**全错、且错得隐蔽**
+
+`packaging/selftest_make_release.sh` 的 ③c 段首版：
+
+| # | 首版写法 | 错在哪 |
+|---|---|---|
+| ① | `pxpkg add "semver@^1.0.0"` | **没有 `init`** ⇒ 报「未找到 px.toml」；**错的原因也能让断言"失败"** |
+| ② | 同上 | `^1.0.0` 而库里只有 `0.1.0` ⇒ **必失败** |
+| ③ | 用 `add` 判「回退生效」 | `add` **只写 px.toml、根本不碰 registry** ⇒ ①**假红**、②**假绿**（反向判据彻底失去意义） |
+
+**重写后**（**在解包出来的发布物里跑** —— 这才是用户拿到的形态；仓库内跑验的是仓库）：
+
+```
+✅ 解包内 · 不设 PX_REGISTRY ⇒ pxpkg install 成功（包内 registry 回退生效）
+✅ 解包内 · 显式设无效 PX_REGISTRY ⇒ 失败（回退不覆盖用户意图）
+```
+
+**双向负控实测**（证明两条断言**都有牙**）：
+
+| 负控 | 手法 | 结果 |
+|---|---|---|
+| **NC-A** | 摘掉回退块 | `install` rc=1 `依赖 semver=^0.1.0 需要 PX_REGISTRY 环境变量` ⇒ ① 判红 ✅ |
+| **NC-B** | 回退改「无条件接管」 | `install` rc=**0**（真覆盖了用户意图）⇒ ② 判红 ✅ |
+
+自测：**11 通过 / 0 失败**。
+
+### 五 顺带修的 M272 遗漏
+
+`tag_guard.sh` 的**建议文案**仍是旧形态：新形态 tag 不以 `-mNNN` 结尾 ⇒ `NEWEST_M_TAG` 匹配不到
+⇒ `SUGGEST_VER` 退成 `v0.0.0` ⇒ 会建议出 **`v0.0.0-m273`** 这种畸形名。
+修：新增 `NEWEST_NEW_TAG` 分支，次段沿用最新新形态 tag（`v0.2.272` ⇒ `v0.2`），末段 = 当前里程碑。
+
+### 六 验收
+
+- `bump_version` → **0.2.275**（9 处一致）· 重烘 **12/0** · `--check-all` **14/14**
+- 发射冻结门 **446 件逐字节一致**（版本号同长度 ⇒ 无重定基）· **`VERSION-GOLDEN-OK`**
+- `bootstrap/pxc --version` / `pxi --version` = **0.2.275**（⇄ 计划 tag `v0.2.275`）
+- 自测：`selftest_make_release` **11/0** · `selftest_tag_guard` **43/0** · `selftest_pxrepo_mirror` **30/0**
+
+### 七 流程复盘（为什么 M275「看起来被跳过」）
+
+`phase2b`（落盘）与 `phase3b`（bump + 重烘 + 提交）是**两个后台脚本**，后者轮询前者的状态文件、
+上限 **160×30s = 80 分钟**。实际 `phase2b` 耗时 **95 分钟** ⇒ `phase3b` **早放弃 15 分钟**
+⇒ 状态停在 **`PHASE3B-SKIP`**，M275 卡在「**已落盘、未提交**」的中间态。
+⇒ **教训：串联式后台编排的等待上限必须 > 前一段的最坏耗时**，否则失败是「静默的」（只写一行状态文件）。
+本轮已人工补齐该段。
 ## M274（第 152 轮）· `m256_eintr` 门「固定端口」⇒ 时序 flake 加固（缺陷 480）
 
 > **一句话**：全量门 **181/182 绿**，唯一红是 `m256_eintr` 的**负控 B** —— 而**判据没错、产品也没错**，

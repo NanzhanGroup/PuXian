@@ -58,8 +58,10 @@ v0.2.269 → v0.2.270 → v0.2.271 → v0.2.272 → …      （升次段后：v
 （`selfhost/*.px` 在源码链指纹里）。
 
 - **patch 段 = 里程碑号**（`v0.2.271` 即 M271 · M272 起）；旧形态 `v0.2.0-m167` 历史冻结。
-- 发布包名：`puxian-<版本>-<m里程碑>-<sha>.tar.gz`（新形态下如 `puxian-0.2.272-m272-<sha>.tar.gz`；
-  sha = tag 指向 commit 的短哈希。rpm 侧：`puxian-0.2.272-1.m272.el9.x86_64.rpm`）。
+- 发布包名：`puxian-<版本>-<sha>.tar.gz`（M274 起去冗余：里程碑号已在版本第三段，不再重复；
+  如 `puxian-0.2.272-<sha>.tar.gz`；sha = tag 指向 commit 的短哈希）。
+  rpm 侧：`puxian-0.2.272-1.m272.el9.x86_64.rpm` —— **Release 里的 `.mNNN` 刻意保留**：
+  它是 rpm 的**版本序载体**（改小会让已装机器判为降级而拒绝升级）。
 - 并列资产：`puxian-bootstrap-aarch64-<tag>.tar.gz`（**aarch64 原生工具链**，见下）。
 
 ### ⚠ tag 命名规则（硬性 · M238 用户令 2026-10-01）
@@ -339,6 +341,9 @@ kill -TERM $OLDPID
 
 ## 已知边界
 
+- **（M274）发布包含 `registry/`** —— 137 个包（146 文件 · 原始 808 KB）随 tarball 与 rpm 一并分发，
+  用户 `import <包名>` 或 `pxpkg install` 时本地即可命中，无需再 clone 仓库；
+  镜像侧另提供 `…/puxian/registry/`（W3，见 `docs/PXPKG_SYNC_PLAN.md`）。
 - 发布包不含 `selfhost/` 源码（编译器 PuXian 源码）与 git 仓库——仅供「使用 PuXian 开发应用」；
   源码改动走 GitHub issue / PR。aarch64 并列包同样只含工具链与 runtime/stdlib，不含 selfhost 源码
   （需要自举整套时用 `selfhost/native_bootstrap.sh`，它需要仓库源码）。

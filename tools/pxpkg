@@ -15,6 +15,18 @@
 # ============================================================
 set -u
 PKG_HOME="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ── M274：包内 registry **自动回退**（A 的必要配套）──────────────────────
+#   pxpkg.px **只认** env("PX_REGISTRY")（取值 :232 / 判 null :275）⇒ 不补这个回退，
+#   把 registry/ 放进发布物**等于没放**（用户仍要 clone 或手设路径 —— 正是
+#   docs/PXPKG_SYNC_PLAN.md §一 所说"缺的是客户端消费远程目录的能力"）。
+#   口径：仅当 ① 用户未设 ② 包内确有 registry/ 时才回退 ⇒ **不覆盖用户意图**；
+#         未命中时**不 export**（保持 env() 返回 null，pxpkg 原有守卫照旧）。
+if [ -z "${PX_REGISTRY:-}" ] && [ -d "$PKG_HOME/registry" ]; then
+    PX_REGISTRY="$PKG_HOME/registry"
+    export PX_REGISTRY
+fi
+
 CMD="${1:-help}"
 shift 2>/dev/null || true
 

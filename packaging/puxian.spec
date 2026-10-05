@@ -27,7 +27,9 @@ Release:        1.%{pxtag}%{?dist}
 Summary:        PuXian programming language compiler and toolchain
 License:        Apache-2.0
 URL:            https://github.com/NanzhanGroup/PuXian
-Source0:        puxian-%{version}-%{pxtag}-%{pxsha}.tar.gz
+# M274：tarball 名去冗余（版本第三段已含里程碑号）⇒ Source0/%setup 必须同步，
+#   否则 rpmbuild 报 Source0 缺失。**Release 段刻意保留 %{pxtag}**（版本序载体，见文件头）。
+Source0:        puxian-%{version}-%{pxsha}.tar.gz
 
 # pxc build 需要 C 编译器（gcc 静态链接 .px → ELF）
 Requires:       gcc
@@ -70,13 +72,13 @@ locates its package root via argv[0] resolution, so it works from any
 directory without PX_STDLIB.
 
 %prep
-%setup -q -n puxian-%{version}-%{pxtag}-%{pxsha}
+%setup -q -n puxian-%{version}-%{pxsha}
 
 %install
 rm -rf %{buildroot}
 # 包树平铺到 /usr/share/puxian（= 发布 tarball 内容，strip 顶层目录）
 install -d %{buildroot}%{_datadir}/puxian
-cp -a tools bootstrap stdlib runtime \
+cp -a tools bootstrap stdlib runtime registry \
       LICENSE RELEASE.md VERSION \
       %{buildroot}%{_datadir}/puxian/
 # 可执行位兜底（cp -a 已保留，防个别环境 umask）

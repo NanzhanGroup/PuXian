@@ -6,7 +6,7 @@
 #       构建发布包（版本号自 tag 派生，见脚本"版本来源"段）
 #       → 收集 tarball / SHA-256 / 上一 tag 起的提交列表
 #       → gh CLI 创建 GitHub Release 并上传 tarball（GITHUB_TOKEN，零第三方 action）
-# 产物：GitHub Release 资产 puxian-<VER>-<m62>-<sha>.tar.gz
+# 产物：GitHub Release 资产 puxian-<VER>-<sha>.tar.gz（M274 起去冗余：里程碑号已在版本第三段）
 # 发布 SOP：
 #   git tag v0.1.0-m62            # 版本决策：v<主版本>-m<里程碑>
 #   git push origin v0.1.0-m62    # 触发本 workflow（main 需已含对应代码）
