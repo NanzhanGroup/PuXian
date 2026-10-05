@@ -124,13 +124,59 @@ def allocs_in_locks(body):
     return out
 
 
+def strip_comments_only(src):
+    """只去掉 C 注释，**保留字符串字面量的内容** —— 「存在类」判据必须用它：
+    `strip_comments_strings` 会把字面量内容抹成空格 ⇒ 含字面量的源码事实永远查不到
+    ⇒ 假红。（M262 在 check_anchors2.py 上实测到的自伤，同款回灌到这里。）"""
+    out = []
+    i, n = 0, len(src)
+    st = 0
+    while i < n:
+        c = src[i]
+        nx = src[i + 1] if i + 1 < n else ''
+        if st == 0:
+            if c == '/' and nx == '/':
+                st = 3; out.append(' '); i += 2; continue
+            if c == '/' and nx == '*':
+                st = 4; out.append(' '); i += 2; continue
+            if c == '"':
+                st = 1
+            elif c == "'":
+                st = 2
+            out.append(c); i += 1
+        elif st == 1:
+            if c == '\\':
+                out.append(c); out.append(nx if nx else ' '); i += 2; continue
+            if c == '"':
+                st = 0
+            out.append(c); i += 1
+        elif st == 2:
+            if c == '\\':
+                out.append(c); out.append(nx if nx else ' '); i += 2; continue
+            if c == "'":
+                st = 0
+            out.append(c); i += 1
+        elif st == 3:
+            if c == '\n':
+                st = 0; out.append('\n')
+            i += 1
+        else:
+            if c == '*' and nx == '/':
+                st = 0; out.append(' '); i += 2; continue
+            out.append('\n' if c == '\n' else ' ')
+            i += 1
+    return ''.join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--root', default='.')
     a = ap.parse_args()
     R = os.path.abspath(a.root)
     raw = io.open(os.path.join(R, 'runtime', 'runtime.c'), encoding='utf-8', errors='replace').read()
-    code = strip_comments_strings(raw)      # 内容判定一律用**去注释**版
+    # 两版文本分工：**存在类**用「只去注释」（保留字面量）；**反向类**用「去注释 + 去字面量」
+    code = strip_comments_strings(raw)      # 反向判据（旧形态 0 次）
+    code_nc = strip_comments_only(raw)      # 存在类判据
 
     ok = 0
     bad = 0
@@ -180,7 +226,7 @@ def main():
          'if (rate_bucket_find(key, &b)) {'),
     ]
     for tag, needle in pos:
-        chk(tag, needle in code)
+        chk(tag, needle in code_nc)
 
     # 逐函数：**没有任何分配落在锁区间内**（本轮的核心契约）
     for fn in ('fserve_ensure', 'px_conn_pend_put', 'px_pin_obj',

@@ -72,6 +72,10 @@ chk_grep "容器守卫定义在位"         "$SRC" "static void px_ctr_guard_fai
 chk_grep "px_list_push 守卫"        "$SRC" 'px_ctr_guard_fail(o, PX_LIST, "px_list_push")' 1
 chk_grep "px_dict_set 守卫"         "$SRC" 'px_ctr_guard_fail(o, PX_DICT, "px_dict_set")' 1
 chk_grep "px_dict_get 守卫"         "$SRC" 'px_ctr_guard_fail(o, PX_DICT, "px_dict_get")' 1
+# M262（缺陷 465）：**读入口降噪** —— 探测式读（px_dict_get(resp,"headers")）合法，
+#   默认档必须静默；只有 PX_GC_LIVECHK=1 诊断档才响亮。写入口（dict_set/list_push）保持无条件。
+chk_grep "读入口仅在诊断档响亮"     "$SRC" 'if (px_ctr_livechk_on()) px_ctr_guard_fail(o, PX_DICT, "px_dict_get")' 1
+chk_grep "px_ctr_livechk_on 定义"   "$SRC" 'static int px_ctr_livechk_on(void)' 1
 chk_grep "xmalloc 一致性检查"       "$SRC" "SLAB BUG: bad-alloc" 1
 chk_grep "xfree 一致性检查（对称）" "$SRC" "SLAB BUG: bad-free" 1
 chk_grep "根栈失衡自检"             "$SRC" "M257-ROOT" 1

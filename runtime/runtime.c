@@ -5483,6 +5483,26 @@ static void px_ctr_guard_fail(LXObject* o, int want, const char* what) {
 // 供门/诊断查询（0 = 从未命中）
 long px_ctr_guard_count(void) { return g_ctr_guard_hits; }
 
+// M262（缺陷 465）：**读入口降噪** —— M257 把「容器操作的目标类型不符」当作「存储已被 GC
+//   回收并复用」。对**写入口**（`px_dict_set` / `px_list_push`）这是对的：写非容器**必是 bug**，
+//   且「拒绝 + 响亮」正好挡住「按失效内存改写 + xfree 垃圾指针」这条堆损坏路径 —— **保留**。
+//   但对**读入口**（`px_dict_get`）**不成立**：运行时代码里有大量**合法的探测式读** ——
+//   典型 `px_dict_get(resp, "headers")`（`px_route_*_respond`），而 `resp` 可以是 string
+//   （handler 直接返回字符串）⇒ 期望结果本来就是 `null`。
+//   ⚠️ 实测（**A/B 对照**：干净 M261 树与 M262 树**都**复现 ⇒ **pre-existing**）：
+//     `route()` 返回非 dict 时**每个请求**刷一条 `[M257-CTR]`（5/5 请求，稳定）
+//     ⇒ 判据把「正常探测」误报成「存储已失效」，且污染 stderr（生产日志 + 性能）。
+//   ⇒ 读入口的判据必须**可判定**：默认档回到「静默 `null`」（= M257 之前的语义），
+//     只有 `PX_GC_LIVECHK=1` 诊断档才响亮（那时是**找缺陷**场景，噪音可接受）。
+static int px_ctr_livechk_on(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("PX_GC_LIVECHK");
+        cached = (v && v[0] && v[0] != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
 void px_list_push(LXValue list, LXValue val) {
     LXObject* o = list.as.obj;
     PX_UAFCHK(o, "px_list_push(list)");
@@ -5685,7 +5705,12 @@ void px_dict_set_checked(LXValue dict, LXValue k, LXValue v) {
 LXValue px_dict_get(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
     PX_UAFCHK(o, "px_dict_get(dict)");
-    if (o->type != PX_DICT) { px_ctr_guard_fail(o, PX_DICT, "px_dict_get"); return px_null(); }   // M257（缺陷 459）   // M183：读已回收对象 → 响亮（PX_GC_LIVECHK=1）
+    if (o->type != PX_DICT) {
+        // M262（缺陷 465）：**读入口降噪**（见上面 px_ctr_livechk_on 的说明）—— 探测式读合法，
+        //   默认静默返回 null；诊断档（PX_GC_LIVECHK=1）才响亮。
+        if (px_ctr_livechk_on()) px_ctr_guard_fail(o, PX_DICT, "px_dict_get");
+        return px_null();
+    }
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
     }
@@ -22999,72 +23024,135 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
 //      "待续行" 分支里 goto 到 recv 段，跳过了 fd/tls 的赋值 ⇒ 首次进入即用未初始化
 //      的 tls 调 conn_recv（api-server 进程当场死掉、客户端只收到半截响应）。
 //      现改为循环顶部统一取 fd/tls，无跳转。
+// ==================== M262（缺陷 464）：SSE 取行的**锁内零分配** ====================
+// 修前：两处 `char* tmp = xmalloc(ll+1); … px_str(tmp); xfree(tmp);` 都落在 g_sse_cli_mu
+//   临界区内（OOM ⇒ 隔离点无法回卷 ⇒ `_exit(1)` 服务中断）。而 `tmp` 其实**根本不需要**：
+//   `px_str/px_str_len` 会自己拷贝字节 ⇒ 只要有一块**能放下这一行**的缓冲即可。
+//   ⇒ 三层：① 短行（绝大多数）直接进**栈缓冲**，一次堆分配都不要；
+//           ② 长行走一只**跨轮复用**的堆缓冲，只在**锁外增长**；
+//           ③ 备货尺寸取 pending 的**容量上界**（`pend_cap+1`，容量只增）⇒ 下一轮必然够用。
+#define SSE_LINE_SMALL 1024
+
+// 锁**外**增长行缓冲（xrealloc/xmalloc 都可能失败 ⇒ **绝不能持锁调用**）
+static void sse_line_grow(char** buf, size_t* cap, size_t need) {
+    if (*cap >= need) return;
+    size_t ncap = *cap ? *cap : 4096;
+    while (ncap < need) ncap *= 2;
+    *buf = *buf ? (char*)xrealloc(*buf, ncap) : (char*)xmalloc(ncap);
+    *cap = ncap;
+}
+
+// 取一行（或整段残余）—— **调用前必须持有 g_sse_cli_mu**，且本函数内**绝不分配**。
+//   返回 ≥0：行已拷入 `small` 或 `big`（`*in_big` 指示），值 = 行长度（已去尾部 '\r'），
+//            且 pending 已消费；
+//   返回 -1：需要更大的 `big`（`*want` = 所需字节数），**pending 未改动**（调用方出锁备货后重来）；
+//   返回 -2：此刻没有完整行（半行，调用方继续收字节）。
+static int sse_line_take(int idx, int whole_residual,
+                         char* small, size_t small_cap,
+                         char* big, size_t big_cap, size_t* want, int* in_big) {
+    *in_big = 0;
+    if (!g_sse_clients[idx].pending || g_sse_clients[idx].pend_len <= 0) return -2;
+    unsigned char* p = g_sse_clients[idx].pending;
+    int n = g_sse_clients[idx].pend_len;
+    int nl = -1;
+    if (!whole_residual) {
+        for (int i = 0; i < n; i++) if (p[i] == '\n') { nl = i; break; }
+    }
+    int have = (nl >= 0) || whole_residual;
+    if (!have && (g_sse_clients[idx].chunk_done || !g_sse_clients[idx].active))
+        have = 1;                      // EOF：残余按最后一行返回（Go Scanner 同口径）
+    if (!have) return -2;
+    int take = (nl >= 0) ? nl : n;
+    int cut = (nl >= 0) ? nl + 1 : n;
+    int ll = take;
+    if (ll > 0 && p[ll - 1] == '\r') ll--;
+    int rest = n - cut;
+    if ((size_t)ll < small_cap) {                       // ① 短行：栈缓冲就地拷
+        if (ll > 0) memcpy(small, p, (size_t)ll);
+        if (rest > 0) memmove(p, p + cut, (size_t)rest);
+        g_sse_clients[idx].pend_len = rest;
+        return ll;
+    }
+    if ((size_t)ll + 1 <= big_cap) {                    // ② 长行：复用堆缓冲
+        if (ll > 0) memcpy(big, p, (size_t)ll);
+        if (rest > 0) memmove(p, p + cut, (size_t)rest);
+        g_sse_clients[idx].pend_len = rest;
+        *in_big = 1;
+        return ll;
+    }
+    *want = (size_t)ll + 1;                             // ③ 备货不足（**pending 不动**）
+    return -1;
+}
+
 static LXValue bi_sse_read_line(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: sse_read_line 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
-    for (;;) {
+    // M262（缺陷 464）：**锁内零分配**（见上面那段）。轮数上界仅防御「容量在重试间隙又增长」，
+    //   实测第一轮备货后即成功；真撞上界就**响亮**报错（绝不静默截断）。
+    char small[SSE_LINE_SMALL];
+    char* big = NULL;
+    size_t big_cap = 0;
+    for (int round = 0; round < 8; round++) {
+        size_t want = 0;
+        int in_big = 0;
+        size_t need = 0;
+        int gl;
         pthread_mutex_lock(&g_sse_cli_mu);
         int idx = sse_cli_find(conn);
-        if (idx < 0) { pthread_mutex_unlock(&g_sse_cli_mu); return px_null(); }
+        if (idx < 0) { pthread_mutex_unlock(&g_sse_cli_mu); break; }
         sse_cli_pump(idx);   // M131：chunked 解码（唯一解码点）
         int fd = g_sse_clients[idx].fd;
         HttpsSession* tls = g_sse_clients[idx].tls;
-        int need_more = 1;
-        if (g_sse_clients[idx].pending && g_sse_clients[idx].pend_len > 0) {
-            unsigned char* p = g_sse_clients[idx].pending;
-            int n = g_sse_clients[idx].pend_len;
-            int nl = -1;
-            for (int i = 0; i < n; i++) if (p[i] == '\n') { nl = i; break; }
-            int have = (nl >= 0);
-            if (!have && (g_sse_clients[idx].chunk_done || !g_sse_clients[idx].active))
-                have = 1;                      // EOF：残余按最后一行返回（Go Scanner 同口径）
-            if (have) {
-                int take = (nl >= 0) ? nl : n;
-                int cut = (nl >= 0) ? nl + 1 : n;
-                int ll = take;
-                if (ll > 0 && p[ll - 1] == '\r') ll--;
-                char* tmp = xmalloc((size_t)ll + 1);
-                if (ll > 0) memcpy(tmp, p, (size_t)ll);
-                tmp[ll] = 0;
-                int rest = n - cut;
-                if (rest > 0) memmove(p, p + cut, (size_t)rest);
-                g_sse_clients[idx].pend_len = rest;
-                pthread_mutex_unlock(&g_sse_cli_mu);
-                LXValue r = px_str(tmp);
-                xfree(tmp);
-                return r;
-            }
-            need_more = 1;                     // 半行：等更多字节
+        gl = sse_line_take(idx, 0, small, sizeof(small), big, big_cap, &want, &in_big);
+        if (gl == -1) {
+            need = (size_t)g_sse_clients[idx].pend_cap + 1;   // 容量上界 ⇒ 一次备足
+            if (need < want) need = want;
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            sse_line_grow(&big, &big_cap, need);              // **锁外**增长
+            continue;                                         // 回到轮顶复核
         }
         pthread_mutex_unlock(&g_sse_cli_mu);
-        if (!need_more) continue;
+        if (gl >= 0) {
+            LXValue r = in_big ? px_str_len(big, gl) : px_str_len(small, gl);
+            if (big) xfree(big);
+            return r;
+        }
+        // gl == -2：半行 ⇒ 继续收字节
         unsigned char tmp2[4096];
         int got = conn_recv(tls, fd, (char*)tmp2, (int)sizeof(tmp2));
         if (got <= 0) {
+            want = 0; in_big = 0;
             pthread_mutex_lock(&g_sse_cli_mu);
-            if (g_sse_clients[idx].pending && g_sse_clients[idx].pend_len > 0) {
-                int n = g_sse_clients[idx].pend_len;
-                unsigned char* p = g_sse_clients[idx].pending;
-                int ll = n;
-                if (ll > 0 && p[ll - 1] == '\r') ll--;
-                char* tmp = xmalloc((size_t)ll + 1);
-                if (ll > 0) memcpy(tmp, p, (size_t)ll);
-                tmp[ll] = 0;
-                g_sse_clients[idx].pend_len = 0;
+            int ix = sse_cli_find(conn);
+            if (ix < 0) { pthread_mutex_unlock(&g_sse_cli_mu); break; }
+            gl = sse_line_take(ix, 1, small, sizeof(small), big, big_cap, &want, &in_big);
+            if (gl == -1) {
+                need = (size_t)g_sse_clients[ix].pend_cap + 1;
+                if (need < want) need = want;
                 pthread_mutex_unlock(&g_sse_cli_mu);
-                LXValue r = px_str(tmp);
-                xfree(tmp);
-                return r;
+                sse_line_grow(&big, &big_cap, need);
+                continue;
             }
             pthread_mutex_unlock(&g_sse_cli_mu);
-            return px_null();
+            if (gl >= 0) {
+                LXValue r = in_big ? px_str_len(big, gl) : px_str_len(small, gl);
+                if (big) xfree(big);
+                return r;
+            }
+            break;                                            // 残余为空 ⇒ null
         }
         pthread_mutex_lock(&g_sse_cli_mu);
-        if (!g_sse_clients[idx].active) { pthread_mutex_unlock(&g_sse_cli_mu); return px_null(); }
-        sse_cli_feed(idx, tmp2, got);
+        int ix2 = sse_cli_find(conn);
+        if (ix2 < 0 || !g_sse_clients[ix2].active) {
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            break;
+        }
+        sse_cli_feed(ix2, tmp2, got);
         pthread_mutex_unlock(&g_sse_cli_mu);
     }
+    if (big) xfree(big);
+    return px_null();
 }
 
 // ==================== M17 .px 脚本执行机制（编译模式） ====================

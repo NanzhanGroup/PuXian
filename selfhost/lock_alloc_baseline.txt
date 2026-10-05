@@ -4,9 +4,5 @@
 #   基线 − 实测 非空 ⇒ 提示收口（不判红）。
 # M261：比较键**不含行号**（行号位移不得产生假新增）；行号仅供人工定位。
 # 列：文件:行 <TAB> 函数 <TAB> 被调 <TAB> DIRECT/INDIRECT [<TAB> ACCEPTED:<理由>]
-runtime/runtime.c:23051	bi_sse_read_line	xmalloc	DIRECT
 runtime/runtime.c:3305	gc_register	xrealloc	DIRECT	ACCEPTED:对象表扩容的**兜底分支**（主路径已是两阶段：锁外备好 spare，锁内只换指针）。备货被并发增长吃光时才走到它；M128 定稿保留 —— 去掉它等于让对象注册在 OOM 时静默失败（丢 GC 根 ⇒ 更糟的静默错值）。
 runtime/runtime.c:5420	px_list_push_locked	xrealloc	DIRECT	ACCEPTED:`PX_GROW_RETRY_MAX=0` 的**对照/退路**实现（m128 门 C8/C11 用它做 A/B 对照）。默认路径不走它；删除会让「旧行为对照」失去基准。
-runtime/runtime_route.c:196	route_match	px_dict	INDIRECT
-runtime/runtime_route.c:207	route_match	px_str	INDIRECT
-runtime/runtime_route.c:207	route_match	px_str	INDIRECT

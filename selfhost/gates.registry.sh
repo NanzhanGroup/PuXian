@@ -980,6 +980,10 @@ step "M261 · 持锁可失败分配收口（一）· 缺陷 464（13 → 6）"
 #   px_const_put · px_rate_limit_try×2）；并修好守卫自身两个**判据 bug**
 #   （键含行号 ⇒ 假新增；跨行签名 ⇒ 函数归属错）。
 run m261_lock_alloc bash examples/m261_lock_alloc/verify.sh
+step "M262 · 持锁可失败分配收口（二）· 缺陷 464 收尾 + 缺陷 465（6 → 2）"
+#   route_match（段快照到栈 + 锁外构造 params）· bi_sse_read_line
+#   （栈快路径 + 锁外备货 + 锁内复核）· M257 容器守卫**读入口降噪**。
+run m262_lock_alloc2 bash examples/m262_lock_alloc2/verify.sh
 step "M128 · 扩容分配移出临界区（C1–C12 · 缺陷 439 修好后**收编**为正式门）"
 #   为什么现在才收编：M251 的孤儿门体检把它判为**真回归**（缺陷 439）⇒ 它是「不在任何运行器里
 #   的历史资产」。M260 修掉 439 之后，它第一次可以进运行器（实测 pass=86 / fail=0）。
