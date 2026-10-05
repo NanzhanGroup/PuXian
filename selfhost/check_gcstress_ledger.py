@@ -117,6 +117,9 @@ def main():
         n += 1 if (r.returncode == 1 and '不存在' in r.stdout + r.stderr) else 0
         print("  ⑤ 路径不存在 ⇒ rc=%d（期望 1）" % r.returncode)
         print("self-test: %d/5" % n)
+        # M260：末行必须是**本仓惯例的成功标记**（CI 诊断器按「末行裁决」判绿/红）——
+        #   `self-test: n/m` 不是它认得的形式（实测 CI #497 step 45 因此判红）。
+        print("GCSTRESS-LEDGER-SELFTEST-OK" if n == 5 else "GCSTRESS-LEDGER-SELFTEST-FAIL")
         sys.exit(0 if n == 5 else 1)
 
     if not os.path.exists(LED):

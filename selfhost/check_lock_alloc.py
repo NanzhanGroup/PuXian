@@ -184,6 +184,7 @@ def main():
         n += 1 if ('❌' not in r.stdout) else 0
         print("  ⑤ 判据自伤（清空 DIRECT 表）⇒ 不再报（证红来自判据）")
         print("self-test: %d/5" % n)
+        print("LOCK-ALLOC-SELFTEST-OK" if n == 5 else "LOCK-ALLOC-SELFTEST-FAIL")
         shutil.rmtree(d, ignore_errors=True)
         sys.exit(0 if n == 5 else 1)
 
