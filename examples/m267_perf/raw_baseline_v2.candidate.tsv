@@ -1,13 +1,8 @@
-# M267 性能回归基线（v2 固化） —— 由 examples/m267_perf/freeze_baseline_v2.py 生成
-# 生成机：dongyue · AMD EPYC 7K62 · 8 核 · gcc 11.5.0 · Rocky Linux 9.8
-# 工具链：px 0.2.17
+# 性能基线 v2 —— 采集候选（collect_baseline_v2.sh + baseline_v2_json.py 生成）
+# ⚠️ 候选件：人工核对后固化进 examples/m267_perf/baseline.tsv（本文件不自动覆盖）
+# 来源 3 次独立采集：raw_baseline_v2.rep1.json / raw_baseline_v2.rep2.json / raw_baseline_v2.rep3.json
+# 取值：各次采集的最小值（口径『取无干扰下界』）
 # 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>
-# ⚠️ 绝对值只对**同机同工具链**有意义；判据是**相对变化**。刷新前须人工确认。
-# ⚠️ 换机器 / 换 gcc / 换 px 版本 ⇒ 必须 --update 重定基（否则比值无意义）
-# 依据：docs/PERF_BASELINE_V2.md（M266 建立）· docs/PERF_BASELINE_METRICS_SPEC.md（口径）
-# 采集时间：2026-10-05T05:28:46Z .. 2026-10-05T05:31:40Z（3 次独立采集 · 固化值 = 各次最小值 min）
-# 代码版本：09457e24b3ceb19a18a15241e88aa201bce2c490（M271 补（缺陷 470）：`px run` 发现性提示只对 TTY 说话 —— 全量门当场照出）
-# 口径指纹：sha256 0dc65700dc7a7d79ea7da86cd26ff27c4071fdc39967c16e6352dd94179f2447
 fib28_vm       run      s      1.0377     纯递归 fib(28)x5 —— 纯计算最坏情形（VM 轨）
 fib28_c        run      s      0.261      纯递归 fib(28)x5 —— C 轨（比值锚）
 while_sum_vm   run      s      0.3319     纯算术/比较/JMP 3M —— 专盯每指令固定开销漂移（VM 轨）
