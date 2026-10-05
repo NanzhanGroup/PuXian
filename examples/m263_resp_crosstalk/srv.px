@@ -1,0 +1,70 @@
+# M263 · 「响应串味」复现用服务端
+# ------------------------------------------------------------
+# 形状对齐 m128 门 C10 的现场：`px_serve` + 路由 + **重分配**路由 + **协程**路由
+#   （重分配/协程都会在请求处理期间触发大量分配与 GC，这正是串味可能显形的窗口）。
+# 四个端点各有**互不相同、逐字节确定**的应答体 ⇒ 只要「答非所问」就能被断言抓住。
+PORT = 18363
+D = "/tmp/px_m263_cross"
+mkdir(D)
+
+def qint(q, key, dflt):
+    if q == "":
+        return dflt
+    let parts = split(q, "&")
+    var i = 0
+    while i < len(parts):
+        let kv = split(parts[i], "=")
+        if len(kv) == 2 and kv[0] == key:
+            return int(kv[1])
+        i = i + 1
+    return dflt
+
+def h_health(req):
+    return "alive"
+
+def h_list(req):
+    let n = qint(req["query"], "n", 100)
+    let l = json_parse("[]")
+    var i = 0
+    while i < n:
+        l.push(i)
+        i = i + 1
+    return "list=" + str(len(l))
+
+def h_dict(req):
+    let n = qint(req["query"], "n", 100)
+    let d = json_parse("{}")
+    var i = 0
+    while i < n:
+        d["k" + str(i)] = "v" + str(i)
+        i = i + 1
+    return "dict=" + str(len(d))
+
+def grower(l, n):
+    var i = 0
+    while i < n:
+        l.push(i)
+        i = i + 1
+
+def h_inv(req):
+    let l = json_parse("[]")
+    spawn grower(l, 4000)
+    var guard = 0
+    while len(l) < 2000 and guard < 20000:
+        sleep_us(200)
+        guard = guard + 1
+    if len(l) < 1:
+        return "inv-empty"
+    return "inv first=" + str(l[0]) + " n=" + str(len(l))
+
+route("GET", "/health", h_health)
+route("GET", "/list", h_list)
+route("GET", "/dict", h_dict)
+route("GET", "/inv", h_inv)
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+print("M263 READY port=" + str(PORT))
+sleep(60000)
+print("M263 MAIN-EXIT-NORMAL")

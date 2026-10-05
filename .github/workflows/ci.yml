@@ -1002,6 +1002,16 @@ jobs:
           grep -E '^── M262|^  ✅ .*CTR' /tmp/v_m262.log | tail -6 || true
           echo "✅ m262_lock_alloc2（锚点 21/0 + 基线 0 待收口/2 有意保留 + 路由默认档 CTR=0 / 诊断档 CTR>0）PASS"
 
+      - name: m263_resp_crosstalk（「响应串味」定向复现 + pbuf/fd 审查 + 缺陷 466）
+        if: always()
+        run: |
+          python3 examples/m263_resp_crosstalk/check_lifecycle.py --root . > /tmp/v_m263a.log 2>&1 || { echo "❌ M263 生命周期审查判红（L2 丢弃型未重置 fd / L3 关闭路径未清挂起表）"; grep -E '^  ❌' /tmp/v_m263a.log | head -10; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── ' /tmp/v_m263a.log | tail -2 || true
+          bash examples/m263_resp_crosstalk/verify.sh --neg-skip --rounds 4 > /tmp/v_m263.log 2>&1 || { echo "❌ m263 门失败（复现器报异常？）"; grep -E '^(   |── |❌|  ✅)' /tmp/v_m263.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── M263|^  ✅ M263-REPRO' /tmp/v_m263.log | tail -4 || true
+          grep -q 'C10 零重试' examples/m128_unlock_grow/verify.sh || { echo "❌ m128 C10 的「零重试」硬判据不在位（掩盖未去掉）"; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m263_resp_crosstalk（生命周期 9/0 + 定向复现 CLEAN + m128 C10 零重试硬判据）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
