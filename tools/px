@@ -24,7 +24,10 @@
 #                                           mbedtls-lib/sqlite-obj 指定目标架构静态库
 #   px build [--zlib-lib <dir>] <file.px>    zlib 外部库目录（M61-S0：缺省按 cc 自动探测，
 #                                            gcc→lib，aarch64→lib-aarch64，armv7→lib-armv7，riscv64→lib-riscv64）
-#   px run <file.px> [args...]            解释执行
+#   px run <file.px> [args...]            解释执行（tree-walking，秒起 ≈5 ms）
+#   px run --fast <file.px> [args...]     构建缓存：首次编译（≈1 s）→ 此后 exec 产物
+#                                         （≈30 ms，**378×**）；含 Mini 子集守卫，
+#                                          子集外脚本自动回落解释轨
 #   px lex <file.px>                      打印 Token 流（调试，走 PuXian lexer）
 #   px parse <file.px>                    打印 AST（调试，走 PuXian parser）
 #   px --version / -v                     输出版本号
@@ -159,7 +162,13 @@ px $RELEASE_VER
                                                                   （缺省 third_party/sqlite3/sqlite3.o）
                                                  --zlib-lib      目标架构 zlib 库目录
                                                                   （缺省按 cc 自动探测：gcc→lib，aarch64/armv7/riscv64→lib-<arch>）
-  px run <file.px> [args...]                 解释执行
+  px run <file.px> [args...]                 解释执行（tree-walking，秒起 ≈5 ms）
+  px run --fast <file.px> [args...]          构建缓存：首次编译（≈1 s）→ 此后直接 exec
+                                             产物（≈30 ms，**378x**，M268）。含 Mini 子集
+                                             守卫：脚本含并发构造 ⇒ 打印提示 + **回落解释轨**
+                                             （缓存只许影响快慢，不许影响语义）
+                                             PX_RUNCACHE_DIR 覆盖缓存根 · PX_RUN_NOCACHE=1 关
+  px run --interp <file.px> [args...]        显式强制解释轨（同默认；与 --fast 成对，供脚本自述）
                                              （M106-S4 注：解释器约定的脚本位置是**最后一个
                                              参数**（selfhost/interp.px a[len(a)-1]）；px run
                                              已自动把脚本置于末尾，前面的 [args...] 按数据
@@ -890,8 +899,120 @@ cmd_build() {
     return 0
 }
 
-cmd_run() {
+# ══════════════════════════════════════════════════════════════
+# M268（第 145 轮）：`px run --fast` —— **用户脚本构建缓存**
+# ------------------------------------------------------------
+# 来历：晨曦《px run（解释轨）性能》+ 清歌《性能基线 v2》。实测（本机 0.2.17）：
+#   `pxi`（tree-walking）11.6 s  ⇄  `px build` 产物 30.7 ms  = **378×**
+#   （python3 28.9 ms；四条轨 stdout 逐字节一致。见 docs/PERF_BASELINE_V2.md §六）
+#
+# 为什么**默认关**（不采纳"默认开缓存"）：
+#   `px run` 的秒起（5–8 ms）不是体验问题，是**基础设施属性** —— 仓内 20 个门用
+#   `px run`、66 个直接用 `bootstrap/pxi`，CI 脚本与大量 verify.sh 依赖它。
+#   默认加编译 ⇒ 每个调用点 +0.5–1 s ⇒ 全仓 CI 被拉长。
+#   ⇒ 收益不打折：重计算脚本改用 `px run --fast` 或 `px build`。
+#
+# ⚠️ 语义口径（**缓存不得改变语义**）：
+#   解释轨只支持 Mini 子集（并发原语仅编译轨，docs/MINI_SUBSET.md §边界表）。
+#   若缓存命中就直接 exec 编译产物，则「这脚本能不能 spawn」会变成由「有没有开
+#   --fast」决定 —— **缓存只许影响快慢，不许影响语义**。
+#   ⇒ 本实现带**子集守卫**：脚本含并发构造 ⇒ 打印提示 + **回落解释轨**（行为不变）。
+#
+# 环境变量：PX_RUNCACHE_DIR（缓存根，默认 $PXC_HOME/.runcache）· PX_RUN_NOCACHE=1（禁用）
+# ══════════════════════════════════════════════════════════════
+PXPAR_BIN_RUN="$PXPAR_BIN"
+RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
+
+# 子集守卫：脚本是否**在解释轨（Mini 子集）能力范围内** ⇒ 0=在（可走编译轨）
+#   名单来源：examples/m201_interp_ffi/verify.sh 的 WAIVED（6 条 native，机器核对过）
+#           + istmt.px/iexpr.px 的语句级拒绝（Spawn/Chan/Send/Recv/Select）。
+#   判据形态：**解析出的 AST**（不是源码文本）⇒ 不误命中注释与字符串字面量。
+#   方向：**过近似**（假阳性只损失速度，不损失正确性）。
+run_subset_ok() { # $1=脚本；stdout 输出违例名单（空=通过）
+    local ast
+    ast="$("$PXPAR_BIN_RUN" "$1" 2>/dev/null)" || { echo "解析失败"; return 1; }
+    local bad=""
+    if printf '%s' "$ast" | grep -qE '^[[:space:]]*(Spawn|Chan|Send|Recv|Select)[[:space:]]*\{'; then
+        bad="并发语句(spawn/chan/send/recv/select)"
+    fi
+    local nm
+    nm="$(printf '%s' "$ast" | grep -oE 'name: "(spawn|chan|chan_try_recv|select_try|mutex|rwlock)"' \
+          | sed 's/name: "//; s/"//' | LC_ALL=C sort -u | tr '\n' ' ')"
+    if [ -n "$nm" ]; then bad="${bad:+$bad }并发 native(${nm% })"; fi
+    [ -z "$bad" ] && return 0
+    printf '%s' "$bad"; return 1
+}
+
+run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产物"的东西决定）
+    # ⚠️ **必须含脚本内容** —— .rtcache 的 key 不含（那是 runtime 的缓存且按"引用集
+    #    cuts"分桶，正确）；这里若不含脚本内容，改了脚本还命中旧产物 = 错误的缓存。
+    #
+    # ⚠️ 各来源都是**内容/版本信号**，不用 mtime（M169 缺陷 185 / M223 缺陷 323：
+    #   可自动挑选的东西必须也可自动核对；mtime 会因 touch/cp/解包而漂移）。
+    {
+        sha256sum "$1" | cut -c1-16
+        "$PXC_SELF" --version 2>/dev/null | head -1
+        "$PXC_SELF" rtkey "" gcc 0 2>/dev/null | head -1      # runtime 源内容哈希（不编译）
+        sha256sum "$PXC_HOME/bootstrap/pxc_vm" 2>/dev/null | cut -c1-16
+        echo "engine=${PX_BUILD_ENGINE:-vm}"
+    } | sha256sum | cut -c1-16
+}
+
+cmd_run_fast() {
     local file="$1"; shift
+    [ -f "$file" ] || { echo "读取文件失败: $file" >&2; return 1; }
+    if [ -n "${PX_RUN_NOCACHE:-}" ]; then "$PXI_BIN" "$@" "$file"; return $?; fi
+
+    local abs; abs="$(readlink -f "$file" 2>/dev/null || echo "$file")"
+    local key; key="$(run_cache_key "$abs")"
+    local dir="$RUN_CACHE/$key"
+    local prog="$dir/prog"
+
+    if [ -x "$prog" ]; then
+        exec "$prog" "$@"
+    fi
+
+    # 未命中 ⇒ 先做子集守卫（**语义不可因缓存而变**）
+    local viol
+    if ! viol="$(run_subset_ok "$abs")"; then
+        echo "[px run --fast] 本脚本含 Mini 子集之外的构造（$viol）⇒ **回落解释轨**" >&2
+        echo "  · 理由：缓存只许影响快慢，不许影响语义（解释轨会拒绝这些构造）" >&2
+        "$PXI_BIN" "$@" "$file"
+        return $?
+    fi
+
+    echo "[px run --fast] 首次运行：编译并缓存（此后命中缓存直接 exec，约 30 ms）" >&2
+    local work; work="$(mktemp -d "${TMPDIR:-/tmp}/pxrun.XXXXXX")"
+    local base; base="$(basename "$abs")"
+    cp "$abs" "$work/$base"
+    if ! ( cd "$work" && "$PXC_SELF" build "$base" ) >"$work/build.log" 2>&1; then
+        echo "[px run --fast] 编译失败 ⇒ **回落解释轨**（日志 $work/build.log）" >&2
+        tail -5 "$work/build.log" >&2
+        "$PXI_BIN" "$@" "$file"
+        local rc=$?; rm -rf "$work"; return $rc
+    fi
+    local out="$work/build/${base%.px}"
+    [ -x "$out" ] || { echo "[px run --fast] 产物缺失（$out）⇒ 回落解释轨" >&2; "$PXI_BIN" "$@" "$file"; local r=$?; rm -rf "$work"; return $r; }
+    mkdir -p "$dir"
+    cp "$out" "$prog.tmp" && mv "$prog.tmp" "$prog" && chmod +x "$prog"
+    rm -rf "$work"
+    [ -x "$prog" ] || { echo "[px run --fast] 缓存写入失败 ⇒ 回落解释轨" >&2; "$PXI_BIN" "$@" "$file"; return $?; }
+    exec "$prog" "$@"
+}
+
+cmd_run() {
+    # M268：显式开关。默认**完全不变**（见文件上方 M268 段的理由）。
+    local fast=0
+    case "${1:-}" in
+        --fast|--cache) fast=1; shift ;;
+        --interp)       fast=0; shift ;;
+    esac
+    local file="${1:-}"; shift 2>/dev/null || true
+    if [ -z "$file" ]; then
+        echo "用法: px run [--fast|--interp] <file.px> [args...]" >&2
+        return 2
+    fi
+    [ "$fast" = 1 ] && { cmd_run_fast "$file" "$@"; return $?; }
     # pxi 约定：**最后一个参数**才是脚本（selfhost/interp.px：`let f = a[len(a) - 1]`），
     # 前置参数按数据文件透传（当前 Mini 子集解释器仅支持单文件）。
     # M106-S4 修正：$file 必须放**末尾**。旧版放首位 → `px run prog.px data.txt`
