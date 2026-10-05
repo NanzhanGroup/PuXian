@@ -984,6 +984,11 @@ step "M262 · 持锁可失败分配收口（二）· 缺陷 464 收尾 + 缺陷 
 #   route_match（段快照到栈 + 锁外构造 params）· bi_sse_read_line
 #   （栈快路径 + 锁外备货 + 锁内复核）· M257 容器守卫**读入口降噪**。
 run m262_lock_alloc2 bash examples/m262_lock_alloc2/verify.sh
+step "M263 · 「响应串味」查到底 + pbuf/fd 生命周期审查 + 缺陷 466"
+#   缺陷 440 收口为「未复现」（60 轮/420 断言零异常 + 静态审查无 fd 复用路径）；
+#   静态审查照出缺陷 466（空闲超时关闭路径裸 close，不清挂起 handler 表）⇒ 已修；
+#   m128 的 C10 去掉「疑似⇒重试」掩盖，改「零重试」硬判据。
+run m263_resp_crosstalk bash examples/m263_resp_crosstalk/verify.sh
 step "M128 · 扩容分配移出临界区（C1–C12 · 缺陷 439 修好后**收编**为正式门）"
 #   为什么现在才收编：M251 的孤儿门体检把它判为**真回归**（缺陷 439）⇒ 它是「不在任何运行器里
 #   的历史资产」。M260 修掉 439 之后，它第一次可以进运行器（实测 pass=86 / fail=0）。

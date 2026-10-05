@@ -20859,7 +20859,7 @@ static void* px_ev_loop(void* arg) {
                 } else {
                     // 登记失败兜底（理论不可达）：PXSERVE 走 px_pxpend_close（清 PxConn/TLS/inflight）
                     if (kind_tmo == FSERVE_KIND_PXSERVE) px_pxpend_close(fd);
-                    else close(fd);
+                    else { http_pend_clear(fd); close(fd); }   // M263（缺陷 466）：与 px_evc_close 的收尾对齐（防 fd 复用串扰）
                 }
             } else {
                 __atomic_fetch_add(&g_diag_tmo_close, 1, __ATOMIC_RELAXED);
@@ -20870,7 +20870,7 @@ static void* px_ev_loop(void* arg) {
                 // M99：PXSERVE 连接含 PxConn/TLS/inflight → 必须走 px_pxpend_close（不可裸 close，
                 //   否则泄漏 PxConn 堆对象 + TLS 会话 + inflight 计数错乱）
                 if (kind_tmo == FSERVE_KIND_PXSERVE) px_pxpend_close(fd);
-                else close(fd);
+                else { http_pend_clear(fd); close(fd); }   // M263（缺陷 466）：同上
             }
             pthread_mutex_lock(&g_conn_mu);
         }
