@@ -109,9 +109,15 @@ px $RELEASE_VER
                                                                   产物 = BCModule 字节码镜像 C → 链 runtime
                                                                   含 vm.o → 程序跑在显式帧 VM 上；默认自动
                                                                   裁剪按 s_G 引用集（同 C 轨口径）
-                                                 --c             C 轨逃生舱（M91：显式走旧 fn_* C 文本轨，
-                                                                  纯计算热点程序用 ≈ 1.5x 性能；产物运行语义
-                                                                  与 VM 轨一致）。PXC_VM_BIN 环境变量可覆盖
+                                                 --c             C 轨逃生舱（M91：显式走旧 fn_* C 文本轨；
+                                                                  产物运行语义与 VM 轨一致）。
+                                                                  ⚠️ 性能（M266 实测，docs/PERF_BASELINE_V2.md）：
+                                                                  **纯计算/深递归 ≈ 3.6x**（fib28 3.64x、
+                                                                  fib26 3.63x、while_sum 5.20x、loop_sum
+                                                                  2.64x）；**容器/JSON/文本 0.88–0.96x
+                                                                  （C 轨不更快，甚至更慢）**⇒ 只对纯计算
+                                                                  热点有意义。旧文案"≈ 1.5x"（M89 时代）
+                                                                  已作废。PXC_VM_BIN 环境变量可覆盖
                                                                   VM 编译器路径
                                                  PX_BUILD_ENGINE=c|vm   环境变量逃生舱（脚本/CI 一次性
                                                                   回退到 C 轨；显式 flag 优先于 env；M91 起

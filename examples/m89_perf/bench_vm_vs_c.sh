@@ -4,8 +4,16 @@
 # ------------------------------------------------------------
 # 目标：量化「px build 默认产物从 C 文本轨切到 VM 字节码轨」的性能代价。
 #   对拍实体：同一 .px 源程序的两种用户产物——
-#     C 轨  = px build（fn_* C 文本 → gcc 机器码运行时）
-#     VM 轨 = px build --vm（BCModule 字节码镜像 → VM 解释执行）
+#     C 轨  = px build --c（fn_* C 文本 → gcc 机器码运行时）
+#     VM 轨 = px build（M91 起 = 默认；BCModule 字节码镜像 → VM 解释执行）
+#
+# ⚠️ M266 修复（2026-10-05）：**本脚本原先两条命令产出的是同一轨** ——
+#   M91 把 `px build` 默认轨从 C 切到 VM 后，`px build` 与 `px build --vm` 均为 VM 轨
+#   ⇒ 本脚本测的是 VM vs VM（实测 1.007×），既测不出老的 1.52× 也测不出新的 3.71×，
+#   而它**不被任何门跑** ⇒ 静默失真 8 个月无人发现（见 docs/PERF_BASELINE_V2.md §四）。
+#   现已改为 `--c` / 默认，并新增**产物身份自检**（C 轨含 fn_* 符号、VM 轨不含）。
+# ⚠️ 数字也过期了：老的 6.091s/9.283s（px 0.2.0）现为 0.246s/0.913s（px 0.2.17）
+#   ⇒ 绝对值以 docs/PERF_BASELINE_V2.md 为准；本脚本仅用于**相对变化**。
 # 三类负载（覆盖计算/服务两端的代价区间）：
 #   1) fib_calc     纯计算热点（递归 fib，CPU 密集最坏情形）
 #   2) compiler 形态 同源码编译器（compiler.px）C轨/VM轨 产物各跑 bc dump
@@ -34,13 +42,29 @@ ensure_bins() {
         [ -x "$BIN/$b" ] || need=1
     done
     [ "$need" = 0 ] && return 0
-    echo "── 重建产物（C 轨 / VM 轨）..."
-    ( cd "$SRC" && "$PX" build fib_calc.px >/dev/null 2>&1 && cp build/fib_calc "$BIN/fib_calc_c" \
-      && "$PX" build --vm fib_calc.px >/dev/null 2>&1 && cp build/fib_calc "$BIN/fib_calc_vm" \
-      && "$PX" build http_json.px >/dev/null 2>&1 && cp build/http_json "$BIN/http_json_c" \
-      && "$PX" build --vm http_json.px >/dev/null 2>&1 && cp build/http_json "$BIN/http_json_vm" ) \
+    echo "── 重建产物（C 轨 --c / VM 轨 默认）..."
+    ( cd "$SRC" && "$PX" build --c fib_calc.px >/dev/null 2>&1 && cp build/fib_calc "$BIN/fib_calc_c" \
+      && "$PX" build     fib_calc.px >/dev/null 2>&1 && cp build/fib_calc "$BIN/fib_calc_vm" \
+      && "$PX" build --c http_json.px >/dev/null 2>&1 && cp build/http_json "$BIN/http_json_c" \
+      && "$PX" build     http_json.px >/dev/null 2>&1 && cp build/http_json "$BIN/http_json_vm" ) \
       || { echo "❌ 产物重建失败"; exit 1; }
-    echo "    产物就绪：$(ls "$BIN" | tr '\n' ' ')"
+    # ★ M266 新增：产物身份自检（C 轨含 fn_* 符号；VM 轨不含）
+    check_identity "$BIN/fib_calc_c" C  && check_identity "$BIN/fib_calc_vm" VM \
+      && check_identity "$BIN/http_json_c" C && check_identity "$BIN/http_json_vm" VM \
+      || { echo "   ⛔ 产物身份自检失败 ⇒ 两条轨可能已退化为同一轨，**本脚本的对比结论无效**"; exit 1; }
+    echo "    产物就绪（身份自检 ✅）：$(ls "$BIN" | tr '\n' ' ')"
+}
+
+# ---------- 产物身份自检（M266）：C 轨含 fn_* 符号，VM 轨不含 ----------
+# 没有这一步就会重犯「两条命令同一轨」的错（见文件头 ⚠️）。
+check_identity() { # $1=产物路径 $2=期望轨（C|VM）
+    local n
+    n=$(strings -a "$1" 2>/dev/null | grep -c '^fn_')
+    if [ "$2" = C ]; then
+        [ "$n" -ge 1 ] || { echo "❌ 身份错：$1 期望 C 轨（应含 fn_* 符号），实测 $n 个"; return 1; }
+    else
+        [ "$n" -eq 0 ] || { echo "❌ 身份错：$1 期望 VM 轨（应无 fn_* 符号），实测 $n 个"; return 1; }
+    fi
 }
 
 # ---------- 计时助手：run 3 轮取中位 ----------
@@ -64,10 +88,10 @@ bench_fib() {
     echo ""
     echo "══════════ 基准 1：fib_calc（纯计算热点，fib(28)×5）══════════"
     ensure_bins
-    echo "── C 轨产物（px build）"
+    echo "── C 轨产物（px build --c）"
     BENCH_REPS=5 "$BIN/fib_calc_c" >/dev/null   # warmup
     median3 "C轨" env BENCH_REPS=5 "$BIN/fib_calc_c"
-    echo "── VM 轨产物（px build --vm）"
+    echo "── VM 轨产物（px build，M91 起默认）"
     BENCH_REPS=5 "$BIN/fib_calc_vm" >/dev/null  # warmup
     median3 "VM轨" env BENCH_REPS=5 "$BIN/fib_calc_vm"
 }
