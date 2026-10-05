@@ -212,7 +212,13 @@ def main():
             'char small[SSE_LINE_SMALL];' in b2 and '#define SSE_LINE_SMALL' in rc)
         chk("S3 备货尺寸取 pending **容量上界**（pend_cap+1）",
             b2.count('(size_t)g_sse_clients[') >= 2 and '+ 1;' in b2)
-        chk("S4 有界轮数（round < 8）在位", 'for (int round = 0; round < 8; round++)' in b2)
+        # M265（缺陷 467）：**主循环必须无界** —— 「轮数上限」只能绑**备货重试**。
+        #   修前把 `for (int round = 0; round < 8; round++)` 当主循环 ⇒ 每来一段半行就 ++
+        #   ⇒ **8 次 recv 后直接返回 null** ⇒ SSE 流被截断（m132 的 chunked 段整体读空）。
+        chk("S4 主循环**无界**（for (;;)）—— 缺陷 467 的判据",
+            'for (;;) {' in b2 and 'for (int round = 0; round < 8; round++)' not in b2)
+        chk("S4b 轮数上限只出现在**备货重试**（grow_retry）上",
+            'int grow_retry = 0;' in b2 and b2.count('grow_retry++') >= 2)
     bh = func_body(rc, 'sse_line_take')
     chk("S5 sse_line_take 可定位且**体内零分配**",
         bh is not None and len(allocs_in_locks(bh)) == 0 and not ALLOC_RX.search(bh))
@@ -221,6 +227,8 @@ def main():
         bg is not None and ALLOC_RX.search(bg) is not None)
     chk("S7 反向：旧形态 `char* tmp = xmalloc((size_t)ll + 1);` 0 次",
         rc_ns.count('char* tmp = xmalloc((size_t)ll + 1);') == 0)
+    chk("S8 反向：旧形态「主循环带 round 上限」全仓 0 次（缺陷 467）",
+        rc_ns.count('for (int round = 0; round < 8; round++)') == 0)
 
     # ---------------- C: 缺陷 465 ----------------
     chk("C1 px_ctr_livechk_on 定义在位（读入口诊断开关）",
