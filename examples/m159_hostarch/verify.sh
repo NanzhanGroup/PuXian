@@ -14,6 +14,7 @@
 #   ⑤ 显式 flag 优先：--no-quic 显式给定时不打印自动提示（决策归用户）
 #   ⑥ 负控：库缺失时必须**明确报错并给出获取方式**，不得静默退化到 x86_64 库
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"

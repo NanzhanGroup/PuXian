@@ -30,6 +30,7 @@
 # 用法：bash examples/m187_registry_import/verify.sh [--neg-skip] [--smoke-limit N]
 # 退出码：0 = 绿，1 = 红，2 = 门自身前置自查失败。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

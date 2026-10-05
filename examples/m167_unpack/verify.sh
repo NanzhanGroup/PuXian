@@ -59,6 +59,7 @@
 #   /tmp/pxidev，不碰入库件）→ 跑 → 逐字节还原」。⚠️ 每道负控前先 `restore_all` 再 `snapshot`
 #   （各自独立、干净起点；M165 教训），退出 trap 里也 `restore_all`（中途被杀也能还原）。
 # ═══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

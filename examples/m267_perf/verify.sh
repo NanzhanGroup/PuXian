@@ -23,6 +23,7 @@
 #   bash examples/m267_perf/verify.sh --only fib28_vm
 # 环境：M267_REPS / M267_WARN / M267_FAIL / M267_W / M267_ROOT / M267_DIR
 # ══════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 
 # ROOT/DIR 可用环境变量覆盖 —— 便于在 /tmp 沙箱里自测（也是门自身的可测性要求）

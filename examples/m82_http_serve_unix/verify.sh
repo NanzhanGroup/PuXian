@@ -7,6 +7,7 @@
 #       ⑤ 客户端断连容忍（每次请求独立连接，服务不崩，续连仍通）
 #       ⑥ 同 handler TCP http_serve 双跑对拍（/tcp 路由）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

@@ -32,6 +32,7 @@
 #   [9] 覆盖边界（如实登记）
 #
 # CI 用 `--neg-skip`（负控各要重编一次编译器）。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD

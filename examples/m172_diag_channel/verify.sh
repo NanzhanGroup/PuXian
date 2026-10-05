@@ -25,6 +25,7 @@
 #   解释轨 `错误 [R1001] 行:列:`（AST 行列），编译轨 `[函数 行N]:`（px_srcline 追踪，
 #   runtime 无列号）⇒ 判据只断言「同通道 + 同错误码 + 同消息体 + rc」，**不按整行对拍**。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD

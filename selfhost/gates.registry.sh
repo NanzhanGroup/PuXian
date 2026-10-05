@@ -1081,3 +1081,14 @@ step "示例编译"
 run ex_fib ./tools/pxc build examples/fib.px
 run ex_match ./tools/pxc build examples/match.px
 run ex_struct ./tools/pxc build examples/struct.px
+
+step "M276 · 门级互斥锁（晨曦 2026-10-05 回馈：门「就地改仓库」的并发不安全）"
+#   98 个门会在负控里**现场改源码**（`restore_all` / 负控打桩 / `run_neg` …）；原来只有
+#   **全量门**有 PID 锁 ⇒「人工单跑一扇门」+「全量门在跑」**无覆盖**
+#   （M191 / M213 / M221 / M223 各撞过一次：假红、假绿、残留被烘进产物）。
+#   新 `selfhost/gate_lock.sh`（194 个门 source + `run_gates.sh` 持**同一把**）+ 本守卫。
+#   ⚠️ 用「PID 文件 + cmdline 复核」而非 `flock`：实测 `flock` 的 fd 会**泄漏给后台子进程**
+#      （门里 `setsid … &` 起来的东西会让锁永不释放），且释放只能靠 `trap EXIT`
+#      —— 那会**盖掉门自己的 EXIT 陷阱**。
+run gate_lock_guard bash selfhost/check_gate_lock.sh
+run m276_gate_lock bash examples/m276_gate_lock/verify.sh

@@ -5,6 +5,7 @@
 #       不归还，RSS 逐轮爬升不回吐，该断言失败；
 #   [b] 峰值 RSS 显著高于回落值（peak > rss_idle + 60MB）——证明确有大波内存被归还。
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

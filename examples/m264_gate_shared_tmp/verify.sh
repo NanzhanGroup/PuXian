@@ -21,6 +21,7 @@
 # 用法：bash examples/m264_gate_shared_tmp/verify.sh [--neg-skip]
 # 本门**不含 .px 语料** ⇒ 不触发发射冻结门重定基。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)

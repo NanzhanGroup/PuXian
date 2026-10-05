@@ -21,6 +21,7 @@
 #   [4] 负控 3 道（各自独立判红）
 #   [5] 覆盖边界登记
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

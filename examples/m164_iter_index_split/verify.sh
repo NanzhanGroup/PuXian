@@ -39,6 +39,7 @@
 #   runtime 走 `tools/px` 的内容哈希缓存（`.rtcache/<key>/`，.gitignore 已忽略）；
 #   selfhost 走 `selfhost/devbuild.sh --vm`（产物 /tmp/pxcdev、/tmp/pxcdev_vm，不碰入库件）。
 # ═══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

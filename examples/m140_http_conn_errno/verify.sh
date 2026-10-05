@@ -5,6 +5,7 @@
 #     且 hints.ai_family=AF_INET 强制 IPv4、hparse_url 不支持 `[::1]`。
 #   手段：**不依赖任何外部服务**（127.0.0.1:1 必然无监听、.invalid 必然不解析、
 #     2001:db8::/32 无路由时必然 ENETUNREACH），默认 VM 轨 + C 轨都跑，断言集相同。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

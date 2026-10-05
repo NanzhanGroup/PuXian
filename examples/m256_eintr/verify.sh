@@ -38,6 +38,7 @@
 #
 # ⚠️ 负控要**完整重建 runtime**（改 runtime.c ⇒ .rtcache key 变）⇒ CI 用 `--neg-skip`。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -177,17 +178,39 @@ fi
 
 # ---------- 层 [6] 负控 ----------
 # 「任何一次命中即算复现」—— 单次存在概率（实测 4/5）⇒ 取 3 次机会，避免把 flake 当判据。
+# ⚠️ M276 实测（本门在**全量门里**跑时 [6A] 判红，单跑却绿）：原判据有两个**假红源** ——
+#   ① 探针**没跑完**（被信号杀死 / 输出缺 U2）—— 那是**已知未修**的缺陷 267 家族
+#      （并发/挂起执行流在 PX_GC_INLINE=1 下容器被误回收），**不是**负控要测的那条故障；
+#      原判据把它当成「keep 位置被破坏」⇒ 立刻 rc=2。
+#      （实测 out_n_2.txt 只有 `T1=5` 一行、没有 U2/DONE ⇒ 探针中途死了。）
+#   ② keep 位置偶发异常（实测 out_n_1.txt `T1=5 / U2=-1`）—— 同样先重试，**连续 3 次**才判 rc=2。
+#   ⇒ 改成**有界重试**（最多 6 次）：不可判的run 只记 ℹ️ 并重试；
+#      keep **连续 3 次**异常才 rc=2；`gone` 至少命中 1 次才算通过。
+#   ⚠️ **牙还在**：若产品真的回归（udp_recv 被 STW 打断后静默丢包），U2 会**每次**都 -1
+#      ⇒ 连续 3 次异常 ⇒ 仍然 rc=2 判红；`gone` 永不出现 ⇒ rc=1 判红。
 neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=另一键应保持的值
-    local gone="$1" gone_expect="$2" keep="$3" keep_expect="$4" tag hits=0 i v
-    for i in 1 2 3; do
-        tag="n_${i}"
+    local gone="$1" gone_expect="$2" keep="$3" keep_expect="$4" tag hits=0 i=0 v k bk=0
+    while [ "$i" -lt 6 ]; do
+        i=$((i + 1)); tag="n_${i}"
         run_once "$tag" PX_GC_STRESS=1 PX_GC_INLINE=1 >/dev/null
-        [ "$(get_val "$tag" "$keep")" = "$keep_expect" ] || return 2   # 独立性被破坏
+        if ! grep -q 'M256-PROBE-DONE' "$W/out_$tag.txt"; then
+            N267=$((N267 + 1))
+            echo "  ℹ️ [$tag] 探针未跑完（疑似缺陷 267 家族）⇒ 本次**不可判**，重试"
+            continue
+        fi
+        k="$(get_val "$tag" "$keep")"
+        if [ "$k" != "$keep_expect" ]; then
+            bk=$((bk + 1))
+            echo "  ℹ️ [$tag] $keep=$k（期望 $keep_expect）—— 第 $bk 次"
+            [ "$bk" -ge 3 ] && return 2
+            continue
+        fi
         v="$(get_val "$tag" "$gone")"
         [ -n "$v" ] && [ "$v" != "$gone_expect" ] && hits=$((hits + 1))
+        [ "$hits" -ge 1 ] && return 0
     done
-    [ "$hits" -ge 1 ] || return 1
-    return 0
+    [ "$hits" -ge 1 ] && return 0
+    return 1
 }
 
 if [ "$NEG_SKIP" = "1" ]; then
@@ -222,15 +245,25 @@ else
     patch_one '    ssize_t n = px_io_read(fd, buf, (size_t)maxlen);' \
               '    ssize_t n = read(fd, buf, (size_t)maxlen);' >/dev/null 2>&1 || true
     rebuild "$W/build_nc.log" >/dev/null 2>&1 || true
-    run_track nc PX_GC_STRESS=1 PX_GC_INLINE=1 >/dev/null || true
-    if [ "$(get_val nc T1)" != "5" ]; then
+    # ⚠️ M276 实测：缺陷 456 的**复现本身是概率性的**（要等 GC 的 STW 恰好打断 read）
+    #   ⇒ 原来只跑 1 次就断言「故障复现」，实测 4 次里会红 1 次。改为**有界重试**（最多 6 次）。
+    # ⚠️ 这里是**顶层**（不在函数里）—— 用 `local` 会 `can only be used in a function`
+    #   + `set -u` 下紧接 `_i: unbound variable`（M276 实测踩到）。顶层一律用普通变量。
+    _i=0; _rep=0
+    while [ "$_i" -lt 6 ]; do
+        _i=$((_i + 1))
+        run_track nc PX_GC_STRESS=1 PX_GC_INLINE=1 >/dev/null || true
+        if [ "$(get_val nc T1)" != "5" ]; then _rep=1; break; fi
+        echo "  ℹ️ [nc] 第 $_i 次未复现（T1=5）—— STW 未恰好打断 read，重试"
+    done
+    if [ "$_rep" = 1 ]; then
         if M256_EXPECT_T1=-1 judge_track nc >/dev/null 2>&1; then
             ok "[6C] 同故障在自伤判据下不再判红 ⇒ 红来自比对本身"
         else
             bad "[6C] 自伤判据下仍判红 ⇒ 红的来源不明"
         fi
     else
-        bad "[6C] 故障未复现，无法验证判据自伤"
+        bad "[6C] 故障 6 次均未复现（STW 未打断 read）—— 判据无法自证"
     fi
     restore_all
 fi

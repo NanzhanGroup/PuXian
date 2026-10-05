@@ -7,6 +7,7 @@
 # 本脚本复核产物真实存在 + 静态链接 + 运行输出。
 # 依赖：tools/pxc + bootstrap/pxmcp（9 工具重建版）+ python3
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 HERE=examples/m71_mcp_build

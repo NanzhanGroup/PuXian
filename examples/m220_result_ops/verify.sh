@@ -31,6 +31,7 @@
 #   ⑦ 负控 D：判据自伤（比对恒真）⇒ ④ 的红必须**消失**
 # 用法：verify.sh [--neg-skip]
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

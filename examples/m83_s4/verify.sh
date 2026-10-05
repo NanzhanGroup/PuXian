@@ -4,6 +4,7 @@
 #   + PKCS8==PKCS1 确定性 + 超长 msg + 反例矩阵
 # 依赖：go（crypto/rsa）、openssl（第三方交叉验）、pxc 工具链
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

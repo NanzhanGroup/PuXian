@@ -6,6 +6,7 @@
 #   基线：裸 hello ≈ 2.7M（M85 --min 档）/ --full ≈ 9.0M / sqlite 保留 ≈ 3.76M
 #   依赖：tools/px（M86-S2 版）+ bootstrap/pxc + runtime/native_mod_map.txt
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

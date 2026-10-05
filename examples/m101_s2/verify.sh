@@ -9,6 +9,7 @@
 # 退出码：0=三轮并发握手 FAIL=0（修复后验收）；>0=有失败（修复前=复现成功）。
 # 依赖：openssl + tools/px + Go（CGO_ENABLED=0）。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"

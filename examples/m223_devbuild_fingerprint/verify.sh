@@ -28,6 +28,7 @@
 # ⚠️ 覆盖边界（如实）：见第 ⑦ 层。
 #   用法：bash examples/m223_devbuild_fingerprint/verify.sh [--neg-skip]
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"

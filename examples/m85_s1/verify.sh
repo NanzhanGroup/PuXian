@@ -6,6 +6,7 @@
 #   验证：默认零漂移 / 各组合体积断言 / 裁剪态缺 native R1001 / 核心 http 面保留
 #   依赖：tools/pxc（M85-S1 版）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

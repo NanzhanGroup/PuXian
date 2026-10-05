@@ -11,6 +11,7 @@
 # 依赖：bootstrap/pxfmt（tools/pxc fmt）已构建
 # 用法：./verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 ROOT="$(cd ../.. && pwd)"

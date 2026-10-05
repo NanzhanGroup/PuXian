@@ -3,6 +3,7 @@
 #   px 断言（keygen dict/hex/PEM 两路签名验签 + Go SPKI 反向验签）+ Go 字节级互通：
 #     SPKI PEM pub == pk_hex / PKCS8 seed 派生 pub == pk_hex / Go 验 px 签
 # 依赖：go、pxc 工具链；用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

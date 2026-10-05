@@ -4,6 +4,7 @@
 #   L6 split 保留空段（回归防回退）        → fp_split.px
 #   L7 pxi bytes 族白名单补齐              → fp_bytes.px
 # 运行：bash verify.sh（需 bootstrap/pxi 为含 L7 白名单的新版；pxc build 用新 runtime）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

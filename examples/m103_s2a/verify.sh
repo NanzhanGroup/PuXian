@@ -4,6 +4,7 @@
 #   对拍集合相等 + dns_lookup A/AAAA 零回归
 # 依赖：go、pxc 工具链；断网环境 [4/4] 自动 skip
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

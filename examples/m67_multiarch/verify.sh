@@ -17,6 +17,7 @@
 #   riscv64 ：riscv64-linux-musl-gcc + qemu-riscv64-static
 #             + 交叉库（tools/cross_multiarch.sh --arch riscv64 --outdir $PX_MULTI_LIBS/riscv64）
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."   # 仓库根
 PX_MULTI_LIBS="${PX_MULTI_LIBS:-/opt/px-multiarch}"   # armv7/riscv64 交叉库根（D1：不入库）

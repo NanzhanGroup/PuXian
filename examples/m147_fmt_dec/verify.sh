@@ -14,6 +14,7 @@
 #   ④ 负控 B：把取偶语义改成"半向上"（native 里改 snprintf 精度再自行 +0.5）⇒ 输出必须变化
 #      负控 C：把 dec 参数忽略（固定 2 位）⇒ 输出必须变化
 #      （negative control 是"这条面到底跑没跑"的硬判据 —— 门可以因夹具坏而**假绿**）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

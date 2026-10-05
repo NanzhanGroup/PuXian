@@ -11,6 +11,7 @@
 # 退出码：0=全 PASS；非 0=有失败。
 # 依赖：tools/px（VM 轨）+ bootstrap/pxi（旧 runtime 对拍）。端口 18890。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"

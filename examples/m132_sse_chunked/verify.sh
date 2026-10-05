@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # M132 验证：SSE 客户端 chunked 解码 + sse_read_line（qg-issue 87 缺陷 69）
 # 手段：python 桩按 seg=1/3/0 三种切法承载**同一串字节**；断言三种上游下行/事件序列全同。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

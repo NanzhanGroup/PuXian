@@ -145,7 +145,9 @@ fi
 #   ⇒ 纪律：产物/统计只能由**会跑门的那条路径**创建，**只读入口不得有副作用**。
 : > "$GATE_TSV"
 
-LOCK=/tmp/.m116_gates.lock
+# M276：路径可覆盖（**默认不变**）—— 否则「在门里自测 run_gates 的行为」永远会先撞上
+#   外层全量门的这把锁（实测：m276 门在**全量门里**跑时 [5a]/[5b] 两条判据必红）。
+LOCK="${PX_GATE_PIDLOCK:-/tmp/.m116_gates.lock}"
 if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
     echo "❌ 已有 m116 全门在跑（PID $(cat "$LOCK")）—— 并发跑会互相踩掉负控还原，拒绝启动"
     exit 1
@@ -160,7 +162,31 @@ if [ -n "$DIRTY0" ] && [ "$ALLOW_DIRTY" = 0 ]; then
     echo "   ⇒ 门内负控的 snapshot/restore 会**盖掉**这些改动：先提交/stash，或用 --allow-dirty 明确接受风险"
     rm -f "$LOCK"; exit 1
 fi
-trap 'rm -f "$LOCK"' EXIT
+trap 'rm -f "$LOCK"; [ "${_PX_GL_MINE:-0}" = "1" ] && rm -f "${PX_GATE_LOCK:-/tmp/.px_gate_lock}"' EXIT
+
+# ── M276：门级互斥锁（与门内 `selfhost/gate_lock.sh` **同一把**）──────
+#   为什么：上面那把 `LOCK` 只防「两个**全量门**」。**人工单跑一扇门**与全量门并发时，
+#   两边都会动 `runtime/*.c` / `selfhost/*.px` ⇒ 负控的 snapshot/restore 互相盖掉
+#   （M191 / M213 / M221 / M223 各撞过一次：假红、假绿、残留被烘进产物）。
+#   ⚠️ 位置刻意在 `: > "$GATE_TSV"` **之后** —— m244 门的 [5] 段断言
+#      「真跑门那条路径**会**截断 TSV」，而它在本门里调 `run_gates.sh --only __m244_none__`；
+#      早退也必须已经截断过（M276 实测：放前面会让 m244 判红）。
+_PX_GL_MINE=0
+if [ "${PX_GATE_LOCK_HELD:-0}" != "1" ]; then
+    _PGK="${PX_GATE_LOCK:-/tmp/.px_gate_lock}"
+    _pgo="$(cat "$_PGK" 2>/dev/null || true)"
+    if [ -n "$_pgo" ] && [ "$_pgo" != "$$" ] && kill -0 "$_pgo" 2>/dev/null \
+       && { [ ! -r "/proc/$_pgo/cmdline" ] \
+            || tr '\0' ' ' < "/proc/$_pgo/cmdline" | grep -qE 'verify\.sh|run_gates\.sh|m116_gates\.sh'; }; then
+        echo "❌ 有一扇门单跑着（PID $_pgo）—— 全量门与它并发会互相踩掉负控还原，拒绝启动"
+        echo "   ⇒ 等它结束；锁文件 ${_PGK}（陈旧时删掉即可，脚本自身也会自愈）"
+        exit 1
+    fi
+    printf '%s\n' "$$" > "$_PGK"
+    _PX_GL_MINE=1
+fi
+export PX_GATE_LOCK_HELD=1
+
 
 
 # ── 执行：门的清单全部来自注册源（单一权威名单）──

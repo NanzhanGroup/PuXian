@@ -32,6 +32,7 @@
 #   [8] 源逐字节还原 · [9] 覆盖边界
 #
 # CI 用 `--neg-skip`（负控各要重编解释轨 / 两轨驱动 ≈ 2–4 min）。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD

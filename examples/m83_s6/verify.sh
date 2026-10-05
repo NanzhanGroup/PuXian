@@ -5,6 +5,7 @@
 #   客户端中途断开服务端不崩。
 # 依赖：tools/pxc（编译模式；http_serve/sse_serve/spawn 非 pxi Mini 子集）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

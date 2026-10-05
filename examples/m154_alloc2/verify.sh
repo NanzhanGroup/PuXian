@@ -21,6 +21,7 @@
 # 用法：bash examples/m154_alloc2/verify.sh
 # 退出码：0 = M154-VERIFY-OK；1 = 有失败项
 # ═══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 # 并发互斥：门会改 runtime.c，两个同时跑必然互相污染

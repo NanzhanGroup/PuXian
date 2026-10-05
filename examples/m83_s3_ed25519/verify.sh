@@ -4,6 +4,7 @@
 #   + RFC8032 确定性（同 seed 同 msg → px 签 == Go 签）+ 反例矩阵
 # 依赖：go（crypto/ed25519 生成密钥与反向验签）、pxc 工具链
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

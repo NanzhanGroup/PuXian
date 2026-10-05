@@ -13,6 +13,7 @@
 #   7) 旧 flag --vm/--bc 兼容 = 与默认 VM 等价
 # 前置：bootstrap/pxc_vm（M91 重链，含 F1 默认参数）+ tools/px。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"

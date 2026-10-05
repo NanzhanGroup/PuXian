@@ -28,6 +28,7 @@
 # 判据层：[1] 静态 · [2] 三轨对拍（80 例 × 3 轨）· [3] MODEL.tsv 双向 ·
 #        [4][5][6] 负控 A/B/C（各自独立判红 + 源逐字节还原）· [7] 负控 D（判据自伤）· [8] 覆盖边界
 # CI 用 `--neg-skip`（负控各要重建一次编译器）。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD

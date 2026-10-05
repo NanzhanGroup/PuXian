@@ -27,6 +27,7 @@
 # 用法：bash examples/m150_tls_crypto/verify.sh
 # 退出码：0 = M150-VERIFY-OK；1 = 有失败项
 # ═══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

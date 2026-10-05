@@ -8,6 +8,7 @@
 #   3) m94_s2 抢占套件复绿（定时合并不破坏抢占轮转）
 # 退出码：0=全 PASS；非 0=有失败。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"

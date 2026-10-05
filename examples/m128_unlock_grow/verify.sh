@@ -23,6 +23,7 @@
 #       （避开启动期与 HTTP 层的无关分配抢先命中），每个用例一个独立进程。
 # 用法：bash examples/m128_unlock_grow/verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)

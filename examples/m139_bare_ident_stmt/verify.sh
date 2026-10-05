@@ -12,6 +12,7 @@
 #   "至少会报错"钉住：改成 `assert(…)` 后它们才真的断言（已逐条修正 3 处失效期望）。
 #
 # 本门：正例（合法写法必须编译通过）+ 负例（裸标识符/`pass` 必须编译失败且给可操作提示）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

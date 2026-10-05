@@ -2,6 +2,7 @@
 # M131 验证：http_stream 的 POST / manual / chunked / sse_write（qg-issue 87 缺陷 65）
 # 依赖：tools/px（编译模式）、python3（裸 socket 抓原始线上字节 —— 必须看得到分块帧）
 # 两轨都跑（默认 VM 轨 + C 轨），断言集相同。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

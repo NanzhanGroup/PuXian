@@ -13,6 +13,7 @@
 #   ④ 负控 B：32 位文本换成 64 位（json_num_str(x,32)→(x,64)）⇒ 输出**必须**变化
 #      负控 C：位模式面改坏（float32_bits(x)→float32_bits(x/2.0)）⇒ 输出**必须**变化
 #      （两条都是"这条面到底跑没跑"的硬判据；m142 的教训：门可以因为夹具坏而**假绿**）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

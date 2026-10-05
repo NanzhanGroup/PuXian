@@ -20,6 +20,7 @@
 #
 # 用法：bash examples/m269_gcroot_coverage/verify.sh [--neg-skip]
 # ══════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

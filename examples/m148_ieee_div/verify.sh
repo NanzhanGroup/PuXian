@@ -19,6 +19,7 @@
 #        E：`fmt_num` 定点上界改回 `dec <= 17`（缺陷 133）
 #      （negative control 是「这条面到底跑没跑」的硬判据。
 #        ⚠️ 每条负控都**备份/还原**源码，门内改的是真源码，跑完必须复原。）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

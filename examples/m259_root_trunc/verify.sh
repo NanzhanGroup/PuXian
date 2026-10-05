@@ -31,6 +31,7 @@
 #   ⚠️ [4] 的正判据需要**已应用 A 的 runtime**；负控 A/B/C 均为**静态/判据面**改动
 #      （不需要重编）⇒ 本门在 CI 上可全速跑。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

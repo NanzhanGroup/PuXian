@@ -4,6 +4,7 @@
 #   再 curl -F 对照 ↔ 标准 multipart）+ SMTP 真发信回环（本地假 SMTP server 收信断言）
 # 依赖：tools/pxc、python3（假 SMTP）、curl（multipart 对照）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

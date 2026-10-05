@@ -56,12 +56,14 @@ def srv():
     tcp_close(c)
     tcp_close(l)
 
-# UDP 发送端：1000ms 后开始，每 100ms 发一次（共 6s 窗口）
+# UDP 发送端：1000ms 后开始，每 100ms 发一次（**共 60s 窗口**）
+#   ⚠️ M276 实测：原来只有 6s ⇒ 当 T1 段偏慢时，U2 还没开始跑发送端就停了
+#      ⇒ U2 等满 20s 超时 ⇒ U2=-1（**假红**，不是缺陷）。窗口拉长到 60s 后不再发生。
 def usrv():
     let s = udp_open(0)
     sleep(1000)
     var i = 0
-    while i < 60:
+    while i < 600:
         udp_send(s, "127.0.0.1", UPORT, "PING")
         sleep(100)
         i += 1
@@ -101,22 +103,48 @@ if fd < 0:
     print("T1=CONNFAIL")
 else:
     tcp_opt(fd, {"read_timeout_ms": 20000})
-    let d = read(fd, 64)
+    # ⚠️ M276 实测：TCP 是**字节流** —— 服务端一次 send(5) 并不保证客户端一次 read 就能拿全
+    #   （实测 T1=4 假红）。⇒ 累积到 5 字节为止。
+    #   缺陷 456 的可观测面**不变**：read 被 STW 打断后**不重试** ⇒ 返回 -1 ⇒ n 保持 -1 ⇒ 判红。
+    # ⚠️ `read()` 返回 **bytes**，而 `+` **不支持 bytes 拼接**（实测 `R1002 无法相加: bytes + bytes`）
+    #   ⇒ 只累加**长度**，不拼内容。
+    var got = 0
     var n = -1
-    if d != -1:
-        n = len(d)
+    var failed = 0
+    var rounds = 0
+    while rounds < 8:
+        let d = read(fd, 64)
+        if d == -1:
+            failed = 1
+            break
+        got = got + len(d)
+        if got >= 5:
+            break
+        rounds += 1
+    if failed == 0:
+        n = got
     print("T1=" + str(n))
     tcp_close(fd)
 
 # ── 用例 U2：UDP udp_recv（先排空，使这一发**必然阻塞**）──
+#   ⚠️ M276 实测的**第二种环境干扰**：该端口上可能落到**别的进程**发来的数据报
+#      （实测收到过 23 字节的陌生包 ⇒ U2=23 假红）。⇒ 接收端**只认尺寸匹配的那一发**，
+#      其余丢掉继续等。
+#      缺陷 456 的可观测面**不变**：一旦 udp_recv 被 STW 打断后返回 **null** ⇒ m 保持 -1 ⇒ 判红。
 tcp_opt(u, {"read_timeout_ms": 1})
 while udp_recv(u, 64) != null:
     0
 tcp_opt(u, {"read_timeout_ms": 20000})
-let r = udp_recv(u, 64)
 var m = -1
-if r != null:
-    m = len(r["data"])
+var guard = 0
+while guard < 64:
+    let r = udp_recv(u, 64)
+    if r == null:
+        break
+    if len(r["data"]) == 4:
+        m = 4
+        break
+    guard += 1
 print("U2=" + str(m))
 udp_close(u)
 print("M256-PROBE-DONE")

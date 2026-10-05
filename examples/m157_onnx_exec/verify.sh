@@ -13,6 +13,7 @@
 #   ⑦ C 侧负控 2 个（必须判红）+ 逐字节还原复跑 · ⑧ 三轨一致（VM vs 解释轨）
 # 另：可选 `M157_REAL_REF=1` 时追加"真模型 × 独立参考数值对拍"（纯 Python，约 20 分钟）
 # ══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 HERE="$(pwd)"

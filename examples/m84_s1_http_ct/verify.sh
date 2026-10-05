@@ -5,6 +5,7 @@
 #   显式 CL 保留；GET 无 body 无 CT/CL；http_unix 同步修复。
 # 依赖：tools/pxc 编译模式（http_request/http_unix 非 pxi Mini 子集）+ python3
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

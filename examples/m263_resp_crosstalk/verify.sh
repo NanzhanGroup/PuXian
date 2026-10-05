@@ -23,6 +23,7 @@
 #   [7] 覆盖边界
 # 用法：bash examples/m263_resp_crosstalk/verify.sh [--neg-skip] [--rounds N]
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)

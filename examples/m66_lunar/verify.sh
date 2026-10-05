@@ -2,6 +2,7 @@
 # M66-S4 m66_lunar 专项验证：stdlib/lunar.px 收编 std.lunar（双模式 36 PASS 一致）
 # 锚点覆盖：春节/除夕/闰月/月末/边界 1900-2100 + 往返 + ws-todo lunar:M-D 落点
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc
