@@ -88,11 +88,12 @@ if [ ! -x "$BLD" ]; then
     bad "探针构建失败：$(tail -1 "$W/build.log")"
 else
     ok "探针构建成功"
-    mkdir -p /tmp/px_m256_probe
+    # M264：用**本门自己的**探针目录（不再与 m256 共用固定的 /tmp/px_m256_probe）
+    mkdir -p "$W/probe_d"
     good=0; sig=0; nodone=0
     for i in $(seq 1 "$N"); do
         out="$W/p$i.out"
-        PX_GC_STRESS=1 PX_GC_INLINE=1 timeout -k 5 180 "$BLD" >"$out" 2>&1
+        M256_PROBE_D="$W/probe_d" PX_GC_STRESS=1 PX_GC_INLINE=1 timeout -k 5 180 "$BLD" >"$out" 2>&1
         rc=$?
         if [ "$rc" -ge 128 ]; then sig=$((sig + 1));
         elif [ "$rc" -ne 0 ]; then sig=$((sig + 1));
@@ -158,7 +159,9 @@ echo "── [5] 覆盖边界（如实登记）"
 cat <<'EOF'
   · 本门的「复现装置」只证**装置可用**；**不证**缺陷 267 家族已修 —— A/B/C 三组的实测
     次数与结论登记在 `examples/m260_gc_repro/REPRO.md`（含 M256 源码树的对照）。
-  · 探针依赖固定端口 18420/18421 与 `/tmp/px_m256_probe`；并行跑会互相抢端口（本门串行）。
+  · 探针依赖**固定端口 18420/18421** ⇒ 并行跑会互相抢端口（本门串行）。
+  · 探针的**数据目录**自 M264 起改为 `M256_PROBE_D`（本门传 `$W/probe_d`）⇒
+    不再与 m256 共用同一条**固定数据目录**（门间隔离；见 examples/m264_gate_shared_tmp/）。
   · 台账的「未覆盖清单」只做**可见性**，不判红（判红靠 `gcstress_progress.txt` 的只增不减）。
 EOF
 ok "覆盖边界已登记"

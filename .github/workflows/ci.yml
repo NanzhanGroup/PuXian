@@ -1012,6 +1012,16 @@ jobs:
           grep -q 'C10 零重试' examples/m128_unlock_grow/verify.sh || { echo "❌ m128 C10 的「零重试」硬判据不在位（掩盖未去掉）"; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m263_resp_crosstalk（生命周期 9/0 + 定向复现 CLEAN + m128 C10 零重试硬判据）PASS"
 
+      - name: m264_gate_shared_tmp（门间隔离 · 共用固定 /tmp 路径白名单制）
+        if: always()
+        run: |
+          bash selfhost/check_gate_shared_tmp.sh --self-test > /tmp/v_m264a.log 2>&1 || { echo "❌ check_gate_shared_tmp.sh 自证失败"; tail -10 /tmp/v_m264a.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash selfhost/check_gate_shared_tmp.sh --root . > /tmp/v_m264b.log 2>&1 || { echo "❌ 门间共用固定 /tmp 路径：有未登记项 或 白名单过期/无理由"; grep -E '· ❌' /tmp/v_m264b.log | head -10; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^✅' /tmp/v_m264b.log || true
+          bash examples/m264_gate_shared_tmp/verify.sh --neg-skip > /tmp/v_m264.log 2>&1 || { echo "❌ m264 门失败"; tail -20 /tmp/v_m264.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── M264' /tmp/v_m264.log | tail -2 || true
+          echo "✅ m264_gate_shared_tmp（守卫自证 4/4 + 白名单 6 条各带理由 + M256_PROBE_D 隔离）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

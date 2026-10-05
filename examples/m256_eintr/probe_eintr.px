@@ -24,7 +24,16 @@
 
 PORT = 18420
 UPORT = 18421
-D = "/tmp/px_m256_probe"
+# M264：目录可由环境变量 `M256_PROBE_D` 覆盖 —— 让**复用本探针的门**（m260）用
+#   自己的目录。修前是固定 `/tmp/px_m256_probe`：两个门共用同一条固定路径，
+#   一个门的残留会改变另一个门的行为（「门间隔离」，M260 §八 候选 ③）。
+var D = "/tmp/px_m256_probe"
+let _m256d = env("M256_PROBE_D")
+# ⚠️ 必须**先查 null**：`env()` 未设置时返回 `null`，而 `null != ""` 为 **true**
+#   ⇒ 只查 `!= ""` 会把 D 赋成 null（实测：探针启动即崩、门 5/14）。
+if _m256d != null:
+    if _m256d != "":
+        D = _m256d
 
 # TCP 服务端：accept 一次 → 等 1500ms → 发 5 字节 → 关
 def srv():
