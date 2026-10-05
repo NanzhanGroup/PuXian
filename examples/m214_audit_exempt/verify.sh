@@ -20,7 +20,7 @@
 #   ② 真实审计 **候选 0**，且三类豁免计数**逐个非零**（R-A=1 · R-B=2 · R-C=1）
 #   ③ A/B 三档各自独立：`--no-postdead`⇒1 · `--no-globalout`⇒2 · `--no-argread`⇒1 · 全关⇒4
 #   ④ **判据回放（precision replay）**：撤掉 `px_route_try_dispatch` 的
-#      `px_root_push_keep(params)` ⇒ 必须报出 `params@379`，而**同一个调用**上的
+#      `px_root_push_keep(params)` ⇒ 必须报出 `params@<行>`（**行号从源码派生**，不硬编码），而**同一个调用**上的
 #      `handler`（全局根）**仍被豁免** —— 同语句、同调用、两个出参，一豁免一报出。
 #   ⑤ 负控 3 道（各自独立判红 · 源逐字节还原）
 #   ⑥ 覆盖边界（如实登记）
@@ -125,9 +125,19 @@ if [ -n "$KEEP_LN" ] && patch_line runtime/runtime_route.c "$KEEP_LN" '    /* NE
     OUT="$(audit --show-victims)"
     echo "$OUT" | grep -q 'runtime_route.c' \
         && ok "回放后 runtime_route.c 出现候选" || bad "回放后没有候选（规则把真缺陷吃掉了）"
-    echo "$OUT" | grep -q 'params@379' \
-        && ok "受害者点名 params@379（R-B 不豁免「本地构造」出参）" || bad "未点名 params@379"
-    echo "$OUT" | grep -q 'handler@379' \
+    # 期望受害者**落在 px_route_try_dispatch 体内** —— 行号**从源码派生**，不硬编码。
+    #   旧版写死 `params@379`；M262（缺陷 464 收尾）把函数改长 ⇒ 报告行变 418 ⇒ 门判红。
+    #   这是「旧门锚点」老形状（M161/M164/M226/M227/M230 同族），修法一致：
+    #   **锚点必须可派生**，否则每次上游编辑都会伪造一次红。
+    V_LN="$(echo "$OUT" | sed -n 's/.*params@\([0-9][0-9]*\).*/\1/p' | head -1)"
+    F0="$(grep -nE '^[a-z ]*int px_route_try_dispatch\(' runtime/runtime_route.c | head -1 | cut -d: -f1)"
+    F1="$(awk -v s="${F0:-0}" 'NR>s && /^}/ {print NR; exit}' runtime/runtime_route.c)"
+    if [ -n "$V_LN" ] && [ -n "$F0" ] && [ "$V_LN" -ge "${F0:-0}" ] && [ "$V_LN" -le "${F1:-0}" ]; then
+        ok "受害者点名 params@$V_LN（在 px_route_try_dispatch 体 $F0–$F1 内 · R-B 不豁免「本地构造」出参）"
+    else
+        bad "未点名 params（或行号不在函数体内：v=$V_LN · f=$F0-$F1）"
+    fi
+    echo "$OUT" | grep -q 'handler@' \
         && bad "handler 也被报出（R-B 失效 ⇒ 全局根也当成风险）" \
         || ok "同语句的 handler 仍被 R-B 豁免（精确性成立）"
     restore_all
@@ -169,7 +179,7 @@ else
             '                            _glob = True   # NEGCTL-M214-B' b; then
         if [ -n "$KEEP_LN" ] && patch_line runtime/runtime_route.c "$KEEP_LN" '    /* NEGCTL-M214-REPLAY */'; then
             OUT2="$(audit --show-victims)"
-            if echo "$OUT2" | grep -q 'params@379'; then
+            if echo "$OUT2" | grep -q 'params@'; then
                 bad "NC-B：放宽判据后仍报出 params ⇒ 该判据对本门无牙"
             else
                 ok "NC-B glob 恒真 ⇒ params 不再被报出（第④层必红）✅"
