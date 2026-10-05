@@ -23093,7 +23093,12 @@ static LXValue bi_sse_read_line(LXValue* args, int nargs, void* ctx) {
     char small[SSE_LINE_SMALL];
     char* big = NULL;
     size_t big_cap = 0;
-    for (int round = 0; round < 8; round++) {
+    // M265（缺陷 467）：**主循环必须无界** —— 它是「流式读」：每来一段半行就要再 recv
+    //   一次（一条 SSE 行可能跨多次 recv）。修前把「备货重试 ≤8 轮」的计数顺手用在主循环上
+    //   ⇒ **8 次 recv 之后直接返回 null** ⇒ SSE 流被截断（实测 m132 的 chunked 段整体读空；
+    //   而 m137 恰好每行都一次到位 ⇒ 没暴露）。⇒ 轮数上限**只**绑 `grow_retry`。
+    int grow_retry = 0;
+    for (;;) {
         size_t want = 0;
         int in_big = 0;
         size_t need = 0;
@@ -23109,6 +23114,10 @@ static LXValue bi_sse_read_line(LXValue* args, int nargs, void* ctx) {
             need = (size_t)g_sse_clients[idx].pend_cap + 1;   // 容量上界 ⇒ 一次备足
             if (need < want) need = want;
             pthread_mutex_unlock(&g_sse_cli_mu);
+            if (grow_retry++ >= 8) {                          // 只防「备货后容量又涨」的循环
+                if (big) xfree(big);
+                px_error("R1009: sse_read_line 行缓冲在并发增长下未稳定（8 轮），请重试");
+            }
             sse_line_grow(&big, &big_cap, need);              // **锁外**增长
             continue;                                         // 回到轮顶复核
         }
@@ -23131,6 +23140,10 @@ static LXValue bi_sse_read_line(LXValue* args, int nargs, void* ctx) {
                 need = (size_t)g_sse_clients[ix].pend_cap + 1;
                 if (need < want) need = want;
                 pthread_mutex_unlock(&g_sse_cli_mu);
+                if (grow_retry++ >= 8) {
+                    if (big) xfree(big);
+                    px_error("R1009: sse_read_line 行缓冲在并发增长下未稳定（8 轮），请重试");
+                }
                 sse_line_grow(&big, &big_cap, need);
                 continue;
             }
