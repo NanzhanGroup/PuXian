@@ -197,6 +197,13 @@ RPM_MS="$(git -C "$CLONE" ls-tree -r --name-only FETCH_HEAD rpm 2>/dev/null \
 RPM_MS_BAD="$(git -C "$CLONE" ls-tree -r --name-only FETCH_HEAD rpm 2>/dev/null \
           | grep -oE '\.m[0-9]+s[0-9]+\.' | tr -d '.' | sort -u | tr '\n' ' ' || true)"
 TAG_MS="$(printf '%s' "$TAG" | grep -oE 'm[0-9]+$' || true)"
+if [ -z "$TAG_MS" ]; then
+  # 新形态 v0.2.271（M272 起）：**第三段就是里程碑号** —— 没有 -m 段可抓。
+  #   ⚠ 这里修前会静默落到「跳过交叉校验」分支 ⇒ 覆盖率无声下降（M235 缺陷 355 同族）。
+  _p="$(printf '%s' "$TAG" | sed -nE 's/^v[0-9]+\.[0-9]+\.([0-9]+)$/\1/p')"
+  _p="$(printf '%s' "$_p" | sed 's/^0*//')"   # v0.2.0 ⇒ 空 ⇒ 保持「跳过校验」（不是 m0）
+  [ -n "$_p" ] && TAG_MS="m$_p"
+fi
 if [ -n "$TAG_MS" ]; then
   case " $RPM_MS " in
     *" $TAG_MS "*) log "   ✅ 交叉校验：rpm 树含 $TAG_MS（= tag $TAG）" ;;
@@ -209,7 +216,7 @@ if [ -n "$TAG_MS" ]; then
   [ "$(printf '%s' "$RPM_MS" | wc -w)" -le 1 ] \
     || log "   ⚠ rpm 树内出现多个里程碑版本（$RPM_MS）—— 疑似上游 rsync 未 --delete"
 else
-  log "   ⚠ tag 无 -mNNN 后缀（$TAG），跳过 rpm 树版本交叉校验"
+  log "   ⚠ tag 形态无法派生里程碑号（$TAG），跳过 rpm 树版本交叉校验"
 fi
 # <<< xcheck-rpm-tree <<<
 

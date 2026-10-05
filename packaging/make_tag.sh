@@ -36,7 +36,10 @@ set -uo pipefail
 # 规则（唯一真相 · 与 packaging/tag_guard.sh 的 TAG_NAME_RE 逐字符一致）
 #   ⚠ 两处必须一致 —— selftest_make_tag.sh 有一段判据专门断言这一点。
 # ------------------------------------------------------------
-TAG_NAME_RE='^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$'
+TAG_NAME_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+# 旧形态（M238–M271 用过的 v<major>.<minor>.<patch>-m<里程碑>）：**历史冻结**、
+#   守卫仍接受（否则 160+ 个历史 tag 要逐个进豁免表），但**不允许新建**。
+TAG_LEGACY_RE='^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$'
 
 # 仓库根解析顺序（自测要在 mktemp 夹具里跑 ⇒ 不能只认脚本所在位置）：
 #   ① PX_TAG_REPO（显式指定，自测用） ② 当前目录所在的 git 顶层 ③ 脚本的上一级
@@ -47,7 +50,7 @@ fi
 [ -n "$REPO" ] || REPO="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 [ -n "$REPO" ] || { echo "❌ 定位不到仓库根（用 PX_TAG_REPO=<路径> 显式指定）" >&2; exit 2; }
 CHANGELOG_PATH="CHANGELOG.md"
-AT=""; MILESTONE=""; MSG=""; NAME=""; NAME_GIVEN=0; DO_MOVE=0; DO_PUSH=0; DRY=0
+AT=""; MILESTONE=""; MSG=""; NAME=""; NAME_GIVEN=0; DO_MOVE=0; DO_PUSH=0; DRY=0; MINOR_OVERRIDE=""
 
 die() { echo "❌ $*" >&2; exit "${EXIT_CODE:-1}"; }
 say() { echo "$*"; }
@@ -56,14 +59,16 @@ u() {  # u <说明>
     cat >&2 <<EOF
 用法: packaging/make_tag.sh [选项]
   --name <tag>        直接给出完整 tag 名（**会按规则强校验**；给错名 ⇒ exit 3）
-  --milestone <N>     里程碑号（默认取 CHANGELOG 标题行里最高的 M<NNN>）
+  --milestone <N>     里程碑号（默认取 CHANGELOG 标题行里最高的 M<NNN>）· 它同时是 patch 段
+  --minor <N>         次段（默认自最近 tag 继承）—— **只在「大改进」时手工升**
   --at <commit>       tag 指向的提交（默认 HEAD）
   --msg <文本>        tag 消息（默认自动生成）
   --move              tag 已存在且指向别处 ⇒ 重定向到新提交（合规的补丁轮做法）
   --push              创建后推 main + tag（同一次 push，消 M245 补实测的 push 竞态）
   --dry-run           只打印计划，不创建、不推送
   --help              本帮助
-规则: tag 名必须是 $TAG_NAME_RE（例 v0.2.0-m248）——**没有补丁后缀**。
+规则: tag 名必须是 $TAG_NAME_RE（例 v0.2.271 = 次段.里程碑号）——**没有 -m 后缀**。
+      旧形态 $TAG_LEGACY_RE 仅作历史兼容（不再新建）。
       $*
 EOF
 }
@@ -72,6 +77,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --name)      [ $# -ge 2 ] || u "--name 缺参数";      NAME="$2"; NAME_GIVEN=1; shift 2 ;;
         --milestone) [ $# -ge 2 ] || u "--milestone 缺参数"; MILESTONE="$2"; shift 2 ;;
+        --minor)     [ $# -ge 2 ] || u "--minor 缺参数";     MINOR_OVERRIDE="$2"; shift 2 ;;
         --at)        [ $# -ge 2 ] || u "--at 缺参数";        AT="$2";        shift 2 ;;
         --msg)       [ $# -ge 2 ] || u "--msg 缺参数";       MSG="$2";       shift 2 ;;
         --move)      DO_MOVE=1; shift ;;
@@ -100,27 +106,28 @@ SHA="$(git rev-parse --short "$SHA_FULL")"
 # ⚠ `--move`（把已有 tag 重定向到最终提交）**不递增**：那不是新版本，只是同一版换个提交。
 #   若递增，自测 E 段（--move v0.2.0-m248）会算出 v0.2.1-m248 ⇒ 名字对不上。
 # ⚠ `--name` 路径不参与本段（手输完整名，直接过命名校验）。
-VER="0.2.0"
-LAST_TAG="$(git tag -l --sort=-v:refname 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$' | head -1 || true)"
+MAJOR="0"; MINOR="2"
+VER_BASE="${MAJOR}.${MINOR}"
+# 主/次段自最近 tag 继承（新旧形态都认：v0.2.271 / v0.2.12-m260 ⇒ 0.2）。
+#   **patch 段不再在这里算** —— 它是「里程碑号」，在第 3 段之后才知道（见下方 TAG 构造）。
+LAST_TAG="$(git tag -l --sort=-v:refname 2>/dev/null | grep -E "$TAG_NAME_RE|$TAG_LEGACY_RE" | head -1 || true)"
 if [ -n "$LAST_TAG" ]; then
     _tv="${LAST_TAG#v}"; _tv="${_tv%%-*}"
     case "$_tv" in
         [0-9]*.[0-9]*.[0-9]*)
-            VER="$_tv"
-            if [ "$DO_MOVE" != 1 ]; then
-                _maj="${_tv%%.*}"; _rest="${_tv#*.}"
-                _min="${_rest%%.*}"; _pat="${_rest#*.}"
-                _pat=$((_pat + 1))
-                if [ "$_pat" -ge 100 ]; then
-                    _pat=0; _min=$((_min + 1))
-                fi
-                VER="${_maj}.${_min}.${_pat}"
-                say "ℹ️ 版本段自 $LAST_TAG **递增** patch: $_tv → $VER（patch 到 100 ⇒ 进位 minor）"
-            else
-                say "ℹ️ 版本段沿用 $LAST_TAG: $VER（--move 不递增）"
-            fi
+            MAJOR="${_tv%%.*}"; _rest="${_tv#*.}"; MINOR="${_rest%%.*}"
+            VER_BASE="${MAJOR}.${MINOR}"
+            say "ℹ️ 主/次段自 $LAST_TAG 继承: $VER_BASE（patch 段 = 里程碑号，见下）"
             ;;
     esac
+fi
+# 大改进（兼容性 / 重大能力面）时**手工**升次段：--minor 3 ⇒ v0.3.<里程碑>
+if [ -n "${MINOR_OVERRIDE:-}" ]; then
+    case "$MINOR_OVERRIDE" in
+        ''|*[!0-9]*) EXIT_CODE=2 die "--minor '$MINOR_OVERRIDE' 不是纯数字";;
+    esac
+    MINOR="$MINOR_OVERRIDE"; VER_BASE="${MAJOR}.${MINOR}"
+    say "ℹ️ 次段由 --minor 指定: $VER_BASE（大改进才升 · 见 docs/RELEASE_PROCESS.md）"
 fi
 
 # ---------- 3. 里程碑号：显式 > CHANGELOG 标题行最高 ----------
@@ -150,17 +157,20 @@ else
     case "$MILESTONE" in
         ''|*[!0-9]*) EXIT_CODE=2 die "--milestone '$MILESTONE' 不是纯数字（规则: v<主版本>-m<里程碑>，无补丁后缀）";;
     esac
-    TAG="v${VER}-m${MILESTONE}"
+    TAG="v${VER_BASE}.${MILESTONE}"
 fi
 
 # ---------- 4. 命名合规（第 ① 道防线的核心）----------
 # 先给**已知的错误形态**一句人话，再给通用兜底 —— 用户/后人不该靠猜。
 if ! printf '%s' "$TAG" | grep -qE "$TAG_NAME_RE"; then
     echo "❌ 拒绝创建不合规 tag: $TAG" >&2
-    echo "   规则只有一条: $TAG_NAME_RE（例 v0.2.0-m248）——**没有补丁后缀**。" >&2
+    echo "   规则只有一条: $TAG_NAME_RE（例 v0.2.271）—— 第三段就是**里程碑号**，没有 -m 后缀。" >&2
     # 「补丁后缀」是最常见的错法（我 2026-10-03 就是这么错的）：直接给出合规名。
     if printf '%s' "$TAG" | grep -qE -- '-m[0-9]+s[0-9]+$'; then
-        SUGGEST="$(printf '%s' "$TAG" | sed 's/\(-m[0-9][0-9]*\)s[0-9][0-9]*$/\1/')"
+        # M272：建议名必须是**新形态**（v<次段>.<里程碑>）—— 旧形态自 M272 起不可新建，
+        #   否则「按提示照做」还会再被拒一次（把报错引向错误的方向）。
+        SUGGEST="$(printf '%s' "$TAG" | sed -nE 's/^v([0-9]+)\.([0-9]+)\.[0-9]+-m([0-9]+)s[0-9]+$/v\1.\2.\3/p')"
+        [ -n "$SUGGEST" ] || SUGGEST="v0.2.<里程碑号>"
         echo "   你写的是「补丁后缀」形态（-mNsN）。合规做法有两条:" >&2
         echo "     ① 该里程碑**已有** tag ⇒ 把同一个 tag 重定向到最终提交（**不要造新名字**）:" >&2
         echo "          packaging/make_tag.sh --move --name $SUGGEST" >&2

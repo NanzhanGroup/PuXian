@@ -109,7 +109,8 @@ fi
 # ------------------------------------------------------------
 # ③ tag 命名合规（M238 · 用户令 2026-10-01）
 # ------------------------------------------------------------
-# 规则（唯一，与 docs/RELEASE_PROCESS.md 一致）：v<主版本>-m<里程碑>，例 v0.2.0-m167。
+# 规则（唯一，与 docs/RELEASE_PROCESS.md 一致）：v<次段>.<里程碑>，例 v0.2.271（M272 起）。
+#   旧形态 v<major>.<minor>.<patch>-m<里程碑>（v0.2.0-m167）为**历史冻结**：守卫仍接受，不再新建。
 #   **没有补丁后缀**。补丁轮的正确做法 = 把**同一个合规 tag** 指向该里程碑的最终提交
 #   （tag 已推过 ⇒ `git push --force origin <commit>:refs/tags/<tag>` 重定向；
 #    ⚠ 不要删 tag 再建 —— GitHub 会把对应 Release 转成草稿）。
@@ -119,13 +120,14 @@ fi
 #   ② packaging/build_rpm.sh 的 MILESTONE 取短横线之后**整段** ⇒ rpm 包名被污染成
 #      puxian-0.2.0-1.m237s3.el9.x86_64.rpm ⇒ 与 gh-pages 的 `.mNNN.` 交叉校验失配。
 #   ⇒ 用户的 dnf 镜像因此停摆。故 **违规必须响亮**。
-TAG_NAME_RE='^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$'
+TAG_NAME_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+TAG_LEGACY_RE='^v[0-9]+\.[0-9]+\.[0-9]+-m[0-9]+$'   # 历史形态（M238–M271），只读兼容
 TAG_EXEMPT_FILE="${TAG_GUARD_EXEMPT:-$(dirname "$0")/tag_name_exempt.txt}"
 TAG_EXEMPT_LIST=""
 if [ -f "$TAG_EXEMPT_FILE" ]; then
     TAG_EXEMPT_LIST="$(grep -vE '^[[:space:]]*(#|$)' "$TAG_EXEMPT_FILE" | awk '{print $1}' || true)"
 fi
-BAD_ALL=$(git tag -l 'v*' | grep -vE "$TAG_NAME_RE" | grep -v '^$' || true)
+BAD_ALL=$(git tag -l 'v*' | grep -vE "$TAG_NAME_RE" | grep -vE "$TAG_LEGACY_RE" | grep -v '^$' || true)
 if [ -n "$BAD_ALL" ]; then
     if [ -n "$TAG_EXEMPT_LIST" ]; then
         BAD_NEW=$(printf '%s\n' "$BAD_ALL" | grep -vxF "$TAG_EXEMPT_LIST" || true)
@@ -134,7 +136,7 @@ if [ -n "$BAD_ALL" ]; then
     fi
     N_NEW=$(printf '%s\n' "${BAD_NEW:-}" | grep -c . || true)
     if [ "${N_NEW:-0}" -gt 0 ]; then
-        echo "❌ 存在 $N_NEW 个**未登记**的不合规 tag（规则：v<主版本>-m<里程碑>，例 v0.2.0-m167）" >&2
+        echo "❌ 存在 $N_NEW 个**未登记**的不合规 tag（规则：v<次段>.<里程碑>，例 v0.2.271；旧形态 v0.2.0-m167 已冻结）" >&2
         printf '%s\n' "$BAD_NEW" | sed 's/^/     · /' >&2
         echo "   后果：pxrepo_mirror.sh 的版本序会静默过滤它们（镜像停在旧版、无任何告警），" >&2
         echo "         且 build_rpm.sh 会把短横线之后整段当作 MILESTONE ⇒ rpm 包名被污染。" >&2
@@ -158,9 +160,17 @@ if [ -n "$TAG_EXEMPT_LIST" ]; then
     fi
 fi
 
-ALL_TAGS=$(git tag -l "$TAG_GLOB")
-# 里程碑号 → tag 名（容忍前导零：-m128 / -m0128 都算）
-tag_for() { printf '%s\n' "$ALL_TAGS" | grep -E -e "-m0*$1$" | sort -V | tail -1; }
+ALL_TAGS=$(git tag -l 'v*')
+# 里程碑号 → tag 名。两种形态都认（M272 起新形态优先）：
+#   ① 新 v<major>.<minor>.<里程碑>  —— 第三段**就是**里程碑号
+#   ② 旧 v<major>.<minor>.<patch>-m<里程碑>（历史冻结；容忍前导零 -m128 / -m0128）
+tag_for() {
+    local n="$1" t=""
+    t="$(printf '%s\n' "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+         | awk -F. -v n="$n" '($3+0)==(n+0) {print}' | sort -V | tail -1 || true)"
+    [ -n "$t" ] || t="$(printf '%s\n' "$ALL_TAGS" | grep -E -e "-m0*$n$" | sort -V | tail -1 || true)"
+    printf '%s\n' "$t"
+}
 
 TAG=$(tag_for "$TOP")
 
@@ -176,7 +186,7 @@ TAG=$(tag_for "$TOP")
 #   ⚠️ 只对「有远端」的仓库做；TAG_GUARD_NO_FETCH=1 关闭（自测的负控用它）。
 # ------------------------------------------------------------
 if [ -z "$TAG" ] && [ "${TAG_GUARD_NO_FETCH:-0}" != "1" ] && [ -n "$(git remote 2>/dev/null | head -1)" ]; then
-    say "ℹ️ 本地 tag 快照里没有 -m$TOP ⇒ 补取一次远端 tag（push 竞态兜底）…"
+    say "ℹ️ 本地 tag 快照里没有 M$TOP 对应的 tag（v<次段>.$TOP 或 v*-m$TOP）⇒ 补取一次远端（push 竞态兜底）…"
     # M256（缺陷 457 · 2026-10-04 实测事故）：**无 TTY 时 `git fetch` 会挂住** ——
     #   它要凭据时会去读 stdin，而后台/CI 的 stdin 是不关闭的管道 ⇒ 守卫**无限等待**
     #   （实测：后台跑 `tag_guard.sh --ref HEAD` 3 分 17 秒仍未返回；同一条命令加
@@ -218,7 +228,7 @@ if [ -n "$TAG" ]; then
     fi
     REASON="tag $TAG 指向 $(git rev-parse --short "$TAG_COMMIT" 2>/dev/null)，不在 $SHORT 的可达链上"
 else
-    REASON="找不到匹配 -m$TOP 的 tag（glob: $TAG_GLOB）"
+    REASON="找不到匹配 M$TOP 的 tag（新形态 v<次段>.$TOP 或旧形态 v*-m$TOP）"
 fi
 
 # ------------------------------------------------------------
