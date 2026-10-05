@@ -74,6 +74,28 @@ grep -qF 'PX_RUN_NOCACHE:-}" ]; then "$PXI_BIN" "$@" "$file"' "$CODE" \
     && ok "[1.6] NOCACHE 分支参数序正确（脚本在末尾）" || bad "[1.6] NOCACHE 分支缺脚本参数"
 
 # ─────────────────────────────────────────────────────────────
+# [1b] 发现性提示**不得污染单流捕获**（M271 补 · 缺陷 470）
+#   修前无条件写 stderr ⇒ `px run x.px > out 2>&1` 会多一行，实测 examples/m148_ieee_div
+#   的「三轨输出逐字节一致」当场判红（提示行混进被 diff 的解释轨输出）。
+#   判据两层（静态 + 动态），动态那一层是关键 —— 「有守卫」不等于「守卫生效」：
+#     静态：源码必须有 `[ -t 2 ]`
+#     动态：非 TTY 捕获**不得**出现提示；`PX_RUN_HINT=1` 强制**必须**出现（证明功能没被掐死）
+# ─────────────────────────────────────────────────────────────
+echo "── [1b] 提示不污染单流捕获（缺陷 470）"
+grep -qF '[ -t 2 ]' "$CODE" \
+    && ok "[1.7] 提示带 TTY 守卫" || bad "[1.7] 提示缺 TTY 守卫（会污染 > out 2>&1）"
+_h1="$W/hint_plain.txt"; _h2="$W/hint_forced.txt"
+PX_RUN_HINT_SEC=0 "$ROOT/tools/px" run "$SRC/ok.px" > "$_h1" 2>&1 || true
+if grep -q '提示：本脚本' "$_h1"; then
+    bad "[1.8] 非 TTY 捕获里出现提示 ⇒ 污染脚本输出"
+else
+    ok "[1.8] 非 TTY 捕获无提示（2>&1 干净）"
+fi
+PX_RUN_HINT_SEC=0 PX_RUN_HINT=1 "$ROOT/tools/px" run "$SRC/ok.px" > "$_h2" 2>&1 || true
+grep -q '提示：本脚本' "$_h2" \
+    && ok "[1.9] PX_RUN_HINT=1 可强制（功能未被掐死）" || bad "[1.9] 强制开关无效"
+
+# ─────────────────────────────────────────────────────────────
 # [2] 三形态对齐
 # ─────────────────────────────────────────────────────────────
 echo "── [2] 三形态对齐（interp / --fast 冷 / --fast 热 / build 产物）"
@@ -149,7 +171,13 @@ cmp -s "$W/o.mod" "$W/o.interp" && bad "[5.2b] 输出与改前相同 ⇒ 未真�
 echo "── [6] 发现性提示"
 "$PX" run "$SRC/slow.px" > "$W/o.slow" 2>"$W/e.slow"; rc_slow=$?
 chk "[6.1] 慢脚本 rc=0" "$rc_slow" "0"
-grep -q 'px run --fast' "$W/e.slow" && ok "[6.1b] 慢脚本 stderr 出现提示" || bad "[6.1b] 慢脚本未提示"
+grep -q 'px run --fast' "$W/e.slow" \
+    && bad "[6.1b] 非 TTY 捕获出现提示（缺陷 470 回归：污染 > out 2>&1）" \
+    || ok "[6.1b] 非 TTY 捕获无提示（缺陷 470 守卫生效）"
+PX_RUN_HINT=1 "$PX" run "$SRC/slow.px" > /dev/null 2>"$W/e.slow2"
+grep -q 'px run --fast' "$W/e.slow2" \
+    && ok "[6.1c] PX_RUN_HINT=1 强制下出现提示（功能未掐死）" \
+    || bad "[6.1c] 强制开关无效"
 "$PX" run "$SRC/tiny.px" > /dev/null 2>"$W/e.tiny"
 grep -q 'px run --fast' "$W/e.tiny" && bad "[6.2] 秒起脚本也打提示（噪声）" || ok "[6.2] 秒起脚本不打提示"
 
