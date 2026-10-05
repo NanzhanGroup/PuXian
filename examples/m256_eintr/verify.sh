@@ -94,7 +94,11 @@ rebuild() {   # $1=日志路径 → 0/1
 # 跑一档：$1=档名（余下为 env 赋值）→ 输出落 $W/out_<档名>.txt，回 rc
 run_once() {
     local tag="$1"; shift
-    ( cd "$ROOT" && env "$@" timeout -k 5 180 "$BIN" ) >"$W/out_$tag.txt" 2>&1
+    # M275：每次用**一对新端口** —— 本门一轮连跑 9 次，固定端口会因上一次残留而失败。
+    #   区间 20000+ 刻意避开本仓其它门用到的 18xxx 段（静态扫：18099–19999）。
+    local _base=$(( 20000 + RANDOM % 20000 ))
+    ( cd "$ROOT" && env "$@" M256_PROBE_PORT="$_base" M256_PROBE_UPORT="$(( _base + 1 ))" \
+        timeout -k 5 180 "$BIN" ) >"$W/out_$tag.txt" 2>&1
     echo "$?"
 }
 

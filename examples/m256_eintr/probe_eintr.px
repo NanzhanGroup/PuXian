@@ -24,6 +24,17 @@
 
 PORT = 18420
 UPORT = 18421
+# M275：端口可由环境变量覆盖 —— **门内**连续跑多次时的残留监听会让下一次 tcp_listen 失败
+#   （实测 2026-10-05 全量门：[6B] 因 T1=CONNFAIL ⇒ neg_any 返回 rc=2「独立性被破坏」）。
+#   与 M264 对目录 `M256_PROBE_D` 做过的参数化同款；⚠️ 必须**先查 null**（env() 未设时返回 null）。
+let _pport = env("M256_PROBE_PORT")
+if _pport != null:
+    if _pport != "":
+        PORT = int(_pport)
+let _uport = env("M256_PROBE_UPORT")
+if _uport != null:
+    if _uport != "":
+        UPORT = int(_uport)
 # M264：目录可由环境变量 `M256_PROBE_D` 覆盖 —— 让**复用本探针的门**（m260）用
 #   自己的目录。修前是固定 `/tmp/px_m256_probe`：两个门共用同一条固定路径，
 #   一个门的残留会改变另一个门的行为（「门间隔离」，M260 §八 候选 ③）。
