@@ -1,0 +1,51 @@
+# M269 GC 根登记「覆盖强度」台账 —— 由 check_gcroot_coverage.py --update 生成
+# ⚠️ 本表列的是「**判据强度不足**的桥」（WEAK = 只有靠 loose 过近似才进 TRIGGER）。
+#   它**不是**缺陷清单，是「还有多少地方看不清」的账 —— **只许缩小**。
+#   每行：<函数名>\t<分类标签>；标签必须在下面的图例里定义过。
+#
+# 【口径】loose 档 = 精确三规则 + 任何 `(*x` 形状（**有意的过近似**，M213 缺陷 295）；
+#   tight 档 = 仅精确三规则。`WEAK = P_loose \ TRIGGER_tight`
+#   ⇒ 这些函数**体内没有对已知触发点的直接调用**，被算作触发点**只因** loose 把
+#   「可能的间接调用（函数指针 / 回调）」也计入。
+#   ⇒ 它们的「产出窗口是否安全」**尚未由精确规则判定** —— 这正是要追踪的量。
+#
+# @quic_h3: QUIC/H3 族 —— 触发点来自**回调/函数指针**（h3 stream 回调、quic conn 回调、
+#   stateless 重试路径）⇒ 精确规则（直接调用）不命中。处理方向：给回调注册点做
+#   **显式触发点标注**，而不是靠 `(*x` 形状兜。
+# @ws: WebSocket 族 —— 同上（ws 的 handler 回调 + stream 分帧）。方向同 quic_h3。
+# @sse: SSE 族 —— 同上（serve/connect 的回调与长连接状态机）。方向同 quic_h3。
+# @qpack: QPACK 解码器 —— 同上（解码器经静态句柄/函数指针调用）。方向同 quic_h3。
+# @http_serve: HTTP 服务族 —— 同上（route/handler/vhost 经**全局表**持有的函数指针调用；
+#   注意 M213 的 R-B「全局根可达」是**豁免**规则，与本表(触发点来源)正交）。
+# @misc: 零星单点（见各条名字）—— 形状同上，但不构成族；逐条定性留待下一轮。
+#
+bi_bus_subscribe	misc
+bi_ed25519_verify	misc
+bi_h3_conn_close	quic_h3
+bi_h3_conn_setup	quic_h3
+bi_h3_serve_poll_stream	quic_h3
+bi_h3_server_listen	quic_h3
+bi_h3_server_listen_stateless	quic_h3
+bi_hex_to_int	misc
+bi_http_serve	http_serve
+bi_http_serve_unix	http_serve
+bi_http_stream	http_serve
+bi_interp_bridge_install	misc
+bi_qs_close	qpack
+bi_qs_dec_ingest	qpack
+bi_qs_open	qpack
+bi_quic_close	quic_h3
+bi_quic_h3_listen	quic_h3
+bi_rate_limit	http_serve
+bi_route	http_serve
+bi_signal	misc
+bi_sse_connect	sse
+bi_sse_serve	sse
+bi_sse_start	sse
+bi_vhost	http_serve
+bi_ws_connect	ws
+bi_ws_connect_auto	ws
+bi_ws_reply_101	ws
+bi_ws_serve	ws
+bi_ws_stream	ws
+px_get_global	misc

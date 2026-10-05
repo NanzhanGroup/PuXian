@@ -1029,6 +1029,15 @@ jobs:
           grep -E '^── M267|^  ✅ 8/8|^  ✅ 每条' /tmp/v_m267.log | tail -4 || true
           echo "✅ m267_perf（8 负载 x 双轨 x min-of-5 · 身份自检 8/8 · 相对基线 1.0x ± 噪声）PASS"
 
+      - name: m269_gcroot_coverage（GC 根登记覆盖强度台账 · 清歌提案 P0-2）
+        if: always()
+        run: |
+          python3 selfhost/check_gcroot_coverage.py --root . --self-test > /tmp/v_m269a.log 2>&1 || { echo "❌ M269 工具自证失败（锚点/档位关系/划分完备）"; tail -15 /tmp/v_m269a.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          python3 selfhost/check_gcroot_coverage.py --root . > /tmp/v_m269b.log 2>&1 || { echo "❌ M269 覆盖强度台账判红（WEAK 扩大 或 基线过期 或 图例失效）"; grep -E '^  ❌|^       ' /tmp/v_m269b.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m269_gcroot_coverage/verify.sh --neg-skip > /tmp/v_m269.log 2>&1 || { echo "❌ m269 门失败"; tail -20 /tmp/v_m269.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  P_loose|^  ✅' /tmp/v_m269b.log | head -6 || true
+          echo "✅ m269_gcroot_coverage（P=325/T=543/Tt=374 ⇒ STRONG 295 / WEAK 30 · 台账只减不增 · 自证 5/5）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
