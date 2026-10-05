@@ -169,12 +169,18 @@ cmp -s "$W/o.mod" "$W/o.interp" && bad "[5.2b] 输出与改前相同 ⇒ 未真�
 # [6] 发现性提示
 # ─────────────────────────────────────────────────────────────
 echo "── [6] 发现性提示"
-"$PX" run "$SRC/slow.px" > "$W/o.slow" 2>"$W/e.slow"; rc_slow=$?
+# ⚠️ M273（CI 红修复）：**必须显式压阈值**。slow.px 是 30000 次循环 —— 本机 ~3s，
+#   而 CI runner 上 **< 2s**（实测：CI 上 [6.1c] 判红「强制开关无效」）。
+#   不压阈值时：[6.1b] 会**空过**（提示压根没触发，不是因为 TTY 守卫生效）、
+#   [6.1c] 会**假红**（强制开关本来是生效的，只是没到阈值）。
+#   ⇒ 纪律：**判据不得依赖墙上时钟**（同族：M168 ldd 退出码 / M169 按 mtime 选料 /
+#     M213 写死路径 / M215 tag 守卫窗口 / M219 PIE 垫片）。压到 0 后判据只测「开关」本身。
+PX_RUN_HINT_SEC=0 "$PX" run "$SRC/slow.px" > "$W/o.slow" 2>"$W/e.slow"; rc_slow=$?
 chk "[6.1] 慢脚本 rc=0" "$rc_slow" "0"
 grep -q 'px run --fast' "$W/e.slow" \
     && bad "[6.1b] 非 TTY 捕获出现提示（缺陷 470 回归：污染 > out 2>&1）" \
     || ok "[6.1b] 非 TTY 捕获无提示（缺陷 470 守卫生效）"
-PX_RUN_HINT=1 "$PX" run "$SRC/slow.px" > /dev/null 2>"$W/e.slow2"
+PX_RUN_HINT_SEC=0 PX_RUN_HINT=1 "$PX" run "$SRC/slow.px" > /dev/null 2>"$W/e.slow2"
 grep -q 'px run --fast' "$W/e.slow2" \
     && ok "[6.1c] PX_RUN_HINT=1 强制下出现提示（功能未掐死）" \
     || bad "[6.1c] 强制开关无效"

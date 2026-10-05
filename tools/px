@@ -75,7 +75,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.272"
+SELFHOST_VER="0.2.273"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -902,7 +902,7 @@ cmd_build() {
 # ══════════════════════════════════════════════════════════════
 # M268（第 145 轮）：`px run --fast` —— **用户脚本构建缓存**
 # ------------------------------------------------------------
-# 来历：晨曦《px run（解释轨）性能》+ 清歌《性能基线 v2》。实测（本机 0.2.272）：
+# 来历：晨曦《px run（解释轨）性能》+ 清歌《性能基线 v2》。实测（本机 0.2.273）：
 #   `pxi`（tree-walking）11.6 s  ⇄  `px build` 产物 30.7 ms  = **378×**
 #   （python3 28.9 ms；四条轨 stdout 逐字节一致。见 docs/PERF_BASELINE_V2.md §六）
 #
