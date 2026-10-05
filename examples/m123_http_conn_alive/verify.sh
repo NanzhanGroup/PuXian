@@ -3,6 +3,7 @@
 #   语义断言：非 handler 上下文 → 0 · handler 内在线 → 1 · 断连重连不串扰 → 1
 #   定量对照：1MB 请求客户端发完即断，用原语提前收尾的总 CPU 必须 ≤ 完整处理 30%（验收线）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

@@ -5,6 +5,7 @@
 #   · 多参（json_stringify(1,2)）→ 静默只取 args[0]、rc=0（两轨不一致 + 吞错）
 # 修复：ibuiltin.px 50 处直调分支补 len(args) 精确校验，文案逐字对齐 runtime.c（C 轨）。
 # 轨：解释器（px run / bootstrap/pxi）· VM 轨（px build 默认）· C 轨（px build --c）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"

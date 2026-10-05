@@ -22,6 +22,7 @@
 #   退出码：0 全绿 / 1 有失败 / 2 工具自证失败
 #   ⚠️ `--neg-skip`（CI 用）：只跑正判据，跳过 §7 的三道负控（各要重编 runtime / pxi）
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

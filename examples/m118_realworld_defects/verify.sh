@@ -12,6 +12,7 @@
 # 稳健性铁律（M118 尾实测教训）：**不许用固定 sleep 等 socket 就绪** ——
 #   CI 冷启动实测 >0.6s，固定 sleep 会假红（本地不可能复现）。统一改成轮询到就绪；
 #   长驻/联网步骤一律挂 `timeout`，宁可快速失败也不要挂死 CI。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 PX=./tools/px

@@ -5,6 +5,7 @@
 #   缺陷 81（语言缺口）：失败时 errno 被 close() 覆盖 ⇒ 调用方无法区分
 #     "连不上"（可重试）与"超时/对端断开"（重试会放大对端 CPU）。
 # 手段：真起 http_serve_unix 服务端（快/慢两档），**默认 VM 轨 + C 轨都跑**，断言集相同。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

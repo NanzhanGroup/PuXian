@@ -5,6 +5,7 @@
 #         --min 态缺 native R1001 / 核心 HTTP native 保留
 #   aarch64/armv7/riscv64 真机交叉组合由 CI 覆盖（本机无 musl 交叉工具链）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

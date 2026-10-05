@@ -9,6 +9,7 @@
 # 依赖：python3 + bootstrap/pxmcp + bootstrap/pxi pxfmt pxlint pxtest
 #       pxbench pxdoc pxpar（自举产物，随仓库提交）
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 HERE=examples/m65_mcp

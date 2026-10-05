@@ -12,6 +12,7 @@
 #   ① 行为门：把每种堆对象放进容器/全局/帧 → gc() 强制整轮回收 → 逐个使用（两轨都跑）
 #   ② 静态门：check_whitelist.py 读源码文本核对「枚举成员全集 ↔ 表条目」
 #   ③ 负控：把表中 PX_MUTEX 改成 false 的**副本**必须被判红（门自欺检测）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

@@ -13,6 +13,7 @@
 #   ⑤ 权重字节：initializer head16（含窄类型低字节截断）逐字节对
 #   另：三轨一致（VM 默认轨 vs 解释轨）；真实模型可选（**SKIP 不是 PASS**）
 # ══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 HERE="$(pwd)"

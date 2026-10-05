@@ -10,6 +10,7 @@
 #   ③ 负控 A：篡改 Go 真值一行 ⇒ diff **必须**变红
 #   ④ 负控 B：篡改 stdlib 实现一份 ⇒ 输出 **必须**变化
 #   ⑤ 负控 C：篡改语料一条 ⇒ 输出 **必须**变化
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

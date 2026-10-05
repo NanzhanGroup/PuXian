@@ -1045,6 +1045,14 @@ jobs:
           grep -E '^── 结果' /tmp/v_m271.log | tail -2 || true
           echo "✅ m271_run_fast（25/0 · 三形态 stdout+rc 逐字节 · 污染检出 · key 敏感 · 运行器契约）PASS"
 
+      - name: m276_gate_lock（门级互斥锁 · 晨曦回馈「门就地改仓库」）
+        if: always()
+        run: |
+          bash selfhost/check_gate_lock.sh --root . > /tmp/v_m276a.log 2>&1 || { echo "❌ 门级锁守卫判红（有门未 source 锁 / source 顺序错 / runner 未持锁）"; grep -E '❌' /tmp/v_m276a.log | head -10; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m276_gate_lock/verify.sh --neg-skip > /tmp/v_m276.log 2>&1 || { echo "❌ m276 门失败（并发未拒 / 陈旧不自愈 / 后代继承锁 / 竞态非 1）"; grep -E '^  ❌' /tmp/v_m276.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '通过 [0-9]+ · 失败' /tmp/v_m276.log | tail -1 || true
+          echo "✅ m276_gate_lock（194 门 source + runner 持锁 · 并发拒启 · 陈旧自愈 · 无 fd 泄漏 · 竞态恰 1）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

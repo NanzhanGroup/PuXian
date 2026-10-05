@@ -26,6 +26,7 @@
 #       ⇒ 需先把存活对象数推过 8192（故 PX_GC_THRESHOLD 拉高、不做 GC）。
 # 用法：bash examples/m127_unwind_lock/verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)

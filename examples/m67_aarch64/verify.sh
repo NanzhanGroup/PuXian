@@ -15,6 +15,7 @@
 #       三用例均不依赖 H3，语义不受裁剪影响（对齐 M57-S4 先例）。
 # 用法：CC=<交叉gcc> QEMU=<qemu> bash examples/m67_aarch64/verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."   # 仓库根
 QEMU="${QEMU:-qemu-aarch64-static}"

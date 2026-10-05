@@ -5,6 +5,7 @@
 #       ③ NUL body 原样回显（req.body 与响应双向 str.len 保真）④ unix 入口同测（共享 worker 一处改双入口）
 #       ⑤ 小 body 无回归 ⑥ PX_HTTP_BODY_MAX 超限 → 413
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

@@ -6,6 +6,7 @@
 #         9 可裁模块代表 native 全命中（native_mod_map 侧 S2 过滤）
 #   依赖：tools/px + bootstrap/pxc（仓库自带，零改动）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

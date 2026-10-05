@@ -12,6 +12,7 @@
 #   ② 自断言：str()/bytes NUL 保真 + JSON 四类边界（M136_ASSERT 计数）
 #   ③ 负控 A：把 truth 的一行改错 ⇒ diff **必须**变红（证明 diff 不是白跑）
 #   ④ 负控 B：把 fidelity.px 的某条 corpus 改一个字节 ⇒ diff 必须变红
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

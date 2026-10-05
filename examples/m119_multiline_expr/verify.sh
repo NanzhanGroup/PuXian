@@ -16,6 +16,7 @@
 #      见 docs/PUXIAN_CHEATSHEET.md 第 43 条），本门第 5 节据实改为正控 + 行首负控。
 #
 # 用法：bash examples/m119_multiline_expr/verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 PX=./tools/px

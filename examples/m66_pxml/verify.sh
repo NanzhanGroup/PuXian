@@ -1,6 +1,7 @@
 #!/bin/bash
 # M66-S3 m66_pxml 专项验证：stdlib/pxml.px 收编 + PXML 规范 + Dogfood 闭环
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

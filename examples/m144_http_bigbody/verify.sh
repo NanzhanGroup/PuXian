@@ -8,6 +8,7 @@
 # 手段：真起 http_serve_unix + http_serve（进程内 spawn），客户端自调用并**逐字节**校验
 #       （服务端回 body 的长度 + sha256，客户端与本地比对）。
 # 默认 VM 轨 + C 轨都跑，断言集相同。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

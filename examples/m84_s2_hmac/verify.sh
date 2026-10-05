@@ -7,6 +7,7 @@
 #   S5 篡改敏感性
 # 依赖：go（crypto/hmac+sha256 权威对拍）、tools/pxc
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

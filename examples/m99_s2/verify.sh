@@ -15,6 +15,7 @@
 #   6) 优雅关闭：SIGTERM → join + 清 IDLE → 「在途 0」干净退出（≤8s）
 # 退出码：0=全 PASS；非 0=有失败。依赖：tools/px + Go（CGO_ENABLED=0 静态客户端）。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"

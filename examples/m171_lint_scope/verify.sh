@@ -17,6 +17,7 @@
 # 纪律（R50 教训）：每道负控前先 restore 再 snapshot（各自干净起点）；
 #   trap 兜底还原；收尾 git status 复核。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD

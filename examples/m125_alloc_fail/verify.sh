@@ -16,6 +16,7 @@
 #     /usr/bin/px 是安装版（包根=/usr/share/puxian），其 runtime/ 与仓库不同步 —— 会测出旧行为。
 # 用法：bash examples/m125_alloc_fail/verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)

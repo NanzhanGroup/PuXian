@@ -2,6 +2,7 @@
 # M120 · 字典缺键「严格」口径 + 协程错误不再静默（qg-issue 76）
 # 覆盖：E1 协程隔离后退出码 / E2 PX_SPAWN_ISOLATE 逃生舱 / E3 错误码缺 R1007 / E4 非字符串键段错误
 # 轨：解释器（px run）· VM 轨（px build 默认）· C 轨（px build --c）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"

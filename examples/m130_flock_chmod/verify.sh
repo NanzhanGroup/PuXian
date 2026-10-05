@@ -2,6 +2,7 @@
 # M130 验证：文件锁 / 权限 / open 原始 flags（qg-issue 87 缺陷 56–58）
 # 依赖：tools/px（编译模式；python3 用于跨进程持锁对照）
 # 两轨都跑（默认 VM 轨 + C 轨），断言集合相同。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 DIR=$(pwd)

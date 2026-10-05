@@ -35,6 +35,7 @@
 # ⚠️ 用 `./tools/px build`（产物落 `<用例目录>/build/<名>`）；`--c` 才是 C 轨，
 #    默认档 = VM 轨（precise GC）—— 本缺陷正是 VM 轨默认档的病灶。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

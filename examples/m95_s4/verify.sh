@@ -12,6 +12,7 @@
 # 退出码：0=全 PASS；非 0=有失败。
 # 依赖：tools/px（M91 默认 VM 轨）。端口 18196。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"

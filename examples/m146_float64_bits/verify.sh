@@ -12,6 +12,7 @@
 #   ④ 负控 B：把位模式面换成 float32 的（float64_bits → float32_bits）⇒ 输出**必须**变化
 #      负控 C：把 json 文本位宽换成 32 ⇒ 输出**必须**变化
 #      （negative control 是"这条面到底跑没跑"的硬判据 —— 门可以因为夹具坏而**假绿**）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

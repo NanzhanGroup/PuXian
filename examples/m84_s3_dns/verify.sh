@@ -10,6 +10,7 @@
 #     本批 verify 只验 pxc build 编译产物（runtime.c 自动重建）。
 # 依赖：go（net.LookupIP oracle）、getent（系统解析器探测）、tools/pxc
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

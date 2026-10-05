@@ -5,6 +5,7 @@
 #   缺陷 110：http_serve_unix 的 req["remote"] 对 AF_UNIX 给 "unix"，Go 给 "@"。
 #   两轨（VM / C）断言集相同，输出逐字节一致。
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

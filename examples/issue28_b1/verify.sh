@@ -10,6 +10,7 @@
 # 注：本 daemon handler 每次请求制造 ~24k 瞬时对象（px 解释器单发基线 ~75ms），
 #     p95≤50ms 全量标准需观音/清歌 ws-approve 真实 /check 隔离实测（issue28 §7）。
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

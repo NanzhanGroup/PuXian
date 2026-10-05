@@ -32,6 +32,7 @@
 #      C 去掉 `self` 例外 ⇒ ④ 的 `capability.px` 编译失败 ⇒ 必红
 #   ⑦ 源逐字节还原断言
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

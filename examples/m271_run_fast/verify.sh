@@ -22,6 +22,7 @@
 #   bash examples/m271_run_fast/verify.sh --neg-skip  # CI 用
 # 环境：M271_ROOT / M271_W / PX_RUN_HINT_SEC
 # ══════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 
 ROOT="${M271_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"

@@ -14,6 +14,7 @@
 #      时变伪文件请用 ①b2 的容差写法（两读均实时：非空 / 2 字段 / up 差 ≤5s，同 m58 口径）。
 # 用法：bash examples/m117_realworld_defects/verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)

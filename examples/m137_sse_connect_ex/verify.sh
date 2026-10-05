@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # M137 验证：sse_connect_ex（失败可分类 / CT 不硬要求 / IO 超时）
 #   VM 轨 + C 轨跑**同一断言集**，两轨输出必须一致（除时间量）。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

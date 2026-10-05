@@ -2,6 +2,7 @@
 # M64-S5 doc 生成器自测验证
 # 注：文档输出含 markdown 反引号 `，不能走 eval+chk（反引号会被命令替换），
 # 此处直接 if/grep 断言；grep pattern 用反引号需以变量携带并 -F 字面匹配。
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 PXC="$PWD/tools/pxc"

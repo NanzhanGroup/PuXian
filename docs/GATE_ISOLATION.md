@@ -1,7 +1,8 @@
 # 门间隔离（Gate Isolation）
 
 > 建立于 M264；来历 = M260 §八 候选 ③「门之间的残留干扰」。
-> 判据工具：`selfhost/check_gate_shared_tmp.sh` · 白名单 `selfhost/gate_shared_tmp.txt`。
+> 判据工具：`selfhost/check_gate_shared_tmp.sh` · 白名单 `selfhost/gate_shared_tmp.txt`（§一–§七）；
+> `selfhost/check_gate_lock.sh`（§八 门级互斥 · M276）。
 
 ## 一 为什么「单独跑全绿、串起来跑却红」
 
@@ -86,3 +87,86 @@ M256_PROBE_D="$W/probe_d" ... "$BLD" ...
 3. 端口要么用 `$W` 派生，要么在门的「覆盖边界」里写清「不可并行」。
 4. 门结束前**清理自己写出去的东西**（仓库内的新增文件尤其重要 —— 见 M207 的运行副作用清理）。
 5. 改完跑：`bash selfhost/check_gate_shared_tmp.sh --self-test && bash selfhost/check_gate_shared_tmp.sh --root .`
+6. 门开头 source **门级互斥锁**（M276 · 见 §八）：
+   ```sh
+   . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败" >&2; exit 2; }
+   ```
+   （守卫 `check_gate_lock.sh` 会判：**每个门**都必须 source、且必须在改源码的标记**之前**。）
+
+---
+
+## 八 门级互斥（M276 · 晨曦 2026-10-05 回馈）
+
+> 晨曦原话：「门有并发不安全性（**就地改仓库**，建议加锁或 mktemp 副本）」。
+
+§一 列了隔离的三个面（**文件** / **进程与端口** / **共享构件**），但**「同时有两个人改同一份源码」**这一面
+此前**只有一半护栏**：
+
+| 场景 | M276 之前 |
+|---|---|
+| 两个**全量门**并发 | ✅ `run_gates.sh` 的 PID 锁（M191 立） |
+| **人工单跑**一扇门 + 全量门在跑 | ❌ **无覆盖** |
+
+而本仓 **98 个门**会在负控里**现场改源码**（`restore_all` / `NEGCTL` / `run_neg` …）。实测代价
+（M191 / M213 / M221 / M223 **各撞过一次**）：负控的 `snapshot/restore` 会**盖掉**未提交改动；
+门会读到**别的门打的负控补丁**（中间态）⇒ 假红 / 假绿；abort 时残留 `NEGCTL-*` 会被烘进入库件。
+
+### 机制
+
+```sh
+# 每个门开头（在任何改源码的动作之前）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh"
+```
+
+- **全量门**（`run_gates.sh`）**持有同一把锁**并导出 `PX_GATE_LOCK_HELD=1` ⇒ 门内直接返回（不重复加锁）
+- **单跑门** ⇒ 抢锁；抢不到 ⇒ **`rc=2` 响亮退出**（默认**不等待** —— 全量门要跑 ~2h，
+  静默阻塞看起来就像挂死）；`PX_GATE_LOCK_WAIT=<秒>` 可改成轮询等待
+- 拿到锁后**导出** `PX_GATE_LOCK_HELD=1` ⇒ 本门派生的子进程（重烘 / 子脚本）不再抢锁
+
+### ⚠️ 为什么是「PID 文件」而不是 `flock`（本轮实测后改的设计）
+
+第一版写的是 `exec 201>lock; flock -n 201`。实测**两个致命问题**：
+
+1. **锁会随 fd 泄漏给后代** —— 门里 `setsid nohup px_serve &` 那类**后台进程**继承 fd 201，
+   门退出后它仍持锁 ⇒ **下一扇门无端失败**。`flock` 是 open-file-description 级的，
+   而 bash 没有语法给 `exec N>` 设 `FD_CLOEXEC`。
+2. **释放只能靠进程退出或 `trap EXIT`**，而 **`trap EXIT` 会盖掉门自己已有的 EXIT 陷阱**
+   （大量门用它做 cleanup）⇒ 要么破坏门，要么泄漏。
+
+⇒ 改用**只认「持有者 PID 还活着吗」**的文件锁：后台子进程**不影响**它，也不需要 `trap`
+（陈旧文件由**存活判据**自愈）。存活判据 = `kill -0` **且** `/proc/<pid>/cmdline` 像门
+（后者防 **PID 复用**把陈旧锁误判成「被占」⇒ 所有门永久被挡）。
+
+### 判据（`selfhost/check_gate_lock.sh`）
+
+| # | 判据 | 违反时 |
+|---|---|---|
+| **J1** | **每个** `examples/*/verify.sh` 必须 source `gate_lock.sh` | 判红（**指名**） |
+| **J2** | source 行必须在**第一个改源码标记之前** | 判红（在标记之后 source = 白 source） |
+| **J3** | 规模锚点（门 ≥190 · 含标记门 ≥90） | 判红（防判据静默变空） |
+| **J4** | `run_gates.sh` 必须**持有**同一把锁（只 export 不持有 = 等于没锁） | 判红 |
+| **J5** | `gate_lock.sh` 存在 | 判红 |
+
+门 `examples/m276_gate_lock/`：**32 通过 / 0 失败** —— 行为五组（抢到 / 并发被拒 / 陈旧自愈 /
+已持跳过 / **后代不继承**）+ **竞态**（10 进程同启 ⇒ 恰好 1 个）+ `run_gates.sh` 集成（持锁拒启 ·
+对照已持放行）+ **3 道负控各自独立判红**。
+
+### 覆盖边界（如实）
+
+- 锁是**全局单把**（不按仓库根分键）⇒ 两个 git worktree 会互相串行。**有意**：分键要
+  runner / gate 两处各算一遍，**算不一致就是静默失效**（没有保护还看不出来）⇒ 宁可过度串行。
+- 「持有者是否在跑门」靠 `kill -0` + `/proc/<pid>/cmdline` ⇒ **非 Linux 平台**退回只看存活。
+- 只覆盖 `examples/*/verify.sh`；`selfhost/check_*.sh` 那批守卫**不改源码**，未纳面。
+- `run_gates.sh` 的锁块在**脏树检查之后** ⇒ 脏树时不会走到锁（那条路径本来就拒启）。
+- 竞态判据是**概率性**的（跑 1 次；10 进程同启 ×100 才等价穷举）。
+
+## 九 写门时的「锁」自检（与本文件 §七 合并使用）
+
+```sh
+bash selfhost/check_gate_lock.sh --root .          # J1–J5
+bash selfhost/check_gate_lock.sh --self-test       # 合成夹具 + 负控（跑 m276 门）
+bash examples/m276_gate_lock/verify.sh             # 行为 + 竞态 + 集成
+```
+
+⚠️ **测试锁的时候要 `env -u PX_GATE_LOCK_HELD`** —— 门自己已持锁并导出了这个变量，
+**后代进程会继承它并短路**（M276 实测：首版夹具全部"通过"但其实是空转 ⇒ 假绿）。

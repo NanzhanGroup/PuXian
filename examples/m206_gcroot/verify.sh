@@ -30,6 +30,7 @@
 #      由**静态判据**（层 ②）覆盖 —— http_serve 路径用的是**内联** urlencoded 解析（实测：
 #      撤 `px_parse_urlenc` 的 KEEP 后 probe_rt 仍全绿 ⇒ 该探针不经过它），故不给它们配动态负控。
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

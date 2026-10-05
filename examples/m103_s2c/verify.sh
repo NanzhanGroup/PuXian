@@ -5,6 +5,7 @@
 #       + 读 go_out.yaml（Go 写→px 读）+ dump px_out.yaml
 #   [3] Go check：yaml.Unmarshal 读 px_out.yaml 断言（px 写→Go 读）
 # 依赖：go（gopkg.in/yaml.v3，go.mod 已固定）、pxc 工具链；用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

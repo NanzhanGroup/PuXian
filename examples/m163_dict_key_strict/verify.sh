@@ -31,6 +31,7 @@
 # 备注：负控 A/B 会改 `runtime/` 源 → `tools/px` 的 rtcache **按内容哈希另建目录**
 #   （`.rtcache/<key>/`，.gitignore 已忽略；不改动既有缓存、跑完源码逐字节还原）。
 # ═══════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

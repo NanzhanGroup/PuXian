@@ -13,6 +13,7 @@
 #   ② 自断言：esc() 自身 + **已登记边界**（M138_SELF_OK 计数）
 #   ③ 负控 A：把真值改一个字节 ⇒ diff **必须**变红（证明 diff 不是白跑）
 #   ④ 负控 B：把 parity.px 的语料改一处 ⇒ 输出必须变化
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

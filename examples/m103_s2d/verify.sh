@@ -4,6 +4,7 @@
 #   [2] px 断言：PNG decode/等比缩放 ≤512/JPEG q70 魔数+decode back/JPEG 输入/畸形 Err
 #   [3] Go check：px_out.jpg 可被 image.Decode 解析 + 尺寸 512×384 + 体积同量级
 # 依赖：go（image/png/jpeg 标准库）、pxc 工具链；用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc

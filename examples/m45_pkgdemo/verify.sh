@@ -11,6 +11,7 @@
 #   6. 恢复后 --locked 通过；registry 删除也不影响（已锁定，不重新解析）
 # 运行：examples/m45_pkgdemo/verify.sh
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 DEMO="$(cd "$(dirname "$0")" && pwd)"
 PKG="${DEMO}/../../tools/pxpkg"

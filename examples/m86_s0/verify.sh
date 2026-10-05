@@ -5,6 +5,7 @@
 #         build 零漂移（默认 9.0M + --no-quic 3.93M）/ 安装链路（spec/install.sh/make_release）双装
 #   依赖：tools/px（M86-S0 版）+ bootstrap/pxc（仓库自带）
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px

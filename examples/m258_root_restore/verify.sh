@@ -25,6 +25,7 @@
 #       C 判据自伤（[3] 的检测恒真）⇒ 与 [4] 冲突 ⇒ 可判定
 # 用法：verify.sh [--neg-skip] [--keep]
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

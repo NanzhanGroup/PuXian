@@ -22,6 +22,7 @@
 #  ⑥ 负控 C（判据自伤）：把本工具的逐字节比对改成恒真 ⇒ ③ 必须**不再红**
 #  ⑦ 覆盖边界：如实登记「正常档就不通的语料不在本筛管辖区」（SKIP_NORM 带原因）
 # ============================================================
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

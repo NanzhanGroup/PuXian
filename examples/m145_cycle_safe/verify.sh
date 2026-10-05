@@ -9,6 +9,7 @@
 #         JSON 在环上**受控报错**（Go encoding/json 同族文案）。
 #   三轨断言集相同：VM（默认 build）/ C（PX_BUILD_ENGINE=c）/ 解释轨（px run）。
 # 用法：bash verify.sh
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")"
 PX=../../tools/px
