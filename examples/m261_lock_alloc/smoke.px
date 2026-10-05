@@ -1,0 +1,33 @@
+# M261 冒烟 · 覆盖「两阶段」改造后的两条真实路径
+# ------------------------------------------------------------
+#   ① `fserve_ensure`：**首个 serve 入口**建池（http_serve ⇒ 懒初始化）——
+#      改造后两处 xcalloc 在锁外，锁内只发布。若发布逻辑写错（例如忘了赋值
+#      g_fserve_threads/g_fserve_queue），worker 线程会拿到 NULL 表 ⇒ 首个请求崩。
+#      ⇒ 判据 = 「起服务 + 真拿到 200」。
+#   ② `px_rate_limit_try`：**未命中 ⇒ 锁外备货 ⇒ 复核 ⇒ 发布**（新桶只建一次，
+#      之后走命中热路径）。⇒ 判据 = 连打 5 次，全部 success（桶建好且计数正常）。
+#   另：`px_conn_pend_put` 的余留字节路径由 HTTP 管线化门覆盖（m95_s2 / m97_s2 /
+#      m131 / m176 / m242），本冒烟不重复。
+PORT = 18321
+
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return {"status": 200, "body": "alive"}
+    if p == "/rl":
+        var s = ""
+        var i = 0
+        while i < 5:
+            let ok = rate_limit("m261-smoke", 100, 60)
+            if ok:
+                s = s + "1"
+            else:
+                s = s + "0"
+            i = i + 1
+        return {"status": 200, "body": "rl=" + s}
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve(PORT, handler)
+print("M261 READY port=" + str(PORT))
+sleep(60000)
+print("M261 MAIN-EXIT-NORMAL")

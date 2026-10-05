@@ -13,7 +13,9 @@
 #   C6/C7 **不变量**：子协程扩容中被隔离终止，父协程核对「对象完好 + 仍可继续追加」
 #          （旧实现留下 cap 与数组长度不一致 ⇒ 下一次追加越界写；新实现备货未发布 ⇒ 零影响）；
 #   C8 A/B 对照（PX_GROW_RETRY_MAX=0 走旧锁内路径 + 同尺寸注入）⇒ 进程退出 + 审计列出 g_gc_mu；
-#   C9 诚实记录：默认路径下仍有锁内分配站点（rate_limit 建桶）⇒ M127 审计仍是必需的；
+#   C9 **M261 连带更新**：rate_limit 建桶已移出 g_rate_mu 临界区 ⇒ 该站点注入**不再命中**
+#      （修前会命中并 _exit(1)）。判据移位为「不命中 + 请求正常 + 进程存活」，
+#      并把「默认路径是否还有锁内站点」转交守卫 check_lock_alloc.py（M261 门）回答；
 #   C10/C11 负控：无注入全 200（默认路径 / 兜底路径两种都测）＋ 自然退出 rc=0；
 #   C12 材料完整性。
 # 注 1：必须用**仓库自带** tools/px（PXC_HOME=仓库根 ⇒ 用仓库 runtime/）。
@@ -204,15 +206,33 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[9/12] C9 诚实记录：默认路径下仍有锁内分配站点（rate_limit 建桶）⇒ M127 审计仍是必需的"
+echo "[9/12] C9 M261 连带：rate_limit 建桶已移出临界区 ⇒ 注入不再命中（期望值移位）"
 if start_bin C9 1 PX_ALLOC_FAIL_IN_LOCK=g_rate_mu; then :; fi
 if [ -n "$PID" ]; then
   H=$(req_full "/rates" /tmp/m128_C9_tgt.out); echo "     /rates → '${H:-（无响应）}'"
-  grep -q "px-locktrack] 注入命中：本线程持锁栈深度=1，匹配=&g_rate_mu" "$LOG" \
-    && ok "C9 rate_limit 建桶确在 g_rate_mu 临界区内分配（M129 候选：px_rate_limit_try）" \
-    || bad "C9 未见 g_rate_mu 锁内注入命中行"
-  if wait_gone 10; then ok "C9 该站点失败 ⇒ 锁审计介入并退出（未假死）"; else bad "C9 进程未退出"; kill9; fi
-  grep -q "g_rate_mu" "$LOG" && ok "C9 审计清单列出 &g_rate_mu" || bad "C9 审计清单缺 g_rate_mu"
+  # M261（缺陷 464）：rate_limit 建桶已**两阶段化**（锁外备货 → 锁内只发布）⇒ 该站点
+  #   在临界区内**再无分配** ⇒ 注入**不命中**。修前的期望（命中 + 隔离 + _exit(1)）已失效，
+  #   按「改行为 ⇒ 期望值移位」把判据翻到**反面**（这正是 M230/M227 立下的纪律）。
+  case "$H" in *" 200"*) ok "C9 /rates ⇒ 200（注入未命中 ⇒ 建桶已在锁外，M261 收口生效）";;
+                *) bad "C9 /rates 期望 200，实得 '$H'";; esac
+  if grep -q "px-locktrack] 注入命中" "$LOG"; then
+    bad "C9 仍出现锁内注入命中行 ⇒ 收口回潮（M261 的守卫应在 CI 之前挡住）"
+  else
+    ok "C9 零锁内注入命中（该站点已不在 g_rate_mu 临界区内分配）"
+  fi
+  grep -q "无法安全回滚\|_exit(1)" "$LOG" \
+    && bad "C9 出现锁审计/致命退出行" || ok "C9 无锁审计行、无 _exit(1)"
+  if kill -0 "$PID" 2>/dev/null; then ok "C9 进程存活（对照修前：命中即 _exit(1)）"; else bad "C9 进程已退出"; fi
+  H=$(req_full "/health" /tmp/m128_C9b.out); B=$(body_of /tmp/m128_C9b.out)
+  [ "$B" = "alive" ] && ok "C9 失败注入不影响服务：/health ⇒ alive" || bad "C9 /health body='$B'"
+  kill9
+  # 诚实记录（移交给守卫）：默认路径是否**还有**锁内可失败分配站点 —— 不由本门肉眼判断，
+  #   由 selfhost/check_lock_alloc.py 的基线回答（M261：6 处 = 4 待收口 + 2 有意保留）。
+  if python3 "$ROOT/selfhost/check_lock_alloc.py" --root "$ROOT" >/tmp/m128_C9_guard.log 2>&1; then
+    ok "C9 守卫复核：$(head -1 /tmp/m128_C9_guard.log)"
+  else
+    bad "C9 守卫判红（新增持锁分配）"
+  fi
 fi
 
 echo

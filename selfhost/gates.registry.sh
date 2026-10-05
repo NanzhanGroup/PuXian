@@ -975,6 +975,11 @@ step "M260 · GC 压力档台账（分批常态化）+ 持锁可失败分配守�
 run gcstress_ledger python3 selfhost/check_gcstress_ledger.py --root .
 run lock_alloc python3 selfhost/check_lock_alloc.py --root .
 run m260_gc_repro bash examples/m260_gc_repro/verify.sh
+step "M261 · 持锁可失败分配收口（一）· 缺陷 464（13 → 6）"
+#   7 处机械两阶段（fserve_ensure×2 · px_conn_pend_put · px_pin_obj 死代码 ·
+#   px_const_put · px_rate_limit_try×2）；并修好守卫自身两个**判据 bug**
+#   （键含行号 ⇒ 假新增；跨行签名 ⇒ 函数归属错）。
+run m261_lock_alloc bash examples/m261_lock_alloc/verify.sh
 step "M128 · 扩容分配移出临界区（C1–C12 · 缺陷 439 修好后**收编**为正式门）"
 #   为什么现在才收编：M251 的孤儿门体检把它判为**真回归**（缺陷 439）⇒ 它是「不在任何运行器里
 #   的历史资产」。M260 修掉 439 之后，它第一次可以进运行器（实测 pass=86 / fail=0）。
