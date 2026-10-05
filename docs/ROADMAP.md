@@ -74,6 +74,16 @@
 
 ## 三、远期方向
 
+### 已立项 · `pxpkg sync`（registry 在线分发）—— 规划见 `docs/PXPKG_SYNC_PLAN.md`
+
+> **令源**：用户 2026-10-05「pxpkg sync 立项」。需求输入：晨曦《请给 pxpkg 加 `pxpkg sync`》（7,507 B）。
+> **问题**：用户 `rpm install puxian` 后有 `pxpkg` 但**没有包源**（`registry/` 不在发布物里）；
+> 现有两条取包路径（本地 `PX_REGISTRY` 目录 / 单文件 `add <url>#sha256`）都到不了「一条 URL 拿全部」。
+> **重评估 M69**（「registry 目录级远程明确不做」）—— 当年缺的是分发站，现在对端**已就绪**
+> （`soft.wsai.chat/puxian-registry/` + 广州边缘双活，归档 230,720 B，含 `version.json` / `files.sha256`）。
+> **上游要做**：W1 `pxpkg sync` 客户端 · W2 发布物含 `registry/`（**待拍板**）· W3 `pxrepo_mirror.sh` 的
+> registry 支持（现发布段 `rsync -a --delete --exclude=/rpm/` 会删掉 `DEST` 下其它内容）· W4 门。
+
 ### 候选主线排期（由 docs/GAP_ANALYSIS.md 驱动，按建议顺序）
 
 > 定位：未来主线的候选池。立项流程：出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地

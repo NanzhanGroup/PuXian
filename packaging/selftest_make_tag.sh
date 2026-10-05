@@ -60,15 +60,15 @@ chk "H 规则不接受补丁后缀（负控自证）" \
 echo "── A 正向：构造名（--milestone）──"
 R="$(newrepo a)"; run "$R" --milestone 249
 chk "A rc=0" "$RC" "0"
-chk "A 建出 v0.2.0-m249" "$(tags "$R")" "v0.2.0-m249 "
-chk "A 是 annotated tag" "$(git -C "$R" cat-file -t refs/tags/v0.2.0-m249)" "tag"
+chk "A 建出 v0.2.249" "$(tags "$R")" "v0.2.249 "
+chk "A 是 annotated tag" "$(git -C "$R" cat-file -t refs/tags/v0.2.249)" "tag"
 chk "A 指向 HEAD" \
-    "$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m249^{commit}')" "$(git -C "$R" rev-parse HEAD)"
+    "$(git -C "$R" rev-parse 'refs/tags/v0.2.249^{commit}')" "$(git -C "$R" rev-parse HEAD)"
 
 echo "── B 正向：里程碑自 CHANGELOG 推断 ──"
 R="$(newrepo b)"; run "$R"
 chk "B rc=0" "$RC" "0"
-chk "B 推断出 M248 ⇒ v0.2.0-m248" "$(tags "$R")" "v0.2.0-m248 "
+chk "B 推断出 M248 ⇒ v0.2.248" "$(tags "$R")" "v0.2.248 "
 case "$out" in *"M248"*) ok "B 输出里报出推断到的里程碑";; *) bad "B 输出未提里程碑: $out";; esac
 
 echo "── C ★核心负控：补丁后缀形态必须被拒绝 ──"
@@ -80,7 +80,7 @@ case "$out" in *"打包 r"*|*"镜像"*) ok "C 信息说明了后果（镜像同�
 
 echo "── D 不合规名矩阵（全部必须 rc=3 且零副作用）──"
 for n in v0.2.0-m245s1 v0.2.0-m245s2 v0.2.0-245 v0.2.0-M245 v0.2.0-m245x \
-         m245 v0.2.0 v0.2.0-m245.1 v1.2-m245; do
+         m245 v0.2.0-m249 v0.2.0-m245.1 v1.2-m245; do
     R="$(newrepo "d$pass$fail$$")"
     run "$R" --name "$n"
     rc="$RC"; created="$(tags "$R")"
@@ -93,23 +93,22 @@ chk "D --name '' ⇒ rc=2（参数错 · 不静默退回构造名）" "$RC" "2"
 chk "D --name '' 零副作用" "$(tags "$R")" ""
 
 echo "── E 已存在且指向别处、未 --move ⇒ rc=4 且**不动**原 tag ──"
-# ⚠ M249：本段与 F 段改走 `--name`（**钉死完整名**）—— 默认路径自 M249 起会
-#   递增 patch ⇒ 第二次 `--milestone 248` 算出 v0.2.1-m248（**不重名** ⇒ rc=0）。
-#   本段要测的是「**同名** tag 已存在的行为」，与版本段无关 ⇒ 名字必须钉死。
-#   默认路径不重名这件事由 **R7** 正面覆盖。
-R="$(newrepo e)"; run "$R" --name v0.2.0-m248; OLD="$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')"
+# ⚠ M272：方案 B 下 **tag 名与里程碑一一对应**（patch 段 = 里程碑号）⇒ 同一里程碑
+#   第二次 `--milestone 248` 会算出**同一个名字** ⇒ rc=4。本段用 `--name` 把名字钉死，
+#   测的是「同名 tag 已存在、未 --move」的行为；正面的「同名即拒绝」由 **R7** 覆盖。
+R="$(newrepo e)"; run "$R" --name v0.2.248; OLD="$(git -C "$R" rev-parse 'refs/tags/v0.2.248^{commit}')"
 git -C "$R" commit -q --allow-empty -m "M248：第二个提交"
-run "$R" --name v0.2.0-m248
+run "$R" --name v0.2.248
 chk "E rc=4" "$RC" "4"
-chk "E 原 tag 未被移动" "$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')" "$OLD"
+chk "E 原 tag 未被移动" "$(git -C "$R" rev-parse 'refs/tags/v0.2.248^{commit}')" "$OLD"
 case "$out" in *"--move"*) ok "E 信息给出合规出路（--move）";; *) bad "E 未给出路";; esac
 
 echo "── F --move 重定向 ──"
-run "$R" --move --name v0.2.0-m248
+run "$R" --move --name v0.2.248
 chk "F rc=0" "$RC" "0"
 chk "F tag 已指向新 HEAD" \
-    "$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m248^{commit}')" "$(git -C "$R" rev-parse HEAD)"
-chk "F 仍是 annotated（不是轻量 tag）" "$(git -C "$R" cat-file -t refs/tags/v0.2.0-m248)" "tag"
+    "$(git -C "$R" rev-parse 'refs/tags/v0.2.248^{commit}')" "$(git -C "$R" rev-parse HEAD)"
+chk "F 仍是 annotated（不是轻量 tag）" "$(git -C "$R" cat-file -t refs/tags/v0.2.248)" "tag"
 
 echo "── G --dry-run 是**只读**入口（M244 缺陷 412 的纪律）──"
 R="$(newrepo g)"; run "$R" --milestone 250 --dry-run
@@ -138,7 +137,7 @@ git -C "$R" commit -q --allow-empty -m "M248：新提交"
 run "$R" --milestone 252 --at "$FIRST"
 chk "M rc=0" "$RC" "0"
 chk "M tag 指向指定提交（不是 HEAD）" \
-    "$(git -C "$R" rev-parse 'refs/tags/v0.2.0-m252^{commit}')" "$FIRST"
+    "$(git -C "$R" rev-parse 'refs/tags/v0.2.252^{commit}')" "$FIRST"
 
 echo "── N 顺序判据：校验必须在创建**之前** ──"
 LN_CHK="$(grep -n '拒绝创建不合规 tag' "$MT" | head -1 | cut -d: -f1)"
@@ -240,7 +239,10 @@ git -C "$R2" tag -a v0.2.0-m245s1 -m "夹具：坏 tag"
 out="$(cd "$R2" && SKIP_SIGN=1 timeout 60 bash packaging/build_rpm.sh 2>&1)"; :
 case "$out" in *"tag 命名不合规"*) bad "Q5 build_rpm 打桩后仍在报错（打桩无效）";; *) ok "Q5 build_rpm 打桩后不再拦（= 原判据确实在拦）";; esac
 
-echo "── R：版本段**递增**（M249 · 用户令「每次 tag 改 0.2.*，到 100 就升 0.3.0」）──"
+echo "── R：版本段 = <次段>.<里程碑>（M272 · 用户令 2026-10-05 方案 B）──"
+#   方案 B 语义：**patch 段就是里程碑号** ⇒ ① 版本号自带进展；② 同一里程碑的 tag 名**唯一**
+#   （不再「每轮递增 patch」，也不再有「patch 到 100 进位 minor」那条——它会让 0.2.x 一百轮耗尽）。
+#   次段只在**大改进**时手工升（`--minor N`）。
 #   判据形态：`--dry-run` 只读入口（无副作用 · M244 缺陷 412 的纪律）⇒ 把 tag 名读回来比。
 bump_probe() {  # bump_probe <仓库> <里程碑> <期望tag> [额外参数...]
     local d="$1"
@@ -253,61 +255,68 @@ bump_probe() {  # bump_probe <仓库> <里程碑> <期望tag> [额外参数...]
     chk "R m$ms ⇒ $exp" "$got" "$exp"
 }
 
-# R0 无 tag ⇒ **不递增**（保持 0.2.0 默认 —— A 段判据不变的前提）
-R0="$(newrepo r0)"; bump_probe "$R0" 249 "v0.2.0-m249"
+# R0 无 tag ⇒ 次段取默认 0.2
+R0="$(newrepo r0)"; bump_probe "$R0" 249 "v0.2.249"
 
-# R1 基线 v0.2.0-m246 ⇒ patch+1
+# R1 旧形态基线 v0.2.0-m246 ⇒ 次段继承 0.2，patch 段 = 里程碑号
 R1="$(newrepo r1)"; git -C "$R1" tag -a v0.2.0-m246 -m x
-bump_probe "$R1" 247 "v0.2.1-m247"
+bump_probe "$R1" 247 "v0.2.247"
 
-# R2 v0.2.98-m344 ⇒ 0.2.99（未到 100，不进位）
+# R2 旧形态 v0.2.98-m344 ⇒ 次段仍继承 0.2
 RB2="$(newrepo r2)"; git -C "$RB2" tag -a v0.2.98-m344 -m x
-bump_probe "$RB2" 345 "v0.2.99-m345"
+bump_probe "$RB2" 345 "v0.2.345"
 
-# R3 v0.2.99-m345 ⇒ **patch 到 100 ⇒ 进位 0.3.0**
+# R3 **不再「到 100 进位」**：v0.2.99-m345 ⇒ v0.2.346（旧规则会算成 0.3.0-m346）
 R3="$(newrepo r3)"; git -C "$R3" tag -a v0.2.99-m345 -m x
-bump_probe "$R3" 346 "v0.3.0-m346"
+bump_probe "$R3" 346 "v0.2.346"
 
-# R4 多 tag 乱序 ⇒ 取**版本序最高**那个（不是「最近可达」）
+# R3b 新形态基线 v0.2.271 ⇒ v0.2.272
+R3B="$(newrepo r3b)"; git -C "$R3B" tag -a v0.2.271 -m x
+bump_probe "$R3B" 272 "v0.2.272"
+
+# R3c `--minor 3`（大改进升次段）⇒ v0.3.272（patch 段**仍是**里程碑号）
+bump_probe "$R3B" 272 "v0.3.272" --minor 3
+
+# R4 多 tag 乱序 ⇒ 次段取**版本序最高**那个（不是「最近可达」）
 R4="$(newrepo r4)"; git -C "$R4" tag -a v0.2.0-m246 -m x; git -C "$R4" tag -a v0.2.1-m249 -m x
-bump_probe "$R4" 250 "v0.2.2-m250"
+bump_probe "$R4" 250 "v0.2.250"
 
-# R5 `--move` **不递增**（重定向同一 tag 换提交 ≠ 新版本）
-R5="$(newrepo r5)"; git -C "$R5" tag -a v0.2.0-m248 -m x
+# R5 `--move` 不改变命名（重定向同一 tag 换提交 ≠ 新版本）
+R5="$(newrepo r5)"; git -C "$R5" tag -a v0.2.248 -m x
 git -C "$R5" commit -q --allow-empty -m "second"
-bump_probe "$R5" 248 "v0.2.0-m248" --move
+bump_probe "$R5" 248 "v0.2.248" --move
 
-# R7 默认路径：连续两次 `--milestone` 得到**不同**名字（递增 ⇒ 不重名 ⇒ 都 rc=0）
+# R7 **同名即拒绝**（方案 B 的直接后果）：同一里程碑连打两次 ⇒ 第二次 rc=4（提示 --move）
+#   旧规则下两次会得到两个名字（递增）⇒ 这条判据正是「tag 名字与里程碑一一对应」的守护。
 R7="$(newrepo r7)"
 run "$R7" --milestone 800
 chk "R7 第一次 rc=0" "$RC" "0"
+# 换一个提交再打同一个里程碑 ⇒ 名字相同、指向不同 ⇒ 必须 rc=4（提示 --move）
+git -C "$R7" commit -q --allow-empty -m "M800：第二个提交"
 run "$R7" --milestone 800
-chk "R7 第二次仍 rc=0（递增后不重名）" "$RC" "0"
-chk "R7 两个 tag 并存" "$(tags "$R7")" "v0.2.0-m800 v0.2.1-m800 "
+chk "R7 第二次 rc=4（同名已存在 ⇒ 需 --move）" "$RC" "4"
+chk "R7 只留一个 tag（不产生第二个名字）" "$(tags "$R7")" "v0.2.800 "
 
-# R6 ★负控：**拆掉递增逻辑** ⇒ R1 的结论必须不再成立（证明 R1 的绿来自递增本身）
-MT_STUB="$TMP/make_tag_nobump.sh"
+# R6 ★负控：**拆掉「patch 段 = 里程碑号」** ⇒ R1 的结论必须不再成立
+#   （锚点 = TAG 构造那一行；它变了说明构造方式改了，判据要跟着改）
+MT_STUB="$TMP/make_tag_nopatch.sh"
 cp "$MT" "$MT_STUB"
 python3 - "$MT_STUB" <<'PYEOF'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text(encoding="utf-8")
-OLD = ('                _pat=$((_pat + 1))\n'
-       '                if [ "$_pat" -ge 100 ]; then\n'
-       '                    _pat=0; _min=$((_min + 1))\n'
-       '                fi\n'
-       '                VER="${_maj}.${_min}.${_pat}"\n')
-NEW = '                VER="$_tv"\n'
+OLD = '    TAG="v${VER_BASE}.${MILESTONE}"\n'
+NEW = '    TAG="v${VER_BASE}.0-m${MILESTONE}"\n'
 if s.count(OLD) != 1:
     sys.stderr.write("NEGCTL-R6-MISS\n"); sys.exit(1)
 p.write_text(s.replace(OLD, NEW, 1), encoding="utf-8")
 PYEOF
 if [ $? != 0 ]; then
-    bad "R6 ★负控：打桩失败（递增段锚点没命中 —— 说明 make_tag.sh 的写法变了，判据要跟着改）"
+    bad "R6 ★负控：打桩失败（TAG 构造锚点没命中 —— make_tag.sh 的写法变了，判据要跟着改）"
 else
     bash -n "$MT_STUB" || bad "R6 打桩后语法错"
     out="$(PX_TAG_REPO="$R1" bash "$MT_STUB" --milestone 247 --dry-run 2>&1)"
     got="$(printf '%s\n' "$out" | sed -n 's/^  tag 名   : //p' | head -1)"
-    chkn "R6 ★负控：拆掉递增后**不再**给出 v0.2.1-m247" "$got" "v0.2.1-m247"
+    chkn "R6 ★负控：拆掉后**不再**给出 v0.2.247" "$got" "v0.2.247"
 fi
 
 # ── V 段：packaging 工具链的执行位一致性（M254 · 缺陷 450）──

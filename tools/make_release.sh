@@ -47,13 +47,25 @@ done
 VER="0.1.0"
 TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 if [ -n "$TAG" ]; then
-    TVER="${TAG#v}"                 # v0.1.0-m62 → 0.1.0-m62
-    TAG_VER="${TVER%%-*}"           # → 0.1.0
-    [ -n "$TAG_VER" ] && VER="$TAG_VER"
-    if [ -z "$MILESTONE" ] && [ "$TVER" != "${TVER%%-*}" ]; then
-        # 未显式指定里程碑且 tag 带 -mxx 后缀 → tag 是发布决策，优先于 commit 推断
-        MILESTONE="$(echo "${TVER#*-}" | tr 'A-Z' 'a-z')"
-    fi
+    TVER="${TAG#v}"                 # v0.2.271 → 0.2.271 ；v0.1.0-m62 → 0.1.0-m62
+    case "$TVER" in
+        *-m*)
+            # 旧形态（历史冻结）：v<ver>-m<里程碑>
+            TAG_VER="${TVER%%-*}"
+            [ -n "$TAG_VER" ] && VER="$TAG_VER"
+            if [ -z "$MILESTONE" ]; then
+                MILESTONE="$(echo "${TVER#*-}" | tr 'A-Z' 'a-z')"
+            fi
+            ;;
+        [0-9]*.[0-9]*.[0-9]*)
+            # 新形态（M272 起）：第三段 = 里程碑号 ⇒ 版本号即 tag 名
+            VER="$TVER"
+            if [ -z "$MILESTONE" ]; then
+                _pat="${TVER##*.}"
+                MILESTONE="m$(printf '%s' "$_pat" | sed 's/^0*//')"
+            fi
+            ;;
+    esac
     echo "   版本源: tag $TAG"
 fi
 if [ -z "$MILESTONE" ]; then

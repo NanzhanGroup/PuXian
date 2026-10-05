@@ -55,10 +55,23 @@ fi
 #   VER=主版本段（0.2.0 / 0.1.0）；MILESTONE=-m 段（m72）或兜底（commit 里程碑 / dev）
 TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 [ -n "$TAG" ] || { echo "❌ 未找到 git tag（发布必须先打 v<版本> tag）"; exit 1; }
-TVER="${TAG#v}"                        # v0.2.0 → 0.2.0；v0.1.0-m72 → 0.1.0-m72
-VER="${TVER%%-*}"                      # 0.2.0 / 0.1.0
+TVER="${TAG#v}"                        # v0.2.271 → 0.2.271；v0.2.0-m167 → 0.2.0-m167
+VER="${TVER%%-*}"                      # 0.2.271 / 0.2.0
 MILESTONE=""
-if [ "$TVER" != "${TVER%%-*}" ]; then  # 含 -m<里程碑> 段
+if [ "$TVER" = "${TVER%%-*}" ]; then    # **新形态** v<次段>.<里程碑>（M272 起）：
+    #   第三段就是里程碑号 ⇒ 版本号里直接读出轮次（脚本不再有「-m 后缀」这一层。）
+    case "$TVER" in
+        [0-9]*.[0-9]*.[0-9]*)
+            _pat="${TVER##*.}"
+            case "$_pat" in
+                ''|*[!0-9]*) echo "❌ tag 命名不合规：$TAG（规则: v<次段>.<里程碑>，例 v0.2.271）" >&2; exit 1 ;;
+            esac
+            MILESTONE="m$(printf '%s' "$_pat" | sed 's/^0*//')"
+            [ "$MILESTONE" != "m" ] || { echo "❌ tag 里程碑段为 0：$TAG" >&2; exit 1; }
+            ;;
+        *) echo "❌ tag 命名不合规：$TAG（既不是新形态 v<次段>.<里程碑>，也不是旧形态 v<ver>-m<NNN>）" >&2; exit 1 ;;
+    esac
+elif [ "$TVER" != "${TVER%%-*}" ]; then  # 旧形态 v<ver>-m<里程碑>（历史冻结）
     MILESTONE="$(echo "${TVER#*-}" | tr 'A-Z' 'a-z')"
     # ---- M248 第 ② 道防线：tag 派生的 MILESTONE 必须是 m<数字> ----
     #   此前这里**不校验**：短横线之后整段都当里程碑 ⇒ 2026-10-03 实测，一个
