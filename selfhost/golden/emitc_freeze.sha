@@ -255,7 +255,7 @@ examples/m246_compound_assign/drv.px src=9d2625fa6f373310 rc=0 out=855d822c3724f
 examples/m250_onnx_tensor/surface.px src=5458387bf9a5e86e rc=0 out=b0d9938eb6ccf109252acbe40fce4e99 err=e3b0c44298fc1c14
 examples/m253_bcorpus/surface.px src=8daec923cfcec395 rc=0 out=9222a7deba5a8e6b240f05749b8be721 err=e3b0c44298fc1c14
 examples/m255_ws_takeover_rst/srv.px src=390c3b99cefa33d2 rc=0 out=cf8e1b332985512204236d4ec072754c err=e3b0c44298fc1c14
-examples/m256_eintr/probe_eintr.px src=07e8a9594d987d56 rc=0 out=967738bfa2216b14468563ed2a4fce8e err=e3b0c44298fc1c14
+examples/m256_eintr/probe_eintr.px src=7be4461902bda35b rc=0 out=5434e0ae6d733a8bc42b29174dbc6982 err=e3b0c44298fc1c14
 examples/m257_alloc_integrity/probe_dict.px src=668482995e2bd7e1 rc=0 out=191f91b9e704654f47b20ea80e2accfc err=e3b0c44298fc1c14
 examples/m261_lock_alloc/smoke.px src=b8b6310e4959f8c8 rc=0 out=84fa2ec87a9896d842e5cc2b414239f9 err=e3b0c44298fc1c14
 examples/m262_lock_alloc2/route_smoke.px src=66767f74606d0865 rc=0 out=2565c6c52fdce5ececfff4aad064ad26 err=e3b0c44298fc1c14

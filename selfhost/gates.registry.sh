@@ -989,6 +989,10 @@ step "M263 · 「响应串味」查到底 + pbuf/fd 生命周期审查 + 缺陷 
 #   静态审查照出缺陷 466（空闲超时关闭路径裸 close，不清挂起 handler 表）⇒ 已修；
 #   m128 的 C10 去掉「疑似⇒重试」掩盖，改「零重试」硬判据。
 run m263_resp_crosstalk bash examples/m263_resp_crosstalk/verify.sh
+step "M264 · 门间隔离（共用固定 /tmp 路径 · 白名单制）"
+#   新守卫 check_gate_shared_tmp.sh + 白名单（未登记⇒红 · 无理由⇒rc=3 · 过期⇒红）；
+#   把唯一一处非有意共用修掉（m260 复用 m256 的探针 ⇒ 数据目录参数化 M256_PROBE_D）。
+run m264_gate_shared_tmp bash examples/m264_gate_shared_tmp/verify.sh
 step "M128 · 扩容分配移出临界区（C1–C12 · 缺陷 439 修好后**收编**为正式门）"
 #   为什么现在才收编：M251 的孤儿门体检把它判为**真回归**（缺陷 439）⇒ 它是「不在任何运行器里
 #   的历史资产」。M260 修掉 439 之后，它第一次可以进运行器（实测 pass=86 / fail=0）。
