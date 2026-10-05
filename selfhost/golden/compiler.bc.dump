@@ -1076,7 +1076,7 @@ K 1072 str "Named"
 K 1073 str "Optional"
 K 1074 str "Func"
 K 1075 str "Generic"
-K 1076 str "0.2.12"
+K 1076 str "0.2.13"
 K 1077 str "M-B9a"
 # G 371
 G 0 g_src

@@ -980,6 +980,17 @@ jobs:
           grep -E '^── |^  PASS' /tmp/v_m260.log | tail -8 || true
           echo "✅ m260（台账 423 条 100% 覆盖 + 18 处已知欠账不新增 + 复现装置 5/5）PASS"
 
+      - name: m261_lock_alloc（持锁可失败分配收口（一）· 缺陷 464 · 13 → 6）
+        if: always()
+        run: |
+          python3 examples/m261_lock_alloc/check_anchors.py --root . > /tmp/v_m261a.log 2>&1 || { echo "❌ M261 静态锚点失败（旧形态回潮 / 锁区间内出现分配）"; grep -E '^  ❌' /tmp/v_m261a.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── ' /tmp/v_m261a.log | tail -2 || true
+          python3 selfhost/check_lock_alloc.py --root . > /tmp/v_m261b.log 2>&1 || { echo "❌ 持锁临界区内的可失败分配：新增 或 基线 ACCEPTED 无理由"; head -6 /tmp/v_m261b.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^✅|^⚠️' /tmp/v_m261b.log || true
+          bash examples/m261_lock_alloc/verify.sh --neg-skip > /tmp/v_m261.log 2>&1 || { echo "❌ m261_lock_alloc verify 失败"; grep -E '^(   |── |❌|  ✅)' /tmp/v_m261.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^── M261' /tmp/v_m261.log | tail -2 || true
+          echo "✅ m261_lock_alloc（锚点 20/0 + 守卫自证 7/7 + 基线 4 待收口/2 有意保留 + 冒烟 fserve/rate_limit）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

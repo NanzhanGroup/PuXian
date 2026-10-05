@@ -2394,7 +2394,10 @@ static void px_pin_obj(LXObject* o) {
     //   + 4161 小整数文本），于是每次 pin 都要数千次比较、总代价 O(n²)：实测占整图编译
     //   **10.0% 采样**（榜第二，仅次于解释循环）。改为开放寻址指针集合后 pin = O(1)。
     //   集合满/探针用尽时**退化为直接追加**（数组里重复一项，标记同一对象两次无害）。
-    if (!g_pin_set) g_pin_set = (LXObject**)xcalloc(PX_PIN_SLOTS, sizeof(LXObject*));
+    // M261（缺陷 464）：此处原有 `if (!g_pin_set) g_pin_set = xcalloc(...)` —— **不可达死代码**：
+    //   本函数入口已按 ACQUIRE 读过 g_pin_set，NULL 时**必**备好 nset；上面那两行要么发布
+    //   nset、要么发现他线程已发布 ⇒ 执行到这里 g_pin_set **必非 NULL**（它只在这一处被赋值，
+    //   任何地方都不会写回 NULL）。删掉它同时消掉一处「持 g_pinned_mu 的可失败分配」。
     unsigned h = (unsigned)((((uintptr_t)o >> 4) * 0x9E3779B97F4A7C15ULL) >> 40) & (PX_PIN_SLOTS - 1);
     for (int k = 0; k < 16; k++) {
         unsigned j = (h + (unsigned)k) & (PX_PIN_SLOTS - 1);
@@ -2458,10 +2461,15 @@ static LXObject* px_const_get(const char* s) {
     return NULL;
 }
 static void px_const_put(const char* s, LXObject* o) {
+    // M261（缺陷 464）：**两阶段** —— 常量表未建时先在**锁外**建好备货，锁内只发布。
+    //   修前 xcalloc 落在 g_ctab_mu 临界区内（OOM ⇒ 持锁 ⇒ _exit(1) 服务中断）。
+    PxConstEnt* ntab = NULL;
+    if (!__atomic_load_n(&g_ctab, __ATOMIC_ACQUIRE))
+        ntab = (PxConstEnt*)xcalloc(PX_CONST_SLOTS, sizeof(PxConstEnt));
     pthread_mutex_lock(&g_ctab_mu);
-    if (!g_ctab) {
-        g_ctab = (PxConstEnt*)xcalloc(PX_CONST_SLOTS, sizeof(PxConstEnt));
-    }
+    if (!g_ctab && ntab) { g_ctab = ntab; ntab = NULL; }    // 发布备货
+    if (ntab) xfree(ntab);                                  // 他线程已建 ⇒ 丢弃（xfree 不可失败）
+    if (!g_ctab) { pthread_mutex_unlock(&g_ctab_mu); return; }
     if (g_ctab_n >= PX_CONST_SLOTS * 3 / 4) { pthread_mutex_unlock(&g_ctab_mu); return; }
     unsigned i = px_const_hash(s) & (PX_CONST_SLOTS - 1);
     for (int k = 0; k < 8; k++) {
@@ -20185,23 +20193,29 @@ static void fserve_push(int fd, int kind) {
 // 懒初始化：首个 serve 入口调用时建池（幂等；持 g_fserve_mu 下创建，worker 启动后
 // 阻塞在 cond_wait 内部释放本锁 → 无死锁）
 static void fserve_ensure(void) {
+    // M261（缺陷 464）：**两阶段** —— 参数解析在两处 xcalloc **之前**（都不持锁），
+    //   锁内只剩「复核 + 发布」或「复核失败 ⇒ 释放备货」。修前两处 xcalloc 落在
+    //   g_fserve_mu 临界区内：OOM ⇒ 隔离点无法回卷（线程持锁）⇒ _exit(1) 服务中断
+    //   （M127 → M128 → 439 同一条线的第四次）。
     if (g_fserve_inited) return;
+    int workers = FSERVE_DEFAULT_WORKERS;
+    const char* we = getenv("PX_SERVE_WORKERS");
+    if (we) {
+        int w = atoi(we);
+        // M95-S2：下限 8→2 —— http_serve handler 协程化后（D8-②）长业务请求占
+        //   协程不占 fserve worker，显式小池（2 worker 起）即可承载并发长业务；
+        //   默认仍 FSERVE_DEFAULT_WORKERS。逃险舱（PX_NATIVE handler 同步直调）
+        //   占 worker 语义不变，显式小池由用户在知晓 handler 形态下配置。
+        if (w >= 2 && w <= 4095) workers = w;
+    }
+    pthread_t* th = (pthread_t*)xcalloc((size_t)workers, sizeof(pthread_t));
+    FServeJob* fq = (FServeJob*)xcalloc((size_t)FSERVE_QUEUE_CAP, sizeof(FServeJob));
     pthread_mutex_lock(&g_fserve_mu);
     if (!g_fserve_inited) {
-        int workers = FSERVE_DEFAULT_WORKERS;
-        const char* we = getenv("PX_SERVE_WORKERS");
-        if (we) {
-            int w = atoi(we);
-            // M95-S2：下限 8→2 —— http_serve handler 协程化后（D8-②）长业务请求占
-            //   协程不占 fserve worker，显式小池（2 worker 起）即可承载并发长业务；
-            //   默认仍 FSERVE_DEFAULT_WORKERS。逃险舱（PX_NATIVE handler 同步直调）
-            //   占 worker 语义不变，显式小池由用户在知晓 handler 形态下配置。
-            if (w >= 2 && w <= 4095) workers = w;
-        }
         g_fserve_workers = workers;
         g_fserve_qcap = FSERVE_QUEUE_CAP;
-        g_fserve_threads = (pthread_t*)xcalloc((size_t)workers, sizeof(pthread_t));
-        g_fserve_queue = (FServeJob*)xcalloc((size_t)FSERVE_QUEUE_CAP, sizeof(FServeJob));
+        g_fserve_threads = th; th = NULL;
+        g_fserve_queue = fq;   fq = NULL;
         for (int i = 0; i < workers; i++) {
             if (pthread_create(&g_fserve_threads[i], NULL, fserve_worker, NULL) != 0) {
                 // 创建失败不致命：保留已建 worker；容量不足时 accept 背压，绝不 exit
@@ -20213,6 +20227,8 @@ static void fserve_ensure(void) {
         g_fserve_inited = 1;
     }
     pthread_mutex_unlock(&g_fserve_mu);
+    if (th) xfree(th);   // 复核失败（他线程已建池）⇒ 释放备货
+    if (fq) xfree(fq);
 }
 
 // http_serve(port, handler)：阻塞 accept 循环（Go 风格），连接交池 worker 处理
@@ -20514,19 +20530,48 @@ static int px_conn_pend_take(int fd, char* out, int cap) {
 
 static void px_conn_pend_put(int fd, const char* data, int n) {
     if (fd < 0 || n <= 0 || !data) return;
-    pthread_mutex_lock(&g_conn_mu);
-    PxConnCtx* c = px_evc_ctx(fd);
-    if (c && c->fd == fd) {
-        if (n > c->pbuf_cap) {
-            int ncap = c->pbuf_cap > 0 ? c->pbuf_cap : 4096;
-            while (ncap < n) ncap *= 2;
-            c->pbuf = c->pbuf ? xrealloc(c->pbuf, (size_t)ncap) : xmalloc((size_t)ncap);
-            c->pbuf_cap = ncap;
+    // M261（缺陷 464）：**两阶段** —— 探测（锁内只读）→ 备货（锁外，可失败）→ 发布（锁内）。
+    //   修前 xrealloc/xmalloc 落在 g_conn_mu 临界区内：OOM ⇒ 隔离点无法回卷（线程持锁）
+    //   ⇒ _exit(1) 服务中断（M127 → M128 → 439 同一形状）。
+    //   ⚠️ 两段之间状态可能变（并发扩/连接收尾）⇒ **有界重来**（最多 4 轮），
+    //     任何一轮都不在临界区内分配；4 轮仍撞并发属实测不可达，那时**响亮**记一次
+    //     而不是静默丢字节（「响亮优于静默」，本仓 M166/M163 同口径）。
+    //   不变量：pbuf_cap > 0 ⇒ pbuf != NULL（所有写入点都成对设置，见 20338/20602/20618/20784）。
+    for (int attempt = 0; attempt < 4; attempt++) {
+        int need_cap = 0;
+        pthread_mutex_lock(&g_conn_mu);
+        PxConnCtx* c = px_evc_ctx(fd);
+        int live = (c && c->fd == fd);
+        if (live && n > c->pbuf_cap) {
+            need_cap = c->pbuf_cap > 0 ? c->pbuf_cap : 4096;
+            while (need_cap < n) need_cap *= 2;
+            if (need_cap < n) need_cap = n;       // 防溢出回绕（ncap *= 2 溢出即变负）
         }
-        memcpy(c->pbuf, data, (size_t)n);
-        c->pbuf_len = n;
+        pthread_mutex_unlock(&g_conn_mu);
+        if (!live) return;                        // 连接已收尾：静默丢弃（与原实现同）
+        char* grow = need_cap ? (char*)xmalloc((size_t)need_cap) : NULL;   // 锁外备货
+        pthread_mutex_lock(&g_conn_mu);
+        c = px_evc_ctx(fd);
+        live = (c && c->fd == fd);
+        if (live && n <= c->pbuf_cap && c->pbuf) {
+            memcpy(c->pbuf, data, (size_t)n);     // 已够大（他线程扩过）⇒ 备货作废
+            c->pbuf_len = n;
+            pthread_mutex_unlock(&g_conn_mu);
+            if (grow) xfree(grow);
+            return;
+        }
+        if (live && grow && need_cap >= n && need_cap > c->pbuf_cap) {
+            if (c->pbuf) xfree(c->pbuf);          // 旧缓冲：锁内释放（xfree 不可失败）
+            c->pbuf = grow; c->pbuf_cap = need_cap; grow = NULL;
+            memcpy(c->pbuf, data, (size_t)n);
+            c->pbuf_len = n;
+            pthread_mutex_unlock(&g_conn_mu);
+            return;
+        }
+        pthread_mutex_unlock(&g_conn_mu);
+        if (grow) xfree(grow);
     }
-    pthread_mutex_unlock(&g_conn_mu);
+    fprintf(stderr, "[px-conn] pend_put 连续 4 轮撞并发变更，本次余留字节未能发布（fd=%d n=%d)\n", fd, n);
 }
 
 #if defined(__linux__)
@@ -27078,31 +27123,44 @@ int px_rate_limit_try(const char* key, long long max, long long window_sec) {
     pthread_mutex_lock(&g_rate_mu);
     RateBucket* b = NULL;
     if (!rate_bucket_find(key, &b)) {
-        // 新建桶（防膨胀：超上限清空所有空桶）
-        if (g_rate_buckets >= PX_RATE_MAX_BUCKETS) {
-            RateBucket** pp = &g_rate_head;
-            while (*pp) {
-                RateBucket* cur = *pp;
-                if (cur->count == 0) {
-                    *pp = cur->next;
-                    xfree(cur->times);
-                    xfree(cur);
-                    g_rate_buckets--;
-                } else {
-                    pp = &cur->next;
+        // M261（缺陷 464）：**两阶段** —— 未命中 ⇒ **出锁备货**（两处 xmalloc 都在锁外，
+        //   失败就是请求级 5xx，回卷无锁在身）⇒ 重新进锁**复核**：他线程已建则丢弃备货。
+        //   修前两处 xmalloc 落在 g_rate_mu 临界区内 ⇒ OOM ⇒ 持锁 ⇒ _exit(1) 服务中断
+        //   （m128 门的 C9 一直在诚实记录这条）。
+        pthread_mutex_unlock(&g_rate_mu);
+        RateBucket* nb = (RateBucket*)xmalloc(sizeof(RateBucket));
+        memset(nb, 0, sizeof(*nb));
+        int ncap = (int)max < 64 ? 64 : (int)(max + 16);
+        if (ncap > 100000) ncap = 100000;
+        long long* ntimes = (long long*)xmalloc(sizeof(long long) * (size_t)ncap);
+        pthread_mutex_lock(&g_rate_mu);
+        b = NULL;
+        if (rate_bucket_find(key, &b)) {
+            xfree(ntimes); xfree(nb);                   // 复核命中：丢弃备货（xfree 不可失败）
+        } else {
+            // 新建桶（防膨胀：超上限清空所有空桶）
+            if (g_rate_buckets >= PX_RATE_MAX_BUCKETS) {
+                RateBucket** pp = &g_rate_head;
+                while (*pp) {
+                    RateBucket* cur = *pp;
+                    if (cur->count == 0) {
+                        *pp = cur->next;
+                        xfree(cur->times);
+                        xfree(cur);
+                        g_rate_buckets--;
+                    } else {
+                        pp = &cur->next;
+                    }
                 }
             }
+            nb->times = ntimes;
+            nb->cap = ncap;
+            snprintf(nb->key, sizeof(nb->key), "%s", key);
+            nb->next = g_rate_head;
+            g_rate_head = nb;
+            g_rate_buckets++;
+            b = nb;
         }
-        b = xmalloc(sizeof(RateBucket));
-        memset(b, 0, sizeof(*b));
-        int cap = (int)max < 64 ? 64 : (int)(max + 16);
-        if (cap > 100000) cap = 100000;
-        b->times = xmalloc(sizeof(long long) * (size_t)cap);
-        b->cap = cap;
-        snprintf(b->key, sizeof(b->key), "%s", key);
-        b->next = g_rate_head;
-        g_rate_head = b;
-        g_rate_buckets++;
     }
     long long now = (long long)time(NULL);
     long long win_start = now - window_sec;
