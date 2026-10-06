@@ -288,6 +288,49 @@ checkout fetch **22:34:27Z** 开始 → tag **22:34:26Z** 才创建并紧随推�
 + 自测 **K 段**（两份干净快照 + 负控「禁补取必红」）。
 ⇒ 但**次序仍照上面写**：兜底是安全网，不是「随便推」的借口。
 
+## ⚠️ 发布通道是**单通道**：一次推多个 tag 会**静默取消**先到的 Release（M278 · 2026-10-06）
+
+`release.yml` 用单通道并发（`group: Release-publish` · `cancel-in-progress: false`）。
+GitHub 的语义**不是**「排队都等着」，而是：
+
+> 同组同时只允许 **一个 in-progress** + **一个 pending**；**新来的 pending 会取消先前的 pending**。
+
+于是**一次推多个 tag**（典型：历史回填）时，先到的 Release run 被取消 —— 而**没有任何东西会告诉你**：
+CI 不报、Tag Guard 不报、镜像同步不报（它只搬「有」的东西）。
+
+**2026-10-06 实测证据**（`v0.2.263/264/265/271` 一次推送 + `v0.2.275` 同批）：
+
+| tag | run 结论 | 后果 |
+|---|---|---|
+| `v0.2.275` | `cancelled` | `release` job 赶在取消生效前跑完了（资产 4 件齐），**rpm 三个 job 从未跑** |
+| `v0.2.261/263/264/265/271` | `cancelled` | **至今没有任何 Release** |
+| `v0.2.276` | `in_progress` | Release **被队首挤了 96 分钟**才开始（06:01 建 run → 07:37 才起）|
+
+⇒ 两个后果：① 合法发布可能**被静默取消**；② 真发布的**出包被推迟**（用户会看到「tag 打了、包没出」）。
+
+### 纪律
+
+1. **一次只推一个 tag**，等它的 Release 起来（或至少起完 `release` job）再推下一个。
+2. **历史回填要谨慎** —— Tag Guard 只要求**最高**里程碑有 tag，中间缺口只打 ℹ️
+   ⇒ 回填纯粹是记账，**没有可下载价值**，却要占用发布通道（每个 tag 一次完整 Release）。
+3. 回填过的 tag 若确实**不该**有发布，登记进 `packaging/release_reconcile.ignore`（**每条必须写理由**）。
+
+### 复查工具：`packaging/release_reconcile.sh`（M278）
+
+把「tag ⇄ Release ⇄ 资产」对账，找出**该有发布却没有**的 tag：
+
+```bash
+GH_TOKEN=$(cat /data/pat.md) packaging/release_reconcile.sh --limit 12      # 只读对账
+GH_TOKEN=$(cat /data/pat.md) packaging/release_reconcile.sh --limit 12 --rerun   # 顺带重跑 cancelled
+```
+
+- 判定：`OK` / `ASSETS-INCOMPLETE` / `NO-RELEASE-CANCELLED` / `NO-RELEASE-FAILED` /
+  `NO-RELEASE-NORUN` / `NO-RELEASE-INPROGRESS`（**不算异常**）/ `KNOWN-NO-RELEASE`（豁免）/ `STALE-IGNORE`（**豁免过期**）
+- `--rerun` **只重跑 `cancelled`** —— `failed` 可能是真失败，机械重跑会掩盖问题（要人看）
+- `--json` / `--api-fixture DIR`（离线自证用）· 令牌**只走环境变量**（不落盘、不进仓库）
+- 豁免表过期判据：若某条豁免的 tag **就是最新的版本 tag** ⇒ 判 `STALE-IGNORE`（最新必须有发布）
+- 门：`examples/m278_release_reconcile/verify.sh`（离线自证 30/0 + 静态判据 + 负控）
+
 ## 发布前核对清单
 
 - [ ] `main` 已含待发代码并推送（工作区干净）

@@ -1,3 +1,74 @@
+## M278（2026-10-06）— 发布通道对账：Release run 被并发规则**静默取消**（缺陷 482）
+
+### 一 起因（用户报：收到「M276 无人值守失败」通知）
+
+用户收到一条 M276 的无人值守失败通知 ⇒ 查证：
+
+- **通知本身是设计行为**（2026-10-05 建立的 p1 超时升级）：03:57 M276 全量门中止（P1「过程态」，
+  只落 inbox）⇒ 04:50 满 **53 分钟** > 45 分钟阈值 ⇒ 升级推 QQ 一次。M276/M277 随后均已修复并推送。
+- **但它顺带照出三处系统性问题**，其中一处是真缺陷。
+
+### 二 缺陷 482：`Release` run 被并发规则**静默取消**（真缺陷 · 高）
+
+`release.yml` 是**单通道**并发（`group: Release-publish` · `cancel-in-progress: false`）。
+GitHub 的语义**不是**「排队都等着」：
+
+> 同组同时只允许 **一个 in-progress** + **一个 pending**；**新来的 pending 会取消先前的 pending**。
+
+⇒ **一次推多个 tag**（历史回填）时，先到的 Release run 被取消 —— **没有任何东西会告诉你**
+（CI 不报 · Tag Guard 不报 · 镜像只搬「有」的东西）。2026-10-06 实测：
+
+| tag | run | 后果 |
+|---|---|---|
+| `v0.2.275` | `cancelled` | `release` job 赶在取消生效前跑完（资产 4 件齐）· **rpm 三个 job 从未跑** |
+| `v0.2.261/263/264/265/271` | `cancelled` | **至今没有任何 Release** |
+| `v0.2.276` | `in_progress` | Release **被队首挤了 96 分钟**才开始（run 06:01 建 → 07:37 起）|
+
+⇒ 两个后果：① 合法发布可能被**静默取消**；② 真发布的**出包被推迟**（用户看到「tag 打了、包没出」）。
+
+### 三 修法：把「tag ⇄ Release ⇄ 资产」判据化（新工具 + 新门）
+
+- **`packaging/release_reconcile.sh`**（新）—— 对账工具：
+  · 判定 `OK` / `ASSETS-INCOMPLETE` / `NO-RELEASE-CANCELLED` / `NO-RELEASE-FAILED` /
+    `NO-RELEASE-NORUN` / `NO-RELEASE-INPROGRESS`（不算异常）/ `KNOWN-NO-RELEASE` / `STALE-IGNORE`
+  · `--rerun` **只重跑 `cancelled`** —— `failed` 可能是真失败，机械重跑会掩盖问题（**要人看**）
+  · `--json` · `--api-fixture DIR`（离线）· 令牌**只走环境变量**（不落盘、不进仓库 —— [SECURITY/P0]）
+  · 判据依赖 GitHub API；不可达时 **rc=2 响亮**，不静默放行
+- **`packaging/release_reconcile.ignore`**（新）—— 「明知没有 Release」的豁免表：
+  · **每条必须带理由**；理由为空 ⇒ 无效、**不当豁免**、计入异常
+  · **过期判据**：若某条豁免的 tag **就是最新的版本 tag** ⇒ `STALE-IGNORE`（最新必须有发布）
+  · 表头写明本仓口诀：**真缺陷不许进表**
+- **`packaging/selftest_reconcile.sh`**（新）—— **离线**自证 **30 通过 / 0 失败**：
+  三档 fixture（good/bad/stale）· 逐条判定**双向精确相等** · `--json` 计数 · `--rerun` 只碰 cancelled ·
+  **负控 A**（抽掉豁免处理 ⇒ 豁免项必须判异常）· **负控 B**（判据自伤 ⇒ 坏档必须变 OK）
+  ⇒ fixture 用 heredoc 现造 ⇒ 仓库不留 fixture 文件、不动注册面
+- **`examples/m278_release_reconcile/verify.sh`**（新门 · **15 通过 / 0 失败**，无令牌档 14/0）：
+  离线自证 + **静态判据**（缺陷事实与纪律必须写在脚本头/豁免表里 —— 防「知识只活在提交信息里」）+
+  豁免表纪律 + **实网对账**（无 `GH_TOKEN` ⇒ **响亮 SKIP**，不假装通过）+ 负控 + 覆盖边界
+- 已注册：`selfhost/gates.registry.sh` + `.github/workflows/ci.yml`（`check_gate_registry.sh` 9/0 通过）
+
+### 四 顺带修好的两处（通知系统 · 节点侧）
+
+M276 那次**一条事故推了两条 QQ**（`m276-red` + `m277-blocked`）⇒ `dy-notify.sh` 升 **v2.2**：
+
+- **`resolve-topic <topic>`** —— 一把了结 `<topic>-*` 的全部 pending（一次事故常挂多条，逐个 resolve 必漏）
+- **升级合并** —— 同一次扫描的多个超时项**合成一条** QQ（修前一项一条 ⇒ 刷屏）
+- **TTL 过期** —— 超 `DY_OPS_TTL_MIN`（默认 12h）仍无人了结 ⇒ 记 `EXPIRE` 并清除，不再无限期挂着
+- 自证 **33 通过 / 0 失败**；**负控**（拿旧版跑同一套自证）**18 条判红** ⇒ 判据有牙；陈旧 pending 已清空
+
+### 五 纪律（新增）
+
+1. **一次只推一个 tag**，等它的 Release run 起来再推下一个（防被取消）。
+2. **历史回填要谨慎** —— Tag Guard 只要求**最高**里程碑有 tag，中间缺口只打 ℹ️
+   ⇒ 回填纯记账、无可下载价值，却要占满单通道发布。
+3. 「该有发布却没有」= 缺陷 ⇒ **修**，不是登记；只有「本就不该有发布」才可进豁免表并写明理由。
+
+### 六 覆盖边界（如实）
+
+- 只扫 `release.yml` 的 run；CI / Tag Guard 不在面内
+- 「Release 存在但**内容**是坏的」不在面内（由 `make_release` 的包内冒烟与 `realhost_smoke.sh` 负责）
+- 豁免表里 5 条历史回填 tag 是**判断**（不是事实）：若要为其补发布，删条目即恢复判红
+
 ## M277（第 155 轮）· aarch64 引导包"镜像上没有"（用户报障）+ 真机冒烟脚本化
 
 > **报障（用户 2026-10-06）**：「在 openEuler 上安装 PuXian 时提示，**aarch64 包不在 xiusoft 镜像上**。」
