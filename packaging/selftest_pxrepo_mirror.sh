@@ -9,7 +9,7 @@
 #   [3] tag-name-guard    tag 命名护栏（不合规 tag 必须响亮）
 #   [4] rpm-tree-layout   ★镜像树布局（rpm/<dist>/x86_64/…）—— M254 补 §⑤ 的判据缺口
 #   [5] registry-mirror   W3：registry/ 随发布物落到镜像（M275）
-#   [6] 整脚本不变量      ★**段间**：序（赋值先于引用）+ 禁形（大产出 | grep -q）—— M279 补「段内自洽、段间不接」这条缝
+#   [6] 整脚本不变量      ★**段间**：序（赋值先于引用）+ 禁形（大产出 | grep -q）+ 同源（缺陷 488）—— M279 补「段内自洽、段间不接」这条缝
 # 回归对象（晨曦 2026-09-16 干跑发现）：原判据用 gh-pages **tip 提交信息**判定，
 #   tip 为「站点文件同步」提交时必然误判 ⇒ 改为以 rpm 树内 `.mNNN` 为真值。
 # 回归对象（晨曦 2026-10-02 干跑发现 · 10-04 第 2 次催办）：§⑤ 丢了 arch 层 ⇒ 真实站点必 die，
@@ -429,6 +429,40 @@ if iv_nopipeq "$W/pre487.sh"; then
   iv_bad "⑥-4 反向判据失效：注入 tar|grep -q 竟未被发现（判据无牙）"
 else
   iv_ok "⑥-4 反向判据：注入 tar|grep -q ⇒ 判红（有牙）"
+fi
+
+# ⑥-5 同源（缺陷 488）：写侧与 ⑦ 复核侧必须引用**同一个**表达式，且定义含 releases/ 前缀
+#   （下游 packaging/install-rpm.sh:166 按 `$MIRROR_ROOT/$a64` 取 ⇒ 前缀是契约）
+iv_a64same() {  # $1=脚本 → 0 = 同源
+  python3 - "$1" <<'PYA64'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+w = re.search(r'^\s*"bootstrap_aarch64_tarball":\s*("[^"]*")\s*,\s*$', s, re.M)
+v = re.search(r'grep -q "\\"bootstrap_aarch64_tarball\\":\s*\\"([^"\\]*)\\""', s)
+if not w or not v:
+    sys.exit(1)
+if w.group(1) != '"%s"' % v.group(1):
+    sys.exit(1)
+sys.exit(0 if 'A64_REL="releases/$A64_TARBALL"' in s else 1)
+PYA64
+}
+if iv_a64same "$SCRIPT"; then
+  iv_ok "⑥-5 同源：写侧与 ⑦ 复核侧表达式逐字节相等，且定义含 releases/ 前缀（下游 install 口径）"
+else
+  iv_bad "⑥-5 不同源：写侧/复核侧表达式不一致，或缺 releases/ 前缀（缺陷 488）"
+fi
+# ⑥-6 反向判据：写侧退回裸名 ⇒ **必须判红**
+python3 - "$SCRIPT" "$W/pre488.sh" <<'PYPRE488'
+import re, sys, pathlib
+s = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+s2 = re.sub(r'^(\s*"bootstrap_aarch64_tarball":\s*)"[^"]*"', r'\1"$A64_TARBALL"', s, count=1, flags=re.M)
+assert s2 != s, "写侧替换失败"
+pathlib.Path(sys.argv[2]).write_text(s2, encoding="utf-8")
+PYPRE488
+if iv_a64same "$W/pre488.sh"; then
+  iv_bad "⑥-6 反向判据失效：写侧退回裸名竟仍判绿（判据无牙）"
+else
+  iv_ok "⑥-6 反向判据：写侧退回裸名 ⇒ 判红（有牙）"
 fi
 
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
