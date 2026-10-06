@@ -8,6 +8,8 @@
 #   [2] rootfiles-fresh   站点根文件指纹（版本不变也要比内容）
 #   [3] tag-name-guard    tag 命名护栏（不合规 tag 必须响亮）
 #   [4] rpm-tree-layout   ★镜像树布局（rpm/<dist>/x86_64/…）—— M254 补 §⑤ 的判据缺口
+#   [5] registry-mirror   W3：registry/ 随发布物落到镜像（M275）
+#   [6] 整脚本不变量      ★**段间**：序（赋值先于引用）+ 禁形（大产出 | grep -q）—— M279 补「段内自洽、段间不接」这条缝
 # 回归对象（晨曦 2026-09-16 干跑发现）：原判据用 gh-pages **tip 提交信息**判定，
 #   tip 为「站点文件同步」提交时必然误判 ⇒ 改为以 rpm 树内 `.mNNN` 为真值。
 # 回归对象（晨曦 2026-10-02 干跑发现 · 10-04 第 2 次催办）：§⑤ 丢了 arch 层 ⇒ 真实站点必 die，
@@ -278,6 +280,7 @@ tar -czf "$W5/staging/releases/fake.tar.gz" -C "$W5/src" px-t
 cat > "$W5/run.sh" <<'RUNEOF'
 set -uo pipefail
 STAGING="$1/staging"; TARBALL=fake.tar.gz
+WORK="$1/work"; mkdir -p "$WORK"   # M279：registry 段「清单落盘后判」需要 WORK
 die(){ echo "DIE: $*" >&2; exit 9; }
 log(){ echo "$*"; }
 RUNEOF
@@ -360,6 +363,73 @@ case "$(cat "$SCRIPT")" in
   *'落地后 aarch64 引导包 sha256 不一致'*) as_ok "落地后**再验一次**（DEST 上真在且一致）" ;;
   *) as_ok "缺落地后 aarch64 自证" 0 ;;
 esac
+
+
+# ══════════════════════════════════════════════════════════════
+# M279 · [6] 整脚本不变量（**段间**，不是段内）
+#   背景（用户 2026-10-06 报障链条的第二层）：上面 [1]–[5] 全部是**按标记抽取段**离线跑
+#   ⇒ 段内自洽，但**段间不接**看不见。两个真缺陷都躲过了 37/0：
+#     缺陷 486 前向引用：§6.5 的 REG_FOUND 被 §6 的 heredoc 引用，赋值却在 §6 之后
+#                       ⇒ set -euo pipefail 下「unbound variable」⇒ 同步 100% 失败。
+#                       ⚠️ dry-run 在 §6 之后、§6.5 之前就 exit 0 ⇒「干跑通过」≠「同步能过」。
+#     缺陷 487 `tar -tzf … | grep -q X` + pipefail ⇒ grep 命中即退出 ⇒ tar 收 SIGPIPE(141)
+#                       ⇒ 整条管道非零 ⇒ 判据**恒假** ⇒ registry/ 永远不被提取（静默降级）。
+#                       实测：grep -q 单独 rc=0；带 pipefail 整条管道 rc=141。
+#   ⇒ 本段补「**整脚本层**」静态不变量，各配一条**反向判据**（证明判据有牙）。
+# ══════════════════════════════════════════════════════════════
+echo "== [6] 整脚本不变量（序 · 禁形 · 段间）=="
+iv_ok()  { echo "  ✅ $1"; PASS=$((PASS+1)); }
+iv_bad() { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
+
+iv_order() {   # $1=脚本 → 0 = 序正确（REG_* 赋值早于 version.json 的引用）
+  local f="$1" a u
+  a="$(grep -nE '^[[:space:]]*REG_(FOUND|N)=0' "$f" 2>/dev/null | head -1 | cut -d: -f1)"
+  u="$(grep -nE '"included":[[:space:]]*\$REG_FOUND' "$f" 2>/dev/null | head -1 | cut -d: -f1)"
+  [ -n "$a" ] && [ -n "$u" ] && [ "$a" -lt "$u" ]
+}
+iv_nopipeq() { # $1=脚本 → 0 = 无「大产出 | grep -q」禁形（**只查代码行**，注释里允许留历史说明）
+  local f="$1" n
+  n="$(grep -nE '(tar|find|cat|dnf)[^|]*\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$f" 2>/dev/null \
+       | grep -vE '^[0-9]+:[[:space:]]*#' | wc -l)"
+  [ "${n:-0}" = 0 ]
+}
+
+_ra="$(grep -nE '^[[:space:]]*REG_(FOUND|N)=0' "$SCRIPT" 2>/dev/null | head -1 | cut -d: -f1)"
+_ru="$(grep -nE '"included":[[:space:]]*\$REG_FOUND' "$SCRIPT" 2>/dev/null | head -1 | cut -d: -f1)"
+if iv_order "$SCRIPT"; then
+  iv_ok "⑥-1 序不变量：REG_* 赋值（行 ${_ra:-?}）早于 version.json 引用（行 ${_ru:-?}）"
+else
+  iv_bad "⑥-1 序不变量破：赋值「${_ra:-无}」/ 引用「${_ru:-无}」⇒ set -u 下必 die（缺陷 486）"
+fi
+# ⑥-2 反向判据：把 registry 段搬回文件末尾（= 修前形态）⇒ **必须判红**
+python3 - "$SCRIPT" "$W/pre486.sh" <<'PYPRE'
+import sys, pathlib
+s = pathlib.Path(sys.argv[1]).read_text()
+B, E = "# >>> registry-mirror >>>", "# <<< registry-mirror <<<"
+i, j = s.find(B), s.find(E)
+assert i > 0 and j > i, "registry-mirror 标记缺失"
+blk = s[i:j + len(E)]
+pathlib.Path(sys.argv[2]).write_text(s[:i] + s[j + len(E):] + "\n" + blk + "\n")
+PYPRE
+if iv_order "$W/pre486.sh"; then
+  iv_bad "⑥-2 反向判据失效：还原「段在 §6 之后」竟仍判绿（判据无牙）"
+else
+  iv_ok "⑥-2 反向判据：还原修前形态 ⇒ 判红（有牙）"
+fi
+
+if iv_nopipeq "$SCRIPT"; then
+  iv_ok "⑥-3 禁形：无「大产出 | grep -q」（SIGPIPE ⇒ 判据恒假）"
+else
+  iv_bad "⑥-3 仍存在「大产出 | grep -q」：$(grep -nE '(tar|find|cat|dnf)[^|]*\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$SCRIPT" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' | head -2 | tr '\n' ' ')"
+fi
+# ⑥-4 反向判据：注入旧形态 ⇒ **必须**被发现
+{ printf 'if tar -tzf /dev/null 2>/dev/null | grep -q x; then\n  :\nfi\n'; } > "$W/pre487.sh"
+cat "$SCRIPT" >> "$W/pre487.sh"
+if iv_nopipeq "$W/pre487.sh"; then
+  iv_bad "⑥-4 反向判据失效：注入 tar|grep -q 竟未被发现（判据无牙）"
+else
+  iv_ok "⑥-4 反向判据：注入 tar|grep -q ⇒ 判红（有牙）"
+fi
 
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
 

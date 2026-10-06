@@ -5826,7 +5826,13 @@ LXValue px_call(LXValue fn, LXValue* args, int nargs) {
         }
         return fn.as.obj->as.native.fn(args, nargs, NULL);
     }
-    px_error("R1002: 无法调用非函数: %s", px_type_name(fn));
+    // M279（缺陷 485）：**三轨统一**为 R1004 + 值文案。依据 docs/ERROR_CODES.md §39：
+    //   「值不可调用」的正典是 R1004（R1002 是「值与形状不符」= 参数类型面）。
+    //   修前解释轨已是 R1004（`icall.px` 的 `i_r1004("值不可调用: " + i_to_str(cv))`），
+    //   而本兜底点报 R1002「无法调用非函数: <类型名>」⇒ 9/10 例分叉（含用户自定义高阶）。
+    //   ⚠️ 文案改用**值**而不是类型名：与解释轨同口径，且能指到真因（`7` 而不是 `int`）。
+    //   `px_fmt_value` 是 M233 建立的唯一渲染入口（带环保护），在报错路径上安全。
+    px_error("R1004: 值不可调用: %s", px_fmt_value(fn));
     return px_null();
 }
 

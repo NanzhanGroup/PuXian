@@ -260,6 +260,7 @@ examples/m257_alloc_integrity/probe_dict.px src=668482995e2bd7e1 rc=0 out=191f91
 examples/m261_lock_alloc/smoke.px src=b8b6310e4959f8c8 rc=0 out=84fa2ec87a9896d842e5cc2b414239f9 err=e3b0c44298fc1c14
 examples/m262_lock_alloc2/route_smoke.px src=66767f74606d0865 rc=0 out=2565c6c52fdce5ececfff4aad064ad26 err=e3b0c44298fc1c14
 examples/m263_resp_crosstalk/srv.px src=eed7029e6a24afa8 rc=0 out=b8c1129223f01391d32eff8c70948f5a err=e3b0c44298fc1c14
+examples/m279_std_surface/drv.px src=8cc5da3073fc9fa7 rc=0 out=be8dd506acce471ed80dcfb8bca2287e err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -364,7 +365,7 @@ examples/m86_s1/hello.px src=57aa8aef3bd88fbb rc=0 out=51a2c9ca00295616bcc1eff33
 examples/m86_s1/imp_a.px src=b1038b6829be6bee rc=0 out=0d97322b246fe3bed067443a105be9da err=e3b0c44298fc1c14
 examples/m86_s1/imp_b.px src=a2d6b025159b8ba6 rc=0 out=718ae17b35be0c8ff9c679d5e10a3177 err=e3b0c44298fc1c14
 examples/m86_s1/sqlite_dep.px src=8dc758aa3a3f4d08 rc=0 out=26addd8ab6d3d2ca2ba96bfa0c054d07 err=e3b0c44298fc1c14
-examples/m86_s1/stdlib_dep.px src=074a2bc993308fc8 rc=0 out=db0aad3276e61857bd11053ebe220d66 err=e3b0c44298fc1c14
+examples/m86_s1/stdlib_dep.px src=074a2bc993308fc8 rc=0 out=94461d42dcbb8b9ea372b13a38aff768 err=e3b0c44298fc1c14
 examples/m86_s1/ws_if.px src=6584b3cd333dd8b5 rc=0 out=939955cdab5037e4baca8839de55c69e err=e3b0c44298fc1c14
 examples/m86_s2/allmod.px src=c8cae129c399bca8 rc=0 out=3af74a268f7aed9106a651e76be6c322 err=e3b0c44298fc1c14
 examples/m86_s2/hello.px src=57aa8aef3bd88fbb rc=0 out=51a2c9ca00295616bcc1eff333c42569 err=e3b0c44298fc1c14
@@ -432,7 +433,7 @@ selfhost/cases/s04_ctrl.px src=940242dabac2b6e0 rc=0 out=b22316c5ab768da7e77e39f
 selfhost/cases/s05_enum.px src=eebc0b932399a289 rc=0 out=81c1b67c68b155ba98b0d865d37b05c8 err=e3b0c44298fc1c14
 selfhost/cases/s06_result.px src=f0420aa4fcc252aa rc=0 out=17f205791957565d4c71ef3cba9a3c9f err=e3b0c44298fc1c14
 selfhost/cases/s07_interp.px src=de5875b378a9bdfb rc=0 out=b851b02cf590d3e522daa7f7cd1f88a5 err=e3b0c44298fc1c14
-selfhost/cases/s08_comprehensive.px src=69c5e5c9a9552133 rc=0 out=ac531e4d3c86920260b6b0245fbde903 err=76bf3f4ca5192da2
+selfhost/cases/s08_comprehensive.px src=69c5e5c9a9552133 rc=0 out=abc4c2c7bafb09ecb1a022f0de8087de err=76bf3f4ca5192da2
 selfhost/cases/s09_unicode_edge.px src=d5c89d5282286f65 rc=0 out=be7c1bb9aa7dcea602d30015d1182bc3 err=e3b0c44298fc1c14
 selfhost/cases/s10_nullable.px src=522794f4a7e3a72a rc=0 out=305046eec6e00db5ffd7efbd8caab036 err=e3b0c44298fc1c14
 selfhost/cases/s11_generics.px src=6149d19f2979ec80 rc=0 out=b0a69ee7994301ac85b1011947feff12 err=e3b0c44298fc1c14
