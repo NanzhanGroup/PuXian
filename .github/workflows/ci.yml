@@ -1081,6 +1081,15 @@ jobs:
           NEG_SKIP=1 bash examples/m279_std_surface/verify.sh > /tmp/v_m279.log 2>&1 || { echo "❌ m279 门失败（静态扫描 / chunk 限时响亮 / 三轨对拍）"; grep -E '^  ❌' /tmp/v_m279.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m279_std_surface（结构性死循环 0 · chunk 边界限时响亮 · 三轨契约 21 例）PASS"
 
+      - name: m280_resource_baseline（资源面：H3 listener 的 CPU/RSS/线程/fd）
+        run: |
+          set -o pipefail
+          # M280：资源面判据 —— H3 托管 listener 的 CPU / RSS / 线程 / fd
+          #   静态（BASELINE.tsv 形态）+ 动态 6 轮采样（**收敛判据**，不是绝对增量）
+          # 门（CI 档：负控跳过 —— 负控要改源码 + 重编，成本高）
+          NEG_SKIP=1 bash examples/m280_resource_baseline/verify.sh > /tmp/v_m280.log 2>&1 || { echo "❌ m280 门失败（资源面：BASELINE 形态 / 6 轮收敛判据 / 忙自旋负控）"; grep -E '^  ❌' /tmp/v_m280.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m280_resource_baseline（收敛判据 · CPU/RSS/线程/fd 四项 · 负控忙自旋判红）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

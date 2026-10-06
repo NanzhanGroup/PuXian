@@ -261,6 +261,9 @@ examples/m261_lock_alloc/smoke.px src=b8b6310e4959f8c8 rc=0 out=84fa2ec87a9896d8
 examples/m262_lock_alloc2/route_smoke.px src=66767f74606d0865 rc=0 out=2565c6c52fdce5ececfff4aad064ad26 err=e3b0c44298fc1c14
 examples/m263_resp_crosstalk/srv.px src=eed7029e6a24afa8 rc=0 out=b8c1129223f01391d32eff8c70948f5a err=e3b0c44298fc1c14
 examples/m279_std_surface/drv.px src=8cc5da3073fc9fa7 rc=0 out=be8dd506acce471ed80dcfb8bca2287e err=e3b0c44298fc1c14
+examples/m280_resource_baseline/cli_abrupt.px src=ca91ee373c5d6abc rc=0 out=86f717a105a38980071313acd5be241a err=e3b0c44298fc1c14
+examples/m280_resource_baseline/cli_grace.px src=29da2b1d15592012 rc=0 out=05c93fadc44e3c560d8415e9bd29558a err=e3b0c44298fc1c14
+examples/m280_resource_baseline/srv.px src=3cad4d48956c743e rc=0 out=d0fb7b5914d12443b0c9c607e9d8b762 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

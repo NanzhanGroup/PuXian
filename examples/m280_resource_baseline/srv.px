@@ -1,0 +1,35 @@
+## M280 门：H3 托管 listener 的**资源面**服务端
+## ------------------------------------------------------------
+## 与 M225（同槽复用，只比输出）的区别：本门量的是 **CPU / RSS / 线程 / fd**。
+## `M280_SPIN=1` ⇒ spawn 一个忙自旋协程（**负控**：CPU 判据必须判红）。
+var hp = 19698
+var h3p = 19699
+var ready = "/tmp/m280gate.ready"
+
+var v = env("M280_HTTP_PORT")
+if v != null:
+    hp = int(v)
+    h3p = hp + 1
+var r = env("M280_READY")
+if r != null:
+    ready = r
+
+def spin_loop():
+    ## 负控专用：忙自旋（模拟 draining 期间的读路径空转）
+    var x = 0
+    while true:
+        x = x + 1
+
+def api_m280(req, params):
+    return {"status": 200, "body": "m280-ok", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/m280", api_m280)
+write_file(ready, "ready")
+print("SRV ready http=" + str(hp) + " h3=" + str(h3p))
+
+var sp = env("M280_SPIN")
+if sp != null:
+    spawn spin_loop()
+    print("SPIN injected")
+
+px_serve(hp, "/tmp", 10000, {"http3": {"port": h3p}})
