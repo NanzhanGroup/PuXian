@@ -465,6 +465,124 @@ else
   iv_ok "⑥-6 反向判据：写侧退回裸名 ⇒ 判红（有牙）"
 fi
 
+
+# ══════════════════════════════════════════════════════════════
+# M281 · [7] 权威版本回落（缺陷 488）
+#   提案人：晨曦（2026-10-06）。四条约束：只在 404 回落 / 非 404（限流）不许回落 /
+#   留痕 / 探测有界。
+#   本段**离线**跑真实抽取出来的决策函数（换掉 HTTP 探针桩）——
+#   ⚠️ 这正是 [6] 段立论的延伸：**决策逻辑必须能被单独注入**，
+#      否则「回落」这种分支永远只能靠联网撞运气。
+# ══════════════════════════════════════════════════════════════
+echo "== [7] 权威版本回落（缺陷 488：只在 404 回落 · 限流不许回落 · 有界）=="
+fb_ok()  { echo "  ✅ $1"; PASS=$((PASS+1)); }
+fb_bad() { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
+
+BLOCK7="$W/fb.sh"
+cat > "$BLOCK7" <<'HDR7'
+log() { printf '[log] %s\n' "$*"; }
+die() { printf '[die] %s\n' "$*"; exit 1; }
+vkey() { printf '%s' "$1" | sed -nE 's/^v([0-9]+)\.([0-9]+)\.([0-9]+)(-m([0-9]+))?$/\1 \2 \3 \5/p'; }
+REPO_SLUG=NanzhanGroup/PuXian
+HDR7
+sed -n '/^# >>> ver-fallback >>>/,/^# <<< ver-fallback <<<$/p' "$SCRIPT" >> "$BLOCK7"
+if grep -q 'resolve_publishable_tag()' "$BLOCK7"; then
+  fb_ok "ver-fallback 段可抽取（结构未破）"
+else
+  fb_bad "抽取失败：$SCRIPT 里 ver-fallback 标记行缺失或被改"
+fi
+
+# 桩 harness：replace HTTP 探针（表驱动），并记录探测次数（判「有界」）
+cat > "$W/fbrun.sh" <<EOS
+set -uo pipefail
+. "$BLOCK7"
+gh_release_code() {
+  local e
+  printf '%s\n' "\$1" >> "\$FB_LOG"
+  e="\$(printf '%s\n' "\$FB_TBL" | tr ',' '\n' | awk -F: -v k="\$1" '\$1==k{print \$2}')"
+  printf '%s' "\${e:-404}"
+}
+resolve_publishable_tag \$FB_TOP \$FB_CANDS
+printf 'RESULT=%s\n' "\$RESOLVED_TAG"
+EOS
+
+fb_case() {   # $1=用例名 $2=表 $3=最新tag $4=候选（空格分隔） $5=额外环境（可空）
+  FB_TBL="$2" FB_TOP="$3" FB_CANDS="$4" FB_LOG="$W/fbcnt.$$" $5 bash "$W/fbrun.sh" 2>&1
+}
+
+# ⑦-1 最新 tag 有 Release ⇒ **不回落**（回落不能变成常态）
+o="$(fb_case x 'v0.2.277:200' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$o" | grep -q 'RESULT=v0.2.277' \
+   && ! printf '%s' "$o" | grep -q '回落生效\|权威版本回落：'; then
+  fb_ok "⑦-1 最新 tag 有 Release ⇒ 选它、**不回落**"
+else
+  fb_bad "⑦-1 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
+fi
+
+# ⑦-2 最新 tag 404 且次高有 Release ⇒ 回落，且**响亮留痕**
+o="$(fb_case x 'v0.2.277:404,v0.2.276:200' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$o" | grep -q 'RESULT=v0.2.276' \
+   && printf '%s' "$o" | grep -q '权威版本回落：v0.2.277 → v0.2.276'; then
+  fb_ok "⑦-2 最新 tag 无 Release ⇒ 回落到次高，且日志**指名**（留痕）"
+else
+  fb_bad "⑦-2 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
+fi
+
+# ⑦-3 ⭐反向判据：**限流（403）绝不许被当成「未发版」** ⇒ 必须 die
+o="$(fb_case x 'v0.2.277:403,v0.2.276:200' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
+if [ "$rc" != 0 ] && printf '%s' "$o" | grep -q '拒绝回落' \
+   && ! printf '%s' "$o" | grep -q 'RESULT='; then
+  fb_ok "⑦-3 403（限流）⇒ **拒绝回落**并响亮（不把真问题藏起来）"
+else
+  fb_bad "⑦-3 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
+fi
+
+# ⑦-4 全部 404 ⇒ 诚实失败（不猜、不降级）
+o="$(fb_case x 'v0.2.277:404' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
+if [ "$rc" != 0 ] && printf '%s' "$o" | grep -q '诚实失败'; then
+  fb_ok "⑦-4 全都没有 Release ⇒ 诚实失败（不猜、不降级）"
+else
+  fb_bad "⑦-4 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
+fi
+
+# ⑦-5 探测**有界**：候选 6 个全 404 + PXREPO_FB_MAX=2 ⇒ 探测次数 ≤ 1（最新）+ 2（回看）
+L="$W/fbcnt5"; : > "$L"
+o="$(FB_TBL='v0.2.277:404' FB_TOP='v0.2.277' FB_CANDS='v0.2.276 v0.2.275 v0.2.274 v0.2.273 v0.2.272 v0.2.271' \
+      FB_LOG="$L" PXREPO_FB_MAX=2 bash "$W/fbrun.sh" 2>&1)"; rc=$?
+N="$(wc -l < "$L" 2>/dev/null || echo 0)"
+if [ "$N" -le 3 ] && printf '%s' "$o" | grep -q '回看已达上限'; then
+  fb_ok "⑦-5 探测有界：PXREPO_FB_MAX=2 ⇒ 实测探测 $N 次（≤3）"
+else
+  fb_bad "⑦-5 探测 $N 次（期望 ≤3）输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 160)"
+fi
+
+# ⑦-6 静态：version.json 必须**留痕**（否则「站点落后一版」事后无从归因）
+# ⑦-8 ⭐ 判据：`vdesc` 必须按**版本序降序**（不是字典序、不是输入序）
+#   本判据直接对应一个**真实事故**：调用点写成 `$(vdesc "$TAGS")`（多行串被引用 ⇒ 单参数）
+#   ⇒ vdesc 只处理首行 ⇒「最新 tag」退化成 `git ls-remote | sort -u` 的**字典序首行**
+#   （实测 v0.1.0-m57）⇒ 会一路回落到最老的 tag。夹具刻意取**字典序 ≠ 版本序**的集合。
+_o="$(bash -c '. "'"$BLOCK7"'"; vdesc v0.1.0-m57 v0.2.12-m260 v0.2.277 v0.2.9' 2>&1)"
+_first="$(printf '%s\n' "$_o" | head -1)"
+if [ "$_first" = "v0.2.277" ]; then
+  fb_ok "⑦-8 vdesc 按**版本序**降序（首行 v0.2.277，而非字典序首行 v0.1.0-m57）"
+else
+  fb_bad "⑦-8 vdesc 排序错：首行「$_first」（应为 v0.2.277）；全部: $(printf '%s' "$_o" | tr '\n' ' ')"
+fi
+# ⑦-9 静态：调用点必须**不加引号**（引号 ⇒ 整串成单参数 ⇒ vdesc 只处理首行）
+case "$(cat "$SCRIPT")" in
+  *'resolve_publishable_tag $(vdesc $TAGS)'*) fb_ok "⑦-9 调用点 \$TAGS 未加引号（多行串按词拆分）" ;;
+  *) fb_bad "⑦-9 调用点形态不对：$(grep -n 'resolve_publishable_tag \$(vdesc' "$SCRIPT" | head -1 | tr '\n' ' ')" ;;
+esac
+
+case "$(cat "$SCRIPT")" in
+  *'"tag_max"'*'"fallback_from"'*) fb_ok "⑦-6 version.json 登记 tag_max / fallback_from（可事后归因）" ;;
+  *) fb_bad "⑦-6 version.json 缺回落留痕字段" ;;
+esac
+case "$(cat "$SCRIPT")" in
+  *'④ 回落（M281'*) fb_ok "⑦-7 头注写明回落口径（作者可读）" ;;
+  *) fb_bad "⑦-7 头注未写回落口径" ;;
+esac
+
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
 
 [ "$FAIL" = 0 ] || exit 1

@@ -16,6 +16,9 @@
 #      不信提交信息（gh-pages 上前有「rpm 发布」提交、后有「站点文件同步」提交，
 #      以 tip 提交信息判定会在站点提交为 tip 时必然误判 —— 2026-09-16 晨曦干跑实测）
 #   ③ 单调守卫：不得低于目标目录现役 version.json 的版本（除非 PXREPO_ALLOW_REGRESSION=<理由>）
+#   ④ 回落（M281 · 缺陷 488）：若最新 tag **尚无 Release**（HTTP 404）⇒ 回落到「有 Release 的最大 tag」，
+#      并在日志与 version.json 的 tag_max/fallback_from 留痕；**非 404（限流/网络）不许回落**；
+#      探测有界（PXREPO_FB_MAX，默认 5）⇒ 未发版窗口不再连累**上一个已发版本**的落地。
 # 校验：tarball sha256 == sha256sums.txt；每个 rpm `rpm -Kv` 验签；repomd.xml.asc 必须存在
 # 发布顺序（消除「元数据与包不匹配」窗口）：新 rpm（不删旧）→ repodata → 删旧 rpm
 # 原子性：全部在 WORK 暂存并通过校验后才写入 DEST；任一步失败 ⇒ DEST 保持原样
@@ -126,6 +129,74 @@ done <<< "$TAGS"
 [ -n "$BEST" ] || die "版本排序失败"
 TAG="$BEST"
 log "   权威版本 = $TAG"
+
+# ---------- 1c. 权威版本回落（缺陷 488 · M281） ----------
+# 令源：晨曦 2026-10-06 回执提案。四条约束见 packaging/pxrepo_mirror.sh 头部说明。
+# >>> ver-fallback >>>
+# 可注入的 HTTP 探针：$1=tag → HTTP 码（000 = 网络不可用）
+# ⚠ 离线自测会**覆盖本函数**（换桩），故必须独立成函数、不内联。
+gh_release_code() {
+  curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+    "https://api.github.com/repos/$REPO_SLUG/releases/tags/$1" 2>/dev/null || echo 000
+}
+# 版本序降序（v<M>.<m>.<p>[-mNNN]）：$@=tag 列表 → 每行一个 tag
+vdesc() {
+  local t k ma mi pa ms
+  for t in "$@"; do
+    k="$(vkey "$t")"; [ -n "$k" ] || continue
+    IFS=' ' read -r ma mi pa ms <<<"$k"
+    printf '%s %s\n' "$(printf '%04d.%04d.%04d.%06d' "$ma" "$mi" "$pa" "${ms:-0}")" "$t"
+  done | sort -r | awk '{print $2}'
+}
+# 回落决策：$1=最新 tag · $2..=其余候选（降序）
+#   **结果写入全局 RESOLVED_TAG**（不写 stdout —— 否则 `die` 的消息会被命令替换吃掉，
+#   整脚本变成「静默死」）。
+#   `die` 在本函数内**直接终止整脚本**（函数不在子 shell 里调用）—— 这是刻意的：
+#   非 404 的探测失败是**不可判定**，必须响亮，不许猜。
+resolve_publishable_tag() {
+  local top="$1"; shift
+  local c t n=0 cap="${PXREPO_FB_MAX:-5}"
+  RESOLVED_TAG=""
+  c="$(gh_release_code "$top")"
+  case "$c" in
+    200) RESOLVED_TAG="$top"; return 0 ;;
+    404) : ;;
+    *) die "探测最新 tag $top 的 Release 返回 HTTP $c（非 200/404）⇒ 可能是限流/网络问题，**拒绝回落**（回落会把真问题藏起来）" ;;
+  esac
+  log "   ⚠ 最新 tag $top 尚无 Release（发布链窗口：tag 先推、Release 后发）⇒ 按版本序回落"
+  for t in "$@"; do
+    n=$((n + 1))
+    if [ "$n" -gt "$cap" ]; then
+      log "   ⚠ 回看已达上限（PXREPO_FB_MAX=$cap）⇒ 停止探测（探测有界）"
+      break
+    fi
+    c="$(gh_release_code "$t")"
+    case "$c" in
+      200) log "   ⚠ 权威版本回落：$top → $t（$top 尚无 Release；站点不停摆，且已在 version.json 留痕）"
+           RESOLVED_TAG="$t"; return 0 ;;
+      404) continue ;;
+      *) die "回落探测 $t 返回 HTTP $c（非 200/404）⇒ **拒绝回落**（限流/网络问题不得当成「未发版」）" ;;
+    esac
+  done
+  die "最新 tag $top 无 Release，且回看 $cap 个 tag 都没有 ⇒ 诚实失败（不猜、不降级）"
+}
+# <<< ver-fallback <<<
+
+TAG_MAX="$TAG"
+TAG_FB_FROM=""
+RESOLVED_TAG=""
+# ⚠ `$TAGS` **不加引号**：它是「每行一个 tag」的多行串，引用会变成**单个参数**
+#   ⇒ vdesc 只处理首行 ⇒ 「最新 tag」退化成 `git ls-remote | sort -u` 的**第一行**
+#   （实测 v0.1.0-m57）⇒ 会一路回落到最老的 tag。本行由端到端干跑抓出。
+resolve_publishable_tag $(vdesc $TAGS)
+[ -n "$RESOLVED_TAG" ] || die "回落决策未给出结果（内部错误）"
+if [ "$RESOLVED_TAG" != "$TAG_MAX" ]; then
+  TAG_FB_FROM="$TAG_MAX"
+  TAG="$RESOLVED_TAG"
+  log "   权威版本（回落生效）= $TAG   [最新 tag 为 $TAG_MAX]"
+else
+  log "   ✅ 最新 tag 已有 Release，无需回落"
+fi
 
 # ---------- 1b. 公用：浅取 gh-pages / 站点根文件指纹 ----------
 # fetch_pages 幂等：无变化时是秒级空转；跑完 FETCH_HEAD = gh-pages tip。
@@ -420,6 +491,8 @@ A64_REL=""
 cat > "$STAGING/version.json" <<JSON
 {
   "version": "$TAG",
+  "tag_max": "$TAG_MAX",
+  "fallback_from": "$TAG_FB_FROM",
   "tag": "$TAG",
   "commit": "$SHORT",
   "synced_at": "$(date -Iseconds)",
