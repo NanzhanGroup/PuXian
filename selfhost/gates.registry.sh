@@ -1097,3 +1097,10 @@ run m276_gate_lock bash examples/m276_gate_lock/verify.sh
 #   本地变量已展开 · 档位分支按档展开（8 组 12 断言）。
 #   ⇒ 「新产物必须有判据」这条不因为「它跑不进 CI」而豁免。
 run realhost_smoke bash packaging/realhost_smoke.sh --self-test
+# M278：**发布通道对账** —— `release.yml` 是单通道 concurrency，GitHub 的语义是
+#   「同组只保留一个 in-progress + **一个** pending」，后来的 pending 会**取消**先前的。
+#   实测（2026-10-06）：一次推多个 tag ⇒ v0.2.275 的 rpm 三个 job 从未跑，
+#   v0.2.261/263/264/265/271 **至今没有任何 Release**，而**没有任何东西会告诉你**。
+#   门 = 离线自证（三档 fixture · 双向精确相等 · 豁免/过期/无效行 · --json · --rerun）
+#        + 静态判据（缺陷事实与纪律在位）+ 负控（豁免最新 tag ⇒ 必须判 STALE-IGNORE）。
+run m278_release_reconcile bash examples/m278_release_reconcile/verify.sh

@@ -1062,6 +1062,15 @@ jobs:
           grep -E '自证：通过' /tmp/v_rhs.log | tail -1 || true
           echo "✅ realhost_smoke（离线自证 12/0：参数校验 · dry-run 合法 bash · 六段锚点 · 变量已展开 · 档位分支）PASS"
 
+      - name: m278_release_reconcile（发布通道对账 · 缺陷：Release run 被并发规则静默取消）
+        # 实网对账需要 GH_TOKEN —— CI **刻意不设** ⇒ 第 [4] 层响亮 SKIP（不假装通过）；
+        # 离线部分（自证/静态判据/负控）照跑。本机跑法：GH_TOKEN=$(cat /data/pat.md) ...
+        if: always()
+        run: |
+          bash examples/m278_release_reconcile/verify.sh > /tmp/v_m278.log 2>&1 || { echo "❌ m278 门失败（对账判据 / 豁免纪律 / 负控未判红）"; grep -E '^  ❌' /tmp/v_m278.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'M278 门结果' /tmp/v_m278.log | tail -1 || true
+          echo "✅ m278_release_reconcile（离线自证 30/0 · 双向精确相等 · 豁免过期判据 · 负控 STALE-IGNORE 判红）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
