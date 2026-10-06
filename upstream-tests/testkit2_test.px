@@ -1,0 +1,20 @@
+# testkit 0.2.0 测试
+import "../registry/testkit/0.2.0/testkit.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    tk_true(1 == 1, "1==1")
+    tk_equal(2 + 2, 4, "2+2=4")
+    tk_contains("hello world", "world", "contains world")
+    # ---- 0.2.0 nil ----
+    tk_nil(null, "null is nil")
+    tk_not_nil(42, "42 not nil")
+    # ---- 0.2.0 match ----
+    tk_match("foobar", "bar", "match bar")
+    # ---- 0.2.0 greater/less ----
+    tk_greater(5, 3, "5 > 3")
+    tk_less(2, 4, "2 < 4")
+    print("PASS: testkit 0.2.0")

@@ -1,0 +1,105 @@
+# bcrypt 0.2.0 测试
+# ⚠️ 性能：bcrypt 刻意慢；验收以编译轨为准
+import "../registry/bcrypt/0.2.0/bcrypt.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+def main():
+    # ---- 0.1.0 兼容向量 ----
+    var cost4 = bc_hash("password", 4, "abcdefghijklmnopqrstuu")
+    expect(cost4.is_ok(), "hash4 Ok")
+    expect(cost4.unwrap() == "$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm",
+        "cost4 向量: " + str(cost4))
+
+    var kn4 = bc_hash("password", 4, "N9qo8uLOickgx2ZMRZoMye")
+    expect(kn4.is_ok(), "known4 Ok")
+    expect(kn4.unwrap() == "$2a$04$N9qo8uLOickgx2ZMRZoMyeSuVmV5MQilj2yZi38Fq2CCnx12jZvOG",
+        "cost4 知名向量: " + str(kn4))
+
+    # 校验正负
+    var ok1 = bc_verify("password", "$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(ok1.is_ok() and ok1.unwrap() == true, "verify 正确 true")
+
+    var bad = bc_verify("wrongpass", "$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(bad.is_ok() and bad.unwrap() == false, "verify 错误 false")
+
+    # ---- 0.2.0 新增：bc_cost ----
+    var c1 = bc_cost("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(c1.is_ok() and c1.unwrap() == 4, "bc_cost → 4")
+
+    var c2 = bc_cost("$2b$10$abcdefghijklmnopqrstuu5Lo0g67CiD3M4RpN1BmBb4Crp5w7dbK")
+    expect(c2.is_ok() and c2.unwrap() == 10, "bc_cost → 10")
+
+    var c3 = bc_cost("not-a-hash")
+    expect_err(c3, "bc_cost invalid → Err")
+
+    # ---- bc_salt ----
+    var s1 = bc_salt("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(s1.is_ok() and s1.unwrap() == "abcdefghijklmnopqrstuu", "bc_salt → abcdefghijklmnopqrstuu")
+
+    # ---- bc_hash_body ----
+    var hb = bc_hash_body("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(hb.is_ok() and hb.unwrap() == "ghE8Ev8uGFaUgY2cNEySvxngrb/Jzdm", "bc_hash_body")
+
+    # ---- bc_version ----
+    var v1 = bc_version("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(v1.is_ok() and v1.unwrap() == "$2a", "bc_version → $2a")
+
+    var v2 = bc_version("$2b$10$abcdefghijklmnopqrstuu5Lo0g67CiD3M4RpN1BmBb4Crp5w7dbK")
+    expect(v2.is_ok() and v2.unwrap() == "$2b", "bc_version → $2b")
+
+    # ---- bc_info ----
+    var info = bc_info("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm")
+    expect(info.is_ok(), "bc_info Ok")
+    if info.is_ok():
+        var iv = info.unwrap()
+        expect(iv["version"] == "$2a", "bc_info version")
+        expect(iv["cost"] == 4, "bc_info cost")
+        expect(iv["salt"] == "abcdefghijklmnopqrstuu", "bc_info salt")
+        expect(iv["hash"] == "ghE8Ev8uGFaUgY2cNEySvxngrb/Jzdm", "bc_info hash")
+
+    # ---- bc_needs_rehash ----
+    var nr1 = bc_needs_rehash("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm", 4)
+    expect(nr1.is_ok() and nr1.unwrap() == false, "needs_rehash same cost → false")
+
+    var nr2 = bc_needs_rehash("$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm", 10)
+    expect(nr2.is_ok() and nr2.unwrap() == true, "needs_rehash diff cost → true")
+
+    var nr3 = bc_needs_rehash("garbage", 10)
+    expect(nr3.is_ok() and nr3.unwrap() == true, "needs_rehash invalid → true")
+
+    # ---- bc_hash_with（随机盐）----
+    var hw = bc_hash_with("mypassword", 4)
+    expect(hw.is_ok(), "bc_hash_with Ok")
+    if hw.is_ok():
+        var hval = hw.unwrap()
+        expect(hval.starts_with("$2a$04$"), "bc_hash_with prefix $2a$04$")
+        expect(len(hval) == 60, "bc_hash_with len = 60, got " + str(len(hval)))
+        # 验证生成的哈希能通过校验
+        var vv = bc_verify("mypassword", hval)
+        expect(vv.is_ok() and vv.unwrap() == true, "bc_hash_with → verify true")
+        # 错误密码应失败
+        var vv2 = bc_verify("wrongpassword", hval)
+        expect(vv2.is_ok() and vv2.unwrap() == false, "bc_hash_with → verify wrong false")
+
+    # ---- bc_gensalt 格式 ----
+    var gs = bc_gensalt(4)
+    expect(gs.starts_with("$2a$04$"), "gensalt prefix $2a$04$")
+    expect(len(gs) == 29, "gensalt len = 29, got " + str(len(gs)))
+
+    var gs2 = bc_gensalt(12)
+    expect(gs2.starts_with("$2a$12$"), "gensalt prefix $2a$12$")
+
+    # ---- 错误路径 ----
+    expect_err(bc_hash("password", 2, "abcdefghijklmnopqrstuu"), "cost<4 Err")
+    expect_err(bc_hash("password", 10, "short"), "盐长度 Err")
+    expect_err(bc_verify("password", "not-a-hash"), "格式非法 Err")
+
+    print("bcrypt 0.2.0: PASS")
+    return Ok(0)

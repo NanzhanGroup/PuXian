@@ -1,0 +1,23 @@
+# punycode 0.2.0 测试
+import "../registry/punycode/0.2.0/punycode.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var enc = pc_encode("bücher").unwrap()
+    expect(pc_decode(enc).unwrap() == "bücher", "roundtrip bücher: " + enc)
+    # ---- 0.2.0 encode_url ----
+    var url = pc_encode_url("münchen.de")
+    expect(contains(url, "xn--") == true, "encode_url has xn--: " + url)
+    # ---- 0.2.0 is_ascii ----
+    expect(pc_is_ascii("hello") == true, "is_ascii hello")
+    expect(pc_is_ascii("héllo") == false, "not is_ascii héllo")
+    # ---- 0.2.0 is_punycode ----
+    expect(pc_is_punycode("xn--bcher-kva") == true, "is_punycode")
+    expect(pc_is_punycode("hello") == false, "not is_punycode")
+    # ---- 0.2.0 strip_prefix ----
+    expect(pc_strip_prefix("xn--bcher-kva") == "bcher-kva", "strip_prefix")
+    expect(pc_strip_prefix("hello") == "hello", "strip_prefix no prefix")
+    print("PASS: punycode 0.2.0")

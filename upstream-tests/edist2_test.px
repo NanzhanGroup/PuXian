@@ -1,0 +1,22 @@
+# edist 0.2.0 测试
+import "../registry/edist/0.2.0/edist.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(ed_levenshtein("kitten", "sitting") == 3, "levenshtein kitten/sitting")
+    expect(ed_hamming("abc", "abd").unwrap() == 1, "hamming abc/abd")
+    # ---- 0.2.0 damerau ----
+    expect(ed_damerau("abc", "acb") == 1, "damerau abc/acb: " + str(ed_damerau("abc", "acb")))
+    expect(ed_damerau("kitten", "sitting") == 3, "damerau kitten/sitting")
+    # ---- 0.2.0 jaro ----
+    var j = ed_jaro("martha", "marhta")
+    expect(j > 0.9, "jaro martha/marhta > 0.9: " + str(j))
+    expect(ed_jaro("abc", "abc") == 1.0, "jaro identical = 1.0")
+    # ---- 0.2.0 jaro_winkler ----
+    var jw = ed_jaro_winkler("martha", "marhta")
+    expect(jw > j, "jaro_winkler > jaro: " + str(jw))
+    expect(ed_jaro_winkler("abc", "abc") == 1.0, "jaro_winkler identical = 1.0")
+    print("PASS: edist 0.2.0")

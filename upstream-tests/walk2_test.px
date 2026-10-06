@@ -1,0 +1,23 @@
+# walk 0.2.0 测试
+import "../registry/walk/0.2.0/walk.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var entries = wk_walk("registry/walk", 1).unwrap()
+    expect(len(entries) > 0, "walk non-empty")
+    # ---- 0.2.0 walk_files ----
+    var files = wk_walk_files("registry/walk", 2)
+    expect(len(files) >= 0, "walk_files >= 0")
+    # ---- 0.2.0 walk_dirs ----
+    var dirs = wk_walk_dirs("registry/walk", 2)
+    expect(len(dirs) >= 0, "walk_dirs >= 0")
+    # ---- 0.2.0 walk_ext ----
+    var pxfiles = wk_walk_ext("registry/walk", ".px", 3)
+    expect(len(pxfiles) >= 1, "walk_ext .px >= 1: " + str(len(pxfiles)))
+    # ---- 0.2.0 count ----
+    var c = wk_count("registry/walk", 2)
+    expect(c["total"] == c["files"] + c["dirs"], "count total = files + dirs")
+    print("PASS: walk 0.2.0")

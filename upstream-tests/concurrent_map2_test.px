@@ -1,0 +1,26 @@
+# concurrent_map 0.2.0 测试（仅编译模式）
+import "../registry/concurrent_map/0.2.0/concurrent_map.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var m = cm_new()
+    cm_set(m, "a", 1)
+    cm_set(m, "b", 2)
+    expect(cm_get(m, "a") == 1, "get a=1")
+    expect(cm_has(m, "b") == true, "has b")
+    expect(cm_len(m) == 2, "len 2: " + str(cm_len(m)))
+    # ---- 0.2.0 clear ----
+    cm_clear(m)
+    expect(cm_len(m) == 0, "after clear len 0: " + str(cm_len(m)))
+    # ---- 0.2.0 values ----
+    cm_set(m, "x", 10)
+    cm_set(m, "y", 20)
+    var vals = cm_values(m)
+    expect(len(vals) == 2, "values len 2: " + str(len(vals)))
+    # ---- 0.2.0 to_string ----
+    var s = cm_to_string(m)
+    expect(contains(s, "x"), "to_string has x: " + s)
+    print("PASS: concurrent_map 0.2.0")

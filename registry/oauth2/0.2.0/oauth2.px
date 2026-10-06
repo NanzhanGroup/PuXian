@@ -1,0 +1,219 @@
+# ============================================================
+# 普贤生态库：registry/oauth2 —— OAuth 2.0 令牌获取
+# ------------------------------------------------------------
+# 纯函数库（网络 IO：native http_request），编译（px build）与解释（px run）双模式一致。
+# 对齐 RFC 6749 / Go golang.org/x/oauth2 / Python requests-oauthlib 心智（0.1.0）：
+#   oa_token_cc(url, client_id, client_secret[, scope])       → Ok(token dict) | Err
+#       client_credentials 模式（§4.4，服务端间调用常用）
+#   oa_token_password(url, client_id, client_secret, user, pw[, scope]) → Ok(token dict) | Err
+#       password 模式（§4.3）
+# token dict = {access_token, token_type, expires_in, ...}（透传 JSON）；
+#   非 2xx / 响应缺 access_token → Err（error 字段带出）。
+# 请求体 application/x-www-form-urlencoded（含 percent 编码，自实现）。
+# 0.1.0 不含刷新、PKCE、authorization-code 全流程。
+# ============================================================
+
+# ---- 内部：urlencoded ----
+def oa_pct(s):
+    var out = ""
+    var b = bytes(s)
+    var i = 0
+    while i < bytes_len(b):
+        var v = bytes_get(b, i)
+        if (v >= 97 and v <= 122) or (v >= 65 and v <= 90) or (v >= 48 and v <= 57) or v == 45 or v == 95 or v == 46 or v == 126:
+            out = out + chr(v)
+        else:
+            var digits = "0123456789ABCDEF"
+            out = out + "%" + digits[v // 16] + digits[v % 16]
+        i += 1
+    return out
+
+def oa_form(params):
+    var out = ""
+    var ks = params.keys()
+    var i = 0
+    while i < len(ks):
+        if i > 0:
+            out = out + "&"
+        out = out + oa_pct(ks[i]) + "=" + oa_pct(str(params[ks[i]]))
+        i += 1
+    return out
+
+# ---- 内部：POST 表单 ----
+def oa_post(url, form):
+    var r = http_request(url, "POST", oa_form(form),
+        {"Content-Type": "application/x-www-form-urlencoded"})
+    # http_request 失败时返回 Result（Err）→ 归一化为 600 状态
+    if type(r) == "result":
+        if r.is_err():
+            return {"status": 600, "body": "", "error": r.err()}
+        return r.unwrap()
+    return r
+
+# ---- 令牌 ----
+# json_parse_opt 返回 Result：统一解包为 dict/null
+def oa_json(body):
+    var r0 = json_parse_opt(body)
+    if type(r0) == "result":
+        if r0.is_ok():
+            return r0.unwrap()
+        return null
+    return r0
+
+def oa_parse_token(r, url):
+    var j = oa_json(r["body"])
+    if r["status"] >= 600:
+        return Err("oauth2: 网络错误: " + str(r["error"]))
+    if r["status"] >= 400:
+        if type(j) == "dict" and j.has("error"):
+            return Err("oauth2: " + str(j["error"]) + " (HTTP " + str(r["status"]) + ")")
+        return Err("oauth2: HTTP " + str(r["status"]))
+    if type(j) != "dict" or not j.has("access_token"):
+        return Err("oauth2: 响应缺少 access_token（" + url + "）")
+    return Ok(j)
+
+def oa_token_cc(url, client_id, client_secret, scope=""):
+    var form = {"grant_type": "client_credentials",
+                "client_id": client_id, "client_secret": client_secret}
+    if scope != "":
+        form.set("scope", scope)
+    return oa_parse_token(oa_post(url, form), url)
+
+def oa_token_password(url, client_id, client_secret, username, password, scope=""):
+    var form = {"grant_type": "password",
+                "client_id": client_id, "client_secret": client_secret,
+                "username": username, "password": password}
+    if scope != "":
+        form.set("scope", scope)
+    return oa_parse_token(oa_post(url, form), url)
+
+# ============================================================
+# 0.2.0 新增 API
+# ============================================================
+
+# ---- 令牌刷新（§6）----
+def oa_token_refresh(url, client_id, client_secret, refresh_token, scope=""):
+    var form = {"grant_type": "refresh_token",
+                "client_id": client_id, "client_secret": client_secret,
+                "refresh_token": refresh_token}
+    if scope != "":
+        form.set("scope", scope)
+    return oa_parse_token(oa_post(url, form), url)
+
+# ---- 授权码模式（§4.1）----
+def oa_token_authcode(url, client_id, client_secret, code, redirect_uri, code_verifier=""):
+    var form = {"grant_type": "authorization_code",
+                "client_id": client_id, "client_secret": client_secret,
+                "code": code, "redirect_uri": redirect_uri}
+    if code_verifier != "":
+        form.set("code_verifier", code_verifier)
+    return oa_parse_token(oa_post(url, form), url)
+
+# ---- PKCE：生成 code_verifier 和 code_challenge ----
+# code_verifier = 43~128 字符的随机字符串（Base64URL 编码的随机字节）
+# code_challenge = Base64URL(SHA256(code_verifier))
+def oa_pkce_verifier(length=43):
+    var hex_s = os_random_hex(length)
+    var raw = hex_to_bytes(hex_s)
+    # Base64URL 编码（无 padding）
+    var b64 = bytes_base64(raw)
+    b64 = replace(b64, "+", "-")
+    b64 = replace(b64, "/", "_")
+    b64 = replace(b64, "=", "")
+    # 截取前 43~128 字符
+    if len(b64) > 128:
+        b64 = b64[0:128]
+    return b64
+
+def oa_pkce_challenge(verifier):
+    var h = sha256_bytes(bytes(verifier))
+    var b64 = bytes_base64(h)
+    b64 = replace(b64, "+", "-")
+    b64 = replace(b64, "/", "_")
+    b64 = replace(b64, "=", "")
+    return b64
+
+# PKCE 完整生成 → {verifier, challenge, method}
+def oa_pkce_generate():
+    var v = oa_pkce_verifier()
+    var c = oa_pkce_challenge(v)
+    return {"verifier": v, "challenge": c, "method": "S256"}
+
+# ---- 构建授权 URL ----
+def oa_build_auth_url(auth_url, client_id, redirect_uri, state, scope="", code_challenge="", code_challenge_method=""):
+    var url = auth_url + "?response_type=code" +
+        "&client_id=" + oa_pct(client_id) +
+        "&redirect_uri=" + oa_pct(redirect_uri) +
+        "&state=" + oa_pct(state)
+    if scope != "":
+        url = url + "&scope=" + oa_pct(scope)
+    if code_challenge != "":
+        url = url + "&code_challenge=" + code_challenge
+    if code_challenge_method != "":
+        url = url + "&code_challenge_method=" + code_challenge_method
+    return url
+
+# ---- Token Introspection（RFC 7662）----
+def oa_introspect(url, client_id, client_secret, token):
+    var form = {"token": token}
+    var r = http_request(url, "POST", oa_form(form),
+        {"Content-Type": "application/x-www-form-urlencoded",
+         "Authorization": "Basic " + bytes_base64(bytes(client_id + ":" + client_secret))})
+    if type(r) == "result":
+        if r.is_err():
+            return Err("oauth2: introspect 网络错误: " + str(r.err()))
+        r = r.unwrap()
+    var j = oa_json(r["body"])
+    if r["status"] >= 400:
+        return Err("oauth2: introspect HTTP " + str(r["status"]))
+    if type(j) != "dict":
+        return Err("oauth2: introspect 响应非 JSON")
+    return Ok(j)
+
+# ---- UserInfo 端点（OIDC）----
+def oa_userinfo(url, access_token):
+    var r = http_request(url, "GET", "",
+        {"Authorization": "Bearer " + access_token})
+    if type(r) == "result":
+        if r.is_err():
+            return Err("oauth2: userinfo 网络错误: " + str(r.err()))
+        r = r.unwrap()
+    var j = oa_json(r["body"])
+    if r["status"] >= 400:
+        return Err("oauth2: userinfo HTTP " + str(r["status"]))
+    if type(j) != "dict":
+        return Err("oauth2: userinfo 响应非 JSON")
+    return Ok(j)
+
+# ---- 检查令牌是否过期 ----
+# token 为令牌 dict（含 expires_in），obtained_at_ms 为获取时的时间戳（毫秒）
+def oa_is_expired(token, obtained_at_ms):
+    if not token.has("expires_in"):
+        return Ok(false)  # 无过期信息，视为未过期
+    var expires_in = token["expires_in"]
+    var expire_at = obtained_at_ms + expires_in * 1000
+    # 提前 5 秒判定过期（避免边界竞争）
+    return Ok(now_ms() >= expire_at - 5000)
+
+# ---- 提取令牌信息 ----
+def oa_token_info(token):
+    var info = {}
+    if token.has("access_token"):
+        info.set("has_access", true)
+    else:
+        info.set("has_access", false)
+    if token.has("refresh_token"):
+        info.set("has_refresh", true)
+    else:
+        info.set("has_refresh", false)
+    if token.has("expires_in"):
+        info.set("expires_in", token["expires_in"])
+    if token.has("token_type"):
+        info.set("token_type", token["token_type"])
+    if token.has("scope"):
+        info.set("scope", token["scope"])
+    return Ok(info)
+
+# ---- 生成 state（防 CSRF）----
+def oa_generate_state():
+    return os_random_hex(16)

@@ -1,0 +1,218 @@
+# ============================================================
+# 普贤生态库：registry/diff —— 行级 diff（LCS）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python difflib 心智（0.1.0 子集，小规模行级 LCS）：
+#   df_lines(a, b)   → [str]   行级 diff：前缀 " "（共有）/"-"（仅 a）/"+"（仅 b）
+#   df_ratio(a, b)   → float   相似度 2*LCS/(len_a+len_b)（0..1）
+#   df_split(s)      → [str]   按 "\n" 切行
+# 说明：
+#   - LCS 用 DP 表（O(n*m) 空间）；适合小规模文本（配置/日志/短文本）
+#   - 行比较为整串字节相等；行内字符级 diff（SequenceMatcher opcodes）留给 0.2.0
+#   - b 中的新增行在 a 的对应位置之后按序出现（与 difflib.unified 同序直觉）
+# ============================================================
+def df_split(s):
+    var lines = s.split("\n")
+    var out = []
+    var i = 0
+    while i < len(lines) - 1:
+        out.append(lines[i])
+        i += 1
+    if len(lines) > 0 and lines[len(lines) - 1] != "":
+        out.append(lines[len(lines) - 1])
+    return out
+# 内部：LCS 长度表（n+1 行 × m+1 列）
+def df_lcs_table(a, b):
+    var n = len(a)
+    var m = len(b)
+    var dp = []
+    var i = 0
+    while i <= n:
+        var row = []
+        var j = 0
+        while j <= m:
+            row.append(0)
+            j += 1
+        dp.append(row)
+        i += 1
+    i = n - 1
+    while i >= 0:
+        var j = m - 1
+        while j >= 0:
+            if a[i] == b[j]:
+                dp[i][j] = dp[i + 1][j + 1] + 1
+            elif dp[i + 1][j] >= dp[i][j + 1]:
+                dp[i][j] = dp[i + 1][j]
+            else:
+                dp[i][j] = dp[i][j + 1]
+            j -= 1
+        i -= 1
+    return dp
+# 回溯生成 diff 行
+def df_backtrack(a, b, dp):
+    var out = []
+    var i = 0
+    var j = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            out.append(" " + a[i])
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            out.append("-" + a[i])
+            i += 1
+        else:
+            out.append("+" + b[j])
+            j += 1
+    while i < len(a):
+        out.append("-" + a[i])
+        i += 1
+    while j < len(b):
+        out.append("+" + b[j])
+        j += 1
+    return out
+def df_lines(a, b):
+    var la = df_split(a)
+    var lb = df_split(b)
+    var dp = df_lcs_table(la, lb)
+    return df_backtrack(la, lb, dp)
+def df_ratio(a, b):
+    var la = df_split(a)
+    var lb = df_split(b)
+    var dp = df_lcs_table(la, lb)
+    var lcs = dp[0][0]
+    var total = len(la) + len(lb)
+    if total == 0:
+        return 1.0
+    return (2.0 * lcs) / total
+
+# ============================================================
+# 0.2.0 新增：字符级 inline diff（SequenceMatcher opcodes）
+# ============================================================
+# 对齐 Python difflib.SequenceMatcher.get_opcodes() 心智：
+#   df_opcodes(a, b) → [{tag, a1, a2, b1, b2}]
+#     tag: "equal" | "replace" | "delete" | "insert"
+#     a[a1:a2] 对应 b[b1:b2]
+#   df_inline(a, b) → str  行内 diff 可读格式
+#     共有部分原样，删除部分用 [-...-]，新增部分用 {+...+}
+#   df_unified(a, b, context?) → str  unified diff 格式（@@ @@ 头 + 行级 diff）
+# 字符级 LCS 复用 df_lcs_table（把字符串当字符列表）
+
+# ---- 字符级 opcodes ----
+def df_opcodes(a, b):
+    var n = len(a)
+    var m = len(b)
+    var dp = df_lcs_table(a, b)
+    var ops = []
+    var i = 0
+    var j = 0
+    while i < n or j < m:
+        if i < n and j < m and a[i] == b[j]:
+            # equal 段
+            var a1 = i
+            var b1 = j
+            while i < n and j < m and a[i] == b[j]:
+                i += 1
+                j += 1
+            ops.append({"tag": "equal", "a1": a1, "a2": i, "b1": b1, "b2": j})
+        elif i < n and (j >= m or dp[i + 1][j] >= dp[i][j + 1]):
+            # delete 段（a 有 b 无）
+            var a1 = i
+            while i < n and (j >= m or dp[i + 1][j] >= dp[i][j + 1]):
+                if i < n and j < m and a[i] == b[j]:
+                    break
+                i += 1
+            # 紧接 insert 段（b 有 a 无）
+            var b1 = j
+            while j < m and (i >= n or dp[i][j + 1] > dp[i + 1][j]):
+                if i < n and j < m and a[i] == b[j]:
+                    break
+                j += 1
+            if j > b1:
+                ops.append({"tag": "replace", "a1": a1, "a2": i, "b1": b1, "b2": j})
+            else:
+                ops.append({"tag": "delete", "a1": a1, "a2": i, "b1": b1, "b2": b1})
+        else:
+            # insert 段
+            var b1 = j
+            while j < m and (i >= n or dp[i][j + 1] > dp[i + 1][j]):
+                if i < n and j < m and a[i] == b[j]:
+                    break
+                j += 1
+            ops.append({"tag": "insert", "a1": i, "a2": i, "b1": b1, "b2": j})
+    return ops
+
+# ---- 行内 diff 可读格式 ----
+# 共有原样，删除 [-...-]，新增 {+...+}
+def df_inline(a, b):
+    var ops = df_opcodes(a, b)
+    var out = ""
+    var i = 0
+    while i < len(ops):
+        var op = ops[i]
+        if op["tag"] == "equal":
+            out = out + a[op["a1"]:op["a2"]]
+        elif op["tag"] == "delete":
+            out = out + "[-" + a[op["a1"]:op["a2"]] + "-]"
+        elif op["tag"] == "insert":
+            out = out + "{+" + b[op["b1"]:op["b2"]] + "+}"
+        else:
+            # replace
+            out = out + "[-" + a[op["a1"]:op["a2"]] + "-]"
+            out = out + "{+" + b[op["b1"]:op["b2"]] + "+}"
+        i += 1
+    return out
+
+# ---- unified diff 格式 ----
+def df_unified(a, b, context=3):
+    var la = df_split(a)
+    var lb = df_split(b)
+    var dp = df_lcs_table(la, lb)
+    # 先用行级 backtrack 获取 diff 行
+    var diff_lines = df_backtrack(la, lb, dp)
+    # 生成 unified 格式
+    var out = "--- a\n+++ b\n"
+    var i = 0
+    while i < len(diff_lines):
+        # 找到第一个非空格行（变更块开始）
+        if diff_lines[i][0] == " ":
+            i += 1
+            continue
+        # 变更块：向前取 context 行
+        var block_start = i - context
+        if block_start < 0:
+            block_start = 0
+        # 向后找变更块结束
+        var block_end = i
+        while block_end < len(diff_lines):
+            if diff_lines[block_end][0] == " ":
+                # 检查是否连续 context 行都是空格
+                var all_space = true
+                var k = block_end
+                while k < len(diff_lines) and k < block_end + context + 1:
+                    if diff_lines[k][0] != " ":
+                        all_space = false
+                        break
+                    k += 1
+                if all_space:
+                    block_end = block_end + context
+                    if block_end > len(diff_lines):
+                        block_end = len(diff_lines)
+                    break
+            block_end += 1
+        if block_end > len(diff_lines):
+            block_end = len(diff_lines)
+        # 输出 @@ 头
+        out = out + "@@ -" + str(block_start + 1) + "," + str(block_end - block_start) + " @@\n"
+        var k2 = block_start
+        while k2 < block_end:
+            var line = diff_lines[k2]
+            if line[0] == " ":
+                out = out + " " + line[1:len(line)] + "\n"
+            elif line[0] == "-":
+                out = out + "-" + line[1:len(line)] + "\n"
+            else:
+                out = out + "+" + line[1:len(line)] + "\n"
+            k2 += 1
+        i = block_end
+    return out

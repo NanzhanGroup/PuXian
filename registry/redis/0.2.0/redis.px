@@ -1,0 +1,364 @@
+# ============================================================
+# 普贤生态库：registry/redis —— Redis 客户端（RESP 协议）
+# ------------------------------------------------------------
+# 纯 .px 实现 RESP（REdis Serialization Protocol），双模式一致。
+# 对齐 Go go-redis / Python redis-py 心智（0.1.0 子集）：
+#   redis_connect(host, port[, opts]) → Ok(conn dict) | Err
+#   redis_cmd(conn, args) → Ok(reply) | Err   通用命令（回复按 RESP 类型映射）
+#   redis_ping(conn) / redis_set / redis_get / redis_del / redis_incr /
+#   redis_ttl / redis_select / redis_close
+# 回复类型映射：+ 简单串→str；- 错误→Err；: 整数→int；$ 块→str；$-1→null；
+#   * 数组→list（元素递归映射）；*-1→null。
+# 依赖 runtime native：tcp_connect_ex / tcp_send_ex / tcp_recv_ex / is_int_str。
+# 限制：0.1.0 无 TLS(红移加密)、无 RESP3（HELLO 3）、无集群/哨兵。
+# ============================================================
+
+# ---- 内部：TCP 读 n 字节 ----
+def rd_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var want = n - bytes_len(buf)
+        if want > 65536:
+            want = 65536
+        var r = tcp_recv_ex(fd, want)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        buf = bytes_concat(buf, r["data"])
+    return [buf, ""]
+
+# ---- 内部：读到 \r\n（返回去尾的行 bytes）----
+def rd_recv_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        buf = bytes_concat(buf, r["data"])
+        var bl = bytes_len(buf)
+        if bl >= 2 and bytes_get(buf, bl - 2) == 13 and bytes_get(buf, bl - 1) == 10:
+            return [bytes_slice(buf, 0, bl - 2), ""]
+
+# ---- 内部：RESP 回复解析（递归）----
+def rd_read_reply(fd):
+    var line = rd_recv_line(fd)
+    if line[1] != "":
+        return Err("redis: recv: " + line[1])
+    var b = line[0]
+    if bytes_len(b) == 0:
+        return Err("redis: 空回复行")
+    var head = bytes_get(b, 0)
+    var rest = bytes_to_str(bytes_slice(b, 1, bytes_len(b)))
+    if head == 43:
+        return Ok(rest)
+    if head == 45:
+        return Err("redis: " + rest)
+    if head == 58:
+        if not is_int_str(rest):
+            return Err("redis: 非法整数回复: " + rest)
+        return Ok(int(rest))
+    if head == 36:
+        if not is_int_str(rest):
+            return Err("redis: 非法长度: " + rest)
+        var n = int(rest)
+        if n == -1:
+            return Ok(null)
+        if n < 0:
+            return Err("redis: 负长度 " + rest)
+        var body = rd_recv_n(fd, n)
+        if body[1] != "":
+            return Err("redis: 块体 recv: " + body[1])
+        var cr = rd_recv_n(fd, 2)
+        if cr[1] != "":
+            return Err("redis: 块尾 recv: " + cr[1])
+        return Ok(bytes_to_str(body[0]))
+    if head == 42:
+        if not is_int_str(rest):
+            return Err("redis: 非法数组长度: " + rest)
+        var n2 = int(rest)
+        if n2 == -1:
+            return Ok(null)
+        var arr = []
+        var i = 0
+        while i < n2:
+            var el = rd_read_reply(fd)
+            if el.is_err():
+                return el
+            arr.append(el.unwrap())
+            i += 1
+        return Ok(arr)
+    return Err("redis: 未知回复类型 " + str(head))
+
+# ---- 内部：命令编码（RESP array of bulk）----
+# args 支持 string/int；返回 [bytes, err]
+def rd_encode(args):
+    var out = bytes("*" + str(len(args)) + chr(13) + chr(10))
+    var i = 0
+    while i < len(args):
+        var a = args[i]
+        var s = a
+        if type(a) == "int":
+            s = str(a)
+        elif type(a) != "string":
+            return [bytes(""), "redis: 参数须 string/int，got " + str(type(a))]
+        # RESP 长度前缀用 UTF-8 字节数（len(s) 是 rune 数，中文会短算导致截断）
+        var raw = bytes(s)
+        out = bytes_concat(out, bytes("$" + str(bytes_len(raw)) + chr(13) + chr(10)))
+        out = bytes_concat(out, raw)
+        out = bytes_concat(out, bytes(chr(13) + chr(10)))
+        i += 1
+    return [out, ""]
+
+# ---- 公开 API ----
+def redis_connect(host, port, opts={}):
+    var timeout_ms = 5000
+    if opts.has("timeout_ms"):
+        timeout_ms = opts["timeout_ms"]
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("redis: connect " + host + ":" + str(port) + " failed: " + c["err"])
+    return Ok({"fd": c["fd"], "host": host, "port": port})
+
+def redis_cmd(conn, args):
+    var enc = rd_encode(args)
+    if enc[1] != "":
+        return Err(enc[1])
+    var r = tcp_send_ex(conn["fd"], enc[0])
+    if not r["ok"]:
+        return Err("redis: send failed: " + r["err"])
+    return rd_read_reply(conn["fd"])
+
+def redis_ping(conn):
+    var r = redis_cmd(conn, ["PING"])
+    if r.is_err():
+        return r
+    if r.unwrap() != "PONG":
+        return Err("redis: ping 期望 PONG，got " + str(r.unwrap()))
+    return Ok("PONG")
+
+def redis_set(conn, key, val):
+    var r = redis_cmd(conn, ["SET", key, val])
+    if r.is_err():
+        return r
+    if r.unwrap() != "OK":
+        return Err("redis: SET 期望 OK，got " + str(r.unwrap()))
+    return Ok(true)
+
+def redis_get(conn, key):
+    return redis_cmd(conn, ["GET", key])
+
+def redis_del(conn, keys):
+    var args = ["DEL"]
+    var i = 0
+    while i < len(keys):
+        args.append(keys[i])
+        i += 1
+    return redis_cmd(conn, args)
+
+def redis_incr(conn, key):
+    return redis_cmd(conn, ["INCR", key])
+
+def redis_ttl(conn, key):
+    return redis_cmd(conn, ["TTL", key])
+
+def redis_select(conn, db):
+    var r = redis_cmd(conn, ["SELECT", db])
+    if r.is_err():
+        return r
+    if r.unwrap() != "OK":
+        return Err("redis: SELECT 期望 OK，got " + str(r.unwrap()))
+    return Ok(true)
+
+def redis_close(conn):
+    # QUIT 尽力而为
+    var r = tcp_send_ex(conn["fd"], rd_encode(["QUIT"])[0])
+    if r["ok"]:
+        tcp_close(conn["fd"])
+    else:
+        tcp_close(conn["fd"])
+    return Ok(true)
+
+# ============================================================
+# 0.2.0 新增 API
+# ============================================================
+
+# ---- EXPIRE ----
+def redis_expire(conn, key, seconds):
+    return redis_cmd(conn, ["EXPIRE", key, str(seconds)])
+
+# ---- EXISTS ----
+def redis_exists(conn, key):
+    return redis_cmd(conn, ["EXISTS", key])
+
+# ---- KEYS ----
+def redis_keys(conn, pattern):
+    return redis_cmd(conn, ["KEYS", pattern])
+
+# ---- TYPE ----
+def redis_type(conn, key):
+    return redis_cmd(conn, ["TYPE", key])
+
+# ---- DECR ----
+def redis_decr(conn, key):
+    return redis_cmd(conn, ["DECR", key])
+
+# ---- INCRBY ----
+def redis_incrby(conn, key, amount):
+    return redis_cmd(conn, ["INCRBY", key, str(amount)])
+
+# ---- MSET / MGET ----
+def redis_mset(conn, pairs):
+    var args = ["MSET"]
+    var i = 0
+    while i < len(pairs):
+        args.append(pairs[i][0])
+        args.append(pairs[i][1])
+        i += 1
+    return redis_cmd(conn, args)
+
+def redis_mget(conn, keys):
+    var args = ["MGET"]
+    var i = 0
+    while i < len(keys):
+        args.append(keys[i])
+        i += 1
+    return redis_cmd(conn, args)
+
+# ---- Hash 操作 ----
+def redis_hset(conn, key, field, value):
+    return redis_cmd(conn, ["HSET", key, field, value])
+
+def redis_hget(conn, key, field):
+    return redis_cmd(conn, ["HGET", key, field])
+
+def redis_hdel(conn, key, field):
+    return redis_cmd(conn, ["HDEL", key, field])
+
+def redis_hexists(conn, key, field):
+    return redis_cmd(conn, ["HEXISTS", key, field])
+
+def redis_hgetall(conn, key):
+    return redis_cmd(conn, ["HGETALL", key])
+
+def redis_hkeys(conn, key):
+    return redis_cmd(conn, ["HKEYS", key])
+
+def redis_hvals(conn, key):
+    return redis_cmd(conn, ["HVALS", key])
+
+def redis_hlen(conn, key):
+    return redis_cmd(conn, ["HLEN", key])
+
+# ---- List 操作 ----
+def redis_lpush(conn, key, value):
+    return redis_cmd(conn, ["LPUSH", key, value])
+
+def redis_rpush(conn, key, value):
+    return redis_cmd(conn, ["RPUSH", key, value])
+
+def redis_lpop(conn, key):
+    return redis_cmd(conn, ["LPOP", key])
+
+def redis_rpop(conn, key):
+    return redis_cmd(conn, ["RPOP", key])
+
+def redis_lrange(conn, key, start, stop):
+    return redis_cmd(conn, ["LRANGE", key, str(start), str(stop)])
+
+def redis_llen(conn, key):
+    return redis_cmd(conn, ["LLEN", key])
+
+# ---- Set 操作 ----
+def redis_sadd(conn, key, member):
+    return redis_cmd(conn, ["SADD", key, member])
+
+def redis_srem(conn, key, member):
+    return redis_cmd(conn, ["SREM", key, member])
+
+def redis_smembers(conn, key):
+    return redis_cmd(conn, ["SMEMBERS", key])
+
+def redis_sismember(conn, key, member):
+    return redis_cmd(conn, ["SISMEMBER", key, member])
+
+def redis_scard(conn, key):
+    return redis_cmd(conn, ["SCARD", key])
+
+# ---- Sorted Set 操作 ----
+def redis_zadd(conn, key, score, member):
+    return redis_cmd(conn, ["ZADD", key, str(score), member])
+
+def redis_zrange(conn, key, start, stop):
+    return redis_cmd(conn, ["ZRANGE", key, str(start), str(stop)])
+
+def redis_zscore(conn, key, member):
+    return redis_cmd(conn, ["ZSCORE", key, member])
+
+def redis_zrem(conn, key, member):
+    return redis_cmd(conn, ["ZREM", key, member])
+
+# ---- Pub/Sub ----
+def redis_publish(conn, channel, message):
+    return redis_cmd(conn, ["PUBLISH", channel, message])
+
+# SUBSCRIBE 会进入订阅模式，阻塞读取消息
+def redis_subscribe(conn, channel):
+    return redis_cmd(conn, ["SUBSCRIBE", channel])
+
+def redis_unsubscribe(conn, channel):
+    return redis_cmd(conn, ["UNSUBSCRIBE", channel])
+
+# ---- SCAN ----
+def redis_scan(conn, cursor, pattern=""):
+    if pattern == "":
+        return redis_cmd(conn, ["SCAN", str(cursor)])
+    return redis_cmd(conn, ["SCAN", str(cursor), "MATCH", pattern])
+
+# ---- 事务 MULTI/EXEC ----
+def redis_multi(conn):
+    var r = redis_cmd(conn, ["MULTI"])
+    if r.is_err():
+        return r
+    if r.unwrap() != "OK":
+        return Err("redis: MULTI 期望 OK")
+    return Ok(true)
+
+def redis_exec(conn):
+    return redis_cmd(conn, ["EXEC"])
+
+def redis_discard(conn):
+    var r = redis_cmd(conn, ["DISCARD"])
+    if r.is_err():
+        return r
+    if r.unwrap() != "OK":
+        return Err("redis: DISCARD 期望 OK")
+    return Ok(true)
+
+# ---- SET 带选项 ----
+def redis_set_ex(conn, key, val, seconds):
+    return redis_cmd(conn, ["SET", key, val, "EX", str(seconds)])
+
+def redis_set_nx(conn, key, val):
+    return redis_cmd(conn, ["SET", key, val, "NX"])
+
+def redis_set_xx(conn, key, val):
+    return redis_cmd(conn, ["SET", key, val, "XX"])
+
+# ---- GETSET ----
+def redis_getset(conn, key, val):
+    return redis_cmd(conn, ["GETSET", key, val])
+
+# ---- APPEND ----
+def redis_append(conn, key, val):
+    return redis_cmd(conn, ["APPEND", key, val])
+
+# ---- STRLEN ----
+def redis_strlen(conn, key):
+    return redis_cmd(conn, ["STRLEN", key])

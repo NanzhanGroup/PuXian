@@ -1,0 +1,90 @@
+# graph 0.2.0 测试：无向边/环检测/连通性/所有路径/MST + 0.1.0 回归
+import "../registry/graph/0.2.0/graph.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var g = gr_new()
+    gr_add_edge(g, "a", "b", 1)
+    gr_add_edge(g, "a", "c", 4)
+    gr_add_edge(g, "b", "c", 2)
+    gr_add_edge(g, "b", "d", 5)
+    gr_add_edge(g, "c", "d", 1)
+    expect(gr_has(g, "a") == true, "has a")
+    expect(gr_has(g, "z") == false, "not has z")
+    expect(len(gr_nodes(g)) == 4, "4 nodes")
+    var bfs = gr_bfs(g, "a").unwrap()
+    expect(bfs[0] == "a", "bfs starts a")
+    expect(len(bfs) == 4, "bfs 4 nodes: " + str(bfs))
+    var path = gr_shortest_path(g, "a", "d")
+    expect(path.is_ok(), "shortest path: " + str(path))
+    expect(path.unwrap()[0] == "a", "path starts a")
+    expect(path.unwrap()[len(path.unwrap()) - 1] == "d", "path ends d")
+    # topo（DAG）
+    var dag = gr_new()
+    gr_add_edge(dag, "a", "b")
+    gr_add_edge(dag, "b", "c")
+    gr_add_edge(dag, "a", "c")
+    var topo = gr_topo(dag)
+    expect(topo.is_ok(), "topo ok: " + str(topo))
+    # ---- 0.2.0 无向边 ----
+    var g2 = gr_new()
+    gr_add_undirected(g2, "a", "b")
+    gr_add_undirected(g2, "b", "c")
+    expect(gr_degree(g2, "a") == 1, "degree a=1")
+    expect(gr_degree(g2, "b") == 2, "degree b=2")
+    expect(gr_degree(g2, "c") == 1, "degree c=1")
+    # ---- 0.2.0 count ----
+    expect(gr_count_nodes(g) == 4, "count nodes 4")
+    expect(gr_count_edges(g) == 5, "count edges 5: " + str(gr_count_edges(g)))
+    # ---- 0.2.0 reverse ----
+    var rg = gr_reverse(g)
+    expect(gr_count_nodes(rg) == 4, "reverse 4 nodes")
+    expect(gr_count_edges(rg) == 5, "reverse 5 edges")
+    # 原来 a→b，反转后 b→a
+    var r_neighbors = gr_neighbors(rg, "b")
+    expect(contains(str(r_neighbors), "a"), "reverse b→a")
+    # ---- 0.2.0 环检测 ----
+    expect(gr_has_cycle(dag) == false, "DAG no cycle")
+    var cyclic = gr_new()
+    gr_add_edge(cyclic, "a", "b")
+    gr_add_edge(cyclic, "b", "c")
+    gr_add_edge(cyclic, "c", "a")
+    expect(gr_has_cycle(cyclic) == true, "cyclic graph")
+    # 自环
+    var self_loop = gr_new()
+    gr_add_edge(self_loop, "a", "a")
+    expect(gr_has_cycle(self_loop) == true, "self loop")
+    # ---- 0.2.0 连通性 ----
+    expect(gr_is_connected(g2) == true, "g2 connected")
+    var disconnected = gr_new()
+    gr_add_edge(disconnected, "a", "b")
+    gr_add_edge(disconnected, "c", "d")
+    expect(gr_is_connected(disconnected) == false, "disconnected")
+    # ---- 0.2.0 所有路径 ----
+    var g3 = gr_new()
+    gr_add_edge(g3, "a", "b")
+    gr_add_edge(g3, "a", "c")
+    gr_add_edge(g3, "b", "d")
+    gr_add_edge(g3, "c", "d")
+    var all_paths = gr_all_paths(g3, "a", "d", 10)
+    expect(len(all_paths) == 2, "2 paths: " + str(len(all_paths)))
+    # ---- 0.2.0 MST ----
+    var mst_g = gr_new()
+    gr_add_undirected(mst_g, "a", "b", 1)
+    gr_add_undirected(mst_g, "b", "c", 2)
+    gr_add_undirected(mst_g, "a", "c", 4)
+    gr_add_undirected(mst_g, "c", "d", 3)
+    gr_add_undirected(mst_g, "b", "d", 5)
+    var mst = gr_mst(mst_g)
+    expect(len(mst) == 3, "MST 3 edges: " + str(len(mst)))
+    # MST 总权重 = 1+2+3 = 6
+    var total_w = 0
+    var i = 0
+    while i < len(mst):
+        total_w = total_w + mst[i]["w"]
+        i += 1
+    expect(total_w == 6, "MST weight 6: " + str(total_w))
+    print("graph 0.2.0: PASS")

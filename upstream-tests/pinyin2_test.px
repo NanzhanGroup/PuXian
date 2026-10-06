@@ -1,0 +1,21 @@
+# pinyin 0.2.0 测试
+import "../registry/pinyin/0.2.0/pinyin.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var p = py_lookup("中").unwrap()
+    expect(p != "", "lookup 中: " + p)
+    var s = py_convert("中国")
+    expect(len(s) > 0, "convert 中国 non-empty")
+    # ---- 0.2.0 first_letters ----
+    var fl = py_first_letters("中国")
+    expect(len(fl) == 2, "first_letters 2: " + fl)
+    # ---- 0.2.0 has_pinyin ----
+    expect(py_has_pinyin("中") == true, "has_pinyin 中")
+    # ---- 0.2.0 count ----
+    var cnt = py_count("中国语言")
+    expect(cnt == 4, "count 4: " + str(cnt))
+    print("PASS: pinyin 0.2.0")

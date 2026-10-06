@@ -1,0 +1,20 @@
+# shutil 0.2.0 测试
+import "../registry/shutil/0.2.0/shutil.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    sh_write_text("/tmp/shtest.txt", "hello")
+    var s = sh_read_text("/tmp/shtest.txt")
+    expect(s == "hello", "read/write: " + s)
+    # ---- 0.2.0 basename ----
+    expect(sh_basename("/a/b/c.txt") == "c.txt", "basename: " + sh_basename("/a/b/c.txt"))
+    # ---- 0.2.0 dirname ----
+    expect(sh_dirname("/a/b/c.txt") == "/a/b", "dirname: " + sh_dirname("/a/b/c.txt"))
+    # ---- 0.2.0 ext ----
+    expect(sh_ext("file.tar.gz") == "gz", "ext: " + sh_ext("file.tar.gz"))
+    # ---- 0.2.0 size ----
+    expect(sh_size("/tmp/shtest.txt") == 5, "size 5: " + str(sh_size("/tmp/shtest.txt")))
+    print("PASS: shutil 0.2.0")

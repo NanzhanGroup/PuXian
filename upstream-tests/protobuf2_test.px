@@ -1,0 +1,24 @@
+# protobuf 0.2.0 测试
+import "../registry/protobuf/0.2.0/protobuf.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var schema = [
+        {"fno": 1, "name": "x", "type": "varint"},
+        {"fno": 2, "name": "y", "type": "bytes"}
+    ]
+    var obj = {"x": 150, "y": "abc"}
+    var data = pb_encode(schema, obj)
+    expect(len(data) > 0, "encode non-empty")
+    var decoded = pb_decode(schema, data)
+    expect(decoded["x"] == 150, "decode x=150: " + str(decoded["x"]))
+    # ---- 0.2.0 encode_field ----
+    var f = pb_encode_field(1, "varint", 42)
+    expect(len(f) > 0, "encode_field non-empty")
+    # ---- 0.2.0 size ----
+    var sz = pb_size(schema, obj)
+    expect(sz == len(data), "size matches: " + str(sz))
+    print("PASS: protobuf 0.2.0")

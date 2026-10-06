@@ -1,0 +1,93 @@
+# oauth2 0.2.0 测试
+# 纯函数测试（不依赖外部 OAuth 服务器）
+import "../registry/oauth2/0.2.0/oauth2.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+def main():
+    # ---- oa_pct（URL 编码）----
+    expect(oa_pct("hello") == "hello", "pct simple")
+    expect(oa_pct("a b") == "a%20b", "pct space")
+    expect(oa_pct("a=b") == "a%3Db", "pct equals")
+    expect(oa_pct("a&b") == "a%26b", "pct ampersand")
+
+    # ---- oa_form ----
+    var params = {"a": "1", "b": "2"}
+    var form = oa_form(params)
+    expect(form == "a=1&b=2" or form == "b=2&a=1", "form encoding: " + form)
+
+    # ---- oa_build_auth_url ----
+    var url = oa_build_auth_url("https://auth.example.com/authorize",
+        "myclient", "https://app.example.com/callback", "abc123", "read write")
+    expect(starts_with(url, "https://auth.example.com/authorize?"), "auth_url prefix")
+    expect(contains(url, "response_type=code"), "auth_url response_type")
+    expect(contains(url, "client_id=myclient"), "auth_url client_id")
+    expect(contains(url, "state=abc123"), "auth_url state")
+    expect(contains(url, "scope=read%20write"), "auth_url scope")
+
+    # ---- with PKCE ----
+    var url2 = oa_build_auth_url("https://auth.example.com/authorize",
+        "myclient", "https://app.example.com/callback", "xyz",
+        "", "mychallenge", "S256")
+    expect(contains(url2, "code_challenge=mychallenge"), "auth_url pkce challenge")
+    expect(contains(url2, "code_challenge_method=S256"), "auth_url pkce method")
+
+    # ---- PKCE ----
+    var pkce = oa_pkce_generate()
+    expect(len(pkce["verifier"]) >= 43, "pkce verifier len >= 43, got " + str(len(pkce["verifier"])))
+    expect(len(pkce["challenge"]) > 0, "pkce challenge non-empty")
+    expect(pkce["method"] == "S256", "pkce method S256")
+
+    # 验证 challenge = Base64URL(SHA256(verifier))
+    var expected_challenge = oa_pkce_challenge(pkce["verifier"])
+    expect(pkce["challenge"] == expected_challenge, "pkce challenge matches")
+
+    # ---- oa_is_expired ----
+    # 未过期令牌
+    var token1 = {"access_token": "abc", "expires_in": 3600}
+    var r1 = oa_is_expired(token1, now_ms())
+    expect(r1.is_ok() and r1.unwrap() == false, "is_expired fresh token → false")
+
+    # 已过期令牌
+    var token2 = {"access_token": "abc", "expires_in": 1}
+    var r2 = oa_is_expired(token2, now_ms() - 10000)  # 10 秒前获取，1 秒过期
+    expect(r2.is_ok() and r2.unwrap() == true, "is_expired old token → true")
+
+    # 无 expires_in
+    var token3 = {"access_token": "abc"}
+    var r3 = oa_is_expired(token3, now_ms())
+    expect(r3.is_ok() and r3.unwrap() == false, "is_expired no expires_in → false")
+
+    # ---- oa_token_info ----
+    var token4 = {"access_token": "abc", "refresh_token": "def", "expires_in": 3600, "token_type": "Bearer", "scope": "read"}
+    var info = oa_token_info(token4)
+    expect(info.is_ok(), "token_info ok")
+    if info.is_ok():
+        var iv = info.unwrap()
+        expect(iv["has_access"] == true, "token_info has_access")
+        expect(iv["has_refresh"] == true, "token_info has_refresh")
+        expect(iv["expires_in"] == 3600, "token_info expires_in")
+        expect(iv["token_type"] == "Bearer", "token_info token_type")
+        expect(iv["scope"] == "read", "token_info scope")
+
+    # 只有 access_token
+    var token5 = {"access_token": "abc"}
+    var info2 = oa_token_info(token5)
+    if info2.is_ok():
+        expect(info2.unwrap()["has_access"] == true, "token_info has_access only")
+        expect(info2.unwrap()["has_refresh"] == false, "token_info no refresh")
+
+    # ---- oa_generate_state ----
+    var state1 = oa_generate_state()
+    var state2 = oa_generate_state()
+    expect(len(state1) == 32, "state len 32, got " + str(len(state1)))
+    expect(state1 != state2, "state random different")
+
+    print("oauth2 0.2.0: PASS")
+    return Ok(0)

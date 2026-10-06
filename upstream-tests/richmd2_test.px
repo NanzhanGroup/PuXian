@@ -1,0 +1,23 @@
+# richmd 0.2.0 测试
+import "../registry/richmd/0.2.0/richmd.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var src = "# Title\nHello"
+    var out = mdr_render(src).unwrap()
+    expect(len(out) > 0, "render non-empty")
+    var stripped = mdr_strip(out).unwrap()
+    expect(len(stripped) > 0, "strip non-empty")
+    # ---- 0.2.0 render_plain ----
+    var plain = mdr_render_plain(src)
+    expect(len(plain) > 0, "render_plain non-empty: " + plain)
+    # ---- 0.2.0 render_html ----
+    var html = mdr_render_html("# Hello\nWorld")
+    expect(contains(html, "<h1>Hello</h1>"), "html h1: " + html)
+    # ---- 0.2.0 count_words ----
+    var wc = mdr_count_words("hello world foo")
+    expect(wc == 3, "count_words 3: " + str(wc))
+    print("PASS: richmd 0.2.0")

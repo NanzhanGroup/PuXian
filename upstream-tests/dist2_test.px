@@ -1,0 +1,23 @@
+# dist 0.2.0 测试
+import "../registry/dist/0.2.0/dist.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var v = di_uniform(0.0, 1.0)
+    expect(v >= 0.0 and v <= 1.0, "uniform in range")
+    # ---- 0.2.0 choice ----
+    var items = [10, 20, 30]
+    var c = di_choice(items).unwrap()
+    expect(c == 10 or c == 20 or c == 30, "choice from list: " + str(c))
+    # ---- 0.2.0 shuffle ----
+    var s = di_shuffle([1, 2, 3, 4, 5])
+    expect(len(s) == 5, "shuffle len 5: " + str(s))
+    # ---- 0.2.0 bernoulli_mean ----
+    expect(di_bernoulli_mean(0.3) == 0.3, "bernoulli_mean 0.3")
+    # ---- 0.2.0 poisson_mean/var ----
+    expect(di_poisson_mean(5.0) == 5.0, "poisson_mean 5")
+    expect(di_poisson_var(5.0) == 5.0, "poisson_var 5")
+    print("PASS: dist 0.2.0")

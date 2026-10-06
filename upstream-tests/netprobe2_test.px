@@ -1,0 +1,99 @@
+# netprobe 0.2.0 测试
+import "../registry/netprobe/0.2.0/netprobe.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def main():
+    # ---- np_ports ----
+    var ps = np_ports(80, 85)
+    expect(ps.is_ok(), "np_ports ok")
+    if ps.is_ok():
+        expect(len(ps.unwrap()) == 6, "np_ports 80-85 → 6 ports")
+        expect(ps.unwrap()[0] == 80, "first port 80")
+        expect(ps.unwrap()[5] == 85, "last port 85")
+
+    # ---- np_port_name ----
+    expect(np_port_name(22) == "ssh", "port 22 → ssh")
+    expect(np_port_name(80) == "http", "port 80 → http")
+    expect(np_port_name(443) == "https", "port 443 → https")
+    expect(np_port_name(3306) == "mysql", "port 3306 → mysql")
+    expect(np_port_name(5432) == "postgresql", "port 5432 → postgresql")
+    expect(np_port_name(6379) == "redis", "port 6379 → redis")
+    expect(np_port_name(9999) == "unknown", "port 9999 → unknown")
+
+    # ---- np_summary ----
+    var results = [
+        {"port": 80, "open": true},
+        {"port": 443, "open": true},
+        {"port": 22, "open": false}
+    ]
+    var s = np_summary(results)
+    expect(s["total"] == 3, "summary total 3")
+    expect(s["open"] == 2, "summary open 2")
+    expect(s["closed"] == 1, "summary closed 1")
+
+    # ---- np_check（本地探测，端口 22 可能开/关）----
+    var c1 = np_check("127.0.0.1", 22, 500)
+    expect(c1.is_ok(), "np_check localhost:22 ok")
+    if c1.is_ok():
+        expect(c1.unwrap()["open"] == true or c1.unwrap()["open"] == false, "check returns bool")
+
+    # 不可达端口
+    var c2 = np_check("127.0.0.1", 9999, 500)
+    expect(c2.is_ok(), "np_check localhost:9999 ok")
+    if c2.is_ok():
+        expect(c2.unwrap()["open"] == false, "port 9999 closed")
+
+    # ---- np_latency ----
+    var l1 = np_latency("127.0.0.1", 9999, 500)
+    expect(l1.is_ok(), "np_latency ok")
+    if l1.is_ok():
+        expect(l1.unwrap()["open"] == false, "latency port 9999 closed")
+        expect(l1.unwrap()["latency_ms"] >= 0, "latency non-negative")
+
+    # ---- np_scan ----
+    var ports = [22, 80, 443, 9999]
+    var sc = np_scan("127.0.0.1", ports, 300)
+    expect(sc.is_ok(), "np_scan ok")
+    if sc.is_ok():
+        expect(len(sc.unwrap()) == 4, "scan 4 ports")
+        var sm = np_summary(sc.unwrap())
+        expect(sm["total"] == 4, "scan summary total 4")
+
+    # ---- np_scan_range ----
+    var sr = np_scan_range("127.0.0.1", 8080, 8082, 300)
+    expect(sr.is_ok(), "np_scan_range ok")
+    if sr.is_ok():
+        expect(len(sr.unwrap()) == 3, "scan_range 3 ports")
+
+    # ---- np_check_multi ----
+    var hosts = ["127.0.0.1", "127.0.0.1"]
+    var cm = np_check_multi(hosts, 9999, 300)
+    expect(cm.is_ok(), "np_check_multi ok")
+    if cm.is_ok():
+        expect(len(cm.unwrap()) == 2, "check_multi 2 hosts")
+
+    # ---- np_scan_named ----
+    var sn = np_scan_named("127.0.0.1", [22, 80, 443], 300)
+    expect(sn.is_ok(), "np_scan_named ok")
+    if sn.is_ok():
+        var snr = sn.unwrap()
+        expect(snr[0]["service"] == "ssh", "named port 22 → ssh")
+        expect(snr[1]["service"] == "http", "named port 80 → http")
+        expect(snr[2]["service"] == "https", "named port 443 → https")
+
+    # ---- np_check_retry ----
+    var cr = np_check_retry("127.0.0.1", 9999, 2, 300)
+    expect(cr.is_ok(), "np_check_retry ok")
+    if cr.is_ok():
+        expect(cr.unwrap()["open"] == false, "retry closed port → false")
+        expect(cr.unwrap()["attempts"] == 2, "retry attempts 2")
+
+    # ---- np_banner（对不可达端口）----
+    var b = np_banner("127.0.0.1", 9999, 300, 128)
+    expect(b.is_err(), "np_banner closed port → Err")
+
+    print("netprobe 0.2.0: PASS")
+    return Ok(0)

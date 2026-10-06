@@ -1,0 +1,373 @@
+# ============================================================
+# 普贤生态库：registry/validator 0.2.0 —— 字段校验（增强版）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go go-playground/validator 心智：
+#   val_validate(data, rules) → Ok(null) | Err("field1: 消息; field2: 消息")
+#     rules = {"field": "rule1|rule2|..."}（| 分隔或 [rule1, rule2]）
+#
+# 0.1.0 规则（全部保留，向后兼容）：
+#   required / email / min=N / max=N / length=A,B / int_range=A,B / in=a,b,c
+#
+# 0.2.0 新增规则：
+#   url                    HTTP(S) URL 格式
+#   phone                  中国手机号格式（1[3-9]xxxxxxxxx）
+#   ip                     IPv4 或 IPv6 地址
+#   ipv4                   仅 IPv4
+#   ipv6                   仅 IPv6
+#   uuid                   UUID 格式（v1-v5 形态，含/不含连字符）
+#   alpha                  纯字母（含中文）
+#   numeric                纯数字字符
+#   alnum                  字母 + 数字
+#   regex=pattern          自定义正则完整匹配
+#   credit_card            Luhn 校验（信用卡号）
+#   starts_with=prefix     前缀匹配
+#   ends_with=suffix       后缀匹配
+#   contains=substr        包含子串
+#   not_in=a,b,c           不在列表中
+#   date                   日期格式 YYYY-MM-DD
+#   datetime               日期时间格式 YYYY-MM-DD HH:MM:SS
+# ============================================================
+# ---- 0.1.0 单值校验（保留）----
+def val_required(v):
+    if v == null:
+        return false
+    var t = type(v)
+    if t == "string":
+        return len(v) > 0
+    if t == "list":
+        return len(v) > 0
+    if t == "dict":
+        return len(v.keys()) > 0
+    return true
+def val_email(v):
+    if type(v) != "string":
+        return false
+    return regex_match("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", v)
+def val_min(v, n):
+    if v == null:
+        return false
+    var t = type(v)
+    if t == "string" or t == "list":
+        return len(v) >= n
+    if t == "int" or t == "float":
+        return v >= n
+    return false
+def val_max(v, n):
+    if v == null:
+        return false
+    var t = type(v)
+    if t == "string" or t == "list":
+        return len(v) <= n
+    if t == "int" or t == "float":
+        return v <= n
+    return false
+def val_int_range(v, a, b):
+    if type(v) != "int":
+        return false
+    return v >= a and v <= b
+# ---- 0.2.0 新增单值校验 ----
+def val_url(v):
+    if type(v) != "string":
+        return false
+    return regex_match("^https?://[^\\s]+\\.[^\\s]+$", v)
+def val_phone(v):
+    if type(v) != "string":
+        return false
+    return regex_match("^1[3-9][0-9]{9}$", v)
+def val_ipv4(v):
+    if type(v) != "string":
+        return false
+    var parts = split(v, ".")
+    if len(parts) != 4:
+        return false
+    var i = 0
+    while i < 4:
+        var p = parts[i]
+        if len(p) == 0 or len(p) > 3:
+            return false
+        var j = 0
+        while j < len(p):
+            if p[j] < "0" or p[j] > "9":
+                return false
+            j += 1
+        var n = int(p)
+        if n > 255:
+            return false
+        if len(p) > 1 and p[0] == "0":
+            return false
+        i += 1
+    return true
+def val_ipv6(v):
+    if type(v) != "string":
+        return false
+    if contains(v, "::"):
+        # 简化 :: 压缩检查：至少应有 2 组冒号分隔的非空段
+        # 不做完整 RFC 4291 校验，用正则辅助
+        return regex_match("^[0-9a-fA-F:]+$", v) and contains(v, ":")
+    var parts = split(v, ":")
+    if len(parts) != 8:
+        return false
+    var i = 0
+    while i < 8:
+        var p = parts[i]
+        if len(p) == 0 or len(p) > 4:
+            return false
+        var j = 0
+        while j < len(p):
+            var c = p[j]
+            if not ((c >= "0" and c <= "9") or (c >= "a" and c <= "f") or (c >= "A" and c <= "F")):
+                return false
+            j += 1
+        i += 1
+    return true
+def val_ip(v):
+    return val_ipv4(v) or val_ipv6(v)
+def val_uuid(v):
+    if type(v) != "string":
+        return false
+    # 含连字符的标准 36 字符形态
+    if len(v) == 36:
+        return regex_match("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", v)
+    # 不含连字符的 32 字符形态
+    if len(v) == 32:
+        return regex_match("^[0-9a-fA-F]{32}$", v)
+    return false
+def val_alpha(v):
+    if type(v) != "string":
+        return false
+    if len(v) == 0:
+        return false
+    var i = 0
+    while i < len(v):
+        var c = v[i]
+        # ASCII 字母或非 ASCII（含中文等 unicode 字母）
+        if not ((c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or ord(c) > 127):
+            return false
+        i += 1
+    return true
+def val_numeric(v):
+    if type(v) != "string":
+        return false
+    if len(v) == 0:
+        return false
+    var i = 0
+    while i < len(v):
+        if v[i] < "0" or v[i] > "9":
+            return false
+        i += 1
+    return true
+def val_alnum(v):
+    if type(v) != "string":
+        return false
+    if len(v) == 0:
+        return false
+    var i = 0
+    while i < len(v):
+        var c = v[i]
+        if not ((c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or ord(c) > 127):
+            return false
+        i += 1
+    return true
+def val_credit_card(v):
+    if type(v) != "string":
+        return false
+    # 去除空格和连字符
+    var digits = ""
+    var i = 0
+    while i < len(v):
+        var c = v[i]
+        if c >= "0" and c <= "9":
+            digits = digits + c
+        elif c != " " and c != "-":
+            return false
+        i += 1
+    if len(digits) < 13 or len(digits) > 19:
+        return false
+    # Luhn 算法
+    var sum = 0
+    var alt = false
+    var j = len(digits) - 1
+    while j >= 0:
+        var d = int(digits[j])
+        if alt:
+            d = d * 2
+            if d > 9:
+                d = d - 9
+        sum = sum + d
+        alt = not alt
+        j -= 1
+    return sum % 10 == 0
+def val_starts_with(v, prefix):
+    if type(v) != "string":
+        return false
+    return starts_with(v, prefix)
+def val_ends_with(v, suffix):
+    if type(v) != "string":
+        return false
+    return ends_with(v, suffix)
+def val_contains(v, sub):
+    if type(v) != "string":
+        return false
+    return contains(v, sub)
+def val_date(v):
+    if type(v) != "string":
+        return false
+    return regex_match("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", v)
+def val_datetime(v):
+    if type(v) != "string":
+        return false
+    return regex_match("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$", v)
+# ---- 规则解析 ----
+def val_split_rules(rs):
+    if type(rs) == "list":
+        return rs
+    return split(rs, "|")
+# 子串查找辅助
+def tmpl_find_v(s, sub, from_idx):
+    if len(sub) == 0:
+        return from_idx
+    var i = from_idx
+    while i <= len(s) - len(sub):
+        if s[i:i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+# 校验一个字段的规则 → 错误消息（null 表示全部通过）
+def val_check_field(name, value, rules):
+    var errs = ""
+    var i = 0
+    while i < len(rules):
+        var rule = rules[i]
+        var rn = rule
+        var arg = ""
+        var eq = tmpl_find_v(rule, "=", 0)
+        if eq >= 0:
+            rn = rule[0:eq]
+            arg = rule[eq + 1:len(rule)]
+        var pass_v = true
+        var msg = ""
+        if rn == "required":
+            pass_v = val_required(value)
+            msg = "必填"
+        elif rn == "email":
+            pass_v = val_email(value)
+            msg = "邮箱格式错误"
+        elif rn == "url":
+            pass_v = val_url(value)
+            msg = "URL 格式错误"
+        elif rn == "phone":
+            pass_v = val_phone(value)
+            msg = "手机号格式错误"
+        elif rn == "ip":
+            pass_v = val_ip(value)
+            msg = "IP 地址格式错误"
+        elif rn == "ipv4":
+            pass_v = val_ipv4(value)
+            msg = "IPv4 地址格式错误"
+        elif rn == "ipv6":
+            pass_v = val_ipv6(value)
+            msg = "IPv6 地址格式错误"
+        elif rn == "uuid":
+            pass_v = val_uuid(value)
+            msg = "UUID 格式错误"
+        elif rn == "alpha":
+            pass_v = val_alpha(value)
+            msg = "须为纯字母"
+        elif rn == "numeric":
+            pass_v = val_numeric(value)
+            msg = "须为纯数字"
+        elif rn == "alnum":
+            pass_v = val_alnum(value)
+            msg = "须为字母或数字"
+        elif rn == "credit_card":
+            pass_v = val_credit_card(value)
+            msg = "信用卡号校验失败"
+        elif rn == "date":
+            pass_v = val_date(value)
+            msg = "日期格式错误(YYYY-MM-DD)"
+        elif rn == "datetime":
+            pass_v = val_datetime(value)
+            msg = "日期时间格式错误"
+        elif rn == "min":
+            pass_v = val_min(value, int(arg))
+            msg = "不能小于 " + arg
+        elif rn == "max":
+            pass_v = val_max(value, int(arg))
+            msg = "不能大于 " + arg
+        elif rn == "length":
+            var ab = split(arg, ",")
+            if len(ab) == 2:
+                var a = int(ab[0])
+                var b = int(ab[1])
+                pass_v = len(value) >= a and len(value) <= b
+                msg = "长度须在 " + str(a) + "-" + str(b)
+        elif rn == "int_range":
+            var ab2 = split(arg, ",")
+            if len(ab2) == 2:
+                pass_v = val_int_range(value, int(ab2[0]), int(ab2[1]))
+                msg = "须在 [" + ab2[0] + "," + ab2[1] + "]"
+        elif rn == "in":
+            var items = split(arg, ",")
+            pass_v = false
+            var j = 0
+            while j < len(items):
+                if str(value) == items[j]:
+                    pass_v = true
+                j += 1
+            msg = "须为 " + arg + " 之一"
+        elif rn == "not_in":
+            var items2 = split(arg, ",")
+            pass_v = true
+            var j2 = 0
+            while j2 < len(items2):
+                if str(value) == items2[j2]:
+                    pass_v = false
+                j2 += 1
+            msg = "不能为 " + arg + " 中任一"
+        elif rn == "regex":
+            if type(value) == "string":
+                pass_v = regex_match(arg, value)
+            else:
+                pass_v = false
+            msg = "正则不匹配"
+        elif rn == "starts_with":
+            pass_v = val_starts_with(value, arg)
+            msg = "须以 " + arg + " 开头"
+        elif rn == "ends_with":
+            pass_v = val_ends_with(value, arg)
+            msg = "须以 " + arg + " 结尾"
+        elif rn == "contains":
+            pass_v = val_contains(value, arg)
+            msg = "须包含 " + arg
+        else:
+            msg = "未知规则 " + rn
+            pass_v = false
+        if not pass_v:
+            if len(errs) > 0:
+                errs = errs + "; "
+            errs = errs + name + ": " + msg
+        i += 1
+    if len(errs) == 0:
+        return null
+    return errs
+# ---- 主入口 ----
+def val_validate(data, rules):
+    var errs = ""
+    var fields = rules.keys()
+    var i = 0
+    while i < len(fields):
+        var f = fields[i]
+        var value = null
+        if data.has(f):
+            value = data[f]
+        var rs = val_split_rules(rules[f])
+        var e = val_check_field(f, value, rs)
+        if e != null:
+            if len(errs) > 0:
+                errs = errs + "; "
+            errs = errs + e
+        i += 1
+    if len(errs) > 0:
+        return Err(errs)
+    return Ok(null)

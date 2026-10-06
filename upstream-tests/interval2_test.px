@@ -1,0 +1,64 @@
+# interval 0.2.0 测试：len/union/subtract/expand/shift/covers + 0.1.0 回归
+import "../registry/interval/0.2.0/interval.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var a = iv_new(1, 5).unwrap()
+    var b = iv_new(3, 7).unwrap()
+    expect(iv_overlap(a, b) == true, "overlap")
+    expect(iv_contains(a, 3) == true, "contains 3")
+    expect(iv_contains(a, 6) == false, "not contains 6")
+    expect(iv_contains_iv(a, iv_new(2, 4).unwrap()) == true, "contains iv")
+    var inter = iv_intersect(a, b).unwrap()
+    expect(inter["lo"] == 3 and inter["hi"] == 5, "intersect: " + str(inter))
+    var c = iv_new(10, 15).unwrap()
+    expect(iv_overlap(a, c) == false, "no overlap")
+    # merge
+    var merged = iv_merge([iv_new(1, 3).unwrap(), iv_new(2, 5).unwrap(), iv_new(8, 10).unwrap()]).unwrap()
+    expect(len(merged) == 2, "merge 2: " + str(merged))
+    expect(merged[0]["lo"] == 1 and merged[0]["hi"] == 5, "merge[0]")
+    expect(merged[1]["lo"] == 8 and merged[1]["hi"] == 10, "merge[1]")
+    # ---- 0.2.0 len ----
+    expect(iv_len(a) == 4, "len 4: " + str(iv_len(a)))
+    expect(iv_len(iv_new(0, 100).unwrap()) == 100, "len 100")
+    # ---- 0.2.0 union ----
+    var u = iv_union(a, b)
+    expect(len(u) == 1, "union 1: " + str(u))
+    expect(u[0]["lo"] == 1 and u[0]["hi"] == 7, "union range")
+    var u2 = iv_union(a, c)
+    expect(len(u2) == 2, "union 2: " + str(u2))
+    # ---- 0.2.0 subtract ----
+    var d = iv_new(1, 10).unwrap()
+    var e = iv_new(3, 5).unwrap()
+    var sub = iv_subtract(d, e)
+    expect(len(sub) == 2, "subtract 2: " + str(sub))
+    expect(sub[0]["lo"] == 1 and sub[0]["hi"] == 2, "subtract left")
+    expect(sub[1]["lo"] == 6 and sub[1]["hi"] == 10, "subtract right")
+    # subtract no overlap
+    var sub2 = iv_subtract(a, c)
+    expect(len(sub2) == 1, "subtract no overlap: " + str(sub2))
+    # ---- 0.2.0 total_len ----
+    var tl = iv_total_len([iv_new(1, 5).unwrap(), iv_new(3, 7).unwrap(), iv_new(10, 20).unwrap()])
+    expect(tl == 16, "total_len: " + str(tl))
+    # ---- 0.2.0 expand/shift ----
+    var exp = iv_expand(a, 2)
+    expect(exp["lo"] == -1 and exp["hi"] == 7, "expand: " + str(exp))
+    var sh = iv_shift(a, 10)
+    expect(sh["lo"] == 11 and sh["hi"] == 15, "shift: " + str(sh))
+    # ---- 0.2.0 eq ----
+    expect(iv_eq(a, iv_new(1, 5).unwrap()) == true, "eq true")
+    expect(iv_eq(a, b) == false, "eq false")
+    # ---- 0.2.0 covers ----
+    expect(iv_covers([iv_new(1, 10).unwrap()], 3, 7) == true, "covers true")
+    expect(iv_covers([iv_new(1, 5).unwrap()], 3, 7) == false, "covers false")
+    expect(iv_covers([iv_new(1, 5).unwrap(), iv_new(4, 10).unwrap()], 2, 8) == true, "covers multi")
+    # ---- 0.2.0 find_containing ----
+    var fc = iv_find_containing([iv_new(1, 5).unwrap(), iv_new(10, 20).unwrap()], 3)
+    expect(fc != null, "find_containing found")
+    expect(fc["lo"] == 1 and fc["hi"] == 5, "find_containing val")
+    var fc2 = iv_find_containing([iv_new(1, 5).unwrap(), iv_new(10, 20).unwrap()], 7)
+    expect(fc2 == null, "find_containing null")
+    print("interval 0.2.0: PASS")

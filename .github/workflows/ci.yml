@@ -1090,6 +1090,18 @@ jobs:
           NEG_SKIP=1 bash examples/m280_resource_baseline/verify.sh > /tmp/v_m280.log 2>&1 || { echo "❌ m280 门失败（资源面：BASELINE 形态 / 6 轮收敛判据 / 忙自旋负控）"; grep -E '^  ❌' /tmp/v_m280.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m280_resource_baseline（收敛判据 · CPU/RSS/线程/fd 四项 · 负控忙自旋判红）PASS"
 
+      - name: m282_registry_020（上游 0.2.0 全量再引入 + 凭据泄漏守卫）
+        run: |
+          set -o pipefail
+          # M282：① 上游 0.2.0 全量引入（120 个新版本目录 + 110 个新用例）
+          #   ② 安全（缺陷 488）：引入器曾把带 PAT 的 clone URL 原样写进公开的 THIRD_PARTY.md
+          #   ③ 运行器判据缺口：成功判据过窄（要求字面 PASS）· 清单/登记**单向**检查
+          # CI 档：负控跳过（NC-A/NC-C 走独立临时目录、NC-B 走 EXPECTED 副本 —— 都不改仓库，
+          #   但为与其它门同口径仍按 NEG_SKIP=1 跑快档）
+          NEG_SKIP=1 bash examples/m282_registry_020/verify.sh > /tmp/v_m282.log 2>&1 || { echo "❌ m282 门失败（表⇔磁盘 / 清单双向 / 凭据守卫 / ftp 0.2.0 补覆盖）"; grep -E '^(  FAIL|      |❌)' /tmp/v_m282.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '通过 [0-9]+ · 失败' /tmp/v_m282.log | tail -1 || true
+          echo "✅ m282_registry_020（表⇔磁盘 244 行 · 清单/登记双向 · 无凭据 · ftp 0.2.0 补覆盖）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

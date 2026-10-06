@@ -1,0 +1,63 @@
+# strcase 0.2.0 测试
+import "../registry/strcase/0.2.0/strcase.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(str_snake("FooBar") == "foo_bar", "snake: " + str_snake("FooBar"))
+    expect(str_kebab("FooBar") == "foo-bar", "kebab: " + str_kebab("FooBar"))
+    expect(str_camel("foo_bar") == "fooBar", "camel: " + str_camel("foo_bar"))
+    expect(str_pascal("foo_bar") == "FooBar", "pascal: " + str_pascal("foo_bar"))
+    expect(str_screaming_snake("FooBar") == "FOO_BAR", "screaming: " + str_screaming_snake("FooBar"))
+    expect(str_title_words("foo_bar") == "Foo Bar", "title: " + str_title_words("foo_bar"))
+    expect(str_words("HTTPServer") == ["HTTP", "Server"], "words HTTP: " + str(str_words("HTTPServer")))
+    # ---- 0.2.0 train ----
+    expect(str_train("foo_bar") == "Foo-Bar", "train: " + str_train("foo_bar"))
+    expect(str_train("helloWorld") == "Hello-World", "train camel: " + str_train("helloWorld"))
+    # ---- 0.2.0 dot ----
+    expect(str_dot("foo_bar") == "foo.bar", "dot: " + str_dot("foo_bar"))
+    expect(str_dot("FooBarBaz") == "foo.bar.baz", "dot pascal: " + str_dot("FooBarBaz"))
+    # ---- 0.2.0 path ----
+    expect(str_path("foo_bar") == "foo/bar", "path: " + str_path("foo_bar"))
+    # ---- 0.2.0 lower/upper words ----
+    expect(str_lower_words("FooBar") == "foo bar", "lower words: " + str_lower_words("FooBar"))
+    expect(str_upper_words("foo_bar") == "FOO BAR", "upper words: " + str_upper_words("foo_bar"))
+    # ---- 0.2.0 capitalize / uncapitalize ----
+    expect(str_capitalize("hello") == "Hello", "capitalize: " + str_capitalize("hello"))
+    expect(str_capitalize("HELLO") == "HELLO", "capitalize upper: " + str_capitalize("HELLO"))
+    expect(str_uncapitalize("Hello") == "hello", "uncapitalize: " + str_uncapitalize("Hello"))
+    expect(str_uncapitalize("hello") == "hello", "uncapitalize lower: " + str_uncapitalize("hello"))
+    # ---- 0.2.0 swap_case ----
+    expect(str_swap_case("HelloWorld") == "hELLOwORLD", "swap: " + str_swap_case("HelloWorld"))
+    expect(str_swap_case("ABC123def") == "abc123DEF", "swap digits: " + str_swap_case("ABC123def"))
+    # ---- 0.2.0 reverse ----
+    expect(str_reverse("hello") == "olleh", "reverse: " + str_reverse("hello"))
+    expect(str_reverse("ab") == "ba", "reverse ab: " + str_reverse("ab"))
+    expect(str_reverse("") == "", "reverse empty")
+    # ---- 0.2.0 repeat ----
+    expect(str_repeat("ab", 3) == "ababab", "repeat: " + str_repeat("ab", 3))
+    expect(str_repeat("x", 0) == "", "repeat 0: " + str_repeat("x", 0))
+    expect(str_repeat("hello", 1) == "hello", "repeat 1: " + str_repeat("hello", 1))
+    # ---- 0.2.0 pad_left / pad_right / pad_center ----
+    expect(str_pad_left("5", 3, "0") == "005", "pad_left: " + str_pad_left("5", 3, "0"))
+    expect(str_pad_left("hello", 3) == "hello", "pad_left no-op")
+    expect(str_pad_right("5", 3, "0") == "500", "pad_right: " + str_pad_right("5", 3, "0"))
+    expect(str_pad_right("hi", 5) == "hi   ", "pad_right space: '" + str_pad_right("hi", 5) + "'")
+    expect(str_pad_center("hi", 6) == "  hi  ", "pad_center: '" + str_pad_center("hi", 6) + "'")
+    expect(str_pad_center("ab", 5) == " ab  ", "pad_center 5: '" + str_pad_center("ab", 5) + "'")
+    # ---- 0.2.0 count ----
+    expect(str_count("hello world hello", "hello") == 2, "count hello: " + str(str_count("hello world hello", "hello")))
+    expect(str_count("aaa", "a") == 3, "count a: " + str(str_count("aaa", "a")))
+    expect(str_count("abc", "xyz") == 0, "count xyz: " + str(str_count("abc", "xyz")))
+    expect(str_count("ababab", "ab") == 3, "count ab: " + str(str_count("ababab", "ab")))
+    # ---- 0.2.0 is_upper / is_lower ----
+    expect(str_is_upper("HELLO") == true, "is_upper true")
+    expect(str_is_upper("Hello") == false, "is_upper false")
+    expect(str_is_lower("hello") == true, "is_lower true")
+    expect(str_is_lower("Hello") == false, "is_lower false")
+    # ---- 0.2.0 is_title ----
+    expect(str_is_title("Foo Bar") == true, "is_title true")
+    expect(str_is_title("foo bar") == false, "is_title false")
+    print("strcase 0.2.0: PASS")

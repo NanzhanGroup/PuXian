@@ -1,0 +1,318 @@
+# ============================================================
+# 普贤生态库：registry/graph —— 图算法（邻接表）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，图状态以 dict 显式传递），双模式一致。
+# 对齐 Go gonum/graph / Python networkx / Rust petgraph 心智（0.1.0）：
+#   gr_new()                   → dict {nodes: {id: {edges: [{to, w}]}}}
+#   gr_add_edge(g, a, b, w=1)  → g       自动建节点
+#   gr_nodes(g) / gr_has(g, a) / gr_neighbors(g, a) → [str]
+#   gr_bfs(g, start) / gr_dfs(g, start) → [str]
+#   gr_topo(g)                 → Ok([str]) | Err（环 → Err）
+#   gr_shortest_path(g, a, b)  → Ok([str] 路径) | Err（Dijkstra，边权非负）
+# 节点 id 为 string；未知节点访问 key 返回 Err（响亮）。
+# ============================================================
+def gr_new():
+    return {"nodes": {}}
+def gr_node(g, id):
+    if not g["nodes"].has(id):
+        g["nodes"].set(id, {"edges": []})
+    return g["nodes"][id]
+def gr_add_edge(g, a, b, w = 1):
+    var na = gr_node(g, a)
+    var nb = gr_node(g, b)
+    na["edges"].append({"to": b, "w": w})
+    return g
+def gr_nodes(g):
+    return g["nodes"].keys()
+def gr_has(g, a):
+    return g["nodes"].has(a)
+def gr_neighbors(g, a):
+    if not gr_has(g, a):
+        return Err("graph: 未知节点 " + a)
+    var tos = []
+    var es = g["nodes"][a]["edges"]
+    var i = 0
+    while i < len(es):
+        tos.append(es[i]["to"])
+        i += 1
+    return Ok(tos)
+# BFS（队列 + 访问集）
+def gr_bfs(g, start):
+    if not gr_has(g, start):
+        return Err("graph: 未知节点 " + start)
+    var order = []
+    var seen = {}
+    var queue = [start]
+    seen.set(start, true)
+    while len(queue) > 0:
+        var cur = queue[0]
+        queue = queue[1:len(queue)]
+        order.append(cur)
+        var es = g["nodes"][cur]["edges"]
+        var i = 0
+        while i < len(es):
+            var to = es[i]["to"]
+            if not seen.has(to):
+                seen.set(to, true)
+                queue.append(to)
+            i += 1
+    return Ok(order)
+# DFS（递归）
+def gr_dfs(g, start):
+    if not gr_has(g, start):
+        return Err("graph: 未知节点 " + start)
+    var order = []
+    var seen = {}
+    gr_dfs_rec(g, start, seen, order)
+    return Ok(order)
+def gr_dfs_rec(g, node, seen, order):
+    if seen.has(node):
+        return
+    seen.set(node, true)
+    order.append(node)
+    var es = g["nodes"][node]["edges"]
+    var i = 0
+    while i < len(es):
+        gr_dfs_rec(g, es[i]["to"], seen, order)
+        i += 1
+# 拓扑排序（Kahn）
+def gr_topo(g):
+    var indeg = {}
+    var ids = gr_nodes(g)
+    var i = 0
+    while i < len(ids):
+        indeg.set(ids[i], 0)
+        i += 1
+    i = 0
+    while i < len(ids):
+        var es = g["nodes"][ids[i]]["edges"]
+        var j = 0
+        while j < len(es):
+            var to = es[j]["to"]
+            indeg.set(to, indeg[to] + 1)
+            j += 1
+        i += 1
+    var queue = []
+    i = 0
+    while i < len(ids):
+        if indeg[ids[i]] == 0:
+            queue.append(ids[i])
+        i += 1
+    var out = []
+    while len(queue) > 0:
+        var cur = queue[0]
+        queue = queue[1:len(queue)]
+        out.append(cur)
+        var es = g["nodes"][cur]["edges"]
+        var k = 0
+        while k < len(es):
+            var to = es[k]["to"]
+            indeg.set(to, indeg[to] - 1)
+            if indeg[to] == 0:
+                queue.append(to)
+            k += 1
+    if len(out) != len(ids):
+        return Err("graph: 存在环，无法拓扑排序")
+    return Ok(out)
+# Dijkstra 最短路（边权非负）；返回路径节点序列
+def gr_shortest_path(g, a, b):
+    if not gr_has(g, a) or not gr_has(g, b):
+        return Err("graph: 未知节点")
+    var dist = {a: 0}
+    var prev = {}
+    var visited = {}
+    while true:
+        # 选未访问最小 dist
+        var best = null
+        var ids = gr_nodes(g)
+        var i = 0
+        while i < len(ids):
+            var id = ids[i]
+            if not visited.has(id) and dist.has(id):
+                if best == null or dist[id] < dist[best]:
+                    best = id
+            i += 1
+        if best == null:
+            break
+        visited.set(best, true)
+        if best == b:
+            break
+        var es = g["nodes"][best]["edges"]
+        var j = 0
+        while j < len(es):
+            var to = es[j]["to"]
+            var nd = dist[best] + es[j]["w"]
+            if not dist.has(to) or nd < dist[to]:
+                dist.set(to, nd)
+                prev.set(to, best)
+            j += 1
+    if not dist.has(b):
+        return Err("graph: 无路径 " + a + " -> " + b)
+    var path = [b]
+    var cur = b
+    while cur != a and prev.has(cur):
+        cur = prev[cur]
+        path.append(cur)
+    path.reverse()
+    return Ok(path)
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 添加无向边（双向）
+def gr_add_undirected(g, a, b, w = 1):
+    gr_add_edge(g, a, b, w)
+    gr_add_edge(g, b, a, w)
+    return g
+# 节点数
+def gr_count_nodes(g):
+    return len(g["nodes"])
+# 边数
+def gr_count_edges(g):
+    var count = 0
+    var nodes = g["nodes"].keys()
+    var i = 0
+    while i < len(nodes):
+        count = count + len(g["nodes"][nodes[i]]["edges"])
+        i += 1
+    return count
+# 节点度数（出度）
+def gr_degree(g, id):
+    if not g["nodes"].has(id):
+        return 0
+    return len(g["nodes"][id]["edges"])
+# 反转图（所有边方向取反）
+def gr_reverse(g):
+    var rg = gr_new()
+    var nodes = g["nodes"].keys()
+    var i = 0
+    while i < len(nodes):
+        gr_node(rg, nodes[i])
+        i += 1
+    i = 0
+    while i < len(nodes):
+        var edges = g["nodes"][nodes[i]]["edges"]
+        var j = 0
+        while j < len(edges):
+            gr_add_edge(rg, edges[j]["to"], nodes[i], edges[j]["w"])
+            j += 1
+        i += 1
+    return rg
+# 环检测（DFS + 递归栈标记）
+def gr_has_cycle(g):
+    var nodes = g["nodes"].keys()
+    var visited = {}
+    var rec_stack = {}
+    var i = 0
+    while i < len(nodes):
+        visited.set(nodes[i], false)
+        rec_stack.set(nodes[i], false)
+        i += 1
+    i = 0
+    while i < len(nodes):
+        if not visited[nodes[i]]:
+            if gr_cycle_dfs(g, nodes[i], visited, rec_stack):
+                return true
+        i += 1
+    return false
+def gr_cycle_dfs(g, node, visited, rec_stack):
+    visited.set(node, true)
+    rec_stack.set(node, true)
+    var edges = g["nodes"][node]["edges"]
+    var i = 0
+    while i < len(edges):
+        var neighbor = edges[i]["to"]
+        if not visited[neighbor]:
+            if gr_cycle_dfs(g, neighbor, visited, rec_stack):
+                return true
+        elif rec_stack[neighbor]:
+            return true
+        i += 1
+    rec_stack.set(node, false)
+    return false
+# 连通性检查（从 start BFS，看是否到达所有节点）
+def gr_is_connected(g):
+    var nodes = g["nodes"].keys()
+    if len(nodes) <= 1:
+        return true
+    var reached = gr_bfs(g, nodes[0]).unwrap()
+    return len(reached) == len(nodes)
+# 所有路径（带深度限制防环）
+def gr_all_paths(g, start, end, max_depth = 10):
+    var paths = []
+    var visited = {}
+    gr_all_paths_dfs(g, start, end, [start], visited, paths, max_depth)
+    return paths
+def gr_all_paths_dfs(g, node, end, path, visited, paths, max_depth):
+    if len(path) > max_depth:
+        return
+    if node == end:
+        var copy = []
+        var i = 0
+        while i < len(path):
+            copy.append(path[i])
+            i += 1
+        paths.append(copy)
+        return
+    visited.set(node, true)
+    var edges = g["nodes"][node]["edges"]
+    var i = 0
+    while i < len(edges):
+        var neighbor = edges[i]["to"]
+        if not visited.has(neighbor) or not visited[neighbor]:
+            path.append(neighbor)
+            gr_all_paths_dfs(g, neighbor, end, path, visited, paths, max_depth)
+            path = path[0:len(path) - 1]
+        i += 1
+    visited.set(node, false)
+# 最小生成树（Kruskal 简化版，返回边列表 [{from, to, w}]）
+# 仅适用于无向图（调用前用 gr_add_undirected 建图）
+def gr_mst(g):
+    var edges = []
+    var nodes = g["nodes"].keys()
+    var seen_edges = {}
+    var i = 0
+    while i < len(nodes):
+        var ne = g["nodes"][nodes[i]]["edges"]
+        var j = 0
+        while j < len(ne):
+            var a = nodes[i]
+            var b = ne[j]["to"]
+            var key = ""
+            if a < b:
+                key = a + "-" + b
+            else:
+                key = b + "-" + a
+            if not seen_edges.has(key):
+                seen_edges.set(key, true)
+                edges.append({"from": a, "to": b, "w": ne[j]["w"]})
+            j += 1
+        i += 1
+    # 按权重排序
+    var sorted_edges = []
+    var k = 0
+    while k < len(edges):
+        sorted_edges.append([edges[k]["w"], k])
+        k += 1
+    sorted_edges = sorted(sorted_edges)
+    # Union-Find
+    var parent = {}
+    i = 0
+    while i < len(nodes):
+        parent.set(nodes[i], nodes[i])
+        i += 1
+    var result = []
+    i = 0
+    while i < len(sorted_edges):
+        var idx = sorted_edges[i][1]
+        var e = edges[idx]
+        var ra = gr_uf_find(parent, e["from"])
+        var rb = gr_uf_find(parent, e["to"])
+        if ra != rb:
+            parent.set(ra, rb)
+            result.append(e)
+        i += 1
+    return result
+def gr_uf_find(parent, x):
+    while parent[x] != x:
+        x = parent[x]
+    return x

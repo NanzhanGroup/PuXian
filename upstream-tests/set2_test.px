@@ -1,0 +1,76 @@
+# set 0.2.0 测试
+import "../registry/set/0.2.0/set.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var s = st_new()
+    st_add(s, "a")
+    st_add(s, "b")
+    st_add(s, "c")
+    expect(st_has(s, "a") == true, "has a")
+    expect(st_has(s, "z") == false, "not has z")
+    expect(st_len(s) == 3, "len 3")
+    var s2 = st_from_list(["b", "c", "d"])
+    var u = st_union(s, s2)
+    expect(st_len(u) == 4, "union 4: " + str(st_to_list(u)))
+    var inter = st_intersection(s, s2)
+    expect(st_len(inter) == 2, "inter 2: " + str(st_to_list(inter)))
+    var diff = st_difference(s, s2)
+    expect(st_len(diff) == 1, "diff 1: " + str(st_to_list(diff)))
+    expect(st_subset(st_from_list(["a"]), s) == true, "subset")
+    expect(st_subset(s, s2) == false, "not subset")
+    # ---- 0.2.0 symmetric_difference ----
+    var sd = st_symmetric_difference(s, s2)
+    expect(st_len(sd) == 2, "sym diff 2: " + str(st_to_list(sd)))
+    expect(st_has(sd, "a") == true, "sym diff has a")
+    expect(st_has(sd, "d") == true, "sym diff has d")
+    # ---- 0.2.0 superset ----
+    expect(st_superset(s, st_from_list(["a", "b"])) == true, "superset true")
+    expect(st_superset(s, s2) == false, "superset false")
+    # ---- 0.2.0 disjoint ----
+    expect(st_disjoint(st_from_list(["a", "b"]), st_from_list(["c", "d"])) == true, "disjoint true")
+    expect(st_disjoint(s, s2) == false, "disjoint false")
+    # ---- 0.2.0 equal ----
+    expect(st_equal(st_from_list(["a", "b", "c"]), st_from_list(["c", "b", "a"])) == true, "equal true")
+    expect(st_equal(s, s2) == false, "equal false")
+    # ---- 0.2.0 is_empty / clear ----
+    expect(st_is_empty(st_new()) == true, "empty true")
+    expect(st_is_empty(s) == false, "empty false")
+    var sc = st_clone(s)
+    st_clear(sc)
+    expect(st_is_empty(sc) == true, "clear")
+    # ---- 0.2.0 pop ----
+    var sp = st_clone(s)
+    var popped = st_pop(sp)
+    expect(st_len(sp) == 2, "pop len 2")
+    expect(popped[1] != null, "pop value not null")
+    # ---- 0.2.0 update / difference_update ----
+    var su = st_new()
+    st_update(su, ["a", "b", "c", "d"])
+    expect(st_len(su) == 4, "update 4")
+    st_difference_update(su, ["b", "d"])
+    expect(st_len(su) == 2, "diff_update 2: " + str(st_to_list(su)))
+    expect(st_has(su, "a") == true, "diff_update has a")
+    expect(st_has(su, "c") == true, "diff_update has c")
+    # ---- 0.2.0 to_sorted_list ----
+    var ss = st_from_list(["c", "a", "b"])
+    var sorted_list = st_to_sorted_list(ss)
+    expect(sorted_list == ["a", "b", "c"], "sorted: " + str(sorted_list))
+    # ---- 0.2.0 filter ----
+    var sf = st_from_list(["apple", "banana", "cherry", "avocado"])
+    var filtered = st_filter(sf, fn(x): starts_with(x, "a"))
+    expect(st_len(filtered) == 2, "filter 2: " + str(st_to_list(filtered)))
+    expect(st_has(filtered, "apple") == true, "filter has apple")
+    expect(st_has(filtered, "avocado") == true, "filter has avocado")
+    # ---- 0.2.0 any ----
+    expect(st_any(st_new()) == null, "any empty")
+    expect(st_any(s) != null, "any non-empty")
+    # ---- 0.2.0 to_string ----
+    var str_s = st_to_string(st_from_list(["a", "b", "c"]))
+    expect(starts_with(str_s, "{"), "to_string starts {")
+    expect(ends_with(str_s, "}"), "to_string ends }")
+    expect(contains(str_s, "a"), "to_string has a")
+    print("set 0.2.0: PASS")

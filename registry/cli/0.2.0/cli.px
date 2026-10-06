@@ -1,0 +1,314 @@
+# ============================================================
+# 普贤生态库：registry/cli 0.2.0 —— 命令行参数解析（增强版）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go flag + cobra 子集心智：
+#
+# 0.1.0 API（全部保留，向后兼容）：
+#   cli_parse(args, spec) → Ok({opts, args}) | Err
+#     spec = {"long": {"short": "x", "type": "str|int|float|bool", "default": v}}
+#
+# 0.2.0 新增：
+#   cli_parse_cmds(args, cmds) → Ok({cmd, opts, args}) | Err
+#     子命令分发：cmds = {"serve": {"spec": ..., "desc": "..."}, ...}
+#   cli_help(spec) → str          自动生成用法帮助
+#   cli_help_cmds(cmds) → str     子命令列表帮助
+#   spec 新增字段：
+#     "env": "VAR_NAME"           环境变量提供默认值（优先级：命令行 > env > default）
+#     "required": true            必须提供（否则 Err）
+#     "choices": [a, b, c]        值必须在候选列表中
+#     "desc": "说明"              用于 help 生成
+# ============================================================
+# 按短名查找 spec 键
+def cli_find_by_short(spec, short):
+    var keys = spec.keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = spec[k]
+        if cfg.has("short") and cfg["short"] == short:
+            return k
+        i += 1
+    return null
+# Result Err 消息剥壳
+def cli_err_msg(r):
+    var s = str(r)
+    if starts_with(s, "Err(") and ends_with(s, ")"):
+        return s[4:len(s) - 1]
+    return s
+# bool 值解析
+def cli_parse_bool(s):
+    if s == "true" or s == "1":
+        return Ok(true)
+    if s == "false" or s == "0":
+        return Ok(false)
+    return Err("cli: 无效布尔值: " + s)
+# 严格整数串
+def cli_is_int_str(s):
+    return is_int_str(s)
+# 严格浮点串
+def cli_is_float_str(s):
+    var t = s
+    if starts_with(t, "-"):
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return false
+    var dots = 0
+    var i = 0
+    while i < len(t):
+        if t[i] == ".":
+            dots += 1
+            if dots > 1:
+                return false
+        elif t[i] < "0" or t[i] > "9":
+            return false
+        i += 1
+    return true
+# 按类型转换字符串值 → Ok(v) | Err
+def cli_cast(v, t):
+    if t == "str" or t == "":
+        return Ok(v)
+    if t == "int":
+        if not cli_is_int_str(v):
+            return Err("cli: 无效整数: " + v)
+        return Ok(int(v))
+    if t == "float":
+        if not cli_is_float_str(v):
+            return Err("cli: 无效浮点数: " + v)
+        return Ok(float(v))
+    if t == "bool":
+        return cli_parse_bool(v)
+    return Err("cli: 未知类型: " + t)
+# 读取环境变量（安全封装：env_get 不存在时返回 null）
+def cli_get_env(name):
+    if name == null or len(name) == 0:
+        return null
+    var v = env(name)
+    if v == null:
+        return null
+    if len(v) == 0:
+        return null
+    return v
+# 初始化默认值（含 env 回退）
+def cli_init_defaults(spec):
+    var opts = {}
+    var keys = spec.keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = spec[k]
+        var t = cfg["type"]
+        if t == null:
+            t = "str"
+        # 优先级：env > default
+        var env_val = null
+        if cfg.has("env"):
+            env_val = cli_get_env(cfg["env"])
+        if env_val != null:
+            var cv = cli_cast(env_val, t)
+            if cv.is_err():
+                return Err("cli: 环境变量 " + cfg["env"] + " 值错误: " + str(cv))
+            opts.set(k, cv.unwrap())
+        elif cfg.has("default"):
+            var cv2 = cli_cast(str(cfg["default"]), t)
+            if cv2.is_err():
+                return Err("cli: 默认值错误 " + k + ": " + str(cv2))
+            opts.set(k, cv2.unwrap())
+        else:
+            if t == "bool":
+                opts.set(k, false)
+            else:
+                opts.set(k, null)
+        i += 1
+    return Ok(opts)
+# 校验 required 和 choices
+def cli_check_constraints(opts, spec):
+    var keys = spec.keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = spec[k]
+        var v = opts[k]
+        if cfg.has("required") and cfg["required"] == true:
+            if v == null:
+                return Err("cli: 缺少必填选项 --" + k)
+        if cfg.has("choices") and v != null:
+            var choices = cfg["choices"]
+            var found = false
+            var j = 0
+            while j < len(choices):
+                if str(v) == str(choices[j]):
+                    found = true
+                j += 1
+            if not found:
+                return Err("cli: 选项 --" + k + " 值 " + str(v) + " 不在候选列表中")
+        i += 1
+    return Ok(null)
+# 解析参数（0.1.0 核心，保留并增强）
+def cli_parse(args, spec):
+    var init = cli_init_defaults(spec)
+    if init.is_err():
+        return init
+    var opts = init.unwrap()
+    var pos = []
+    var j = 0
+    var after_dd = false
+    while j < len(args):
+        var a = args[j]
+        if after_dd:
+            pos.append(a)
+            j += 1
+            continue
+        if a == "--":
+            after_dd = true
+            j += 1
+            continue
+        if starts_with(a, "--"):
+            var body = a[2:len(a)]
+            var name = body
+            var has_eq = contains(body, "=")
+            var inline = ""
+            if has_eq:
+                var eq = -1
+                var e = 0
+                while e < len(body):
+                    if body[e] == "=":
+                        eq = e
+                    e += 1
+                name = body[0:eq]
+                inline = body[eq + 1:len(body)]
+            if not spec.has(name):
+                return Err("cli: 未知选项 --" + name)
+            var cfg = spec[name]
+            var t = cfg["type"]
+            if t == null:
+                t = "str"
+            if t == "bool":
+                if has_eq:
+                    var bv = cli_parse_bool(inline)
+                    if bv.is_err():
+                        return Err(cli_err_msg(bv))
+                    opts.set(name, bv.unwrap())
+                else:
+                    opts.set(name, true)
+            else:
+                var val = inline
+                if not has_eq:
+                    j += 1
+                    if j >= len(args):
+                        return Err("cli: 选项 --" + name + " 缺少值")
+                    val = args[j]
+                var cv = cli_cast(val, t)
+                if cv.is_err():
+                    return Err("cli: 选项 --" + name + ": " + str(cv))
+                opts.set(name, cv.unwrap())
+            j += 1
+            continue
+        if starts_with(a, "-") and len(a) > 1:
+            var body = a[1:len(a)]
+            var short = body[0:1]
+            var name = cli_find_by_short(spec, short)
+            if name == null:
+                return Err("cli: 未知选项 -" + short)
+            var cfg = spec[name]
+            var t = cfg["type"]
+            if t == null:
+                t = "str"
+            var rest = body[1:len(body)]
+            if t == "bool":
+                if starts_with(rest, "="):
+                    var bv = cli_parse_bool(rest[1:len(rest)])
+                    if bv.is_err():
+                        return Err(cli_err_msg(bv))
+                    opts.set(name, bv.unwrap())
+                else:
+                    opts.set(name, true)
+            else:
+                var val = ""
+                if starts_with(rest, "="):
+                    val = rest[1:len(rest)]
+                elif len(rest) > 0:
+                    val = rest
+                else:
+                    j += 1
+                    if j >= len(args):
+                        return Err("cli: 选项 -" + short + " 缺少值")
+                    val = args[j]
+                var cv = cli_cast(val, t)
+                if cv.is_err():
+                    return Err("cli: 选项 -" + short + ": " + str(cv))
+                opts.set(name, cv.unwrap())
+            j += 1
+            continue
+        pos.append(a)
+        j += 1
+    var cc = cli_check_constraints(opts, spec)
+    if cc.is_err():
+        return cc
+    return Ok({"opts": opts, "args": pos})
+# ---- 0.2.0 子命令分发 ----
+def cli_parse_cmds(args, cmds):
+    if len(args) == 0:
+        return Err("cli: 缺少子命令")
+    var cmd = args[0]
+    if not cmds.has(cmd):
+        return Err("cli: 未知子命令: " + cmd)
+    var cmd_cfg = cmds[cmd]
+    var spec = {}
+    if cmd_cfg.has("spec"):
+        spec = cmd_cfg["spec"]
+    var rest = []
+    var i = 1
+    while i < len(args):
+        rest.append(args[i])
+        i += 1
+    var pr = cli_parse(rest, spec)
+    if pr.is_err():
+        return pr
+    var parsed = pr.unwrap()
+    return Ok({"cmd": cmd, "opts": parsed["opts"], "args": parsed["args"]})
+# ---- 0.2.0 help 生成 ----
+def cli_help(spec):
+    var lines = []
+    lines.append("Usage: [OPTIONS]")
+    lines.append("")
+    lines.append("Options:")
+    var keys = spec.keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = spec[k]
+        var t = cfg["type"]
+        if t == null:
+            t = "str"
+        var line = "  --" + k
+        if cfg.has("short"):
+            line = line + ", -" + cfg["short"]
+        line = line + " <" + t + ">"
+        if cfg.has("default"):
+            line = line + "  (default: " + str(cfg["default"]) + ")"
+        if cfg.has("env"):
+            line = line + "  [env: " + cfg["env"] + "]"
+        if cfg.has("required") and cfg["required"] == true:
+            line = line + "  (required)"
+        if cfg.has("desc"):
+            line = line + "  " + cfg["desc"]
+        lines.append(line)
+        i += 1
+    return join("\n", lines)
+def cli_help_cmds(cmds):
+    var lines = []
+    lines.append("Usage: <command> [OPTIONS]")
+    lines.append("")
+    lines.append("Commands:")
+    var keys = cmds.keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = cmds[k]
+        var line = "  " + k
+        if cfg.has("desc"):
+            line = line + "  " + cfg["desc"]
+        lines.append(line)
+        i += 1
+    return join("\n", lines)

@@ -1,0 +1,22 @@
+# readstat 0.2.0 测试
+import "../registry/readstat/0.2.0/readstat.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var s = "The cat sat on the mat. It was a good day."
+    var w = rs_words(s)
+    expect(len(w) == 12, "words 12: " + str(len(w)))
+    var fk = rs_flesch_kincaid(s)
+    expect(fk > 0.0, "fk > 0: " + str(fk))
+    # ---- 0.2.0 syllables ----
+    expect(rs_syllables("hello") >= 2, "syllables hello >= 2: " + str(rs_syllables("hello")))
+    # ---- 0.2.0 avg_word_len ----
+    var awl = rs_avg_word_len("hello world")
+    expect(awl == 5.0, "avg_word_len 5.0: " + str(awl))
+    # ---- 0.2.0 reading_time ----
+    var rt = rs_reading_time("one two three", 200)
+    expect(rt > 0.0, "reading_time > 0: " + str(rt))
+    print("PASS: readstat 0.2.0")

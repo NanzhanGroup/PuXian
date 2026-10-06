@@ -1,0 +1,26 @@
+# num2words 0.2.0 测试
+import "../registry/num2words/0.2.0/num2words.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var w = nw_convert(123).unwrap()
+    expect(len(w) > 0, "convert 123 non-empty: " + w)
+    # ---- 0.2.0 to_words_en ----
+    expect(nw_to_words_en(0) == "zero", "en 0: " + nw_to_words_en(0))
+    expect(nw_to_words_en(1) == "one", "en 1")
+    expect(nw_to_words_en(15) == "fifteen", "en 15: " + nw_to_words_en(15))
+    expect(nw_to_words_en(20) == "twenty", "en 20: " + nw_to_words_en(20))
+    expect(nw_to_words_en(21) == "twenty-one", "en 21: " + nw_to_words_en(21))
+    expect(nw_to_words_en(100) == "one hundred", "en 100: " + nw_to_words_en(100))
+    expect(nw_to_words_en(1000) == "one thousand", "en 1000: " + nw_to_words_en(1000))
+    # ---- 0.2.0 to_words_cn ----
+    expect(nw_to_words_cn(0) == "零", "cn 0: " + nw_to_words_cn(0))
+    expect(nw_to_words_cn(1) == "一", "cn 1")
+    expect(nw_to_words_cn(10) == "十", "cn 10: " + nw_to_words_cn(10))
+    # ---- 0.2.0 currency ----
+    expect(nw_currency(12345) == "¥123.45", "currency 12345: " + nw_currency(12345))
+    expect(nw_currency(500, "USD") == "$5.00", "currency USD: " + nw_currency(500, "USD"))
+    print("PASS: num2words 0.2.0")

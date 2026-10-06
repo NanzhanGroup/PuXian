@@ -1,0 +1,20 @@
+# actor 0.2.0 测试（仅编译模式 —— 含 chan/spawn 并发原语）
+import "../registry/actor/0.2.0/actor.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def ping_handler(msg, state):
+    return ["pong", state]
+def main():
+    var handlers = {"ping": ping_handler}
+    var act = ac_new(handlers, 0)
+    expect(ac_status(act) == "running", "status running")
+    expect(ac_alive(act) == true, "alive true")
+    expect(ac_state(act) == 0, "state 0")
+    ac_set_state(act, 42)
+    expect(ac_state(act) == 42, "state 42 after set")
+    ac_stop(act)
+    expect(ac_status(act) == "stopped", "status stopped")
+    expect(ac_alive(act) == false, "alive false after stop")
+    print("PASS: actor 0.2.0")

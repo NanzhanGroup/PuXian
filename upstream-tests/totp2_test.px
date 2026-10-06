@@ -1,0 +1,20 @@
+# totp 0.2.0 测试
+import "../registry/totp/0.2.0/totp.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var code = otp_totp_step("JBSWY3DPEHPK3PXP", 6, 1700000000, 30).unwrap()
+    expect(len(code) == 6, "totp 6 digits: " + code)
+    # ---- 0.1.0 hotp ----
+    var hotp = otp_hotp("JBSWY3DPEHPK3PXP", 0, 6).unwrap()
+    expect(len(hotp) == 6, "hotp 6 digits: " + hotp)
+    # ---- 0.2.0 steps_remaining ----
+    var rem = otp_steps_remaining(30)
+    expect(rem > 0 and rem <= 30, "steps_remaining 1-30: " + str(rem))
+    # ---- 0.2.0 generate ----
+    var code2 = otp_generate("JBSWY3DPEHPK3PXP", 6, 30)
+    expect(len(code2) == 6, "generate 6 digits: " + code2)
+    print("PASS: totp 0.2.0")

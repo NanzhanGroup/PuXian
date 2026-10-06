@@ -1,0 +1,36 @@
+# inflect 0.2.0 测试
+import "../registry/inflect/0.2.0/inflect.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(if_plural("cat").unwrap() == "cats", "plural cat")
+    expect(if_singular("cats").unwrap() == "cat", "singular cats")
+    expect(if_count(1, "cat") == "1 cat", "count 1")
+    expect(if_count(2, "cat") == "2 cats", "count 2")
+    # ---- 0.2.0 ordinal ----
+    expect(if_ordinal(1) == "1st", "ordinal 1")
+    expect(if_ordinal(2) == "2nd", "ordinal 2")
+    expect(if_ordinal(3) == "3rd", "ordinal 3")
+    expect(if_ordinal(11) == "11th", "ordinal 11")
+    expect(if_ordinal(21) == "21st", "ordinal 21")
+    # ---- 0.2.0 article ----
+    expect(if_article("cat") == "a", "article cat")
+    expect(if_article("apple") == "an", "article apple")
+    expect(if_article("hour") == "an", "article hour")
+    expect(if_article("university") == "a", "article university")
+    # ---- 0.2.0 pluralize ----
+    expect(if_pluralize("child") == "children", "pluralize child")
+    expect(if_pluralize("person") == "people", "pluralize person")
+    expect(if_pluralize("box") == "boxes", "pluralize box")
+    expect(if_pluralize("city") == "cities", "pluralize city")
+    expect(if_pluralize("knife") == "knives", "pluralize knife")
+    expect(if_pluralize("sheep") == "sheep", "pluralize sheep")
+    expect(if_pluralize("bus") == "buses", "pluralize bus")
+    # ---- 0.2.0 singularize ----
+    expect(if_singularize("children") == "child", "singularize children")
+    expect(if_singularize("cities") == "city", "singularize cities")
+    expect(if_singularize("boxes") == "box", "singularize boxes")
+    print("PASS: inflect 0.2.0")

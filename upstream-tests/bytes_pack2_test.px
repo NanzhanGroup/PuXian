@@ -1,0 +1,32 @@
+# bytes_pack 0.2.0 测试
+import "../registry/bytes_pack/0.2.0/bytes_pack.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var packed = bp_pack("<I", [42]).unwrap()
+    var unpacked = bp_unpack("<I", packed).unwrap()
+    expect(unpacked[0] == 42, "pack/unpack u32")
+    # ---- 0.2.0 pack_u16 ----
+    var le16 = bp_pack_u16_le(0x1234)
+    expect(ord(le16[0]) == 0x34, "u16_le low byte")
+    expect(ord(le16[1]) == 0x12, "u16_le high byte")
+    var be16 = bp_pack_u16_be(0x1234)
+    expect(ord(be16[0]) == 0x12, "u16_be high byte")
+    expect(ord(be16[1]) == 0x34, "u16_be low byte")
+    # ---- 0.2.0 unpack_u16 ----
+    expect(bp_unpack_u16_le(le16, 0) == 0x1234, "unpack u16_le")
+    expect(bp_unpack_u16_be(be16, 0) == 0x1234, "unpack u16_be")
+    # ---- 0.2.0 pack_u32 ----
+    var le32 = bp_pack_u32_le(0x12345678)
+    expect(bp_unpack_u32_le(le32, 0) == 0x12345678, "roundtrip u32_le")
+    var be32 = bp_pack_u32_be(0x12345678)
+    expect(bp_unpack_u32_be(be32, 0) == 0x12345678, "roundtrip u32_be")
+    # ---- 0.2.0 pack_string ----
+    var ps = bp_pack_string("hello")
+    var pr = bp_unpack_string(ps, 0)
+    expect(pr["str"] == "hello", "pack_string roundtrip: " + pr["str"])
+    expect(pr["next_off"] == 9, "pack_string next_off")
+    print("PASS: bytes_pack 0.2.0")

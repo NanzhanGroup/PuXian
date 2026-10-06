@@ -1,0 +1,31 @@
+# tdtest 0.2.0 测试
+import "../registry/tdtest/0.2.0/tdtest.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def tc_add():
+    if 1 + 1 != 2:
+        return "add failed"
+    return ""
+def tc_sub():
+    if 5 - 3 != 2:
+        return "sub failed"
+    return ""
+def main():
+    # ---- 0.1.0 回归 ----
+    var cases = [
+        {"name": "add", "fn": tc_add},
+        {"name": "sub", "fn": tc_sub}
+    ]
+    var result = td_run(cases)
+    expect(result["failed"] == 0, "no failures: " + str(result))
+    # ---- 0.2.0 skip ----
+    var s = td_skip("wip", "not ready")
+    expect(contains(s, "SKIP"), "skip msg: " + s)
+    # ---- 0.2.0 name ----
+    var n = td_name("mytest")
+    expect(contains(n, "TEST"), "name msg: " + n)
+    # ---- 0.2.0 count ----
+    expect(td_count(cases) == 2, "count 2: " + str(td_count(cases)))
+    print("PASS: tdtest 0.2.0")

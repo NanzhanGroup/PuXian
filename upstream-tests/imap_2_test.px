@@ -1,0 +1,59 @@
+# imap 0.2.0 测试：search/create/delete/examine/copy/store/close/noop（双模式一致）
+import "../registry/imap/0.2.0/imap.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    return s.find(sub) >= 0
+def main():
+    var c = imap_connect("127.0.0.1", 2143, 5000)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    # 登录
+    expect(imap_login(conn, "user", "pass").is_ok(), "login")
+    # LIST
+    var boxes = imap_list(conn).unwrap()
+    expect(len(boxes) >= 1, "LIST 至少 1 个邮箱, got " + str(boxes))
+    # SELECT INBOX
+    var sel = imap_select(conn, "INBOX").unwrap()
+    expect(sel["exists"] >= 2, "SELECT INBOX exists >= 2, got " + str(sel))
+    # FETCH 1
+    var msgs = imap_fetch(conn, "1", "BODY[]").unwrap()
+    expect(len(msgs) >= 1, "FETCH 1 有结果")
+    expect(contains(msgs[0], "message one"), "FETCH 1 内容")
+    expect(contains(msgs[0], "普贤"), "FETCH 1 含中文")
+    # SEARCH ALL
+    var all = imap_search(conn, "ALL").unwrap()
+    expect(len(all) >= 2, "SEARCH ALL >= 2, got " + str(all))
+    # SEARCH UNSEEN
+    var unseen = imap_search(conn, "UNSEEN").unwrap()
+    expect(len(unseen) >= 1, "SEARCH UNSEEN >= 1, got " + str(unseen))
+    # EXAMINE（只读）
+    var ex = imap_examine(conn, "INBOX").unwrap()
+    expect(ex["exists"] >= 2, "EXAMINE INBOX exists >= 2")
+    # NOOP
+    expect(imap_noop(conn).is_ok(), "NOOP")
+    # STORE（标记 \Seen）
+    expect(imap_store(conn, "2", "+FLAGS (\\Seen)").is_ok(), "STORE +FLAGS")
+    # COPY
+    expect(imap_copy(conn, "1", "Sent").is_ok(), "COPY 1 Sent")
+    # CREATE + DELETE
+    expect(imap_create(conn, "TestBox").is_ok(), "CREATE TestBox")
+    var boxes2 = imap_list(conn).unwrap()
+    var found = false
+    var i = 0
+    while i < len(boxes2):
+        if boxes2[i] == "TestBox":
+            found = true
+        i += 1
+    expect(found, "CREATE 后 LIST 含 TestBox")
+    expect(imap_delete(conn, "TestBox").is_ok(), "DELETE TestBox")
+    # CLOSE
+    expect(imap_close(conn).is_ok(), "CLOSE")
+    # LOGOUT
+    expect(imap_logout(conn).is_ok(), "LOGOUT")
+    print("imap: PASS")
+    return Ok(0)

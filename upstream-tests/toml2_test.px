@@ -1,0 +1,24 @@
+# toml 0.2.0 测试
+import "../registry/toml/0.2.0/toml.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var src = "name = \"Alice\"\nage = 30"
+    var root = toml_parse(src).unwrap()
+    expect(root["name"] == "Alice", "parse name: " + str(root["name"]))
+    # ---- 0.2.0 has_key ----
+    expect(toml_has_key(root, "name") == true, "has_key name")
+    expect(toml_has_key(root, "nonexist") == false, "has_key nonexist")
+    # ---- 0.2.0 get_keys ----
+    var keys = toml_get_keys(root)
+    expect(len(keys) == 2, "get_keys 2: " + str(len(keys)))
+    # ---- 0.2.0 to_string ----
+    var s = toml_to_string(root)
+    expect(contains(s, "name") == true, "to_string has name")
+    # ---- 0.2.0 get_default ----
+    expect(toml_get_default(root, "name", "default") == "Alice", "get_default existing")
+    expect(toml_get_default(root, "nonexist", "default") == "default", "get_default default")
+    print("PASS: toml 0.2.0")

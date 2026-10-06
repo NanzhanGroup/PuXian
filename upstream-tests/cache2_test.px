@@ -1,0 +1,40 @@
+# cache 0.2.0 测试
+import "../registry/cache/0.2.0/cache.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var c = ca_new(3)
+    ca_set(c, "a", 1, 0, 100)
+    ca_set(c, "b", 2, 0, 100)
+    ca_set(c, "c", 3, 0, 100)
+    expect(ca_get(c, "a", 100).unwrap() == 1, "get a")
+    expect(ca_get(c, "b", 100).unwrap() == 2, "get b")
+    # ---- 0.2.0 clear ----
+    ca_clear(c)
+    expect(ca_len(c, 100) == 0, "clear len 0")
+    # ---- 0.2.0 keys/values/entries ----
+    ca_set(c, "x", 10, 0, 200)
+    ca_set(c, "y", 20, 0, 200)
+    expect(len(ca_keys(c, 200)) == 2, "keys 2")
+    expect(ca_values(c, 200) == [10, 20] or ca_values(c, 200) == [20, 10], "values: " + str(ca_values(c, 200)))
+    expect(len(ca_entries(c, 200)) == 2, "entries 2")
+    # ---- 0.2.0 stats ----
+    var s = ca_stats(c, 200)
+    expect(s["size"] == 2, "stats size 2")
+    expect(s["max"] == 3, "stats max 3")
+    # ---- 0.2.0 peek ----
+    expect(ca_peek(c, "x", 200).unwrap() == 10, "peek x")
+    expect(ca_peek(c, "z", 200).is_err() == true, "peek missing")
+    # ---- 0.2.0 set_many ----
+    ca_clear(c)
+    ca_set_many(c, [["a", 1], ["b", 2], ["c", 3]], 0, 300)
+    expect(ca_len(c, 300) == 3, "set_many len 3")
+    expect(ca_get(c, "c", 300).unwrap() == 3, "set_many get c")
+    # ---- 0.2.0 TTL ----
+    ca_clear(c)
+    ca_set(c, "temp", 99, 10, 100)
+    expect(ca_get(c, "temp", 105).unwrap() == 99, "ttl before expiry")
+    expect(ca_get(c, "temp", 111).is_err() == true, "ttl after expiry")
+    print("PASS: cache 0.2.0")

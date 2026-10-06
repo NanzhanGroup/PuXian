@@ -1,0 +1,137 @@
+# pdf 0.2.0 测试
+import "../registry/pdf/0.2.0/pdf.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+def main():
+    # ---- 标准页面尺寸 ----
+    var a4 = pd_page_size("A4")
+    expect(a4.is_ok(), "A4 ok")
+    if a4.is_ok():
+        expect(a4.unwrap()["w"] == 595, "A4 width 595")
+        expect(a4.unwrap()["h"] == 842, "A4 height 842")
+
+    var letter = pd_page_size("Letter")
+    expect(letter.is_ok() and letter.unwrap()["w"] == 612, "Letter width 612")
+
+    var a3 = pd_page_size("A3")
+    expect(a3.is_ok() and a3.unwrap()["w"] == 842, "A3 width 842")
+
+    var bad = pd_page_size("Foo")
+    expect_err(bad, "unknown page size → Err")
+
+    # ---- 基本文档构建 ----
+    var doc = pd_new()
+    doc = pd_add_page(doc, 595, 842)
+    doc = pd_add_text(doc, 0, 50, 800, "Hello World")
+    var r = pd_bytes(doc)
+    expect(r.is_ok(), "basic doc bytes ok")
+    if r.is_ok():
+        var pdf = r.unwrap()
+        expect(starts_with(pdf, "%PDF-1.4"), "PDF header")
+        expect(pdf.contains("%%EOF"), "PDF EOF")
+        expect(pdf.contains("Hello World"), "PDF contains text")
+        expect(pdf.contains("/Type /Catalog"), "has Catalog")
+        expect(pdf.contains("/Type /Pages"), "has Pages")
+        expect(pdf.contains("/Type /Page"), "has Page")
+
+    # ---- 字号文本 ----
+    var doc2 = pd_new()
+    doc2 = pd_add_page(doc2, 595, 842)
+    doc2 = pd_add_text_fs(doc2, 0, 50, 800, "Big Text", 24)
+    doc2 = pd_add_text_fs(doc2, 0, 50, 770, "Small Text", 8)
+    var r2 = pd_bytes(doc2)
+    expect(r2.is_ok(), "font size doc ok")
+    if r2.is_ok():
+        expect(r2.unwrap().contains("24 Tf"), "has 24pt font")
+        expect(r2.unwrap().contains("8 Tf"), "has 8pt font")
+
+    # ---- 线条 ----
+    var doc3 = pd_new()
+    doc3 = pd_add_page(doc3, 595, 842)
+    doc3 = pd_add_line(doc3, 0, 50, 700, 500, 700)
+    var r3 = pd_bytes(doc3)
+    expect(r3.is_ok(), "line doc ok")
+    if r3.is_ok():
+        expect(r3.unwrap().contains(" m "), "has moveto")
+        expect(r3.unwrap().contains(" l S"), "has lineto stroke")
+
+    # ---- 矩形 ----
+    var doc4 = pd_new()
+    doc4 = pd_add_page(doc4, 595, 842)
+    doc4 = pd_add_rect(doc4, 0, 100, 600, 200, 100, false)
+    doc4 = pd_add_rect(doc4, 0, 100, 400, 200, 100, true)
+    var r4 = pd_bytes(doc4)
+    expect(r4.is_ok(), "rect doc ok")
+    if r4.is_ok():
+        expect(r4.unwrap().contains(" re S"), "has rect stroke")
+        expect(r4.unwrap().contains(" re f"), "has rect fill")
+
+    # ---- 元数据 ----
+    var doc5 = pd_new()
+    doc5 = pd_add_page(doc5, 595, 842)
+    doc5 = pd_add_text(doc5, 0, 50, 800, "Title Page")
+    doc5 = pd_add_metadata(doc5, "My Document", "Author Name", "Test Subject")
+    var r5 = pd_bytes(doc5)
+    expect(r5.is_ok(), "metadata doc ok")
+    if r5.is_ok():
+        var pdf5 = r5.unwrap()
+        expect(pdf5.contains("/Title (My Document)"), "has Title")
+        expect(pdf5.contains("/Author (Author Name)"), "has Author")
+        expect(pdf5.contains("/Subject (Test Subject)"), "has Subject")
+        expect(pdf5.contains("/Info"), "has Info ref")
+
+    # ---- 多页 ----
+    var doc6 = pd_new()
+    doc6 = pd_add_page(doc6, 595, 842)
+    doc6 = pd_add_page(doc6, 612, 792)
+    doc6 = pd_add_text(doc6, 0, 50, 800, "Page 1")
+    doc6 = pd_add_text(doc6, 1, 50, 750, "Page 2")
+    var r6 = pd_bytes(doc6)
+    expect(r6.is_ok(), "multi-page ok")
+    if r6.is_ok():
+        expect(r6.unwrap().contains("/Count 2"), "has 2 pages")
+        expect(r6.unwrap().contains("Page 1"), "has Page 1 text")
+        expect(r6.unwrap().contains("Page 2"), "has Page 2 text")
+
+    # ---- 线宽 ----
+    var doc7 = pd_new()
+    doc7 = pd_line_width(doc7, 2.5)
+    doc7 = pd_add_page(doc7, 595, 842)
+    doc7 = pd_add_line(doc7, 0, 50, 700, 500, 700)
+    var r7 = pd_bytes(doc7)
+    expect(r7.is_ok(), "line width ok")
+    if r7.is_ok():
+        expect(r7.unwrap().contains("2.5 w"), "has line width 2.5")
+
+    # ---- 字体设置 ----
+    var doc8 = pd_new()
+    doc8 = pd_set_font(doc8, "Helvetica-Bold")
+    doc8 = pd_add_page(doc8, 595, 842)
+    doc8 = pd_add_text(doc8, 0, 50, 800, "Bold Text")
+    var r8 = pd_bytes(doc8)
+    expect(r8.is_ok(), "font set ok")
+    if r8.is_ok():
+        expect(r8.unwrap().contains("/Helvetica-Bold"), "has bold font")
+
+    # ---- 空文档错误 ----
+    var doc9 = pd_new()
+    expect_err(pd_bytes(doc9), "empty doc → Err")
+
+    # ---- 文本转义 ----
+    var doc10 = pd_new()
+    doc10 = pd_add_page(doc10, 595, 842)
+    doc10 = pd_add_text(doc10, 0, 50, 800, "a(b)c\\d")
+    var r10 = pd_bytes(doc10)
+    expect(r10.is_ok(), "escape doc ok")
+    if r10.is_ok():
+        expect(r10.unwrap().contains("a\\(b\\)c\\\\d"), "escaped parentheses and backslash")
+
+    print("pdf 0.2.0: PASS")
+    return Ok(0)

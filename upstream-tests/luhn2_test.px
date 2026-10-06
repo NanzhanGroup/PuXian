@@ -1,0 +1,34 @@
+# luhn 0.2.0 测试：strip/card_type/generate/format + 0.1.0 回归
+import "../registry/luhn/0.2.0/luhn.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(luhn_check("7992739871").unwrap() == 3, "check digit")
+    expect(luhn_append("7992739871").unwrap() == "79927398713", "append")
+    expect(luhn_valid("79927398713") == true, "valid")
+    expect(luhn_valid("79927398710") == false, "invalid")
+    # ---- 0.2.0 strip ----
+    expect(luhn_strip("79927398713").unwrap() == "7992739871", "strip")
+    expect(luhn_strip("4532015112830366").unwrap() == "453201511283036", "strip 16")
+    # ---- 0.2.0 card_type ----
+    expect(luhn_card_type("4532015112830366").unwrap() == "visa", "visa type")
+    expect(luhn_card_type("5500000000000004").unwrap() == "mastercard", "mc type")
+    expect(luhn_card_type("371449035398149").unwrap() == "amex", "amex type")
+    expect(luhn_card_type("6011000990139424").unwrap() == "discover", "discover type")
+    expect(luhn_card_type("3530111333300000").unwrap() == "jcb", "jcb type")
+    expect(luhn_card_type("6212345678901234").unwrap() == "unionpay", "unionpay type")
+    # ---- 0.2.0 generate ----
+    var gen = luhn_generate("4532", 16).unwrap()
+    expect(len(gen) == 16, "generate len 16")
+    expect(luhn_valid(gen) == true, "generate valid")
+    expect(starts_with(gen, "4532"), "generate prefix")
+    var gen2 = luhn_generate("37", 15).unwrap()
+    expect(len(gen2) == 15, "generate amex len 15")
+    expect(luhn_valid(gen2) == true, "generate amex valid")
+    # ---- 0.2.0 format ----
+    expect(luhn_format("4532015112830366") == "4532 0151 1283 0366", "format 16")
+    expect(luhn_format("371449035398149") == "3714 4903 5398 149", "format 15")
+    print("PASS: luhn 0.2.0")

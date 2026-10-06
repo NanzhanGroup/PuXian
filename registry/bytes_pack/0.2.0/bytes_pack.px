@@ -1,0 +1,258 @@
+# ============================================================
+# 普贤生态库：registry/bytes_pack —— 二进制 pack/unpack
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python struct / Rust byteorder 心智（0.1.0：整数 + float32/64 子集）：
+#   bp_size(fmt)               → Ok(int) | Err   格式固定长度（字节数）
+#   bp_pack(fmt, args)         → Ok(bytes) | Err 按格式打包
+#   bp_unpack(fmt, data)       → Ok([值...]) | Err  自偏移 0 解包（须恰好消费完）
+#   bp_unpack_from(fmt, data, off) → Ok([新偏移, [值...]]) | Err  从 off 解包
+# 格式：
+#   字节序前缀（可省略，默认 ">" 大端/网络序）：
+#     <  小端   >  大端   =  当大端（标准尺寸+大端，0.1.0 与 > 同义）
+#   类型符：
+#     B u8 / b i8 / H u16 / h i16 / I u32 / i i32 / L u32 / l i32 / Q u64 / q i64
+#     f f32 / d f64
+#   重复前缀：如 "4B" = 4 个 u8；无前缀 = 1 个
+# 已知限制：
+#   - Q 仅保证 0..2^63-1 可表示范围（PuXian int 为 i64；超出自动回绕为负，调用方注意）
+#   - 不支持对齐填充（0.2.0 视需要加）
+# 实现说明：
+#   - 整数转换收敛到原生 int_to_bytes/bytes_to_int（PX-DEF-019/020 已由 M186 修复，
+#     endian/signed 三轨可靠）；float 走 float32_bits/float64_bits + bits_to_float32/64
+#   - 范围/长度/格式错误一律 Err（不静默截断）
+# ============================================================
+# ---- 内部：格式解析 ----
+# 解析一个类型符 + 重复数 → [size, signed, count, 剩余串索引]；失败返回 null
+def bp_parse_unit(fmt, i):
+    var count = 0
+    var started = false
+    while i < len(fmt) and fmt[i] >= "0" and fmt[i] <= "9":
+        count = count * 10 + (ord(fmt[i]) - 48)
+        started = true
+        i += 1
+    if not started:
+        count = 1
+    if i >= len(fmt):
+        return null
+    var c = fmt[i]
+    var size = 0
+    var kind = "u"
+    if c == "B":
+        size = 1
+    elif c == "b":
+        size = 1
+        kind = "i"
+    elif c == "H":
+        size = 2
+    elif c == "h":
+        size = 2
+        kind = "i"
+    elif c == "I" or c == "L":
+        size = 4
+    elif c == "i" or c == "l":
+        size = 4
+        kind = "i"
+    elif c == "Q":
+        size = 8
+    elif c == "q":
+        size = 8
+        kind = "i"
+    elif c == "f":
+        size = 4
+        kind = "f32"
+    elif c == "d":
+        size = 8
+        kind = "f64"
+    else:
+        return null
+    return [size, kind, count, i + 1]
+# 字节序前缀 → ["little"/"big", 内容起点]
+def bp_parse_endian(fmt):
+    if len(fmt) == 0:
+        return ["big", 0]
+    var c = fmt[0]
+    if c == "<":
+        return ["little", 1]
+    if c == ">":
+        return ["big", 1]
+    if c == "=":
+        return ["big", 1]
+    return ["big", 0]
+# 解析整段格式 → [endian, [[size, signed, count], ...]]；失败 null
+def bp_parse(fmt):
+    var pe = bp_parse_endian(fmt)
+    var endian = pe[0]
+    var i = pe[1]
+    var units = []
+    while i < len(fmt):
+        if fmt[i] == " " or fmt[i] == "\t":
+            i += 1
+            continue
+        var u = bp_parse_unit(fmt, i)
+        if u == null:
+            return null
+        units.append([u[0], u[1], u[2]])
+        i = u[3]
+    return [endian, units]
+# ---- 内部：范围校验 ----
+# 值范围校验（size==8 特殊：i64 全范围合法；u64 仅非负可表示范围）
+def bp_check_range(n, size, signed):
+    if size == 8:
+        if signed:
+            return true
+        return n >= 0
+    var bits = 8 * size
+    if signed:
+        var half = bp_pow2(bits - 1)
+        return n >= -half and n < half
+    var maxv = bp_pow2(bits)
+    return n >= 0 and n < maxv
+def bp_pow2(bits):
+    var v = 1
+    var k = 0
+    while k < bits:
+        v = v * 2
+        k += 1
+    return v
+# ---- 打包 ----
+def bp_pack(fmt, args):
+    var pf = bp_parse(fmt)
+    if pf == null:
+        return Err("bytes_pack: 非法格式: " + fmt)
+    var endian = pf[0]
+    var units = pf[1]
+    var ai = 0
+    var out = ""
+    var ui = 0
+    while ui < len(units):
+        var size = units[ui][0]
+        var kind = units[ui][1]
+        var count = units[ui][2]
+        var j = 0
+        while j < count:
+            if ai >= len(args):
+                return Err("bytes_pack: 参数不足")
+            var n = args[ai]
+            if kind == "f32" or kind == "f64":
+                if type(n) != "float":
+                    return Err("bytes_pack: 值须为 float: " + str(n))
+                var bits = 0
+                if kind == "f32":
+                    bits = float32_bits(n)
+                    # f32 位模式可达 2^32-1（负数 float 的符号位），须按无符号 u32 编码
+                    out = out + bytes_to_str(int_to_bytes(bits, size, endian, false))
+                else:
+                    bits = float64_bits(n)
+                    # f64 位模式落回 i64 二补（负数 float 位模式 >2^63，int64 为负），signed 编码即原字节
+                    out = out + bytes_to_str(int_to_bytes(bits, size, endian, true))
+            else:
+                if type(n) != "int":
+                    return Err("bytes_pack: 值须为 int: " + str(n))
+                if not bp_check_range(n, size, kind == "i"):
+                    return Err("bytes_pack: 越界: " + str(n) + " 于 " + fmt)
+                out = out + bytes_to_str(int_to_bytes(n, size, endian, kind == "i"))
+            ai += 1
+            j += 1
+        ui += 1
+    if ai != len(args):
+        return Err("bytes_pack: 参数过多")
+    return Ok(bytes(out))
+# ---- 解包 ----
+# 从 data 解一个值（off 起 size 字节）
+def bp_unpack_unit(data, off, size, kind, endian):
+    var sl = bytes_slice(data, off, off + size)
+    if bytes_len(sl) != size:
+        return null
+    if kind == "f32":
+        return bits_to_float32(bytes_to_int(sl, endian, false))
+    if kind == "f64":
+        return bits_to_float64(bytes_to_int(sl, endian, true))
+    return bytes_to_int(sl, endian, kind == "i")
+def bp_unpack_from(fmt, data, off):
+    var pf = bp_parse(fmt)
+    if pf == null:
+        return Err("bytes_pack: 非法格式: " + fmt)
+    var endian = pf[0]
+    var units = pf[1]
+    var o = off
+    var vals = []
+    var ui = 0
+    while ui < len(units):
+        var size = units[ui][0]
+        var kind = units[ui][1]
+        var count = units[ui][2]
+        var j = 0
+        while j < count:
+            var v = bp_unpack_unit(data, o, size, kind, endian)
+            if v == null:
+                return Err("bytes_pack: 数据长度不足（偏移 " + str(o) + "）")
+            vals.append(v)
+            o = o + size
+            j += 1
+        ui += 1
+    return Ok([o, vals])
+def bp_unpack(fmt, data):
+    var r = bp_unpack_from(fmt, data, 0)
+    if r.is_err():
+        return r
+    var rr = r.unwrap()
+    if rr[0] != bytes_len(data):
+        return Err("bytes_pack: 数据未被完全消费（剩余 " + str(bytes_len(data) - rr[0]) + " 字节）")
+    return Ok(rr[1])
+def bp_size(fmt):
+    var pf = bp_parse(fmt)
+    if pf == null:
+        return Err("bytes_pack: 非法格式: " + fmt)
+    var units = pf[1]
+    var total = 0
+    var i = 0
+    while i < len(units):
+        total = total + units[i][0] * units[i][2]
+        i += 1
+    return Ok(total)
+
+# ============================================================
+# 0.2.0 新增：pack_u16/u32/u64, unpack_u16/u32/u64, pack_string
+# ============================================================
+
+# 打包 uint16 (小端) → str
+def bp_pack_u16_le(n):
+    return chr(n & 0xFF) + chr((n >> 8) & 0xFF)
+
+# 打包 uint16 (大端) → str
+def bp_pack_u16_be(n):
+    return chr((n >> 8) & 0xFF) + chr(n & 0xFF)
+
+# 打包 uint32 (小端) → str
+def bp_pack_u32_le(n):
+    return chr(n & 0xFF) + chr((n >> 8) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 24) & 0xFF)
+
+# 打包 uint32 (大端) → str
+def bp_pack_u32_be(n):
+    return chr((n >> 24) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 8) & 0xFF) + chr(n & 0xFF)
+
+# 解包 uint16 (小端) → int
+def bp_unpack_u16_le(data, off):
+    return ord(data[off]) | (ord(data[off + 1]) << 8)
+
+# 解包 uint16 (大端) → int
+def bp_unpack_u16_be(data, off):
+    return (ord(data[off]) << 8) | ord(data[off + 1])
+
+# 解包 uint32 (小端) → int
+def bp_unpack_u32_le(data, off):
+    return ord(data[off]) | (ord(data[off + 1]) << 8) | (ord(data[off + 2]) << 16) | (ord(data[off + 3]) << 24)
+
+# 解包 uint32 (大端) → int
+def bp_unpack_u32_be(data, off):
+    return (ord(data[off]) << 24) | (ord(data[off + 1]) << 16) | (ord(data[off + 2]) << 8) | ord(data[off + 3])
+
+# 打包长度前缀字符串 → str
+def bp_pack_string(s):
+    return bp_pack_u32_le(len(s)) + s
+
+# 解包长度前缀字符串 → {str, next_off}
+def bp_unpack_string(data, off):
+    var n = bp_unpack_u32_le(data, off)
+    return {"str": data[off + 4:off + 4 + n], "next_off": off + 4 + n}

@@ -1,0 +1,24 @@
+# tar 0.2.0 测试
+import "../registry/tar/0.2.0/tar.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var files = [{"name": "hello.txt", "data": bytes("Hello, World!")}]
+    var packed = tar_pack(files).unwrap()
+    var unpacked = tar_unpack(packed).unwrap()
+    expect(len(unpacked) == 1, "unpack 1 file: " + str(len(unpacked)))
+    expect(unpacked[0]["name"] == "hello.txt", "unpack name: " + str(unpacked[0]["name"]))
+    # ---- 0.2.0 list_files ----
+    var names = tar_list_files(packed)
+    expect(len(names) == 1, "list_files 1: " + str(names))
+    expect(names[0] == "hello.txt", "list_files[0]: " + str(names[0]))
+    # ---- 0.2.0 has_file ----
+    expect(tar_has_file(packed, "hello.txt") == true, "has_file hello.txt")
+    expect(tar_has_file(packed, "noexist") == false, "has_file noexist false")
+    # ---- 0.2.0 get_file_size ----
+    var sz = tar_get_file_size(packed, "hello.txt")
+    expect(sz > 0, "file_size > 0: " + str(sz))
+    print("PASS: tar 0.2.0")

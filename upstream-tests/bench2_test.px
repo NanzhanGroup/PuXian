@@ -1,0 +1,29 @@
+# bench 0.2.0 测试
+import "../registry/bench/0.2.0/bench.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def noop():
+    return 0
+def main():
+    # ---- 0.1.0 回归 ----
+    var t = bn_time(noop, 100).unwrap()
+    expect(t["total_ns"] >= 0.0, "bn_time total >= 0")
+    # ---- 0.2.0 time_ms ----
+    var ms = bn_time_ms(noop, 100)
+    expect(ms >= 0.0, "time_ms >= 0")
+    # ---- 0.2.0 compare ----
+    var cmp = bn_compare(noop, noop, 100, "a", "b")
+    expect(cmp["ms_a"] >= 0.0, "compare ms_a")
+    expect(cmp["ms_b"] >= 0.0, "compare ms_b")
+    # ---- 0.2.0 stats ----
+    var st = bn_stats(noop, 100, 3)
+    expect(st["min"] >= 0.0, "stats min")
+    expect(st["max"] >= st["min"], "stats max >= min")
+    expect(st["avg"] >= 0.0, "stats avg")
+    # ---- 0.2.0 format ----
+    expect(contains(bn_format(0.5), "μs") == true, "format μs")
+    expect(contains(bn_format(500.0), "ms") == true, "format ms")
+    expect(contains(bn_format(5000.0), "s") == true, "format s")
+    print("PASS: bench 0.2.0")

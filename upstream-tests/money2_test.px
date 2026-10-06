@@ -1,0 +1,62 @@
+# money 0.2.0 测试
+import "../registry/money/0.2.0/money.px"
+def approx(a, b, eps = 0.01):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < eps
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(mn_format(1234.56, "CNY").unwrap() == "¥1,234.56", "format CNY: " + mn_format(1234.56, "CNY").unwrap())
+    expect(mn_format(99.99, "USD").unwrap() == "$99.99", "format USD: " + mn_format(99.99, "USD").unwrap())
+    expect(mn_format(1000, "JPY").unwrap() == "¥1,000", "format JPY: " + mn_format(1000, "JPY").unwrap())
+    expect(mn_parse("¥1,234.56").unwrap() == 1234.56, "parse: " + str(mn_parse("¥1,234.56").unwrap()))
+    # ---- 0.2.0 add ----
+    expect(approx(mn_add(1.99, 2.99), 4.98), "add: " + str(mn_add(1.99, 2.99)))
+    expect(approx(mn_add(0.1, 0.2), 0.3), "add float: " + str(mn_add(0.1, 0.2)))
+    # ---- 0.2.0 sub ----
+    expect(approx(mn_sub(10.00, 3.50), 6.50), "sub: " + str(mn_sub(10.00, 3.50)))
+    expect(approx(mn_sub(1.00, 0.99), 0.01), "sub small: " + str(mn_sub(1.00, 0.99)))
+    # ---- 0.2.0 mul ----
+    expect(approx(mn_mul(9.99, 3), 29.97), "mul: " + str(mn_mul(9.99, 3)))
+    expect(approx(mn_mul(100.00, 0.5), 50.00), "mul half: " + str(mn_mul(100.00, 0.5)))
+    # ---- 0.2.0 div ----
+    expect(approx(mn_div(100.00, 4), 25.00), "div: " + str(mn_div(100.00, 4)))
+    expect(approx(mn_div(10.00, 3), 3.33), "div 3: " + str(mn_div(10.00, 3)))
+    # ---- 0.2.0 compare ----
+    expect(mn_compare(1.00, 0.99) == 1, "compare >: " + str(mn_compare(1.00, 0.99)))
+    expect(mn_compare(0.99, 1.00) == 0 - 1, "compare <: " + str(mn_compare(0.99, 1.00)))
+    expect(mn_compare(1.00, 1.00) == 0, "compare ==")
+    expect(mn_eq(1.00, 1.00) == true, "eq true")
+    expect(mn_eq(1.00, 1.01) == false, "eq false")
+    expect(mn_gt(1.01, 1.00) == true, "gt true")
+    expect(mn_lt(0.99, 1.00) == true, "lt true")
+    # ---- 0.2.0 split ----
+    var parts = mn_split(100.00, 3)
+    expect(len(parts) == 3, "split 3 parts")
+    expect(approx(parts[0] + parts[1] + parts[2], 100.00), "split sum: " + str(parts[0] + parts[1] + parts[2]))
+    # 100/3 = 33.33, 33.33, 33.34
+    expect(approx(parts[0], 33.34), "split first: " + str(parts[0]))
+    expect(approx(parts[2], 33.33), "split last: " + str(parts[2]))
+    var parts2 = mn_split(10.00, 4)
+    expect(approx(parts2[0], 2.50), "split even: " + str(parts2[0]))
+    expect(approx(parts2[3], 2.50), "split even last: " + str(parts2[3]))
+    # ---- 0.2.0 percent ----
+    expect(approx(mn_percent(200.00, 15), 30.00), "percent: " + str(mn_percent(200.00, 15)))
+    # ---- 0.2.0 discount ----
+    expect(approx(mn_discount(100.00, 20), 80.00), "discount: " + str(mn_discount(100.00, 20)))
+    # ---- 0.2.0 with_tax ----
+    expect(approx(mn_with_tax(100.00, 8), 108.00), "with_tax: " + str(mn_with_tax(100.00, 8)))
+    # ---- 0.2.0 convert ----
+    expect(approx(mn_convert(100.00, 6.5), 650.00), "convert: " + str(mn_convert(100.00, 6.5)))
+    # ---- 0.2.0 ext symbols ----
+    expect(mn_symbol_ext("KRW") == "₩", "KRW symbol")
+    expect(mn_symbol_ext("INR") == "₹", "INR symbol")
+    expect(mn_symbol_ext("CHF") == "Fr", "CHF symbol")
+    expect(mn_decimals_ext("KRW") == 0, "KRW 0 decimals")
+    expect(mn_decimals_ext("USD") == 2, "USD 2 decimals")
+    print("money 0.2.0: PASS")

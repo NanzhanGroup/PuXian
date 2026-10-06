@@ -1,0 +1,75 @@
+# itertools 0.2.0 测试
+import "../registry/itertools/0.2.0/itertools.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(it_chain([[1, 2], [3, 4]]) == [1, 2, 3, 4], "chain")
+    expect(it_unique([1, 1, 2, 3, 3]) == [1, 2, 3], "unique")
+    var perms = it_permutations([1, 2, 3], 2)
+    expect(len(perms) == 6, "perms 6: " + str(len(perms)))
+    var combos = it_combinations([1, 2, 3, 4], 2)
+    expect(len(combos) == 6, "combos 6: " + str(len(combos)))
+    var t = it_take([1, 2, 3, 4, 5], 3)
+    expect(t.unwrap() == [1, 2, 3], "take 3")
+    var ch = it_chunk([1, 2, 3, 4, 5], 2)
+    expect(ch.unwrap() == [[1, 2], [3, 4], [5]], "chunk: " + str(ch.unwrap()))
+    var w = it_window([1, 2, 3, 4], 2)
+    expect(w.unwrap() == [[1, 2], [2, 3], [3, 4]], "window")
+    # ---- 0.2.0 zip ----
+    expect(it_zip([1, 2, 3], ["a", "b", "c"]) == [[1, "a"], [2, "b"], [3, "c"]], "zip")
+    expect(it_zip([1, 2, 3], ["a", "b"]) == [[1, "a"], [2, "b"]], "zip short")
+    # ---- 0.2.0 zip3 ----
+    var z3 = it_zip3([1, 2], ["a", "b"], [true, false])
+    expect(z3 == [[1, "a", true], [2, "b", false]], "zip3: " + str(z3))
+    # ---- 0.2.0 filter ----
+    var evens = it_filter([1, 2, 3, 4, 5, 6], fn(x): x % 2 == 0)
+    expect(evens == [2, 4, 6], "filter even: " + str(evens))
+    # ---- 0.2.0 map ----
+    var doubled = it_map([1, 2, 3], fn(x): x * 2)
+    expect(doubled == [2, 4, 6], "map: " + str(doubled))
+    # ---- 0.2.0 reduce ----
+    var sum = it_reduce([1, 2, 3, 4], fn(a, b): a + b, 0)
+    expect(sum == 10, "reduce sum: " + str(sum))
+    var product = it_reduce([1, 2, 3, 4], fn(a, b): a * b, 1)
+    expect(product == 24, "reduce product: " + str(product))
+    # ---- 0.2.0 flat_map ----
+    var fm = it_flat_map([1, 2, 3], fn(x): [x, x * 10])
+    expect(fm == [1, 10, 2, 20, 3, 30], "flat_map: " + str(fm))
+    # ---- 0.2.0 group_by ----
+    var grouped = it_group_by([1, 2, 3, 4, 5, 6], fn(x): x % 2)
+    expect(len(grouped["0"]) == 3, "group even: " + str(grouped["0"]))
+    expect(len(grouped["1"]) == 3, "group odd: " + str(grouped["1"]))
+    # ---- 0.2.0 partition ----
+    var parts = it_partition([1, 2, 3, 4, 5], fn(x): x > 3)
+    expect(parts[0] == [4, 5], "partition yes: " + str(parts[0]))
+    expect(parts[1] == [1, 2, 3], "partition no: " + str(parts[1]))
+    # ---- 0.2.0 interleave ----
+    var il = it_interleave([1, 3, 5], [2, 4, 6])
+    expect(il == [1, 2, 3, 4, 5, 6], "interleave: " + str(il))
+    var il2 = it_interleave([1, 3], [2, 4, 6, 8])
+    expect(il2 == [1, 2, 3, 4, 6, 8], "interleave uneven: " + str(il2))
+    # ---- 0.2.0 pairwise ----
+    var pw = it_pairwise([1, 2, 3, 4])
+    expect(pw == [[1, 2], [2, 3], [3, 4]], "pairwise: " + str(pw))
+    # ---- 0.2.0 accumulate ----
+    var acc = it_accumulate([1, 2, 3, 4], fn(a, b): a + b, 0)
+    expect(acc == [1, 3, 6, 10], "accumulate: " + str(acc))
+    # ---- 0.2.0 range ----
+    expect(it_range(0, 5, 1) == [0, 1, 2, 3, 4], "range 0-5: " + str(it_range(0, 5, 1)))
+    expect(it_range(0, 10, 2) == [0, 2, 4, 6, 8], "range step 2: " + str(it_range(0, 10, 2)))
+    expect(it_range(5, 0, 0 - 1) == [5, 4, 3, 2, 1], "range desc: " + str(it_range(5, 0, 0 - 1)))
+    # ---- 0.2.0 reverse ----
+    expect(it_reverse([1, 2, 3]) == [3, 2, 1], "reverse")
+    # ---- 0.2.0 slice ----
+    expect(it_slice([1, 2, 3, 4, 5], 1, 4) == [2, 3, 4], "slice 1-4: " + str(it_slice([1, 2, 3, 4, 5], 1, 4)))
+    # ---- 0.2.0 max_by / min_by ----
+    var mx = it_max_by([{"v": 3}, {"v": 7}, {"v": 1}], fn(x): x["v"])
+    expect(mx["v"] == 7, "max_by: " + str(mx))
+    var mn = it_min_by([{"v": 3}, {"v": 7}, {"v": 1}], fn(x): x["v"])
+    expect(mn["v"] == 1, "min_by: " + str(mn))
+    # ---- 0.2.0 sum ----
+    expect(it_sum([1, 2, 3, 4, 5]) == 15, "sum: " + str(it_sum([1, 2, 3, 4, 5])))
+    print("itertools 0.2.0: PASS")

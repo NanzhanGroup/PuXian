@@ -1,0 +1,38 @@
+# nanoid 0.2.0 测试：custom/nonsecure/valid_custom/prefix + 0.1.0 回归
+import "../registry/nanoid/0.2.0/nanoid.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var id1 = nd_generate().unwrap()
+    expect(len(id1) == 21, "default len 21")
+    expect(nd_valid(id1) == true, "default valid")
+    expect(len(nd_alphabet()) == 64, "alphabet 64")
+    # ---- 0.2.0 custom alphabet ----
+    var custom = nd_generate_custom("abcdef", 10).unwrap()
+    expect(len(custom) == 10, "custom len 10")
+    expect(nd_valid_custom(custom, "abcdef") == true, "custom valid")
+    var custom2 = nd_generate_custom("0123456789", 16).unwrap()
+    expect(len(custom2) == 16, "custom numeric len 16")
+    expect(nd_valid_custom(custom2, "0123456789") == true, "custom numeric valid")
+    # hex alphabet (16 chars, 256%16==0, no rejection)
+    var hex_id = nd_generate_custom("0123456789abcdef", 32).unwrap()
+    expect(len(hex_id) == 32, "hex custom len 32")
+    # ---- 0.2.0 nonsecure ----
+    var ns = nd_generate_nonsecure(15).unwrap()
+    expect(len(ns) == 15, "nonsecure len 15")
+    expect(nd_valid(ns) == true, "nonsecure valid")
+    # ---- 0.2.0 default size ----
+    expect(nd_default_size() == 21, "default size 21")
+    # ---- 0.2.0 prefix ----
+    var pref = nd_generate_prefix("user_", 10).unwrap()
+    expect(starts_with(pref, "user_"), "prefix starts_with")
+    expect(len(pref) == 15, "prefix len 15")
+    expect(nd_valid(pref[5:15]) == true, "prefix tail valid")
+    # ---- 0.2.0 error cases ----
+    expect(nd_generate(0).is_err() == true, "zero len err")
+    expect(nd_generate_custom("a", 10).is_err() == true, "single char alphabet err")
+    expect(nd_generate_custom("aabb", 10).is_err() == true, "duplicate alphabet err")
+    print("PASS: nanoid 0.2.0")

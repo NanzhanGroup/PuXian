@@ -1,0 +1,190 @@
+# ============================================================
+# 普贤生态库：registry/strength —— 密码强度（zxcvbn-lite）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Dropbox zxcvbn 心智（0.1.0 启发式子集，非真实熵模型）：
+#   st_score(pw)   → Ok(int 0..4)    评分
+#   st_entropy(pw) → Ok(float)       近似熵 = 长度 × log2(字符集大小)
+#   st_strength(pw) → Ok(str)        弱 / 中 / 强
+# 规则：长度(≥8/≥12)、字符类(小写/大写/数字/符号 ≥3/4 类)、
+#   弱口令词表命中 → 0、全同字符 → 0。
+# ============================================================
+
+const ST_WEAK = ["123456", "password", "12345678", "qwerty", "abc123",
+                 "111111", "password1", "admin", "letmein", "1234567890",
+                 "1234567", "123456789", "iloveyou", "sunshine", "monkey"]
+
+def st_classes(pw):
+    var has_lower = false
+    var has_upper = false
+    var has_digit = false
+    var has_sym = false
+    var i = 0
+    while i < len(pw):
+        var c = pw[i]
+        if c >= "a" and c <= "z":
+            has_lower = true
+        elif c >= "A" and c <= "Z":
+            has_upper = true
+        elif c >= "0" and c <= "9":
+            has_digit = true
+        else:
+            has_sym = true
+        i += 1
+    var n = 0
+    if has_lower:
+        n += 1
+    if has_upper:
+        n += 1
+    if has_digit:
+        n += 1
+    if has_sym:
+        n += 1
+    return n
+
+def st_all_same(pw):
+    if len(pw) <= 1:
+        return true
+    var c0 = pw[0]
+    var i = 1
+    while i < len(pw):
+        if pw[i] != c0:
+            return false
+        i += 1
+    return true
+
+def st_in_weak(pw):
+    var i = 0
+    while i < len(ST_WEAK):
+        if pw == ST_WEAK[i]:
+            return true
+        i += 1
+    return false
+
+def st_score(pw):
+    if len(pw) == 0:
+        return Err("strength: 空密码")
+    if st_in_weak(pw) or st_all_same(pw):
+        return Ok(0)
+    var s = 0
+    if len(pw) >= 8:
+        s += 1
+    if len(pw) >= 12:
+        s += 1
+    var cls = st_classes(pw)
+    if cls >= 3:
+        s += 1
+    if cls >= 4:
+        s += 1
+    if s > 4:
+        s = 4
+    if s < 0:
+        s = 0
+    return Ok(s)
+
+def st_entropy(pw):
+    if len(pw) == 0:
+        return Err("strength: 空密码")
+    var cls = st_classes(pw)
+    var pool = 0.0
+    if cls >= 1:
+        pool = pool + 26.0
+    if cls >= 2:
+        pool = pool + 26.0
+    if cls >= 3:
+        pool = pool + 10.0
+    if cls >= 4:
+        pool = pool + 16.0
+    if pool <= 0.0:
+        pool = 26.0
+    return Ok(float(len(pw)) * log(pool) / log(2.0))
+
+def st_strength(pw):
+    var r = st_score(pw)
+    if r.is_err():
+        return r
+    var s = r.unwrap()
+    if s <= 1:
+        return Ok("弱")
+    if s <= 3:
+        return Ok("中")
+    return Ok("强")
+# ============================================================
+# 0.2.0 新增：issues / time_to_crack / recommend / check_common
+# ============================================================
+
+# 返回密码问题列表 → [str]
+def st_issues(pw):
+    var issues = []
+    if len(pw) < 8:
+        issues.append("太短（建议至少 8 位）")
+    if st_all_same(pw):
+        issues.append("所有字符相同")
+    if st_in_weak(pw):
+        issues.append("在常见弱密码列表中")
+    var classes = st_classes(pw)
+    if classes < 3:
+        issues.append("字符种类不足（建议 3 种以上）")
+    # 检查连续字符
+    var i = 1
+    var consecutive = 1
+    while i < len(pw):
+        if ord(pw[i]) - ord(pw[i - 1]) == 1:
+            consecutive += 1
+            if consecutive >= 3:
+                issues.append("含连续递增字符")
+                break
+        else:
+            consecutive = 1
+        i += 1
+    return issues
+
+# 估算破解时间（秒）→ str（人类可读）
+def st_time_to_crack(pw):
+    var e = st_entropy(pw).unwrap()
+    # 假设 10^10 次猜测/秒
+    var seconds = 1.0
+    var i = 0
+    while i < int(e):
+        seconds = seconds * 2.0
+        i += 1
+    seconds = seconds / 10000000000.0
+    if seconds < 1.0:
+        return "不足 1 秒"
+    if seconds < 60.0:
+        return str(int(seconds)) + " 秒"
+    if seconds < 3600.0:
+        return str(int(seconds / 60.0)) + " 分钟"
+    if seconds < 86400.0:
+        return str(int(seconds / 3600.0)) + " 小时"
+    if seconds < 31536000.0:
+        return str(int(seconds / 86400.0)) + " 天"
+    var years = int(seconds / 31536000.0)
+    if years < 1000:
+        return str(years) + " 年"
+    return "超过千年"
+
+# 密码改进建议 → [str]
+def st_recommend(pw):
+    var recs = []
+    var issues = st_issues(pw)
+    var i = 0
+    while i < len(issues):
+        recs.append(issues[i])
+        i += 1
+    if len(recs) == 0:
+        recs.append("密码强度良好")
+    return recs
+
+# 检查是否为常见密码 → bool
+def st_check_common(pw):
+    var common = ["123456", "password", "123456789", "12345678", "12345", "1234567",
+        "admin", "qwerty", "abc123", "111111", "123123", "000000", "password1",
+        "iloveyou", "1234", "1q2w3e4r", "qwerty123", "1q2w3e"]
+    var lower = to_lower(pw)
+    var i = 0
+    while i < len(common):
+        if lower == common[i]:
+            return true
+        i += 1
+    return false

@@ -1,0 +1,130 @@
+# ============================================================
+# 普贤生态库：registry/bloom —— 布隆过滤器
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，过滤器状态以 {"n","k","d"} 显式传递），
+# 编译（px build）与解释（px run）双模式一致。
+# 对齐 Go willf/bloom / Python pybloom_live 心智（0.1.0）：
+#   bloom_new(nbits, k)      → Ok(bf) | Err    k 个哈希位（1..8）
+#   bloom_add(bf, item)      → Ok(bf) | Err    插入（幂等）
+#   bloom_may_contain(bf, item) → Ok(bool) | Err  可能包含（有假阳性，无假阴性）
+# 哈希：item → sha256_bytes（32 字节）→ 每 4 字节一个 u32 位位置（k<=8 个）。
+# 0.1.0 无删除（标准布隆不支持）、无缩放。
+# ============================================================
+
+def bl_positions(bf, item):
+    var h = sha256_bytes(bytes(item))
+    var pos = []
+    var j = 0
+    while j < bf["k"]:
+        var idx = bytes_to_int(bytes_slice(h, j * 4, j * 4 + 4), "big", false)
+        pos.append(idx % bf["n"])
+        j += 1
+    return pos
+
+def bloom_new(nbits, k):
+    if nbits <= 0:
+        return Err("bloom: nbits 须 > 0")
+    if k <= 0 or k > 8:
+        return Err("bloom: k 须在 1..8")
+    var size = (nbits + 7) // 8
+    var d = bytes("")
+    var i = 0
+    while i < size:
+        d = bytes_concat(d, byte(0))
+        i += 1
+    return Ok({"n": nbits, "k": k, "d": d})
+
+def bloom_add(bf, item):
+    var pos = bl_positions(bf, item)
+    var i = 0
+    while i < len(pos):
+        var p = pos[i]
+        var v = bytes_get(bf["d"], p // 8) | (1 << (p % 8))
+        bf.set("d", bytes_set(bf["d"], p // 8, v))
+        i += 1
+    return Ok(bf)
+
+def bloom_may_contain(bf, item):
+    var pos = bl_positions(bf, item)
+    var i = 0
+    while i < len(pos):
+        var p = pos[i]
+        if (bytes_get(bf["d"], p // 8) & (1 << (p % 8))) == 0:
+            return Ok(false)
+        i += 1
+    return Ok(true)
+# ============================================================
+# 0.2.0 新增：count / false_positive_rate / capacity / clear / to_list
+# ============================================================
+
+# 估算已设置位数 → int
+def bloom_count(bf):
+    var total = 0
+    var size = bytes_len(bf["d"])
+    var i = 0
+    while i < size:
+        total = total + bit_count(bytes_get(bf["d"], i))
+        i += 1
+    return total
+
+# 估算假阳性率 → float
+def bloom_false_positive_rate(bf, num_items):
+    var m = float(bf["n"])
+    var k = float(bf["k"])
+    var n = float(num_items)
+    # p = (1 - e^(-k*n/m))^k
+    var exp_val = -k * n / m
+    # 用泰勒展开近似 e^x for x < 0
+    var e_val = 1.0 + exp_val + (exp_val * exp_val) / 2.0 + (exp_val * exp_val * exp_val) / 6.0
+    if e_val < 0.0:
+        e_val = 0.0
+    var p = 1.0 - e_val
+    var result = 1.0
+    var j = 0
+    while j < bf["k"]:
+        result = result * p
+        j += 1
+    return result
+
+# 推荐位数（给定预期元素数和假阳性率）→ int
+def bloom_capacity(num_items, fpr):
+    # m = -n * ln(p) / (ln(2)^2)
+    var n = float(num_items)
+    var ln2 = 0.6931471805599453
+    # 简单 ln 近似
+    var p = fpr
+    if p <= 0.0 or p >= 1.0:
+        return 0
+    # ln(p) for small p: use -ln(1/p)
+    var inv_p = 1.0 / p
+    var ln_p = 0.0
+    var x = inv_p - 1.0
+    var term = x
+    var i = 1
+    while i < 20:
+        ln_p = ln_p + term / float(i)
+        term = term * x * -1.0
+        i += 1
+    ln_p = -ln_p
+    return int(n * ln_p / (ln2 * ln2)) + 1
+
+# 清空过滤器 → bf
+def bloom_clear(bf):
+    var size = (bf["n"] + 7) // 8
+    var d = bytes("")
+    var i = 0
+    while i < size:
+        d = bytes_concat(d, byte(0))
+        i += 1
+    bf.set("d", d)
+    return bf
+
+# 返回所有可能包含的项（需外部跟踪，此函数返回已设置位列表）→ [int]
+def bloom_bit_list(bf):
+    var out = []
+    var i = 0
+    while i < bf["n"]:
+        if (bytes_get(bf["d"], i // 8) & (1 << (i % 8))) != 0:
+            out.append(i)
+        i += 1
+    return out

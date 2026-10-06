@@ -1,0 +1,28 @@
+# metrics 0.2.0 测试
+import "../registry/metrics/0.2.0/metrics.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var reg = m_registry()
+    m_counter(reg, "requests", "Total requests")
+    m_inc(reg, "requests")
+    m_inc(reg, "requests")
+    # ---- 0.2.0 histogram ----
+    m_histogram(reg, "latency", "Request latency")
+    m_observe(reg, "latency", 0.05)
+    m_observe(reg, "latency", 0.2)
+    expect(reg["latency"]["total"] == 2, "histogram total 2")
+    # ---- 0.2.0 summary ----
+    m_summary(reg, "size", "Response size")
+    m_observe_summary(reg, "size", 100.0)
+    m_observe_summary(reg, "size", 200.0)
+    expect(reg["size"]["count"] == 2, "summary count 2")
+    expect(reg["size"]["sum"] == 300.0, "summary sum 300: " + str(reg["size"]["sum"]))
+    # ---- 0.2.0 timer ----
+    var timer = m_timer_start()
+    var elapsed = m_timer_stop(timer)
+    expect(elapsed >= 0.0, "timer elapsed >= 0")
+    print("PASS: metrics 0.2.0")

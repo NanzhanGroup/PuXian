@@ -1,0 +1,217 @@
+# ============================================================
+# 普贤生态库：registry/csv 0.2.0 —— RFC 4180 CSV 解析与序列化（增强版）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go encoding/csv 心智：
+#
+# 0.1.0 API（全部保留，向后兼容）：
+#   csv_parse(s) → Ok(rows) | Err(msg)    rows = [[str,...],...]
+#   csv_serialize(rows) → Ok(str) | Err
+#
+# 0.2.0 新增：
+#   csv_parse_opts(s, opts)     → 自定义分隔符/引号/注释符/跳空行
+#   csv_parse_header(s)         → Ok(list[dict]) 首行作 header
+#   csv_serialize_header(rows, headers) → Ok(str) 带 header 行
+#   csv_serialize_row(row)      → Ok(str) 单行序列化
+#   csv_parse_tsv(s)            → Tab 分隔快捷
+#   csv_parse_delim(s, delim)   → 自定义分隔符快捷
+#   csv_get_col(rows, idx)      → 提取某列为 list
+#   csv_filter_rows(rows, idx, val) → 筛选某列等于 val 的行
+# ============================================================
+# ---- 0.1.0 核心解析（保留）----
+def csv_parse(s):
+    return csv_parse_opts(s, {})
+# 0.2.0 增强解析（支持自定义分隔符/引号/注释/跳空行）
+def csv_parse_opts(s, opts):
+    var delim = ","
+    var quote = "\""
+    var comment = ""
+    var skip_empty = false
+    if opts != null and type(opts) == "dict":
+        if opts.has("delim"):
+            delim = opts["delim"]
+        if opts.has("quote"):
+            quote = opts["quote"]
+        if opts.has("comment"):
+            comment = opts["comment"]
+        if opts.has("skip_empty"):
+            skip_empty = opts["skip_empty"]
+    var rows = []
+    var row = []
+    var field = ""
+    var i = 0
+    var n = len(s)
+    var in_quotes = false
+    var field_started = false
+    var line_start = true
+    while i < n:
+        var c = s[i]
+        # 注释行：行首匹配 comment 前缀 → 跳到行尾
+        if line_start and len(comment) > 0 and i + len(comment) <= n and s[i:i + len(comment)] == comment:
+            while i < n and s[i] != "\n":
+                i += 1
+            if i < n:
+                i += 1
+            row = []
+            field = ""
+            field_started = false
+            line_start = true
+            continue
+        line_start = false
+        if in_quotes:
+            if c == quote:
+                if i + 1 < n and s[i + 1] == quote:
+                    field = field + quote
+                    i += 2
+                    continue
+                in_quotes = false
+                i += 1
+                continue
+            field = field + c
+            i += 1
+            continue
+        if c == quote:
+            if len(field) == 0:
+                in_quotes = true
+                field_started = true
+            else:
+                field = field + c
+            i += 1
+            continue
+        if c == delim:
+            row.append(field)
+            field = ""
+            field_started = false
+            i += 1
+            continue
+        if c == "\n":
+            if field_started or len(field) > 0 or len(row) > 0:
+                row.append(field)
+                rows.append(row)
+            elif not skip_empty and len(row) > 0:
+                row.append(field)
+                rows.append(row)
+            row = []
+            field = ""
+            field_started = false
+            line_start = true
+            i += 1
+            continue
+        if c == "\r":
+            i += 1
+            continue
+        field = field + c
+        field_started = true
+        i += 1
+    if in_quotes:
+        return Err("csv: 未闭合的引号")
+    if len(field) > 0 or field_started or len(row) > 0:
+        row.append(field)
+        rows.append(row)
+    return Ok(rows)
+# ---- 序列化 ----
+def csv_needs_quote(f, delim):
+    if contains(f, delim):
+        return true
+    if contains(f, "\""):
+        return true
+    if contains(f, "\n"):
+        return true
+    if contains(f, "\r"):
+        return true
+    return false
+def csv_escape_quotes(f):
+    var out = ""
+    var i = 0
+    while i < len(f):
+        if f[i] == "\"":
+            out = out + "\"\""
+        else:
+            out = out + f[i]
+        i += 1
+    return out
+def csv_serialize(rows):
+    return csv_serialize_opts(rows, {})
+# 0.2.0 带选项序列化
+def csv_serialize_opts(rows, opts):
+    var delim = ","
+    if opts != null and type(opts) == "dict" and opts.has("delim"):
+        delim = opts["delim"]
+    var out = ""
+    var r = 0
+    while r < len(rows):
+        var line = ""
+        var c = 0
+        while c < len(rows[r]):
+            if c > 0:
+                line = line + delim
+            var f = str(rows[r][c])
+            if csv_needs_quote(f, delim):
+                line = line + "\"" + csv_escape_quotes(f) + "\""
+            else:
+                line = line + f
+            c += 1
+        out = out + line + "\n"
+        r += 1
+    return Ok(out)
+# 单行序列化
+def csv_serialize_row(row):
+    var r = csv_serialize_opts([row], {})
+    if r.is_err():
+        return r
+    var s = r.unwrap()
+    return Ok(s[0:len(s) - 1])
+# ---- 0.2.0 header 处理 ----
+# 首行作 header → list[dict]
+def csv_parse_header(s):
+    var r = csv_parse(s)
+    if r.is_err():
+        return r
+    var rows = r.unwrap()
+    if len(rows) < 1:
+        return Ok([])
+    var headers = rows[0]
+    var result = []
+    var i = 1
+    while i < len(rows):
+        var obj = {}
+        var j = 0
+        while j < len(headers) and j < len(rows[i]):
+            obj.set(headers[j], rows[i][j])
+            j += 1
+        result.append(obj)
+        i += 1
+    return Ok(result)
+# 带 header 行序列化
+def csv_serialize_header(rows, headers):
+    var all_rows = [headers]
+    var i = 0
+    while i < len(rows):
+        all_rows.append(rows[i])
+        i += 1
+    return csv_serialize(all_rows)
+# ---- 0.2.0 快捷方法 ----
+def csv_parse_tsv(s):
+    return csv_parse_opts(s, {"delim": "\t"})
+def csv_parse_delim(s, delim):
+    return csv_parse_opts(s, {"delim": delim})
+# 提取某列
+def csv_get_col(rows, idx):
+    var col = []
+    var i = 0
+    while i < len(rows):
+        if idx < len(rows[i]):
+            col.append(rows[i][idx])
+        else:
+            col.append("")
+        i += 1
+    return col
+# 筛选某列等于 val 的行
+def csv_filter_rows(rows, idx, val):
+    var result = []
+    var i = 0
+    while i < len(rows):
+        if idx < len(rows[i]) and rows[i][idx] == val:
+            result.append(rows[i])
+        i += 1
+    return result

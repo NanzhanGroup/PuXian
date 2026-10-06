@@ -1,0 +1,22 @@
+# base58 0.2.0 测试
+import "../registry/base58/0.2.0/base58.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var enc = base58_encode("hello")
+    expect(base58_decode(enc).unwrap() == "hello", "roundtrip hello")
+    # ---- 0.2.0 encode_int/decode_int ----
+    expect(base58_encode_int(0) == "1", "encode_int 0")
+    expect(base58_encode_int(58) == "21", "encode_int 58: " + base58_encode_int(58))
+    expect(base58_decode_int("21") == 58, "decode_int 21")
+    expect(base58_decode_int(base58_encode_int(12345)) == 12345, "roundtrip int 12345")
+    # ---- 0.2.0 is_valid ----
+    expect(base58_is_valid("12345") == true, "valid 12345")
+    expect(base58_is_valid("0OIl") == false, "invalid 0OIl")
+    # ---- 0.2.0 encode_hex ----
+    var hexenc = base58_encode_hex("48656c6c6f")
+    expect(len(hexenc) > 0, "encode_hex non-empty: " + hexenc)
+    print("PASS: base58 0.2.0")

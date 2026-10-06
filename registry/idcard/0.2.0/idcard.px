@@ -1,0 +1,201 @@
+# ============================================================
+# 普贤生态库：registry/idcard —— 身份证校验（GB 11643-1999）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+#   idcard_validate(id) → Ok({province, province_name, city_name, birth, gender, type}) | Err(msg)
+#   idcard_upgrade15to18(id15) → Ok(id18) | Err(msg)
+#
+# 规则（18 位）：
+#   6 位地区码（首位非 0） + 8 位生日（YYYYMMDD，闰年校验）
+#   + 3 位顺序码（第 17 位奇男偶女） + 1 位校验码
+#   校验码加权因子 [7,9,10,5,8,4,2,1,6,3,7,9,10,5,8,4,2] 模 11 映射 10X98765432
+#
+# 规则（15 位旧号，1999-10-01 前签发）：
+#   6 位地区码 + 6 位生日（YYMMDD，两位年） + 3 位顺序码（末位奇男偶女）
+#   无校验位；两位年 00-29 → 2000-2029，30-99 → 1930-1999
+#
+# 0.2.0 新增：15 位旧号支持、地区码枚举表（34 省级 + 主要城市）、15→18 升级
+# ============================================================
+
+const IDC_W = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+const IDC_C = "10X98765432"
+
+# ---- 地区码表（GB/T 2260）----
+# 省级（2 位码 → 名称）
+const IDC_PROVINCES = {
+    "11": "北京", "12": "天津", "13": "河北", "14": "山西", "15": "内蒙古",
+    "21": "辽宁", "22": "吉林", "23": "黑龙江",
+    "31": "上海", "32": "江苏", "33": "浙江", "34": "安徽", "35": "福建",
+    "36": "江西", "37": "山东",
+    "41": "河南", "42": "湖北", "43": "湖南", "44": "广东", "45": "广西",
+    "46": "海南",
+    "50": "重庆", "51": "四川", "52": "贵州", "53": "云南", "54": "西藏",
+    "61": "陕西", "62": "甘肃", "63": "青海", "64": "宁夏", "65": "新疆",
+    "71": "台湾", "81": "香港", "82": "澳门",
+}
+
+# 主要城市（4 位码 → 名称，子集）
+const IDC_CITIES = {
+    "1101": "北京市", "1201": "天津市", "1301": "石家庄市", "1401": "太原市",
+    "1501": "呼和浩特市", "2101": "沈阳市", "2201": "长春市", "2301": "哈尔滨市",
+    "3101": "上海市", "3201": "南京市", "3205": "苏州市", "3301": "杭州市",
+    "3302": "宁波市", "3401": "合肥市", "3501": "福州市", "3502": "厦门市",
+    "3601": "南昌市", "3701": "济南市", "3702": "青岛市", "4101": "郑州市",
+    "4201": "武汉市", "4301": "长沙市", "4401": "广州市", "4403": "深圳市",
+    "4404": "珠海市", "4501": "南宁市", "4601": "海口市", "5001": "重庆市",
+    "5101": "成都市", "5201": "贵阳市", "5301": "昆明市", "5401": "拉萨市",
+    "6101": "西安市", "6201": "兰州市", "6301": "西宁市", "6401": "银川市",
+    "6501": "乌鲁木齐市",
+}
+
+# ---- 闰年 ----
+def idc_leap(y):
+    if y % 400 == 0:
+        return true
+    if y % 100 == 0:
+        return false
+    return y % 4 == 0
+
+# ---- 日期合法（YYYYMMDD）----
+def idc_valid_date(s):
+    if len(s) != 8:
+        return false
+    var i = 0
+    while i < 8:
+        if s[i] < "0" or s[i] > "9":
+            return false
+        i += 1
+    var y = int(s[0:4])
+    var m = int(s[4:6])
+    var d = int(s[6:8])
+    if m < 1 or m > 12:
+        return false
+    var dim = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if m == 2 and idc_leap(y):
+        dim[1] = 29
+    return d >= 1 and d <= dim[m - 1]
+
+# ---- 两位年展开（15 位旧号用）----
+# 15 位旧号均 1999 年前签发 → 两位年一律 19xx
+def idc_expand_year(yy):
+    # 15 位旧号均 1999 年前签发 → 两位年一律 19xx
+    return 1900 + int(yy)
+
+# ---- 18 位校验码 ----
+def idc_checksum(id17):
+    var sum = 0
+    var i = 0
+    while i < 17:
+        var digit = int(id17[i])
+        sum = sum + digit * IDC_W[i]
+        i += 1
+    return IDC_C[sum % 11]
+
+# ---- 查省名 ----
+def idc_province_name(code6):
+    var prov = code6[0:2]
+    if IDC_PROVINCES.has(prov):
+        return IDC_PROVINCES[prov]
+    return "未知"
+
+# ---- 查城市名 ----
+def idc_city_name(code6):
+    if IDC_CITIES.has(code6[0:4]):
+        return IDC_CITIES[code6[0:4]]
+    return ""
+
+# ---- 全数字校验 ----
+def idc_all_digits(s):
+    var i = 0
+    while i < len(s):
+        if s[i] < "0" or s[i] > "9":
+            return false
+        i += 1
+    return true
+
+# ---- 18 位校验 ----
+def idc_validate18(t):
+    if len(t) != 18:
+        return Err("idcard: 长度须 18 位")
+    if not idc_all_digits(t[0:17]):
+        return Err("idcard: 前 17 位须数字")
+    var last = t[17]
+    if not ((last >= "0" and last <= "9") or last == "X"):
+        return Err("idcard: 校验位须数字或 X")
+    if t[0] == "0":
+        return Err("idcard: 地区码首位非 0")
+    var birthday = t[6:14]
+    if not idc_valid_date(birthday):
+        return Err("idcard: 生日无效")
+    var expect = idc_checksum(t[0:17])
+    if t[17] != expect:
+        return Err("idcard: 校验码不符（期望 " + expect + "）")
+    var gender = "male"
+    if int(t[16]) % 2 == 0:
+        gender = "female"
+    return Ok({
+        "province": t[0:2],
+        "province_name": idc_province_name(t[0:6]),
+        "city_name": idc_city_name(t[0:6]),
+        "birth": birthday,
+        "gender": gender,
+        "type": "18",
+    })
+
+# ---- 15 位旧号校验 ----
+def idc_validate15(t):
+    if len(t) != 15:
+        return Err("idcard: 长度须 15 位")
+    if not idc_all_digits(t):
+        return Err("idcard: 15 位旧号须全数字")
+    if t[0] == "0":
+        return Err("idcard: 地区码首位非 0")
+    # 两位年展开
+    var yy = idc_expand_year(t[6:8])
+    var yyyy = ""
+    if yy < 10:
+        yyyy = "000" + str(yy)
+    elif yy < 100:
+        yyyy = "00" + str(yy)
+    elif yy < 1000:
+        yyyy = "0" + str(yy)
+    else:
+        yyyy = str(yy)
+    var full_date = yyyy + t[8:12]
+    if not idc_valid_date(full_date):
+        return Err("idcard: 生日无效")
+    var gender = "male"
+    if int(t[14]) % 2 == 0:
+        gender = "female"
+    return Ok({
+        "province": t[0:2],
+        "province_name": idc_province_name(t[0:6]),
+        "city_name": idc_city_name(t[0:6]),
+        "birth": full_date,
+        "gender": gender,
+        "type": "15",
+    })
+
+# ---- 统一入口 ----
+def idcard_validate(id):
+    var t = to_upper(id)
+    if len(t) == 18:
+        return idc_validate18(t)
+    if len(t) == 15:
+        return idc_validate15(t)
+    return Err("idcard: 长度须 15 或 18 位")
+
+# ---- 15 位 → 18 位升级 ----
+def idcard_upgrade15to18(id15):
+    if len(id15) != 15:
+        return Err("idcard: 输入须 15 位")
+    if not idc_all_digits(id15):
+        return Err("idcard: 15 位旧号须全数字")
+    # 先校验旧号合法性
+    var chk = idc_validate15(id15)
+    if chk.is_err():
+        return chk
+    # 地区码(6) + "19" + 生日后6位(6) + 顺序码(3) → 17 位 → 算校验码
+    var id17 = id15[0:6] + "19" + id15[6:12] + id15[12:15]
+    var checksum = idc_checksum(id17)
+    return Ok(id17 + checksum)

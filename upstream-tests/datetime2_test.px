@@ -1,0 +1,96 @@
+# datetime 0.2.0 测试：季度/周数/闰年/比较/duration/时区 + 0.1.0 回归
+import "../registry/datetime/0.2.0/datetime.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var sec = dt_parse("2024-01-15 10:30:00")
+    expect(sec != null, "0.1.0 parse")
+    expect(dt_format(sec) == "2024-01-15 10:30:00", "0.1.0 format")
+    var sec2 = dt_add_days(sec, 10)
+    expect(dt_format(sec2) == "2024-01-25 10:30:00", "add_days")
+    var diff = dt_days_between(sec, sec2)
+    expect(diff == 10, "days_between")
+    # ISO
+    var iso = dt_iso_format(sec)
+    expect(iso == "2024-01-15T10:30:00Z", "iso format: " + iso)
+    var iso_sec = dt_iso_parse("2024-01-15T10:30:00Z")
+    expect(iso_sec.is_ok(), "iso parse")
+    expect(iso_sec.unwrap() == sec, "iso roundtrip")
+    # weekday（2024-01-15 是周一=0）
+    expect(dt_weekday(2024, 1, 15) == 0, "weekday Mon=0")
+    expect(dt_weekday(2024, 1, 16) == 1, "weekday Tue=1")
+    expect(dt_weekday(2024, 1, 21) == 6, "weekday Sun=6")
+    # humane
+    var h = dt_humane(sec + 65, sec)
+    expect(h == "1分钟前", "humane 1min: " + h)
+    var h2 = dt_humane(sec + 3700, sec)
+    expect(h2 == "1小时前", "humane 1hr: " + h2)
+    # ---- 0.2.0 闰年 ----
+    expect(dt_is_leap_year(2024) == true, "2024 leap")
+    expect(dt_is_leap_year(2023) == false, "2023 not leap")
+    expect(dt_is_leap_year(2000) == true, "2000 leap")
+    expect(dt_is_leap_year(1900) == false, "1900 not leap")
+    # ---- 0.2.0 月内天数 ----
+    expect(dt_days_in_month(2024, 2) == 29, "Feb 2024 = 29")
+    expect(dt_days_in_month(2023, 2) == 28, "Feb 2023 = 28")
+    expect(dt_days_in_month(2024, 1) == 31, "Jan = 31")
+    expect(dt_days_in_month(2024, 4) == 30, "Apr = 30")
+    # ---- 0.2.0 季度 ----
+    expect(dt_quarter(2024, 1) == 1, "Q1")
+    expect(dt_quarter(2024, 3) == 1, "Q1 Mar")
+    expect(dt_quarter(2024, 4) == 2, "Q2")
+    expect(dt_quarter(2024, 7) == 3, "Q3")
+    expect(dt_quarter(2024, 10) == 4, "Q4")
+    expect(dt_quarter(2024, 12) == 4, "Q4 Dec")
+    # ---- 0.2.0 年中周数 ----
+    # 2024-01-01 是周一，ISO 第 1 周
+    expect(dt_week_of_year(2024, 1, 1) == 1, "week 1: " + str(dt_week_of_year(2024, 1, 1)))
+    # 2024-01-08 第 2 周
+    expect(dt_week_of_year(2024, 1, 8) == 2, "week 2")
+    # 2024-12-31 应该是第 1 周（属于 2025）
+    var w52 = dt_week_of_year(2024, 12, 30)
+    expect(w52 == 1 or w52 == 52 or w52 == 53, "Dec 30 week: " + str(w52))
+    # ---- 0.2.0 日期比较 ----
+    expect(dt_compare(sec, sec) == 0, "compare eq")
+    expect(dt_compare(sec, sec2) == -1, "compare lt")
+    expect(dt_compare(sec2, sec) == 1, "compare gt")
+    # ---- 0.2.0 duration 解析 ----
+    expect(dt_duration_parse("90s").unwrap() == 90, "dur 90s")
+    expect(dt_duration_parse("1h").unwrap() == 3600, "dur 1h")
+    expect(dt_duration_parse("1h30m").unwrap() == 5400, "dur 1h30m")
+    expect(dt_duration_parse("2d").unwrap() == 172800, "dur 2d")
+    expect(dt_duration_parse("45m30s").unwrap() == 2730, "dur 45m30s")
+    expect(dt_duration_parse("1:30").unwrap() == 90, "dur 1:30")
+    expect(dt_duration_parse("1:30:00").unwrap() == 5400, "dur 1:30:00")
+    expect(dt_duration_parse("2d12h").unwrap() == 216000, "dur 2d12h")
+    # ---- 0.2.0 duration 格式化 ----
+    expect(dt_duration_format(90) == "1m30s", "fmt 90s: " + dt_duration_format(90))
+    expect(dt_duration_format(3600) == "1h", "fmt 1h")
+    expect(dt_duration_format(5400) == "1h30m", "fmt 1h30m")
+    expect(dt_duration_format(0) == "0s", "fmt 0")
+    expect(dt_duration_format(86400) == "1d", "fmt 1d")
+    expect(dt_duration_format(90061) == "1d1h1m1s", "fmt 1d1h1m1s: " + dt_duration_format(90061))
+    # duration 往返
+    var dur = dt_duration_parse("2d4h30m15s").unwrap()
+    expect(dt_duration_format(dur) == "2d4h30m15s", "dur roundtrip: " + dt_duration_format(dur))
+    # ---- 0.2.0 时区偏移 ----
+    # sec 是 UTC 2024-01-15 10:30:00
+    # +8 小时 → 2024-01-15 18:30:00
+    var tz = dt_to_timezone(sec, 8 * 3600)
+    expect(tz == "2024-01-15 18:30:00", "tz +8: " + tz)
+    var tz2 = dt_to_timezone(sec, -5 * 3600)
+    expect(tz2 == "2024-01-15 05:30:00", "tz -5: " + tz2)
+    # ---- 0.2.0 提取字段 ----
+    expect(dt_year(sec) == 2024, "year")
+    expect(dt_month(sec) == 1, "month")
+    expect(dt_day(sec) == 15, "day")
+    expect(dt_hour(sec) == 10, "hour")
+    expect(dt_minute(sec) == 30, "minute")
+    expect(dt_second(sec) == 0, "second")
+    # date_only / time_only
+    expect(dt_date_only(sec) == "2024-01-15", "date_only")
+    expect(dt_time_only(sec) == "10:30:00", "time_only")
+    print("datetime 0.2.0: PASS")

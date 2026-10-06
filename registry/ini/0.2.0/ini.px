@@ -1,0 +1,234 @@
+# ============================================================
+# 普贤生态库：registry/ini —— INI 配置解析
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python configparser 心智（0.1.0 子集）：
+#   ini_parse(s)           → Ok(dict) | Err   解析文本 → {节: {key: value}}
+#   ini_get(cfg, sec, key) → Ok(str) | Err    取值
+#   ini_has(cfg, sec, key) → bool             是否存在键
+#   ini_sections(cfg)      → [str]            节名列表（不含空节 ""）
+#   ini_keys(cfg, sec)     → Ok([str]) | Err  某节的全部键
+# 支持：
+#   - 节：[sec]（允许前后空白；节名不含方括号）
+#   - 键值：k = v / k : v / k=v（首个分隔符切开，值去除首尾空白）
+#   - 注释：# 或 ; 开头整行；空行跳过；值内不解析行内注释（0.1.0 子集）
+#   - 无节键值归入 "" 节（configparser DEFAULT 心智）
+# 说明：文本操作按字节安全（值可含中文/任意字节）；节名大小写敏感。
+#   实现把文本转 bytes 后用 bytes_len/bytes_get 逐字节扫描
+#   （M185 起 str 索引/切片/len 三面统一 rune；本库用字节面保证中文不断坏）。
+# ============================================================
+# ---- 内部工具 ----
+# 字节级首尾去空白（空格 0x20 / 制表 0x09）；返回字节偏移裁剪后的子串
+def in_trim(s):
+    var b = bytes(s)
+    var st = 0
+    var en = bytes_len(b)
+    while st < en and (bytes_get(b, st) == 32 or bytes_get(b, st) == 9):
+        st += 1
+    while en > st and (bytes_get(b, en - 1) == 32 or bytes_get(b, en - 1) == 9):
+        en -= 1
+    if st == 0 and en == bytes_len(b):
+        return s
+    return s[st:en]
+# 首个分隔符（= 0x3D 或 : 0x3A）的字节偏移；无分隔符返回 -1
+def in_first_sep(lb, blen):
+    var i = 0
+    while i < blen:
+        var c = bytes_get(lb, i)
+        if c == 61 or c == 58:
+            return i
+        i += 1
+    return -1
+# ---- 解析 ----
+def ini_parse(s):
+    var cfg = {}
+    cfg.set("", {})
+    var sec = ""
+    var lines = s.split("\n")
+    var i = 0
+    while i < len(lines):
+        var sline = lines[i]
+        var lb = bytes(sline)
+        var st = 0
+        var en = bytes_len(lb)
+        while st < en and (bytes_get(lb, st) == 32 or bytes_get(lb, st) == 9):
+            st += 1
+        while en > st and (bytes_get(lb, en - 1) == 32 or bytes_get(lb, en - 1) == 9):
+            en -= 1
+        if en <= st:
+            i += 1
+            continue
+        var first = bytes_get(lb, st)
+        if first == 35 or first == 59:
+            # # 或 ; 注释
+            i += 1
+            continue
+        if first == 91:
+            # [sec]
+            var close = -1
+            var k = st + 1
+            while k < en:
+                if bytes_get(lb, k) == 93:
+                    close = k
+                    break
+                k += 1
+            if close < 0:
+                return Err("ini: 节行缺少 ]: " + sline[st:en])
+            sec = in_trim(sline[st + 1:close])
+            if not cfg.has(sec):
+                cfg.set(sec, {})
+        else:
+            var sepi = in_first_sep(lb, en)
+            if sepi < 0 or sepi <= st:
+                return Err("ini: 键值行缺少分隔符: " + sline[st:en])
+            var key = in_trim(sline[st:sepi])
+            var val = in_trim(sline[sepi + 1:en])
+            var sd = cfg[sec]
+            sd.set(key, val)
+        i += 1
+    return Ok(cfg)
+# ---- 读取 ----
+def ini_get(cfg, sec, key):
+    if not cfg.has(sec):
+        return Err("ini: 节不存在: " + sec)
+    var sd = cfg[sec]
+    if not sd.has(key):
+        return Err("ini: 键不存在: " + sec + "." + key)
+    return Ok(sd[key])
+def ini_has(cfg, sec, key):
+    if not cfg.has(sec):
+        return false
+    return cfg[sec].has(key)
+def ini_sections(cfg):
+    var out = []
+    var keys = cfg.keys()
+    var i = 0
+    while i < len(keys):
+        if keys[i] != "":
+            out.append(keys[i])
+        i += 1
+    return out
+def ini_keys(cfg, sec):
+    if not cfg.has(sec):
+        return Err("ini: 节不存在: " + sec)
+    var out = []
+    var keys = cfg[sec].keys()
+    var i = 0
+    while i < len(keys):
+        out.append(keys[i])
+        i += 1
+    return Ok(out)
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 序列化：dict → INI 格式字符串
+def ini_dump(cfg):
+    var out = ""
+    # 先输出无节键值
+    if cfg.has("") and len(cfg[""]) > 0:
+        var keys = cfg[""].keys()
+        var i = 0
+        while i < len(keys):
+            out = out + keys[i] + " = " + cfg[""][keys[i]] + "\n"
+            i += 1
+    # 再输出各节
+    var secs = ini_sections(cfg)
+    var i = 0
+    while i < len(secs):
+        if len(out) > 0 and out[len(out) - 1] != "\n":
+            out = out + "\n"
+        out = out + "[" + secs[i] + "]\n"
+        var sd = cfg[secs[i]]
+        var keys = sd.keys()
+        var j = 0
+        while j < len(keys):
+            out = out + keys[j] + " = " + sd[keys[j]] + "\n"
+            j += 1
+        i += 1
+    # 去掉末尾多余换行
+    if len(out) > 0 and out[len(out) - 1] == "\n":
+        out = out[0:len(out) - 1]
+    return out
+# 带默认值获取
+def ini_get_default(cfg, sec, key, default = ""):
+    var r = ini_get(cfg, sec, key)
+    if r.is_ok():
+        return r.unwrap()
+    return default
+# 获取整数
+def ini_get_int(cfg, sec, key, default = 0):
+    var r = ini_get(cfg, sec, key)
+    if r.is_ok():
+        return int(r.unwrap())
+    return default
+# 获取布尔
+def ini_get_bool(cfg, sec, key, default = false):
+    var r = ini_get(cfg, sec, key)
+    if r.is_ok():
+        var v = to_lower(r.unwrap())
+        if v == "true" or v == "1" or v == "yes" or v == "on":
+            return true
+        return false
+    return default
+# 设置值
+def ini_set(cfg, sec, key, value):
+    if not cfg.has(sec):
+        cfg.set(sec, {})
+    cfg[sec].set(key, value)
+    return cfg
+# 删除键
+def ini_remove(cfg, sec, key):
+    if not cfg.has(sec):
+        return cfg
+    if cfg[sec].has(key):
+        cfg[sec].remove(key)
+    return cfg
+# 删除节
+def ini_remove_section(cfg, sec):
+    if cfg.has(sec):
+        cfg.remove(sec)
+    return cfg
+# 合并两个配置（后者优先）
+def ini_merge(a, b):
+    var out = {}
+    var secs = a.keys()
+    var i = 0
+    while i < len(secs):
+        var sd = {}
+        var keys = a[secs[i]].keys()
+        var j = 0
+        while j < len(keys):
+            sd.set(keys[j], a[secs[i]][keys[j]])
+            j += 1
+        out.set(secs[i], sd)
+        i += 1
+    secs = b.keys()
+    i = 0
+    while i < len(secs):
+        if not out.has(secs[i]):
+            out.set(secs[i], {})
+        var keys = b[secs[i]].keys()
+        var j = 0
+        while j < len(keys):
+            out[secs[i]].set(keys[j], b[secs[i]][keys[j]])
+            j += 1
+        i += 1
+    return out
+# 节键数
+def ini_section_len(cfg, sec):
+    if not cfg.has(sec):
+        return 0
+    return len(cfg[sec])
+# 从文件加载
+def ini_load(path):
+    var r = read_file_opt(path)
+    if r.is_err():
+        return Err("ini: 读取失败: " + path)
+    return ini_parse(r.unwrap())
+# 写入文件
+def ini_save(path, cfg):
+    var content = ini_dump(cfg)
+    var r = write_file_opt(path, content)
+    if r.is_err():
+        return Err("ini: 写入失败: " + path)
+    return Ok(true)

@@ -1,0 +1,65 @@
+# ansi 0.2.0 测试：combine/256色/RGB/快捷函数/光标控制 + 0.1.0 回归
+import "../registry/ansi/0.2.0/ansi.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var red = an_color("hello", "red")
+    expect(an_strip(red) == "hello", "strip red: " + an_strip(red))
+    expect(starts_with(red, "\u{1b}[31m"), "red starts: " + red)
+    expect(ends_with(red, "\u{1b}[0m"), "red ends")
+    var bold = an_style("text", "bold")
+    expect(an_strip(bold) == "text", "strip bold")
+    expect(starts_with(bold, "\u{1b}[1m"), "bold starts")
+    var bg = an_bg("x", "blue")
+    expect(an_strip(bg) == "x", "strip bg")
+    expect(starts_with(bg, "\u{1b}[44m"), "bg blue starts: " + bg)
+    expect(an_reset() == "\u{1b}[0m", "reset")
+    expect(an_strip("plain") == "plain", "strip plain")
+    # ---- 0.2.0 combine ----
+    var combined = an_combine("hello", ["bold", "red"])
+    expect(an_strip(combined) == "hello", "combine strip")
+    expect(starts_with(combined, "\u{1b}["), "combine starts ESC")
+    expect(contains(combined, "1"), "combine has bold code")
+    expect(contains(combined, "31"), "combine has red code")
+    var combined2 = an_combine("x", ["bold", "bg_white"])
+    expect(an_strip(combined2) == "x", "combine bg strip")
+    expect(contains(combined2, "47"), "combine bg_white code: " + combined2)
+    # ---- 0.2.0 256 色 ----
+    var c256 = an_256("x", 196)
+    expect(an_strip(c256) == "x", "256 strip")
+    expect(contains(c256, "38;5;196"), "256 code: " + c256)
+    var c256bg = an_256_bg("x", 21)
+    expect(an_strip(c256bg) == "x", "256 bg strip")
+    expect(contains(c256bg, "48;5;21"), "256 bg code: " + c256bg)
+    # ---- 0.2.0 RGB ----
+    var rgb = an_rgb("x", 255, 128, 0)
+    expect(an_strip(rgb) == "x", "rgb strip")
+    expect(contains(rgb, "38;2;255;128;0"), "rgb code: " + rgb)
+    var rgbbg = an_rgb_bg("x", 0, 0, 255)
+    expect(an_strip(rgbbg) == "x", "rgb bg strip")
+    expect(contains(rgbbg, "48;2;0;0;255"), "rgb bg code: " + rgbbg)
+    # ---- 0.2.0 快捷函数 ----
+    expect(an_strip(an_red("x")) == "x", "red shortcut")
+    expect(an_strip(an_green("x")) == "x", "green shortcut")
+    expect(an_strip(an_bold("x")) == "x", "bold shortcut")
+    expect(an_strip(an_underline("x")) == "x", "underline shortcut")
+    expect(starts_with(an_red("x"), "\u{1b}[31m"), "red shortcut code")
+    expect(starts_with(an_green("x"), "\u{1b}[32m"), "green shortcut code")
+    # ---- 0.2.0 光标控制 ----
+    expect(an_cursor_up(3) == "\u{1b}[3A", "cursor up: " + an_cursor_up(3))
+    expect(an_cursor_down(2) == "\u{1b}[2B", "cursor down")
+    expect(an_cursor_left(1) == "\u{1b}[1D", "cursor left")
+    expect(an_cursor_right(5) == "\u{1b}[5C", "cursor right")
+    expect(an_cursor_hide() == "\u{1b}[?25l", "cursor hide")
+    expect(an_cursor_show() == "\u{1b}[?25h", "cursor show")
+    expect(an_move_to(10, 20) == "\u{1b}[10;20H", "move to")
+    expect(an_clear_screen() == "\u{1b}[2J", "clear screen")
+    expect(an_clear_line() == "\u{1b}[2K", "clear line")
+    # ---- 0.2.0 display width ----
+    expect(an_width(an_red("hello")) == 5, "width red hello")
+    expect(an_width(an_bold(an_red("ab"))) == 2, "width bold red ab")
+    expect(an_width("plain") == 5, "width plain")
+    print("ansi 0.2.0: PASS")

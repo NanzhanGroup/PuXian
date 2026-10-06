@@ -45,11 +45,16 @@ registry/<name>/<version>/<分包>.px          # 可选：多文件包（M187 �
 
 - **未引入**：`passhash` —— 其 `pass_verify` 用 `int(parts[1])` 直接吃畸形 hash 串，
   在 M184「严格解析」后语义不再正确，**待上游先修**（登记在 `THIRD_PARTY.md`）。
-- 验证：`bash examples/m187_registry_import/verify.sh`（引入表逐行 sha256 对拍 + 52 包装/import +
+- 验证：`bash examples/m187_registry_import/verify.sh`（引入表逐行 sha256 对拍 + **全量**包装/import +
   抽样双轨编译 + 多文件包语义 + 负控 A/B/C）。
-- 引入清单的三轨普查口径（**M186 · 53 库**，历史值）：编译轨 **50/53** · 解释轨 **47/53**，失败逐条定性见
-  （M200 起清单为 **86 库**：`upstream-tests/` 的 88 用例 × 双轨实测 **161 PASS / 0 FAIL / 15 SKIP**，见 `selfhost/run_upstream_tests.sh`）
-  `docs/PX_DEF_TRIAGE.md` §4.1。
+- 验证（本轮口径）：`bash examples/m282_registry_020/verify.sh`（0.2.0 引入完整性 + 凭据守卫 +
+  **ftp 0.2.0 补覆盖**）+ `bash selfhost/run_upstream_tests.sh`。
+- 引入清单规模沿革（**不写死当下数字，只说口径**）：
+  · M186：53 库（编译轨 50/53 · 解释轨 47/53，逐条定性见 `docs/PX_DEF_TRIAGE.md` §4.1）
+  · M200：86 库 · M201：98 包 · M214：124 包 · **M282：上游 122 包 × 双版本目录 = 244 行（THIRD_PARTY.md）· registry 版本目录 257（含 13 个本仓自建包）**
+- **逐版本目录**：M282 起上游每个包都有 `0.1.0` 与 `0.2.0` 两份 ⇒ `registry/<name>/<ver>/`。
+  0.2.0 的引入结果与**上游用例的逐条定性**（含 12 条 `XFAIL` 上游自相矛盾）见
+  **`docs/UPSTREAM_020_DEFECTS.md`**；本文件不再复述易腐烂的计数。
 
 ## 用法
 

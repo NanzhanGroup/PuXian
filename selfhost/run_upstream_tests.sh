@@ -10,6 +10,10 @@
 # 关键设计（三条判据来自此前事故，别改）：
 #   ① 用例**逐字节照搬** ⇒ 期望值写在数据文件 EXPECTED.tsv 里（不写成"实际跑出来是什么"，
 #      否则门会自我漂绿）；MANIFEST.sha256 逐文件对拍，本地改动即硬失败。
+#      ⚠️ M282：期望值有三个等级 —— **PASS**（必须通过）· **SKIP**（本环境不跑，理由必填）·
+#         **XFAIL**（**期望失败**：上游 0.2.0 的用例与它**自己的库**自相矛盾，见
+#         docs/UPSTREAM_020_DEFECTS.md）。XFAIL 带**反向判据** —— 一旦它通过了就**判红**
+#         （等于上游修好了，必须回来改登记），所以它**不是**"把红记成绿"的出口。
 #   ② **每个引用的模块必须存在**（`--check-imports`）—— M188 事故：stdlib 定位失败时
 #      "找不到模块"只是**警告**、程序照跑 ⇒ 用例静默降级。这里把"引用面完整"变成前置判据。
 #   ③ fixture 由本脚本自建（上游仓库**没有** fixture 脚本，dotenv/glob 用例依赖 /tmp 预置）。
@@ -22,7 +26,7 @@
 #                                  [--registry <dir>] [--work <dir>] [--keep]
 #                                  [--no-fixtures] [--run-skipped] [--timeout <sec>]
 #                                  [--expected <file>] [--json <file>] [-v]
-# 退出码：0 = 与 EXPECTED 完全一致；非 0 = 有偏离（未预期失败 / 未预期跳过 / 清单漂移）
+# 退出码：0 = 与 EXPECTED 完全一致；非 0 = 有偏离（未预期失败 / XFAIL 意外通过 / 清单漂移）
 # ============================================================
 set -u
 
@@ -81,6 +85,40 @@ else
     echo "✗ 缺少 MANIFEST.sha256（无法证明用例逐字节照搬）"; DRIFT=1
 fi
 [ "$DRIFT" = 1 ] && exit 1
+
+# ---------- 前置判据 ①b：MANIFEST 与用例目录**双向一致**（M282 新增） ----------
+#   为什么加这一条：`sha256sum -c` 只验「清单里**已列**的文件内容对不对」，
+#   看不见「清单**漏列**了用例」或「清单里混进了**本仓自己的**文件」。M282 实测事故：
+#   重建清单时写成 `sha256sum *.px fixtures/*.px` ⇒ 我们一改 mock（**本仓文件**，
+#   按 fixtures/README.md 本就**不该**进清单）就把「用例逐字节照搬」判据弄红 ——
+#   判据指不到真因。⇒ 判据：清单的条目集 **必须恰好等于** `*_test.px` 集（多一个/少一个都判红）。
+MF_SET="$(awk 'NF>=2 {n=$2; sub(/^\*/,"",n); print n}' "$MANIFEST" | sort)"
+FS_SET="$(cd "$TESTS_DIR" && ls *_test.px | sort)"
+if [ "$MF_SET" != "$FS_SET" ]; then
+    echo "✗ MANIFEST.sha256 与用例目录**双向不一致**（清单条目集 ≠ *_test.px 集）："
+    diff <(printf '%s\n' "$MF_SET") <(printf '%s\n' "$FS_SET") | sed 's/^/    /'
+    exit 1
+fi
+
+# ---------- 前置判据 ①c：EXPECTED 与用例目录**双向一致 + 无重复**（M282 新增） ----------
+#   为什么加：`exp_for` 的 awk 取「**最后**一个匹配」⇒ 若同一用例被登记两次且取值不同，
+#   前一条会被**静默忽略**（判据静默变窄，M199/M227 同族）。
+#   M282 实测：生成器用 `*2_test.px` 通配 ⇒ 把 0.1.0 的 `oauth2_test.px`（名字以 "2" 结尾）
+#   也当成新用例重复登记了一次；另有两个 0.2.0 用例在更早的轮次已登记。⇒ 三条重复全部来自
+#   「只查单向、不查重复」。这里把它变成**前置硬判据**。
+EXP_NAMES="$(awk -F'\t' '/^[[:space:]]*#/ || NF==0 {next} {print $1}' "$EXPECTED" | sort)"
+DUP="$(printf '%s\n' "$EXP_NAMES" | uniq -d)"
+if [ -n "$DUP" ]; then
+    echo "✗ EXPECTED.tsv 有**重复登记**（后一条会静默覆盖前一条）："
+    printf '%s\n' "$DUP" | sed 's/^/    /'
+    exit 1
+fi
+EXP_FILES="$(cd "$TESTS_DIR" && ls *_test.px | sed 's/\.px$//' | sort)"
+if [ "$EXP_NAMES" != "$EXP_FILES" ]; then
+    echo "✗ EXPECTED.tsv 与用例目录**双向不一致**："
+    diff <(printf '%s\n' "$EXP_NAMES") <(printf '%s\n' "$EXP_FILES") | sed 's/^/    /'
+    exit 1
+fi
 
 # ---------- 期望值（数据文件） ----------# 行格式： <测试名>\t<build 期望>\t<interp 期望>\t<理由>
 # 取值 PASS / SKIP；# 开头为注释。
@@ -166,6 +204,14 @@ cp -p "$TESTS_DIR"/*.px "$WORK/tests/" 2>/dev/null || true
 ln -sfn "$(readlink -f "$REGISTRY")" "$WORK/registry"
 
 # ---------- fixture（上游仓库无 fixture 脚本 ⇒ 本脚本自建） ----------
+# M282 增补：**环境变量 fixture** —— 上游 0.2.0 的 cli2/config2 用例断言「env 优先于 default」：
+#   cli2     spec4.host.env = "PX_TEST_HOST"      ⇒ 期望 **env-host**
+#   config2  cfg_apply_env_recursive(cfg, "APP")  ⇒ 期望 **env-db-host**
+#   且 cli2 另有一处断言「env 不存在时回落 default」用 PX_NONEXISTENT_ENV ⇒ 必须保证它**没被设上**。
+#   （这两条只出现在 0.2.0 用例里，0.1.0 不依赖 env。）它们是用例**明写的契约**，不是我方放宽判据。
+export PX_TEST_HOST="env-host"
+export APP_DB_HOST="env-db-host"
+unset PX_NONEXISTENT_ENV 2>/dev/null || true
 if [ "$FIXTURES" = 1 ]; then
     printf 'USER=test\nQUOTED="a b"\n' > /tmp/dotenv_sample.env
     [ "/tmp/globd" = "/tmp/globd" ] && rm -rf /tmp/globd
@@ -210,13 +256,14 @@ if [ "$FIXTURES" = 1 ]; then
             done
             NET_OK=$((NET_OK + 1))
         done
-        [ "$NET_OK" != 0 ] && echo "── 网络 fixture：$NET_OK 个 mock 服务端已起（oauth2 19090 · pop3 2110 · ftp 2121/2122 · imap 1143）"
+        [ "$NET_OK" != 0 ] && echo "── 网络 fixture：$NET_OK 个 mock 服务端已起（oauth2 19090 · pop3 2110 · ftp 2121/2122 · imap 1143+2143）"
     fi
 fi
+echo "── 环境 fixture：PX_TEST_HOST=env-host · APP_DB_HOST=env-db-host（PX_NONEXISTENT_ENV 已 unset）"
 : > "${JSON:-/dev/null}"
 
 # ---------- 跑 ----------
-PASS=0; FAIL=0; SKIP=0; MISMATCH=0
+PASS=0; FAIL=0; SKIP=0; XFAIL=0; MISMATCH=0
 : > /tmp/.ut_res.$$
 run_one() {  # $1=track  $2=test  → 设 RC / OUT
     local trk="$1" t="$2" log="$WORK/$1-$2.log"
@@ -224,10 +271,15 @@ run_one() {  # $1=track  $2=test  → 设 RC / OUT
         ( cd "$WORK/tests" && timeout "$TIMEOUT" "$PX" build "$t.px" ) >"$log.b" 2>&1
         local brc=$?
         if [ $brc -ne 0 ]; then RC=$brc; OUT="$(tail -3 "$log.b")"; return; fi
-        ( cd "$WORK/tests" && timeout "$TIMEOUT" "./build/$t" ) >"$log" 2>&1
+        # M282（R1）：**跑产物时 cwd 必须是 $WORK**，不是 $WORK/tests ——
+        #   上游 0.2.0 用例改用**相对路径**访问 registry（如 walk2 的 wk_walk("registry/walk")），
+        #   而 $WORK/registry 才是指向被测 registry 的软链。cwd=$WORK/tests 时该相对路径不存在
+        #   ⇒ 用例报 "stat 失败: registry/walk"（**不是**库缺陷，是跑法不对）。
+        #   构建仍在 $WORK/tests 里做 ⇒ 产物落在 $WORK/tests/build/<name>，故用 ./tests/build/…
+        ( cd "$WORK" && timeout "$TIMEOUT" "./tests/build/$t" ) >"$log" 2>&1
         RC=$?
     else
-        ( cd "$WORK/tests" && timeout "$TIMEOUT" "$PX" run "$t.px" ) >"$log" 2>&1
+        ( cd "$WORK" && timeout "$TIMEOUT" "$PX" run "tests/$t.px" ) >"$log" 2>&1
         RC=$?
     fi
     OUT="$(cat "$log")"
@@ -248,7 +300,20 @@ for t in "${SEL[@]}"; do
             continue
         fi
         run_one "$trk" "$t"
-        if [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q 'PASS'; then
+        # 成功判据（M282 修订）：rc==0 **且** 输出里出现「完成标记」（PASS 或 done）。
+        #   ⚠️ 为什么加 `done`：原判据要求字面 `PASS` —— 那是**0.1.0 用例的书写习惯**，
+        #      不是契约。0.1.0 的 125 个用例全部含 `PASS`，而 0.2.0 的 113 个里
+        #      `barcode2_test` 打印的是 `barcode 0.2.0 tests done`（**没有** PASS）
+        #      ⇒ 原判据会把它误判成 FAIL（假红）。
+        #   ⚠️⚠️ **不要**改成「rc==0 且输出无 FAIL」—— 本轮实测踩过：`testkit_test` 的**本职**
+        #      就是验证「断言失败时的报告」，它会**故意**打印 `FAIL: testkit_test（7/24 失败）`，
+        #      再打印真正的结论 `testkit: PASS（成功/失败路径均符合预期）`，且 rc==0。
+        #      ⇒ 「输出含 FAIL ⇒ 失败」这个**我猜的**契约是错的（实现里没有这条）。
+        #   ⚠️ 完成标记是**书写习惯**、rc 才是**硬契约**：所以先判 rc（124=TIMEOUT / ≠0=FAIL），
+        #      标记只用来排除「rc==0 但根本没跑到结尾」。
+        #   ⚠️ 用例**自我跳过**的（如 `redis2_test` 在无 6379 时打印 `SKIP: …` 后 exit 0）
+        #      在 EXPECTED.tsv 里按 **SKIP** 登记（不登记成 PASS），**不**在这里放宽。
+        if [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -qE 'PASS|done'; then
             got=PASS
         elif [ "$RC" = 124 ]; then
             got=TIMEOUT
@@ -257,6 +322,17 @@ for t in "${SEL[@]}"; do
         fi
         if [ "$ex" = SKIP ]; then   # --run-skipped 下跑了期望跳过的：只作信息
             [ "$VERBOSE" = 1 ] && echo "  ℹ $t[$trk] 期望 SKIP，实跑 $got"
+        elif [ "$ex" = XFAIL ]; then
+            # M282：**期望失败**（上游 0.2.0 用例/库自相矛盾 —— 见 docs/UPSTREAM_020_DEFECTS.md）
+            #   反向判据：一旦它**通过** ⇒ 上游可能已修 ⇒ **判红**，逼我们回来复核登记。
+            #   ⇒ XFAIL 不是"把红记成绿"的出口，而是"把已知上游缺陷显式登记 + 自动检测其修复"。
+            if [ "$got" = PASS ]; then
+                echo "  ✗ $t[$trk] 登记为 XFAIL 但**实测通过** ⇒ 上游可能已修，请复核并更新 EXPECTED.tsv"
+                FAIL=$((FAIL + 1))
+            else
+                XFAIL=$((XFAIL + 1))
+                [ "$VERBOSE" = 1 ] && echo "  ⊘ $t[$trk] 期望失败（上游缺陷）· 实跑 $got"
+            fi
         elif [ "$got" = "$ex" ]; then
             PASS=$((PASS + 1))
             [ "$VERBOSE" = 1 ] && echo "  ✓ $t[$trk]"
@@ -272,14 +348,14 @@ done
 # ---------- 汇总 ----------
 echo "── 结果 ──"
 awk -F'\t' '{c[$3]++} END {for (k in c) printf "  %-8s %d\n", k, c[k]}' /tmp/.ut_res.$$ | sort
-echo "  通过 $PASS · 失败 $FAIL · 跳过 $SKIP · 期望值缺失 $MISMATCH"
+echo "  通过 $PASS · 失败 $FAIL · 跳过 $SKIP · 期望失败(XFAIL) $XFAIL · 期望值缺失 $MISMATCH"
 if [ -n "$JSON" ]; then
     # ⚠️ SKIP 行的第 4 列是**理由**（不是 rc）⇒ 生成 JSON 时必须区分，
     #   否则产出 `"rc":interp 设计性不支持 …`（非法 JSON —— 首版就踩了这个）。
     { echo "{"; echo '  "tests": [';
       awk -F'\t' 'BEGIN{n=0} {n++; rc=($4 ~ /^-?[0-9]+$/ ? $4 : "null");
         printf "%s    {\"test\":\"%s\",\"track\":\"%s\",\"result\":\"%s\",\"rc\":%s}", (n>1?",\n":""), $1,$2,$3,rc} END{print ""}' /tmp/.ut_res.$$;
-      echo "  ],"; echo "  \"pass\": $PASS, \"fail\": $FAIL, \"skip\": $SKIP, \"mismatch\": $MISMATCH"; echo "}"; } > "$JSON"
+      echo "  ],"; echo "  \"pass\": $PASS, \"fail\": $FAIL, \"skip\": $SKIP, \"xfail\": $XFAIL, \"mismatch\": $MISMATCH"; echo "}"; } > "$JSON"
 fi
 rm -f /tmp/.ut_res.$$
 if [ "$FAIL" != 0 ] || [ "$MISMATCH" != 0 ]; then

@@ -1,0 +1,32 @@
+# uuid 0.2.0 测试
+import "../registry/uuid/0.2.0/uuid.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var u = uuid_v4()
+    expect(uuid_valid(u) == true, "v4 valid")
+    expect(len(u) == 36, "v4 len 36")
+    # ---- 0.2.0 nil ----
+    expect(uuid_nil() == "00000000-0000-0000-0000-000000000000", "nil")
+    expect(uuid_valid(uuid_nil()) == true, "nil valid")
+    # ---- 0.2.0 version ----
+    expect(uuid_version(u).unwrap() == 4, "version 4")
+    expect(uuid_version(uuid_nil()).unwrap() == 0, "nil version 0")
+    # ---- 0.2.0 variant ----
+    expect(uuid_variant(u).unwrap() == 1, "v4 variant RFC4122")
+    # ---- 0.2.0 to_hex / from_hex ----
+    var hex = uuid_to_hex(u).unwrap()
+    expect(len(hex) == 32, "hex len 32")
+    var back = uuid_from_hex(hex).unwrap()
+    expect(uuid_equals(u, back) == true, "hex roundtrip")
+    # ---- 0.2.0 equals ----
+    expect(uuid_equals(u, u) == true, "equals self")
+    expect(uuid_equals(u, uuid_v4()) == false, "not equals random")
+    # ---- 0.2.0 v4_hex ----
+    var h = uuid_v4_hex()
+    expect(len(h) == 32, "v4_hex len 32")
+    expect(h[12] == "4", "v4_hex version digit")
+    print("PASS: uuid 0.2.0")

@@ -1,0 +1,65 @@
+# counter 0.2.0 测试：subtract/intersect/union/top_n/frequencies + 0.1.0 回归
+import "../registry/counter/0.2.0/counter.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var c = ct_count(["a", "b", "a", "c", "a", "b"])
+    expect(ct_get(c, "a") == 3, "count a=3")
+    expect(ct_get(c, "b") == 2, "count b=2")
+    expect(ct_get(c, "c") == 1, "count c=1")
+    expect(ct_total(c) == 6, "total=6")
+    expect(ct_len(c) == 3, "len=3")
+    var mc = ct_most_common(c)
+    expect(mc[0] == ["a", 3], "most_common[0]")
+    expect(mc[1] == ["b", 2], "most_common[1]")
+    expect(mc[2] == ["c", 1], "most_common[2]")
+    var c2 = ct_count(["a", "a", "d"])
+    var merged = ct_merge(c, c2)
+    expect(ct_get(merged, "a") == 5, "merge a=5")
+    expect(ct_get(merged, "d") == 1, "merge d=1")
+    # ---- 0.2.0 subtract ----
+    var sub = ct_subtract(c, c2)
+    expect(ct_get(sub, "a") == 1, "subtract a=1: " + str(ct_get(sub, "a")))
+    expect(ct_get(sub, "b") == 2, "subtract b=2")
+    expect(ct_get(sub, "d") == 0, "subtract d=0")
+    # ---- 0.2.0 intersect ----
+    var inter = ct_intersect(c, c2)
+    expect(ct_get(inter, "a") == 2, "intersect a=2: " + str(ct_get(inter, "a")))
+    expect(ct_get(inter, "b") == 0, "intersect b=0")
+    expect(ct_get(inter, "d") == 0, "intersect d=0")
+    # ---- 0.2.0 union ----
+    var uni = ct_union(c, c2)
+    expect(ct_get(uni, "a") == 3, "union a=3")
+    expect(ct_get(uni, "b") == 2, "union b=2")
+    expect(ct_get(uni, "d") == 1, "union d=1")
+    # ---- 0.2.0 top_n ----
+    var top2 = ct_top_n(c, 2)
+    expect(len(top2) == 2, "top_n 2")
+    expect(top2[0] == ["a", 3], "top_n[0]")
+    expect(top2[1] == ["b", 2], "top_n[1]")
+    # ---- 0.2.0 least_common ----
+    var lc = ct_least_common(c)
+    expect(lc[0] == ["c", 1], "least_common[0]: " + str(lc[0]))
+    # ---- 0.2.0 keys_above ----
+    var ka = ct_keys_above(c, 2)
+    expect(len(ka) == 2, "keys_above 2: " + str(ka))
+    # ---- 0.2.0 frequencies ----
+    var freq = ct_frequencies(c)
+    expect(freq["a"] == 0.5, "freq a=0.5: " + str(freq["a"]))
+    expect(freq["b"] < 0.34, "freq b<0.34: " + str(freq["b"]))
+    # ---- 0.2.0 from_dict ----
+    var d = {"x": 5, "y": 3, "z": 0}
+    var c3 = ct_from_dict(d)
+    expect(ct_get(c3, "x") == 5, "from_dict x=5")
+    expect(ct_get(c3, "y") == 3, "from_dict y=3")
+    expect(ct_get(c3, "z") == 0, "from_dict z=0 (filtered)")
+    # ---- 0.2.0 add with n ----
+    var c4 = {}
+    ct_add(c4, "a", 5)
+    ct_add(c4, "b", 3)
+    expect(ct_get(c4, "a") == 5, "add a=5")
+    expect(ct_get(c4, "b") == 3, "add b=3")
+    print("counter 0.2.0: PASS")

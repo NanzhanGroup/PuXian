@@ -1,0 +1,24 @@
+# msgpack 0.2.0 测试
+import "../registry/msgpack/0.2.0/msgpack.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var packed = mp_pack(42).unwrap()
+    var unpacked = mp_unpack(packed).unwrap()
+    expect(unpacked == 42, "pack/unpack 42: " + str(unpacked))
+    # ---- 0.2.0 pack_bool ----
+    var pb_true = mp_pack_bool(true)
+    expect(pb_true == [0xc3], "pack_bool true: " + str(pb_true))
+    var pb_false = mp_pack_bool(false)
+    expect(pb_false == [0xc2], "pack_bool false: " + str(pb_false))
+    # ---- 0.2.0 pack_nil ----
+    var pn = mp_pack_nil()
+    expect(pn == [0xc0], "pack_nil: " + str(pn))
+    # ---- 0.2.0 unpack_type ----
+    expect(mp_unpack_type([0xc3], 0) == "true", "unpack_type true")
+    expect(mp_unpack_type([0xc0], 0) == "nil", "unpack_type nil")
+    expect(mp_unpack_type([0x05], 0) == "positive_fixint", "unpack_type fixint")
+    print("PASS: msgpack 0.2.0")

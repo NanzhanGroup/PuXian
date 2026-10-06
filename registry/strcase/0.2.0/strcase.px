@@ -1,0 +1,274 @@
+# ============================================================
+# 普贤生态库：registry/strcase —— 命名风格转换
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust heck / convert_case、Go iancoleman/strcase、Python inflection 心智：
+#   str_snake(s)           → "FooBar"  → "foo_bar"
+#   str_kebab(s)           → "FooBar"  → "foo-bar"
+#   str_camel(s)           → "foo_bar" → "fooBar"
+#   str_pascal(s)          → "foo_bar" → "FooBar"
+#   str_screaming_snake(s) → "FooBar"  → "FOO_BAR"
+#   str_title_words(s)     → "foo_bar" → "Foo Bar"
+#   str_words(s)           → 分词结果 list（供自定义风格）
+# 分词规则（heck 风格）：
+#   - 分隔符（空格 / - / _ / . / / / \\\\ / 制表换行回车）断开
+#   - lower/digit → upper 处断开（camelCase → camel + Case）
+#   - 连续大写后接小写时，在最后一个大写前断开（HTTPServer → HTTP + Server）
+#   - 数字并入相邻单词（sha256 → sha256）
+# 说明：面向 ASCII 标识符；非 ASCII 字符按原字符并入当前词（不按字节切割）。
+#   大小写判定用 to_upper/to_lower（m197 已有原生 ord；PX-DEF-013 为对方跳号不存在，勿引用）。
+# ============================================================
+# ---- 字符分类 ----
+def sc_is_upper(c):
+    return to_upper(c) == c and to_lower(c) != c
+def sc_is_lower(c):
+    return to_lower(c) == c and to_upper(c) != c
+def sc_is_digit(c):
+    var i = 0
+    while i < 10:
+        if "0123456789"[i] == c:
+            return true
+        i += 1
+    return false
+def sc_is_space(c):
+    var b = bytes_get(bytes(c), 0)
+    return b == 32 or b == 9 or b == 10 or b == 13
+def sc_is_sep(c):
+    if sc_is_space(c):
+        return true
+    return c == "-" or c == "_" or c == "." or c == "/" or c == "\\"
+# ---- 分词 ----
+# 输入字符串 → 单词 list（保留原始大小写；空串 / 全分隔符 → []）
+def str_words(s):
+    var words = []
+    var cur = ""
+    var prev = 0
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        if sc_is_sep(c):
+            if len(cur) > 0:
+                words.append(cur)
+                cur = ""
+            prev = 0
+            i += 1
+            continue
+        if sc_is_upper(c):
+            if prev == 1:
+                if len(cur) > 0:
+                    words.append(cur)
+                cur = c
+            else:
+                var next_lower = (i + 1 < n) and sc_is_lower(s[i + 1])
+                if prev == 2 and next_lower and len(cur) > 0:
+                    words.append(cur)
+                    cur = c
+                else:
+                    cur = cur + c
+            prev = 2
+            i += 1
+            continue
+        cur = cur + c
+        prev = 1
+        i += 1
+    if len(cur) > 0:
+        words.append(cur)
+    return words
+# ---- 拼接 ----
+# words + 分隔符 + 大小写模式（"upper" / "lower" / "keep"）
+def sc_join(words, sep, mode):
+    var out = ""
+    var i = 0
+    while i < len(words):
+        if i > 0:
+            out = out + sep
+        var w = words[i]
+        if mode == "upper":
+            out = out + to_upper(w)
+        elif mode == "lower":
+            out = out + to_lower(w)
+        else:
+            out = out + w
+        i += 1
+    return out
+# words → 驼峰拼接（pascal=true 首词也大写）
+def sc_camel_join(words, pascal):
+    var out = ""
+    var i = 0
+    while i < len(words):
+        var w = words[i]
+        if len(w) > 0:
+            if i == 0 and not pascal:
+                out = out + to_lower(w)
+            else:
+                out = out + to_upper(w[0])
+                if len(w) > 1:
+                    out = out + to_lower(w[1:len(w)])
+        i += 1
+    return out
+# ---- 对外 API ----
+def str_snake(s):
+    return sc_join(str_words(s), "_", "lower")
+def str_kebab(s):
+    return sc_join(str_words(s), "-", "lower")
+def str_screaming_snake(s):
+    return sc_join(str_words(s), "_", "upper")
+def str_camel(s):
+    return sc_camel_join(str_words(s), false)
+def str_pascal(s):
+    return sc_camel_join(str_words(s), true)
+def str_title_words(s):
+    var wl = str_words(s)
+    var out = ""
+    var i = 0
+    while i < len(wl):
+        if i > 0:
+            out = out + " "
+        var w = wl[i]
+        if len(w) > 0:
+            out = out + to_upper(w[0])
+            if len(w) > 1:
+                out = out + to_lower(w[1:len(w)])
+        i += 1
+    return out
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# Train-Case: Foo-Bar-Baz
+def str_train(s):
+    var wl = str_words(s)
+    var out = ""
+    var i = 0
+    while i < len(wl):
+        if i > 0:
+            out = out + "-"
+        var w = wl[i]
+        if len(w) > 0:
+            out = out + to_upper(w[0])
+            if len(w) > 1:
+                out = out + to_lower(w[1:len(w)])
+        i += 1
+    return out
+# dot.case: foo.bar.baz
+def str_dot(s):
+    return sc_join(str_words(s), ".", "lower")
+# path/case: foo/bar/baz
+def str_path(s):
+    return sc_join(str_words(s), "/", "lower")
+# lower words: "foo bar baz"
+def str_lower_words(s):
+    return sc_join(str_words(s), " ", "lower")
+# UPPER WORDS: "FOO BAR BAZ"
+def str_upper_words(s):
+    return sc_join(str_words(s), " ", "upper")
+# 首字母大写，其余不变
+def str_capitalize(s):
+    if len(s) == 0:
+        return s
+    return to_upper(s[0]) + s[1:len(s)]
+# 首字母小写，其余不变
+def str_uncapitalize(s):
+    if len(s) == 0:
+        return s
+    return to_lower(s[0]) + s[1:len(s)]
+# 大小写互换
+def str_swap_case(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if sc_is_upper(c):
+            out = out + to_lower(c)
+        elif sc_is_lower(c):
+            out = out + to_upper(c)
+        else:
+            out = out + c
+        i += 1
+    return out
+# 字符串反转
+def str_reverse(s):
+    var out = ""
+    var i = len(s) - 1
+    while i >= 0:
+        out = out + s[i]
+        i = i - 1
+    return out
+# 重复 n 次
+def str_repeat(s, n):
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + s
+        i += 1
+    return out
+# 左填充到指定宽度
+def str_pad_left(s, width, ch = " "):
+    if len(s) >= width:
+        return s
+    var pad = ""
+    var i = 0
+    while i < width - len(s):
+        pad = pad + ch
+        i += 1
+    return pad + s
+# 右填充到指定宽度
+def str_pad_right(s, width, ch = " "):
+    if len(s) >= width:
+        return s
+    var pad = ""
+    var i = 0
+    while i < width - len(s):
+        pad = pad + ch
+        i += 1
+    return s + pad
+# 居中填充
+def str_pad_center(s, width, ch = " "):
+    if len(s) >= width:
+        return s
+    var total = width - len(s)
+    var left = total // 2
+    var right = total - left
+    var lp = ""
+    var i = 0
+    while i < left:
+        lp = lp + ch
+        i += 1
+    var rp = ""
+    i = 0
+    while i < right:
+        rp = rp + ch
+        i += 1
+    return lp + s + rp
+# 统计子串出现次数
+def str_count(s, sub):
+    if len(sub) == 0:
+        return 0
+    var count = 0
+    var i = 0
+    while i + len(sub) <= len(s):
+        if s[i:i + len(sub)] == sub:
+            count = count + 1
+            i = i + len(sub)
+        else:
+            i += 1
+    return count
+# 检测是否全大写
+def str_is_upper(s):
+    var i = 0
+    while i < len(s):
+        if sc_is_lower(s[i]):
+            return false
+        i += 1
+    return true
+# 检测是否全小写
+def str_is_lower(s):
+    var i = 0
+    while i < len(s):
+        if sc_is_upper(s[i]):
+            return false
+        i += 1
+    return true
+# 检测是否标题格式
+def str_is_title(s):
+    return str_title_words(s) == s

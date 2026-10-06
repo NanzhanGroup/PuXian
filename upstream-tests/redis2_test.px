@@ -1,0 +1,155 @@
+# redis 0.2.0 测试（需要 redis-server 运行在 localhost:6379）
+import "../registry/redis/0.2.0/redis.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+def main():
+    # ---- 连接 ----
+    var conn_r = redis_connect("127.0.0.1", 6379)
+    expect(conn_r.is_ok(), "connect ok, got " + str(conn_r))
+    if conn_r.is_err():
+        print("SKIP: redis 不可连接")
+        return Ok(0)
+    var conn = conn_r.unwrap()
+
+    # ---- PING ----
+    var p = redis_ping(conn)
+    expect(p.is_ok() and p.unwrap() == "PONG", "ping PONG")
+
+    # ---- SET / GET ----
+    var s1 = redis_set(conn, "test_key", "hello")
+    expect(s1.is_ok(), "set ok")
+    var g1 = redis_get(conn, "test_key")
+    expect(g1.is_ok() and g1.unwrap() == "hello", "get → hello")
+
+    # ---- DEL ----
+    var d1 = redis_del(conn, ["test_key"])
+    expect(d1.is_ok(), "del ok")
+    var g2 = redis_get(conn, "test_key")
+    expect(g2.is_ok() and g2.unwrap() == null, "get after del → null")
+
+    # ---- EXISTS ----
+    redis_set(conn, "test_exists", "val")
+    var e1 = redis_exists(conn, "test_exists")
+    expect(e1.is_ok() and e1.unwrap() == 1, "exists → 1")
+    redis_del(conn, ["test_exists"])
+    var e2 = redis_exists(conn, "test_exists")
+    expect(e2.is_ok() and e2.unwrap() == 0, "exists after del → 0")
+
+    # ---- EXPIRE / TTL ----
+    redis_set(conn, "test_ttl", "val")
+    var ex = redis_expire(conn, "test_ttl", 100)
+    expect(ex.is_ok() and ex.unwrap() == 1, "expire → 1")
+    var ttl = redis_ttl(conn, "test_ttl")
+    expect(ttl.is_ok() and ttl.unwrap() > 0, "ttl > 0")
+    redis_del(conn, ["test_ttl"])
+
+    # ---- INCR / DECR ----
+    redis_set(conn, "test_counter", "10")
+    var inc = redis_incr(conn, "test_counter")
+    expect(inc.is_ok() and inc.unwrap() == 11, "incr → 11")
+    var dec = redis_decr(conn, "test_counter")
+    expect(dec.is_ok() and dec.unwrap() == 10, "decr → 10")
+    var incby = redis_incrby(conn, "test_counter", 5)
+    expect(incby.is_ok() and incby.unwrap() == 15, "incrby 5 → 15")
+    redis_del(conn, ["test_counter"])
+
+    # ---- TYPE ----
+    redis_set(conn, "test_type", "val")
+    var t = redis_type(conn, "test_type")
+    expect(t.is_ok() and t.unwrap() == "string", "type → string")
+    redis_del(conn, ["test_type"])
+
+    # ---- MSET / MGET ----
+    var ms = redis_mset(conn, [["mk1", "v1"], ["mk2", "v2"]])
+    expect(ms.is_ok(), "mset ok")
+    var mg = redis_mget(conn, ["mk1", "mk2"])
+    expect(mg.is_ok(), "mget ok")
+    if mg.is_ok():
+        var mgv = mg.unwrap()
+        expect(mgv[0] == "v1", "mget[0] → v1")
+        expect(mgv[1] == "v2", "mget[1] → v2")
+    redis_del(conn, ["mk1", "mk2"])
+
+    # ---- Hash ----
+    var hs = redis_hset(conn, "test_h", "f1", "v1")
+    expect(hs.is_ok(), "hset ok")
+    var hg = redis_hget(conn, "test_h", "f1")
+    expect(hg.is_ok() and hg.unwrap() == "v1", "hget → v1")
+    var hga = redis_hgetall(conn, "test_h")
+    expect(hga.is_ok(), "hgetall ok")
+    redis_hset(conn, "test_h", "f2", "v2")
+    var hlen = redis_hlen(conn, "test_h")
+    expect(hlen.is_ok() and hlen.unwrap() == 2, "hlen → 2")
+    redis_del(conn, ["test_h"])
+
+    # ---- List ----
+    redis_lpush(conn, "test_l", "a")
+    redis_lpush(conn, "test_l", "b")
+    redis_rpush(conn, "test_l", "c")
+    var ll = redis_llen(conn, "test_l")
+    expect(ll.is_ok() and ll.unwrap() == 3, "llen → 3")
+    var lr = redis_lrange(conn, "test_l", 0, -1)
+    expect(lr.is_ok(), "lrange ok")
+    if lr.is_ok():
+        var lrv = lr.unwrap()
+        expect(len(lrv) == 3, "lrange 3 elements")
+    redis_del(conn, ["test_l"])
+
+    # ---- Set ----
+    redis_sadd(conn, "test_s", "m1")
+    redis_sadd(conn, "test_s", "m2")
+    var sc = redis_scard(conn, "test_s")
+    expect(sc.is_ok() and sc.unwrap() == 2, "scard → 2")
+    var sism = redis_sismember(conn, "test_s", "m1")
+    expect(sism.is_ok() and sism.unwrap() == 1, "sismember m1 → 1")
+    redis_del(conn, ["test_s"])
+
+    # ---- Sorted Set ----
+    redis_zadd(conn, "test_z", 1, "a")
+    redis_zadd(conn, "test_z", 2, "b")
+    var zs = redis_zscore(conn, "test_z", "a")
+    expect(zs.is_ok(), "zscore ok")
+    redis_del(conn, ["test_z"])
+
+    # ---- SET EX ----
+    var sx = redis_set_ex(conn, "test_ex", "val", 100)
+    expect(sx.is_ok(), "set_ex ok")
+    var ttl2 = redis_ttl(conn, "test_ex")
+    expect(ttl2.is_ok() and ttl2.unwrap() > 0, "set_ex ttl > 0")
+    redis_del(conn, ["test_ex"])
+
+    # ---- APPEND / STRLEN ----
+    redis_set(conn, "test_str", "hello")
+    var ap = redis_append(conn, "test_str", " world")
+    expect(ap.is_ok(), "append ok")
+    var sl = redis_strlen(conn, "test_str")
+    expect(sl.is_ok() and sl.unwrap() == 11, "strlen → 11")
+    redis_del(conn, ["test_str"])
+
+    # ---- Pub/Sub（PUBLISH 不需要订阅者）----
+    var pub_r = redis_publish(conn, "test_ch", "hello")
+    expect(pub_r.is_ok(), "publish ok")
+
+    # ---- SCAN ----
+    var sc2 = redis_scan(conn, 0)
+    expect(sc2.is_ok(), "scan ok")
+
+    # ---- GETSET ----
+    var gs = redis_getset(conn, "test_gs", "newval")
+    expect(gs.is_ok(), "getset ok")
+    var gs2 = redis_getset(conn, "test_gs", "newer")
+    expect(gs2.is_ok() and gs2.unwrap() == "newval", "getset returns old")
+    redis_del(conn, ["test_gs"])
+
+    # ---- 清理 ----
+    redis_close(conn)
+
+    print("redis 0.2.0: PASS")
+    return Ok(0)

@@ -1,0 +1,1052 @@
+# ============================================================
+# 普贤生态库：registry/qrcode —— QR 核心（编码/交织/放置/掩码）
+# ------------------------------------------------------------
+# 被 qrcode.px import；由 qr_table.px（容量表）+ qr_gf.px（RS 纠错）支撑。
+# 实现子集：版本 1..10，纠错级 L/M/Q/H，模式 numeric/alphanumeric/byte。
+# 矩阵表示：[[bool, ...], ...]（行 × 列；true = 深色模块）。
+# 算法对齐 ISO/IEC 18004（Nayuki 参考实现结构），可用 Python segno 全矩阵对拍。
+# ============================================================
+import "qr_table.px"
+import "qr_gf.px"
+const QR_ALNUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
+# N3 罚分图案（1:1:3:1:1 前后各 4 个浅色；避免循环内反复分配）
+const QR_N3_PATTERN = [true, false, true, true, true, false, true, false, false, false, false]
+# ---- 位缓冲 ----
+def qr_bits_append(buf, value, nbits):
+    var i = nbits - 1
+    while i >= 0:
+        buf.append((value >> i) & 1)
+        i -= 1
+def qr_bits_to_bytes(buf):
+    var out = []
+    var i = 0
+    while i + 7 < len(buf):
+        var v = 0
+        var j = 0
+        while j < 8:
+            v = v * 2 + buf[i + j]
+            j += 1
+        out.append(v)
+        i += 8
+    return out
+# ---- 字符计数位长 ----
+def qr_cci_len(v, mode):
+    if mode == 1:  # numeric
+        if v <= 9:
+            return 10
+        return 12
+    if mode == 2:  # alphanumeric
+        if v <= 9:
+            return 9
+        return 11
+    return 8  # byte（v<=9；v10+ 应为 16）
+# byte 模式 v10+ 计数位长为 16
+def qr_cci_len_byte(v):
+    if v <= 9:
+        return 8
+    return 16
+# ---- 模式选择与数据位 ----
+# 返回模式：1=numeric 2=alphanumeric 3=byte
+def qr_choose_mode(s):
+    var numeric = true
+    var alnum = true
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if not (c >= "0" and c <= "9"):
+            numeric = false
+        var found = false
+        var j = 0
+        while j < 45:
+            if QR_ALNUM[j] == c:
+                found = true
+                break
+            j += 1
+        if not found:
+            alnum = false
+        i += 1
+    if numeric:
+        return 1
+    if alnum:
+        return 2
+    return 3
+# 编码数据位（不含模式与计数指示符）
+def qr_encode_data(s, mode, buf):
+    if mode == 1:
+        var i = 0
+        var n = len(s)
+        while i + 2 < n:
+            var v = (ord(s[i]) - 48) * 100 + (ord(s[i + 1]) - 48) * 10 + (ord(s[i + 2]) - 48)
+            qr_bits_append(buf, v, 10)
+            i += 3
+        if n - i == 2:
+            var v2 = (ord(s[i]) - 48) * 10 + (ord(s[i + 1]) - 48)
+            qr_bits_append(buf, v2, 7)
+            i += 2
+        if n - i == 1:
+            qr_bits_append(buf, ord(s[i]) - 48, 4)
+            i += 1
+    elif mode == 2:
+        var i = 0
+        var n = len(s)
+        while i + 1 < n:
+            var a = qr_alnum_val(s[i])
+            var b = qr_alnum_val(s[i + 1])
+            qr_bits_append(buf, a * 45 + b, 11)
+            i += 2
+        if i < n:
+            qr_bits_append(buf, qr_alnum_val(s[i]), 6)
+            i += 1
+    else:
+        # byte：按 UTF-8 字节
+        var b = bytes(s)
+        var i = 0
+        while i < bytes_len(b):
+            qr_bits_append(buf, bytes_get(b, i), 8)
+            i += 1
+def qr_alnum_val(c):
+    var i = 0
+    while i < 45:
+        if QR_ALNUM[i] == c:
+            return i
+        i += 1
+    return -1
+# 数据位所需 bit 数
+def qr_data_bits_len(s, mode):
+    var n = len(s)
+    if mode == 1:
+        return (n // 3) * 10 + [0, 4, 7][n % 3]
+    if mode == 2:
+        return (n // 2) * 11 + (n % 2) * 6
+    return bytes_len(bytes(s)) * 8
+# 该版本能否容纳（mode、长度、cci 位长）
+def qr_fits(v, ec, mode, s):
+    var cap_bits = qr_data_count(v, ec) * 8
+    var cci = 10
+    if mode == 1:
+        cci = qr_cci_len(v, 1)
+    elif mode == 2:
+        cci = qr_cci_len(v, 2)
+    else:
+        cci = qr_cci_len_byte(v)
+    var need = 4 + cci + qr_data_bits_len(s, mode)
+    return need <= cap_bits
+# 自动选版本（返回满足的最小版本，1..10；放不下返回 -1）
+def qr_choose_version(ec, mode, s):
+    var v = 1
+    while v <= 10:
+        if qr_fits(v, ec, mode, s):
+            return v
+        v += 1
+    return -1
+# 构造完整数据码字（模式+计数+数据+终止+填充）
+def qr_build_codewords(s, v, ec, mode):
+    var buf = []
+    var cci = 10
+    if mode == 1:
+        cci = qr_cci_len(v, 1)
+    elif mode == 2:
+        cci = qr_cci_len(v, 2)
+    else:
+        cci = qr_cci_len_byte(v)
+    # 模式指示符：numeric=0001 alnum=0010 byte=0100（枚举 3 → 指示符 4）
+    var mode_ind = mode
+    if mode == 3:
+        mode_ind = 4
+    qr_bits_append(buf, mode_ind, 4)
+    if mode == 3:
+        # byte 计数 = 字节数
+        qr_bits_append(buf, bytes_len(bytes(s)), cci)
+    else:
+        qr_bits_append(buf, len(s), cci)
+    qr_encode_data(s, mode, buf)
+    var cap_bits = qr_data_count(v, ec) * 8
+    # 终止符
+    var rem = cap_bits - len(buf)
+    if rem > 4:
+        rem = 4
+    var i = 0
+    while i < rem:
+        buf.append(0)
+        i += 1
+    # 补到字节对齐（segno 同款：已对齐也补满 8 位零；不超过容量）
+    var zero_pad = 8 - (len(buf) % 8)
+    var leftover = cap_bits - len(buf)
+    if zero_pad > leftover:
+        zero_pad = leftover
+    var z = 0
+    while z < zero_pad:
+        buf.append(0)
+        z += 1
+    # 填充码字 EC/11 交替
+    var pad = [0xEC, 0x11]
+    var p = 0
+    while len(buf) < cap_bits:
+        qr_bits_append(buf, pad[p], 8)
+        p = 1 - p
+    return qr_bits_to_bytes(buf)
+# ---- 交织 ----
+# groups → 扁平块列表 [[数据码字], ...]，再为每块附加纠错码字
+def qr_make_blocks(data_cw, v, ec):
+    var groups = qr_parse_groups(v, ec)
+    var blocks = []
+    var off = 0
+    var gi = 0
+    while gi < len(groups):
+        var g = groups[gi]
+        var bi = 0
+        while bi < g[0]:
+            var blk = []
+            var k = 0
+            while k < g[2]:
+                blk.append(data_cw[off])
+                off += 1
+                k += 1
+            blocks.append(blk)
+            bi += 1
+        gi += 1
+    # RS 编码
+    var out = []
+    var i = 0
+    while i < len(blocks):
+        var ecc = rs_encode(blocks[i], qr_blocks_ecc(v, ec))
+        out.append([blocks[i], ecc])
+        i += 1
+    return out
+# 每块纠错码字数（任取第一组：total - data）
+def qr_blocks_ecc(v, ec):
+    var g = qr_parse_groups(v, ec)
+    return g[0][1] - g[0][2]
+# 数据/纠错字节分别按块轮转交织
+def qr_interleave(blocks):
+    var maxd = 0
+    var i = 0
+    while i < len(blocks):
+        if len(blocks[i][0]) > maxd:
+            maxd = len(blocks[i][0])
+        i += 1
+    var out = []
+    var k = 0
+    while k < maxd:
+        var b = 0
+        while b < len(blocks):
+            if k < len(blocks[b][0]):
+                out.append(blocks[b][0][k])
+            b += 1
+        k += 1
+    var maxe = len(blocks[0][1])
+    var e = 0
+    while e < maxe:
+        var b2 = 0
+        while b2 < len(blocks):
+            if e < len(blocks[b2][1]):
+                out.append(blocks[b2][1][e])
+            b2 += 1
+        e += 1
+    return out
+# ---- 矩阵：功能图形 ----
+# 空矩阵
+def qr_new_matrix(v):
+    var size = qr_size(v)
+    var m = []
+    var r = 0
+    while r < size:
+        var row = []
+        var c = 0
+        while c < size:
+            row.append(false)
+            c += 1
+        m.append(row)
+        r += 1
+    return m
+# 定位图形
+def qr_draw_finder(m, func, top, left):
+    var r = 0
+    while r < 7:
+        var c = 0
+        while c < 7:
+            var dark = (r == 0 or r == 6 or c == 0 or c == 6 or
+                (r >= 2 and r <= 4 and c >= 2 and c <= 4))
+            m[top + r][left + c] = dark
+            func[top + r][left + c] = true
+            c += 1
+        r += 1
+    # 分隔符：finder 外圈 9x9 盒整体标记为功能区（含左侧/下方分隔条；边界裁剪）
+    var s = -1
+    while s <= 7:
+        var t2 = -1
+        while t2 <= 7:
+            var rr = top + s
+            var cc = left + t2
+            if rr >= 0 and rr < len(m) and cc >= 0 and cc < len(m):
+                func[rr][cc] = true
+            t2 += 1
+        s += 1
+# 定时图案（跳过已由定位/对齐图形占用的格，避免覆盖边框）
+def qr_draw_timing(m, func):
+    var size = len(m)
+    var i = 0
+    while i < size:
+        if not func[6][i]:
+            m[6][i] = (i % 2 == 0)
+            func[6][i] = true
+        if not func[i][6]:
+            m[i][6] = (i % 2 == 0)
+            func[i][6] = true
+        i += 1
+# 对齐图案
+def qr_draw_alignment(m, func, v):
+    var centers = QR_ALIGN["v" + str(v)]
+    var size = len(m)
+    var i = 0
+    while i < len(centers):
+        var j = 0
+        while j < len(centers):
+            var cy = centers[i]
+            var cx = centers[j]
+            # 跳过与三个定位图形重叠的位置
+            var skip = (cy == 6 and cx == 6) or
+                (cy == 6 and cx == size - 7) or
+                (cy == size - 7 and cx == 6)
+            if skip:
+                j += 1
+                continue
+            var dy = -2
+            while dy <= 2:
+                var dx = -2
+                while dx <= 2:
+                    var dark = true
+                    if dy == 0 and dx == 0:
+                        dark = true
+                    elif abs(dy) == 2 or abs(dx) == 2:
+                        dark = true
+                    else:
+                        dark = false
+                    var rr = cy + dy
+                    var cc = cx + dx
+                    if rr >= 0 and rr < size and cc >= 0 and cc < size:
+                        m[rr][cc] = dark
+                        func[rr][cc] = true
+                    dx += 1
+                dy += 1
+            j += 1
+        i += 1
+# 预留格式信息区（含暗模块）
+def qr_reserve_format(m, func, v):
+    var size = qr_size(v)
+    var i = 0
+    while i < 9:
+        func[8][i] = true
+        func[i][8] = true
+        i += 1
+    i = 0
+    while i < 8:
+        func[size - 1 - i][8] = true
+        func[8][size - 1 - i] = true
+        i += 1
+    # 暗模块（恒深）
+    var dark_row = size - 8
+    func[dark_row][8] = true
+    m[dark_row][8] = true
+# 版本信息区（v>=7）
+def qr_reserve_version(func, v):
+    if v < 7:
+        return
+    var size = qr_size(v)
+    var i = 0
+    while i < 18:
+        var a = size - 11 + i % 3
+        var b = i // 3
+        func[a][b] = true
+        func[b][a] = true
+        i += 1
+# 构建功能图形骨架（不含格式/版本数据位）
+def qr_draw_function(v):
+    var size = qr_size(v)
+    var m = qr_new_matrix(v)
+    var func = qr_new_matrix(v)
+    qr_draw_finder(m, func, 0, 0)
+    qr_draw_finder(m, func, 0, size - 7)
+    qr_draw_finder(m, func, size - 7, 0)
+    qr_draw_timing(m, func)
+    qr_draw_alignment(m, func, v)
+    qr_reserve_format(m, func, v)
+    qr_reserve_version(func, v)
+    return [m, func]
+# ---- BCH ----
+def qr_bch_rem(value, poly, degree):
+    var rem = value
+    var i = 0
+    while i < degree:
+        rem = (rem << 1) ^ ((rem >> (degree - 1)) * poly)
+        i += 1
+    return rem
+# 格式信息 15bit（查表，与 segno 一致）
+def qr_format_bits(ec, mask):
+    return qr_format_code(ec, mask)
+# 版本信息 18bit（查询 v7..v10）
+def qr_version_bits(v):
+    return QR_VERSION_INFO[v - 7]
+# 画格式信息（segno 同款：8 次循环，vbit=低位垂直、hbit=高位水平）
+def qr_draw_format(m, v, bits15):
+    var size = qr_size(v)
+    var voffset = 0
+    var hoffset = 0
+    var i = 0
+    while i < 8:
+        var vbit = (bits15 >> i) & 1
+        var hbit = (bits15 >> (14 - i)) & 1
+        if i == 6:
+            voffset = voffset + 1
+            hoffset = 1
+        m[i + voffset][8] = (vbit == 1)
+        m[8][i + hoffset] = (hbit == 1)
+        m[8][size - 1 - i] = (vbit == 1)
+        m[size - 1 - i][8] = (hbit == 1)
+        i += 1
+    m[size - 8][8] = true
+# 画版本信息
+def qr_draw_version(m, v):
+    if v < 7:
+        return
+    var bits = qr_version_bits(v)
+    var size = qr_size(v)
+    var i = 0
+    while i < 18:
+        var bit = (bits >> i) & 1
+        var a = size - 11 + i % 3
+        var b = i // 3
+        m[a][b] = (bit == 1)
+        m[b][a] = (bit == 1)
+        i += 1
+# ---- 数据放置与掩码 ----
+# 之字形放置（segno 同款：每列对方向交替；跳到功能格不消耗位）
+# 之字形放置（segno 同款：每列对方向交替；跳到功能格不消耗位）
+# 返回 placed 矩阵：实际放入了数据位的格（掩码只作用于这些格，未放置的
+# 剩余格保持浅色 —— 对应 segno 渲染规则 value == 0x1）
+def qr_place_data(m, func, bits):
+    var size = len(m)
+    var placed = qr_new_matrix(size)
+    var idx = 0
+    var right = size - 1
+    while right >= 1:
+        # 定时列（col 6）两侧裁剪：仅对当前列对生效（修正版——不再级联跳过）
+        var rr = right
+        if rr <= 6:
+            rr = rr - 1
+        var vertical = 0
+        while vertical < size:
+            var z = 0
+            while z < 2:
+                var col = rr - z
+                var upwards = ((rr & 2) == 0)
+                if col < 6:
+                    upwards = not upwards
+                var row_i = vertical
+                if upwards:
+                    row_i = size - 1 - vertical
+                if not func[row_i][col] and idx < len(bits):
+                    m[row_i][col] = (bits[idx] == 1)
+                    placed[row_i][col] = true
+                    idx += 1
+                z += 1
+            vertical += 1
+        right = right - 2
+    return placed
+# 掩码条件
+def qr_mask_cond(mask, r, c):
+    if mask == 0:
+        return (r + c) % 2 == 0
+    if mask == 1:
+        return r % 2 == 0
+    if mask == 2:
+        return c % 3 == 0
+    if mask == 3:
+        return (r + c) % 3 == 0
+    if mask == 4:
+        return (r // 2 + c // 3) % 2 == 0
+    if mask == 5:
+        return ((r * c) % 2 + (r * c) % 3) == 0
+    if mask == 6:
+        return (((r * c) % 2 + (r * c) % 3) % 2) == 0
+    return (((r + c) % 2 + (r * c) % 3) % 2) == 0
+# 应用掩码（全部数据区；剩余格按初始浅色参与掩码，与 segno 渲染 value&1 一致）
+def qr_apply_mask(m, func, mask):
+    var size = len(m)
+    var r = 0
+    while r < size:
+        var c = 0
+        while c < size:
+            if not func[r][c] and qr_mask_cond(mask, r, c):
+                m[r][c] = not m[r][c]
+            c += 1
+        r += 1
+# ---- 掩码罚分 ----
+# N1：同行/同列连续 >=5
+def qr_penalty_n1(m):
+    var size = len(m)
+    var total = 0
+    var r = 0
+    while r < size:
+        var c = 0
+        while c < size:
+            var run = 1
+            while c + run < size and m[r][c + run] == m[r][c]:
+                run += 1
+            if run >= 5:
+                total += 3 + (run - 5)
+            c = c + run
+        r += 1
+    var c2 = 0
+    while c2 < size:
+        var r2 = 0
+        while r2 < size:
+            var run = 1
+            while r2 + run < size and m[r2 + run][c2] == m[r2][c2]:
+                run += 1
+            if run >= 5:
+                total += 3 + (run - 5)
+            r2 = r2 + run
+        c2 += 1
+    return total
+# N2：2x2 同色块
+def qr_penalty_n2(m):
+    var size = len(m)
+    var total = 0
+    var r = 0
+    while r < size - 1:
+        var c = 0
+        while c < size - 1:
+            if m[r][c] and m[r][c + 1] and m[r + 1][c] and m[r + 1][c + 1]:
+                total += 3
+            elif not m[r][c] and not m[r][c + 1] and not m[r + 1][c] and not m[r + 1][c + 1]:
+                total += 3
+            c += 1
+        r += 1
+    return total
+# N3：1:1:3:1:1 比例图案（1011101，前或后 4 模块全浅色 → 40 分）
+# 扫描一行/列：找 7 段图案，检查其前 4 段或后 4 段是否全浅（或位于边缘）
+def qr_penalty_n3(m):
+    var size = len(m)
+    var total = 0
+    var pat = QR_N3_PATTERN
+    var r = 0
+    while r < size:
+        var c = 0
+        while c < size - 7:
+            var hit = true
+            var k = 0
+            while k < 7:
+                if m[r][c + k] != pat[k]:
+                    hit = false
+                    break
+                k += 1
+            if hit:
+                # 前 4 段全浅（无深色）或后 4 段全浅，或贴边
+                var pre_ok = c < 4
+                if not pre_ok:
+                    var j2 = 0
+                    var all_light = true
+                    while j2 < 4:
+                        if m[r][c - 4 + j2]:
+                            all_light = false
+                            break
+                        j2 += 1
+                    pre_ok = all_light
+                var post_ok = c + 11 >= size
+                if not post_ok:
+                    var j3 = 0
+                    var all_light2 = true
+                    while j3 < 4:
+                        if m[r][c + 7 + j3]:
+                            all_light2 = false
+                            break
+                        j3 += 1
+                    post_ok = all_light2
+                if pre_ok or post_ok:
+                    total += 40
+            c += 1
+        r += 1
+    var coll = 0
+    while coll < size:
+        var rr = 0
+        while rr < size - 7:
+            var hit = true
+            var k = 0
+            while k < 7:
+                if m[rr + k][coll] != pat[k]:
+                    hit = false
+                    break
+                k += 1
+            if hit:
+                var pre_ok = rr < 4
+                if not pre_ok:
+                    var j2 = 0
+                    var all_light = true
+                    while j2 < 4:
+                        if m[rr - 4 + j2][coll]:
+                            all_light = false
+                            break
+                        j2 += 1
+                    pre_ok = all_light
+                var post_ok = rr + 11 >= size
+                if not post_ok:
+                    var j3 = 0
+                    var all_light2 = true
+                    while j3 < 4:
+                        if m[rr + 7 + j3][coll]:
+                            all_light2 = false
+                            break
+                        j3 += 1
+                    post_ok = all_light2
+                if pre_ok or post_ok:
+                    total += 40
+            rr += 1
+        coll += 1
+    return total
+# N4：深色占比
+def qr_penalty_n4(m):
+    var size = len(m)
+    var dark = 0
+    var r = 0
+    while r < size:
+        var c = 0
+        while c < size:
+            if m[r][c]:
+                dark += 1
+            c += 1
+        r += 1
+    var total = size * size
+    var percent = dark * 100 // total
+    var prev = (percent // 5) * 5
+    var next = prev + 5
+    var d = prev
+    if 100 - next < 100 - prev:
+        d = next
+    return (d // 5) * 10
+def qr_penalty(m):
+    return qr_penalty_n1(m) + qr_penalty_n2(m) + qr_penalty_n3(m) + qr_penalty_n4(m)
+# ---- 主入口（供 qrcode.px 调用） ----
+# 编码 → [版本, 掩码, 矩阵]；失败返回 Err
+def qr_encode_build(s, ec, fixed_version, fixed_mask):
+    var mode = qr_choose_mode(s)
+    var v = fixed_version
+    if v < 0:
+        v = qr_choose_version(ec, mode, s)
+        if v < 0:
+            return Err("qrcode: 内容超出 v1-10 容量")
+    if not qr_fits(v, ec, mode, s):
+        return Err("qrcode: 版本 " + str(v) + " 放不下该内容")
+    var data = qr_build_codewords(s, v, ec, mode)
+    var blocks = qr_make_blocks(data, v, ec)
+    var allbits = qr_interleave(blocks)
+    var bits = []
+    var i = 0
+    while i < len(allbits):
+        var k = 7
+        while k >= 0:
+            bits.append((allbits[i] >> k) & 1)
+            k -= 1
+        i += 1
+    var base = qr_draw_function(v)
+    var func = base[1]
+    # 选掩码（固定掩码则只算那一个）
+    var start = 0
+    var end = 8
+    if fixed_mask >= 0:
+        start = fixed_mask
+        end = fixed_mask + 1
+    var best_mask = fixed_mask
+    var best_score = -1
+    var best_m = null
+    var mask = start
+    while mask < end:
+        var mm = qr_copy_matrix(base[0])
+        qr_place_data(mm, func, bits)
+        qr_apply_mask(mm, func, mask)
+        # 罚分在格式信息写入之前评估（与 segno/ISO 一致）
+        var sc = qr_penalty(mm)
+        if (fixed_mask >= 0) or best_score < 0 or sc < best_score:
+            best_score = sc
+            best_mask = mask
+            best_m = mm
+        mask += 1
+    # 对入选矩阵写入格式/版本信息
+    qr_draw_format(best_m, v, qr_format_bits(ec, best_mask))
+    qr_draw_version(best_m, v)
+    return Ok([v, best_mask, best_m])
+# 深拷贝矩阵
+def qr_copy_matrix(m):
+    var out = []
+    var r = 0
+    while r < len(m):
+        var row = []
+        var c = 0
+        while c < len(m[r]):
+            row.append(m[r][c])
+            c += 1
+        out.append(row)
+        r += 1
+    return out
+
+# ============================================================
+# decode 侧：矩阵 → 数据字符串
+# 读格式信息（两副本 + 汉明距离选最近）→ 解除掩码 → 之字形读位
+# → 解除交织 → 每块 RS 纠错 → 解析模式/计数/数据位 → 字符串
+# 可与 segno 生成的矩阵对拍（同一布局，双向兼容）
+# ============================================================
+# 从矩阵读 15bit 格式信息（副本 A：环绕左上定位图形）
+def qr_read_fmt_a(m):
+    var bits = 0
+    var i = 0
+    while i < 6:
+        if m[i][8]:
+            bits = bits | (1 << i)
+        i += 1
+    if m[7][8]:
+        bits = bits | (1 << 6)
+    if m[8][8]:
+        bits = bits | (1 << 7)
+    if m[8][7]:
+        bits = bits | (1 << 8)
+    var j2 = 0
+    while j2 < 6:
+        if m[8][5 - j2]:
+            bits = bits | (1 << (9 + j2))
+        j2 += 1
+    return bits
+# 副本 B：右上横排 + 左下竖排
+def qr_read_fmt_b(m, v):
+    var size = qr_size(v)
+    var bits = 0
+    var i = 0
+    while i < 8:
+        if m[8][size - 1 - i]:
+            bits = bits | (1 << i)
+        i += 1
+    var j2 = 0
+    while j2 < 7:
+        if m[size - 7 + j2][8]:
+            bits = bits | (1 << (8 + j2))
+        j2 += 1
+    return bits
+# 位汉明距离
+def qr_popcount(x):
+    var c = 0
+    while x != 0:
+        c = c + (x & 1)
+        x = x >> 1
+    return c
+# 读格式信息 → [ec, mask]（两副本取汉明距离最小）
+def qr_decode_format(m, v):
+    var a = qr_read_fmt_a(m)
+    var b = qr_read_fmt_b(m, v)
+    var best_idx = -1
+    var best_dist = 99
+    var i = 0
+    while i < 32:
+        var da = qr_popcount(a ^ QR_FORMAT_INFO[i])
+        var db = qr_popcount(b ^ QR_FORMAT_INFO[i])
+        var d = da
+        if db < d:
+            d = db
+        if d < best_dist:
+            best_dist = d
+            best_idx = i
+        i += 1
+    if best_idx < 0:
+        return Err("qrcode: 无法解析格式信息")
+    var ec_idx = best_idx // 8
+    var ec = "M"
+    if ec_idx == 0:
+        ec = "M"
+    elif ec_idx == 1:
+        ec = "L"
+    elif ec_idx == 2:
+        ec = "H"
+    else:
+        ec = "Q"
+    return Ok([ec, best_idx % 8])
+# 解除掩码（掩码自反：xor 两次还原）
+def qr_unmask(m, func, mask):
+    var size = len(m)
+    var r = 0
+    while r < size:
+        var c = 0
+        while c < size:
+            if not func[r][c] and qr_mask_cond(mask, r, c):
+                m[r][c] = not m[r][c]
+            c += 1
+        r += 1
+# 沿放置顺序读全部非功能格位（返回 [bits, 已放置位数]）
+def qr_read_data_bits(m, func):
+    var size = len(m)
+    var bits = []
+    var right = size - 1
+    while right >= 1:
+        var rr = right
+        if rr <= 6:
+            rr = rr - 1
+        var vertical = 0
+        while vertical < size:
+            var z = 0
+            while z < 2:
+                var col = rr - z
+                var upwards = ((rr & 2) == 0)
+                if col < 6:
+                    upwards = not upwards
+                var row_i = vertical
+                if upwards:
+                    row_i = size - 1 - vertical
+                if not func[row_i][col]:
+                    bits.append(m[row_i][col])
+                z += 1
+            vertical += 1
+        right = right - 2
+    return bits
+# 位列表 → 字节（每 8 位一组，尾部不足丢弃）
+def qr_bits_from_list(bits, nbytes):
+    var out = []
+    var i = 0
+    while i < nbytes:
+        var v = 0
+        var j = 0
+        while j < 8:
+            if bits[i * 8 + j]:
+                v = v | (1 << (7 - j))
+            j += 1
+        out.append(v)
+        i += 1
+    return out
+# 解除交织：seq 码字 → 各块 [data, ecc]（反向 qr_interleave）
+def qr_deinterleave(seq, v, ec):
+    var groups = qr_parse_groups(v, ec)
+    var blocks = []
+    var data_lens = []
+    var ecc_lens = []
+    var nblocks = 0
+    var gi = 0
+    while gi < len(groups):
+        var g = groups[gi]
+        var bi = 0
+        while bi < g[0]:
+            data_lens.append(g[2])
+            ecc_lens.append(g[1] - g[2])
+            nblocks += 1
+            bi += 1
+        gi += 1
+    var i = 0
+    while i < nblocks:
+        blocks.append([[], []])
+        i += 1
+    var off = 0
+    var maxd = 0
+    var k = 0
+    while k < len(data_lens):
+        if data_lens[k] > maxd:
+            maxd = data_lens[k]
+        k += 1
+    var di = 0
+    while di < maxd:
+        var b = 0
+        while b < nblocks:
+            if di < data_lens[b]:
+                blocks[b][0].append(seq[off])
+                off += 1
+            b += 1
+        di += 1
+    var maxe = ecc_lens[0]
+    var e2 = 0
+    while e2 < len(ecc_lens):
+        if ecc_lens[e2] > maxe:
+            maxe = ecc_lens[e2]
+        e2 += 1
+    var ei = 0
+    while ei < maxe:
+        var b2 = 0
+        while b2 < nblocks:
+            if ei < ecc_lens[b2]:
+                blocks[b2][1].append(seq[off])
+                off += 1
+            b2 += 1
+        ei += 1
+    return blocks
+# 全部数据码字（各块 RS 纠错后拼回）
+def qr_recover_data(codewords, v, ec):
+    var blocks = qr_deinterleave(codewords, v, ec)
+    var out = []
+    var i = 0
+    while i < len(blocks):
+        var blk = blocks[i]
+        var msg = list_copy(blk[0])
+        var k = 0
+        while k < len(blk[1]):
+            msg.append(blk[1][k])
+            k += 1
+        var fixed = rs_correct(msg, len(blk[1]))
+        if fixed.is_err():
+            return Err("qrcode: 数据块 " + str(i) + " 纠错失败: " + str(fixed))
+        var j = 0
+        while j < len(fixed.unwrap()):
+            out.append(fixed.unwrap()[j])
+            j += 1
+        i += 1
+    return Ok(out)
+# 字节 → 两位小写 hex
+def qr_byte_hex(b):
+    var tbl = "0123456789abcdef"
+    return tbl[b // 16] + tbl[b % 16]
+# 解析数据：字节码字 → 字符串
+def qr_parse_data(data, v):
+    var bits = []
+    var i = 0
+    while i < len(data):
+        var b = data[i]
+        var j = 7
+        while j >= 0:
+            bits.append(((b >> j) & 1) == 1)
+            j -= 1
+        i += 1
+    var out = ""
+    var pos = 0
+    var total = len(bits)
+    # 数据码字可能与实际位流长度不一致（RS 失败兜底）→ 由调用方 Err 提前处理；
+    # 这里仅做防御：读位越界即返回 Err 而非崩溃
+    while pos + 4 <= total:
+        var mode = 0
+        var m = 0
+        while m < 4:
+            if bits[pos + m]:
+                mode = mode | (1 << (3 - m))
+            m += 1
+        pos += 4
+        if mode == 0:
+            break  # 终止符
+        var cci = 10
+        if mode == 1:
+            cci = qr_cci_len(v, 1)
+        elif mode == 2:
+            cci = qr_cci_len(v, 2)
+        else:
+            cci = qr_cci_len_byte(v)
+        var count = 0
+        var ci = 0
+        while ci < cci and pos < total:
+            count = count * 2
+            if bits[pos]:
+                count += 1
+            pos += 1
+            ci += 1
+        if mode == 1:
+            # numeric：3 位 10bit / 2 位 7bit / 1 位 4bit
+            var n1 = 0
+            while n1 + 3 <= count:
+                var val = 0
+                var n2 = 0
+                while n2 < 10:
+                    val = val * 2
+                    if bits[pos]:
+                        val += 1
+                    pos += 1
+                    n2 += 1
+                if val >= 1000:
+                    return Err("qrcode: numeric 段错误")
+                out = out + chr(48 + val // 100) + chr(48 + (val // 10) % 10) + chr(48 + val % 10)
+                n1 += 3
+            var rem2 = count - n1
+            if rem2 == 2:
+                var val2 = 0
+                var n3 = 0
+                while n3 < 7:
+                    val2 = val2 * 2
+                    if bits[pos]:
+                        val2 += 1
+                    pos += 1
+                    n3 += 1
+                if val2 >= 100:
+                    return Err("qrcode: numeric 段错误")
+                out = out + chr(48 + val2 // 10) + chr(48 + val2 % 10)
+            elif rem2 == 1:
+                var val3 = 0
+                var n4 = 0
+                while n4 < 4:
+                    val3 = val3 * 2
+                    if bits[pos]:
+                        val3 += 1
+                    pos += 1
+                    n4 += 1
+                if val3 >= 10:
+                    return Err("qrcode: numeric 段错误")
+                out = out + chr(48 + val3)
+        elif mode == 2:
+            # alphanumeric：2 位 11bit / 1 位 6bit
+            var a1 = 0
+            while a1 + 2 <= count:
+                var val = 0
+                var n2 = 0
+                while n2 < 11:
+                    val = val * 2
+                    if bits[pos]:
+                        val += 1
+                    pos += 1
+                    n2 += 1
+                if val >= 45 * 45:
+                    return Err("qrcode: alnum 段错误")
+                out = out + QR_ALNUM[val // 45] + QR_ALNUM[val % 45]
+                a1 += 2
+            if count % 2 == 1:
+                var val2 = 0
+                var n3 = 0
+                while n3 < 6:
+                    val2 = val2 * 2
+                    if bits[pos]:
+                        val2 += 1
+                    pos += 1
+                    n3 += 1
+                if val2 >= 45:
+                    return Err("qrcode: alnum 段错误")
+                out = out + QR_ALNUM[val2]
+        else:
+            # byte：count 个字节 → UTF-8
+            var hexs = ""
+            var bi = 0
+            while bi < count:
+                var val = 0
+                var n2 = 0
+                while n2 < 8:
+                    val = val * 2
+                    if bits[pos]:
+                        val += 1
+                    pos += 1
+                    n2 += 1
+                hexs = hexs + qr_byte_hex(val)
+                bi += 1
+            out = out + bytes_to_str(hex_to_bytes(hexs))
+    return Ok(out)
+# 矩阵 → 字符串（decode 主入口；版本由矩阵边长推导，不依赖上层 qrcode.px）
+def qr_decode_matrix(matrix):
+    var v = (len(matrix) - 17) // 4
+    if v < 1 or v > 10:
+        return Err("qrcode: 版本超出 1..10: " + str(v))
+    var fmt = qr_decode_format(matrix, v)
+    if fmt.is_err():
+        return Err("qrcode: 格式信息解析失败")
+    var ec = fmt.unwrap()[0]
+    var mask = fmt.unwrap()[1]
+    var base = qr_draw_function(v)
+    var func = base[1]
+    var m2 = qr_copy_matrix(matrix)
+    qr_unmask(m2, func, mask)
+    var bits = qr_read_data_bits(m2, func)
+    var total = qr_data_count(v, ec)
+    var ecc_total = 0
+    var groups = qr_parse_groups(v, ec)
+    var gi = 0
+    while gi < len(groups):
+        ecc_total = ecc_total + groups[gi][0] * (groups[gi][1] - groups[gi][2])
+        gi += 1
+    var codewords = qr_bits_from_list(bits, total + ecc_total)
+    var rec = qr_recover_data(codewords, v, ec)
+    if rec.is_err():
+        return rec
+    return qr_parse_data(rec.unwrap(), v)

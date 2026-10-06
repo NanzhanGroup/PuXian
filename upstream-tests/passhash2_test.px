@@ -1,0 +1,99 @@
+# passhash 0.2.0 测试
+import "../registry/passhash/0.2.0/passhash.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+def main():
+    # ---- 0.1.0 兼容 ----
+    var r = pass_hash("hunter2")
+    expect(r.is_ok(), "hash Ok")
+    var stored = r.unwrap()
+    expect(starts_with(stored, "pbkdf2$10000$"), "前缀: " + stored)
+    expect(pass_verify("hunter2", stored), "pass_verify true")
+    expect(not pass_verify("wrong", stored), "pass_verify false")
+
+    # 确定性 + Python golden
+    var r3 = pass_hash("pw", "aabbccddeeff00112233445566778899", 1000)
+    var seg = split(r3.unwrap(), "$")
+    expect(seg[3] == "79be141a3e02d5acf4cc3f50cde2c54725070cf1f1e3e75dac4a8120e9035278",
+        "Python golden: " + seg[3])
+
+    # ---- 0.2.0 新增：ph_iters ----
+    var i1 = ph_iters("pbkdf2$10000$abcdef$123456")
+    expect(i1.is_ok() and i1.unwrap() == 10000, "ph_iters → 10000")
+
+    var i2 = ph_iters("pbkdf2$5000$abcdef$123456")
+    expect(i2.is_ok() and i2.unwrap() == 5000, "ph_iters → 5000")
+
+    var i3 = ph_iters("garbage")
+    expect_err(i3, "ph_iters invalid → Err")
+
+    # ---- ph_salt ----
+    var s1 = ph_salt("pbkdf2$10000$aabbccddeeff$123456")
+    expect(s1.is_ok() and s1.unwrap() == "aabbccddeeff", "ph_salt")
+
+    # ---- ph_hash_body ----
+    var hb = ph_hash_body("pbkdf2$10000$aabbccddeeff$deadbeef")
+    expect(hb.is_ok() and hb.unwrap() == "deadbeef", "ph_hash_body")
+
+    # ---- ph_algorithm ----
+    var a1 = ph_algorithm("pbkdf2$10000$aabbccddeeff$deadbeef")
+    expect(a1.is_ok() and a1.unwrap() == "pbkdf2", "ph_algorithm → pbkdf2")
+
+    # ---- ph_info ----
+    var info = ph_info("pbkdf2$10000$aabbccddeeff$deadbeef")
+    expect(info.is_ok(), "ph_info Ok")
+    if info.is_ok():
+        var iv = info.unwrap()
+        expect(iv["algorithm"] == "pbkdf2", "ph_info algorithm")
+        expect(iv["iters"] == 10000, "ph_info iters")
+        expect(iv["salt"] == "aabbccddeeff", "ph_info salt")
+        expect(iv["hash"] == "deadbeef", "ph_info hash")
+
+    # ---- ph_needs_rehash ----
+    var nr1 = ph_needs_rehash("pbkdf2$10000$aabbccddeeff$deadbeef", 10000)
+    expect(nr1.is_ok() and nr1.unwrap() == false, "needs_rehash same → false")
+
+    var nr2 = ph_needs_rehash("pbkdf2$10000$aabbccddeeff$deadbeef", 50000)
+    expect(nr2.is_ok() and nr2.unwrap() == true, "needs_rehash diff → true")
+
+    var nr3 = ph_needs_rehash("garbage", 10000)
+    expect(nr3.is_ok() and nr3.unwrap() == true, "needs_rehash invalid → true")
+
+    # ---- ph_const_eq ----
+    expect(ph_const_eq("abc", "abc"), "const_eq same → true")
+    expect(not ph_const_eq("abc", "abd"), "const_eq diff → false")
+    expect(not ph_const_eq("abc", "ab"), "const_eq diff len → false")
+    expect(ph_const_eq("", ""), "const_eq empty → true")
+
+    # ---- ph_verify（恒定时间版）----
+    var h = pass_hash("secret", "aabbccddeeff00112233445566778899", 1000)
+    expect(h.is_ok(), "hash for ph_verify Ok")
+    if h.is_ok():
+        expect(ph_verify("secret", h.unwrap()), "ph_verify correct → true")
+        expect(not ph_verify("wrong", h.unwrap()), "ph_verify wrong → false")
+        expect(not ph_verify("secret", "garbage"), "ph_verify garbage → false")
+        expect(not ph_verify("secret", "bcrypt$10$x$y"), "ph_verify non-pbkdf2 → false")
+
+    # ---- ph_hash_with ----
+    var hw = ph_hash_with("mypw", 5000)
+    expect(hw.is_ok(), "ph_hash_with Ok")
+    if hw.is_ok():
+        expect(starts_with(hw.unwrap(), "pbkdf2$5000$"), "ph_hash_with prefix")
+        expect(ph_verify("mypw", hw.unwrap()), "ph_hash_with → ph_verify true")
+        expect(not ph_verify("wrong", hw.unwrap()), "ph_hash_with → ph_verify wrong false")
+
+    # ---- 随机盐不同 ----
+    var h1 = pass_hash("pw").unwrap()
+    var h2 = pass_hash("pw").unwrap()
+    expect(h1 != h2, "随机 salt 不同 hash")
+    expect(pass_verify("pw", h1) and pass_verify("pw", h2), "各自可验证")
+
+    print("passhash 0.2.0: PASS")
+    return Ok(0)

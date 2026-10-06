@@ -1,0 +1,206 @@
+# ============================================================
+# 普贤生态库：registry/ansi —— ANSI 颜色/样式输出
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust colored / anstream 心智（0.1.0 子集）：
+#   an_color(s, fg)   → str   前景色（black/red/green/yellow/blue/magenta/cyan/white
+#                             + bright 前缀 bright_red 等）
+#   an_bg(s, bg)      → str   背景色（同色名）
+#   an_style(s, style)→ str   样式：bold/dim/italic/underline/blink/reverse/strike
+#   an_reset()        → str   "\u{1b}[0m"
+#   an_strip(s)       → str   去除全部 ANSI 转义序列（SGR 及其它 CSI）
+# 说明：
+#   - 转义序列用 \u{1b}[...m 形式（PuXian 不支持 \x / 八进制转义）
+#   - an_strip 按 rune 扫描：遇 ESC 后若接 '[' 则跳到 CSI 终结字节（A-Z/a-z），
+#     否则仅跳过 ESC+1（两字节序列子集）
+#   - 不探测 tty：是否染色由调用方决定（log/cli 增强用）
+# ============================================================
+const AN_ESC = "\u{1b}["
+const AN_RESET = "\u{1b}[0m"
+# 色名 → SGR 码（前景）
+def an_fg_code(name):
+    if name == "black":
+        return 30
+    if name == "red":
+        return 31
+    if name == "green":
+        return 32
+    if name == "yellow":
+        return 33
+    if name == "blue":
+        return 34
+    if name == "magenta":
+        return 35
+    if name == "cyan":
+        return 36
+    if name == "white":
+        return 37
+    if name == "bright_black":
+        return 90
+    if name == "bright_red":
+        return 91
+    if name == "bright_green":
+        return 92
+    if name == "bright_yellow":
+        return 93
+    if name == "bright_blue":
+        return 94
+    if name == "bright_magenta":
+        return 95
+    if name == "bright_cyan":
+        return 96
+    if name == "bright_white":
+        return 97
+    return -1
+# 样式名 → SGR 码
+def an_style_code(name):
+    if name == "bold":
+        return 1
+    if name == "dim":
+        return 2
+    if name == "italic":
+        return 3
+    if name == "underline":
+        return 4
+    if name == "blink":
+        return 5
+    if name == "reverse":
+        return 7
+    if name == "strike":
+        return 9
+    return -1
+def an_color(s, fg):
+    var code = an_fg_code(fg)
+    if code < 0:
+        return s
+    return AN_ESC + str(code) + "m" + s + AN_RESET
+def an_bg(s, bg):
+    var code = an_fg_code(bg)
+    if code < 0:
+        return s
+    return AN_ESC + str(code + 10) + "m" + s + AN_RESET
+def an_style(s, style):
+    var code = an_style_code(style)
+    if code < 0:
+        return s
+    return AN_ESC + str(code) + "m" + s + AN_RESET
+def an_reset():
+    return AN_RESET
+# 判断字符是否为 ASCII 字母（CSI 终结字节）
+def an_is_letter(c):
+    var o = ord(c)
+    return (o >= 65 and o <= 90) or (o >= 97 and o <= 122)
+# 去除 ANSI 转义序列
+def an_strip(s):
+    var out = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        if c == "\u{1b}":
+            if i + 1 < n and s[i + 1] == "[":
+                # CSI：跳到终结字节（A-Z/a-z）
+                i = i + 2
+                while i < n and not an_is_letter(s[i]):
+                    i += 1
+                i = i + 1
+            else:
+                # 两字节序列（ESC X）
+                i = i + 2
+        else:
+            out = out + c
+            i += 1
+    return out
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 组合多个样式：an_combine(s, ["bold", "red", "bg_white"])
+def an_combine(s, styles):
+    var codes = []
+    var i = 0
+    while i < len(styles):
+        var style = styles[i]
+        var fc = an_fg_code(style)
+        var sc = an_style_code(style)
+        if fc >= 0:
+            codes.append(fc)
+        elif sc >= 0:
+            codes.append(sc)
+        elif starts_with(style, "bg_"):
+            var bgc = an_fg_code(style[3:len(style)])
+            if bgc >= 0:
+                codes.append(bgc + 10)
+        i += 1
+    if len(codes) == 0:
+        return s
+    var prefix = AN_ESC
+    var j = 0
+    while j < len(codes):
+        if j > 0:
+            prefix = prefix + ";"
+        prefix = prefix + str(codes[j])
+        j += 1
+    return prefix + "m" + s + AN_RESET
+# 256 色前景
+def an_256(s, code):
+    return AN_ESC + "38;5;" + str(code) + "m" + s + AN_RESET
+# 256 色背景
+def an_256_bg(s, code):
+    return AN_ESC + "48;5;" + str(code) + "m" + s + AN_RESET
+# TrueColor RGB 前景
+def an_rgb(s, r, g, b):
+    return AN_ESC + "38;2;" + str(r) + ";" + str(g) + ";" + str(b) + "m" + s + AN_RESET
+# TrueColor RGB 背景
+def an_rgb_bg(s, r, g, b):
+    return AN_ESC + "48;2;" + str(r) + ";" + str(g) + ";" + str(b) + "m" + s + AN_RESET
+# ---- 颜色快捷函数 ----
+def an_red(s):
+    return an_color(s, "red")
+def an_green(s):
+    return an_color(s, "green")
+def an_yellow(s):
+    return an_color(s, "yellow")
+def an_blue(s):
+    return an_color(s, "blue")
+def an_cyan(s):
+    return an_color(s, "cyan")
+def an_magenta(s):
+    return an_color(s, "magenta")
+def an_bold(s):
+    return an_style(s, "bold")
+def an_dim(s):
+    return an_style(s, "dim")
+def an_italic(s):
+    return an_style(s, "italic")
+def an_underline(s):
+    return an_style(s, "underline")
+# ---- 光标控制 ----
+def an_cursor_up(n = 1):
+    return AN_ESC + str(n) + "A"
+def an_cursor_down(n = 1):
+    return AN_ESC + str(n) + "B"
+def an_cursor_left(n = 1):
+    return AN_ESC + str(n) + "D"
+def an_cursor_right(n = 1):
+    return AN_ESC + str(n) + "C"
+def an_cursor_hide():
+    return AN_ESC + "?25l"
+def an_cursor_show():
+    return AN_ESC + "?25h"
+# 移动到指定位置
+def an_move_to(row, col):
+    return AN_ESC + str(row) + ";" + str(col) + "H"
+# 清屏
+def an_clear_screen():
+    return AN_ESC + "2J"
+# 清行
+def an_clear_line():
+    return AN_ESC + "2K"
+# 保存/恢复光标
+def an_save_cursor():
+    return "\u{1b}7"
+def an_restore_cursor():
+    return "\u{1b}8"
+# 显示宽度（ANSI 序列不计宽度）
+def an_width(s):
+    return len(an_strip(s))

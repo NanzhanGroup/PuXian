@@ -1,0 +1,75 @@
+# config 0.2.0 测试：JSON/validate/递归env/flatten/clone + 0.1.0 回归
+import "../registry/config/0.2.0/config.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var yaml_s = "port: 8080\nhost: localhost\n"
+    var r1 = cfg_from_yaml(yaml_s)
+    expect(r1.is_ok(), "0.1.0 yaml: " + str(r1))
+    expect(r1.unwrap()["port"] == 8080, "yaml port")
+    expect(r1.unwrap()["host"] == "localhost", "yaml host")
+    # merge
+    var base = {"a": 1, "b": {"c": 2, "d": 3}}
+    var overlay = {"b": {"d": 99, "e": 4}, "f": 5}
+    var merged = cfg_merge(base, overlay)
+    expect(merged["a"] == 1, "merge a")
+    expect(merged["b"]["c"] == 2, "merge b.c")
+    expect(merged["b"]["d"] == 99, "merge b.d")
+    expect(merged["b"]["e"] == 4, "merge b.e")
+    expect(merged["f"] == 5, "merge f")
+    # get/set
+    var d = {"a": {"b": {"c": 42}}}
+    expect(cfg_get(d, "a.b.c") == 42, "get a.b.c")
+    expect(cfg_get(d, "a.b.x", "default") == "default", "get default")
+    cfg_set(d, "a.b.x", "new")
+    expect(cfg_get(d, "a.b.x") == "new", "set a.b.x")
+    # ---- 0.2.0 JSON ----
+    var json_s = "{\"port\": 3000, \"host\": \"0.0.0.0\", \"debug\": true}"
+    var r2 = cfg_from_json(json_s)
+    expect(r2.is_ok(), "json parse: " + str(r2))
+    expect(r2.unwrap()["port"] == 3000, "json port")
+    expect(r2.unwrap()["host"] == "0.0.0.0", "json host")
+    expect(r2.unwrap()["debug"] == true, "json debug")
+    # JSON with defaults
+    var r3 = cfg_from_json(json_s, {"port": 80, "extra": "keep"})
+    expect(r3.unwrap()["port"] == 3000, "json merge port")
+    expect(r3.unwrap()["extra"] == "keep", "json merge extra")
+    # to_json
+    var jout = cfg_to_json({"a": 1, "b": "x"})
+    expect(contains(jout, "a"), "to_json has a")
+    expect(contains(jout, "b"), "to_json has b")
+    # ---- 0.2.0 validate ----
+    var cfg = {"port": 8080, "host": "localhost", "db": {"name": "test"}}
+    var missing = cfg_validate(cfg, ["port", "host", "db.name"])
+    expect(len(missing) == 0, "validate all present: " + str(missing))
+    var missing2 = cfg_validate(cfg, ["port", "db.host", "db.name"])
+    expect(len(missing2) == 1, "validate 1 missing: " + str(missing2))
+    expect(missing2[0] == "db.host", "validate db.host missing")
+    # ---- 0.2.0 递归 env ----
+    var cfg2 = {"db": {"host": "localhost", "port": 5432}, "name": "app"}
+    # APP_DB_HOST 由 shell 设置
+    var r4 = cfg_apply_env_recursive(cfg2, "APP")
+    expect(r4["db"]["host"] == "env-db-host", "recursive env: " + str(r4["db"]["host"]))
+    expect(r4["db"]["port"] == 5432, "recursive env keep port")
+    expect(r4["name"] == "app", "recursive env keep name")
+    # ---- 0.2.0 get_all ----
+    var vals = cfg_get_all(cfg, ["port", "host", "db.name", "missing"])
+    expect(vals["port"] == 8080, "get_all port")
+    expect(vals["host"] == "localhost", "get_all host")
+    expect(vals["db.name"] == "test", "get_all db.name")
+    expect(vals["missing"] == null, "get_all missing")
+    # ---- 0.2.0 clone ----
+    var orig = {"a": 1, "b": {"c": 2}}
+    var cl = cfg_clone(orig)
+    cl["b"]["c"] = 99
+    expect(orig["b"]["c"] == 2, "clone deep copy")
+    # ---- 0.2.0 flatten ----
+    var nested = {"a": 1, "b": {"c": 2, "d": {"e": 3}}}
+    var flat = cfg_flatten(nested)
+    expect(flat["a"] == 1, "flatten a")
+    expect(flat["b.c"] == 2, "flatten b.c")
+    expect(flat["b.d.e"] == 3, "flatten b.d.e")
+    print("config 0.2.0: PASS")

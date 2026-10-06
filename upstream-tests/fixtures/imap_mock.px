@@ -5,7 +5,7 @@
 #   但上游仓库**不带服务端**（当时是手工起的临时进程，未入库）⇒ 本仓用普贤自己写一个，
 #   不引入 python3 / netcat 之类的新依赖（同 ftp / pop3 / oauth2 先例）。
 #
-# 契约（严格按 `tests/imap_test.px` 的断言）：
+# 契约（严格按 `tests/imap_test.px` 与 `tests/imap_2_test.px` 的断言）：
 #   欢迎 `* OK`；LOGIN → `<tag> OK`；LIST → INBOX / Sent / Trash 三个邮箱；
 #   SELECT INBOX → `* 2 EXISTS` + `* 0 RECENT`；FETCH 1 BODY[] → literal `{N}` 消息体，
 #   含 `Subject: hello` 与 `普贤`（UTF-8 多字节）；LOGOUT → `<tag> OK`。
@@ -13,12 +13,25 @@
 #   ⚠️ literal 长度必须按**字节**算（`bytes_len`）—— `len("…普贤")` 是 rune 数（PX-DEF-015），
 #      按 rune 数发长度会让客户端多读/少读。
 #
-# 用法：./imapfix            （监听 127.0.0.1 的 1143）
+# M282 增补（0.2.0 用例 `tests/imap_2_test.px` 用到、0.1.0 不用）：
+#   **端口 2143**（同一个 mock 同时听 1143 与 2143）+
+#   `EXAMINE` / `SEARCH ALL|UNSEEN` / `NOOP` / `STORE` / `COPY` / `CREATE` / `DELETE` / `RENAME` / `CLOSE`。
+#   ⚠️ `CREATE` 后 `LIST` 必须**看得见**新邮箱、`DELETE` 后必须看不见 ⇒ 邮箱表是**进程内可变状态**
+#      （不是写死的三行），否则用例的「CREATE 后 LIST 含 TestBox」断言恒假。
+#   ⚠️ 这些命令的**回复码**由用例断言反推（见 registry/imap/0.2.0/imap.px 的同名函数），
+#      不是「为了通过而放宽」：EXAMINE 与 SELECT 同形（只读）、其余只需 `<tag> OK`。
+#
+# 用法：./imapfix            （监听 127.0.0.1 的 1143 与 2143）
 # ============================================================
 
-var IM_PORT = 1143
-var IM_LFD = tcp_listen(IM_PORT)
-print("imapfix: listening " + str(IM_PORT))
+var IM_PORT_A = 1143
+var IM_PORT_B = 2143
+var IM_LFD_A = tcp_listen(IM_PORT_A)
+var IM_LFD_B = tcp_listen(IM_PORT_B)
+print("imapfix: listening " + str(IM_PORT_A) + " · " + str(IM_PORT_B))
+
+# 邮箱表（进程内可变：CREATE/DELETE/RENAME 会改它，LIST 读它）
+var IM_BOXES = ["INBOX", "Sent", "Trash"]
 
 def im_read_line(fd):
     var buf = bytes("")
@@ -45,6 +58,23 @@ def im_send(fd, s):
 # 消息体（含 UTF-8 中文 ⇒ 长度按字节，见文件头注）
 var IM_BODY = "Subject: hello\r\nFrom: a@example.com\r\n\r\nmessage one 普贤"
 
+def im_box_add(name):
+    var i = 0
+    while i < len(IM_BOXES):
+        if IM_BOXES[i] == name:
+            return
+        i += 1
+    IM_BOXES.append(name)
+
+def im_box_del(name):
+    var out = []
+    var i = 0
+    while i < len(IM_BOXES):
+        if IM_BOXES[i] != name:
+            out.append(IM_BOXES[i])
+        i += 1
+    IM_BOXES = out
+
 def im_handle(fd):
     im_send(fd, "* OK [CAPABILITY IMAP4rev1] PuXian IMAP fixture ready")
     while true:
@@ -61,14 +91,19 @@ def im_handle(fd):
             im_send(fd, tag + " OK LOGIN completed")
         elif cmd == "LIST":
             # flags 留空：客户端只取**最后一个** token 并去引号（imap.px `imap_list`）
-            im_send(fd, "* LIST () \"/\" \"INBOX\"")
-            im_send(fd, "* LIST () \"/\" \"Sent\"")
-            im_send(fd, "* LIST () \"/\" \"Trash\"")
+            var i = 0
+            while i < len(IM_BOXES):
+                im_send(fd, "* LIST () \"/\" \"" + IM_BOXES[i] + "\"")
+                i += 1
             im_send(fd, tag + " OK LIST completed")
         elif cmd == "SELECT":
             im_send(fd, "* 2 EXISTS")
             im_send(fd, "* 0 RECENT")
             im_send(fd, tag + " OK [READ-WRITE] SELECT completed")
+        elif cmd == "EXAMINE":
+            im_send(fd, "* 2 EXISTS")
+            im_send(fd, "* 0 RECENT")
+            im_send(fd, tag + " OK [READ-ONLY] EXAMINE completed")
         elif cmd == "FETCH":
             # literal：`* 1 FETCH (BODY[] {N}` + CRLF，随后是 N 字节 + CRLF + `)` + 结束行
             var bb = bytes(IM_BODY)
@@ -76,6 +111,38 @@ def im_handle(fd):
             tcp_send_ex(fd, bb)
             tcp_send_ex(fd, bytes("\r\n)\r\n"))
             im_send(fd, tag + " OK FETCH completed")
+        elif cmd == "SEARCH":
+            # ALL → 两条；UNSEEN → 一条（用例断言 >= 2 / >= 1）
+            var crit = ""
+            if len(parts) >= 3:
+                crit = parts[2]
+            if crit == "UNSEEN":
+                im_send(fd, "* SEARCH 1")
+            else:
+                im_send(fd, "* SEARCH 1 2")
+            im_send(fd, tag + " OK SEARCH completed")
+        elif cmd == "CREATE":
+            if len(parts) >= 3:
+                im_box_add(parts[2])
+            im_send(fd, tag + " OK CREATE completed")
+        elif cmd == "DELETE":
+            if len(parts) >= 3:
+                im_box_del(parts[2])
+            im_send(fd, tag + " OK DELETE completed")
+        elif cmd == "RENAME":
+            if len(parts) >= 4:
+                im_box_del(parts[2])
+                im_box_add(parts[3])
+            im_send(fd, tag + " OK RENAME completed")
+        elif cmd == "COPY":
+            im_send(fd, tag + " OK COPY completed")
+        elif cmd == "STORE":
+            im_send(fd, "* 2 FETCH (FLAGS (\\Seen))")
+            im_send(fd, tag + " OK STORE completed")
+        elif cmd == "CLOSE":
+            im_send(fd, tag + " OK CLOSE completed")
+        elif cmd == "NOOP":
+            im_send(fd, tag + " OK NOOP completed")
         elif cmd == "LOGOUT":
             im_send(fd, "* BYE logging out")
             im_send(fd, tag + " OK LOGOUT completed")
@@ -84,6 +151,11 @@ def im_handle(fd):
             im_send(fd, tag + " BAD unsupported")
     tcp_close(fd)
 
-while true:
-    var cfd = tcp_accept(IM_LFD)
-    im_handle(cfd)
+# 两个端口各一个 accept 循环（1143 = 0.1.0 用例 · 2143 = 0.2.0 用例）
+def im_accept_loop(lfd):
+    while true:
+        var cfd = tcp_accept(lfd)
+        im_handle(cfd)
+
+spawn im_accept_loop(IM_LFD_A)
+im_accept_loop(IM_LFD_B)

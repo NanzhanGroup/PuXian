@@ -1,0 +1,258 @@
+# ============================================================
+# 普贤生态库：registry/textwrap —— 文本排版（换行/缩进/去缩进）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python textwrap 心智（0.1.0 子集）：
+#   tw_wrap(s, width)   → [str]   按词断行（默认词间单空格，空行保留）
+#   tw_fill(s, width)   → str     wrap 后用 "\n" 连接
+#   tw_dedent(s)        → str     去除所有行的公共前导空白
+#   tw_indent(s, prefix)→ str     给非空行加前缀
+# 说明：
+#   - width 按 rune 计数（len(s)，中文每字算 1；实际显示宽度约 2 为排版子集）
+#   - 断行只按空格（" "）分词；制表/连续空格折叠为单空格（0.1.0 子集）
+# ============================================================
+# 内部：按 " " 分词
+def tw_split_words(s):
+    var out = []
+    var cur = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == " ":
+            if len(cur) > 0:
+                out.append(cur)
+                cur = ""
+        else:
+            cur = cur + c
+        i += 1
+    if len(cur) > 0:
+        out.append(cur)
+    return out
+def tw_wrap(s, width):
+    var out = []
+    var lines = s.split("\n")
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if len(line) == 0:
+            out.append("")
+        else:
+            var words = tw_split_words(line)
+            var cur = ""
+            var j = 0
+            while j < len(words):
+                var w = words[j]
+                if len(cur) == 0:
+                    cur = w
+                elif len(cur) + 1 + len(w) <= width:
+                    cur = cur + " " + w
+                else:
+                    out.append(cur)
+                    cur = w
+                j += 1
+            out.append(cur)
+        i += 1
+    return out
+def tw_fill(s, width):
+    var lines = tw_wrap(s, width)
+    var out = ""
+    var i = 0
+    while i < len(lines):
+        if i > 0:
+            out = out + "\n"
+        out = out + lines[i]
+        i += 1
+    return out
+# 公共前导空白：取所有非空行的最小前导空白数
+def tw_dedent(s):
+    var lines = s.split("\n")
+    var min_ind = -1
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if len(line) == 0:
+            i += 1
+            continue
+        var ind = 0
+        while ind < len(line) and (line[ind] == " " or line[ind] == "\t"):
+            ind += 1
+        if min_ind < 0 or ind < min_ind:
+            min_ind = ind
+        i += 1
+    if min_ind <= 0:
+        return s
+    var out = ""
+    var j = 0
+    while j < len(lines):
+        var line = lines[j]
+        if j > 0:
+            out = out + "\n"
+        if len(line) >= min_ind:
+            out = out + line[min_ind:len(line)]
+        else:
+            out = out + line
+        j += 1
+    return out
+# 给非空行加前缀（空行不加）
+def tw_indent(s, prefix):
+    var lines = s.split("\n")
+    var out = ""
+    var i = 0
+    while i < len(lines):
+        if i > 0:
+            out = out + "\n"
+        if len(lines[i]) > 0:
+            out = out + prefix + lines[i]
+        else:
+            out = out + lines[i]
+        i += 1
+    return out
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 居中文本到指定宽度
+def tw_center(s, width, fillchar = " "):
+    if len(s) >= width:
+        return s
+    var total = width - len(s)
+    var left = total // 2
+    var right = total - left
+    var lp = ""
+    var i = 0
+    while i < left:
+        lp = lp + fillchar
+        i += 1
+    var rp = ""
+    i = 0
+    while i < right:
+        rp = rp + fillchar
+        i += 1
+    return lp + s + rp
+# 左对齐填充
+def tw_ljust(s, width, fillchar = " "):
+    if len(s) >= width:
+        return s
+    var pad = ""
+    var i = 0
+    while i < width - len(s):
+        pad = pad + fillchar
+        i += 1
+    return s + pad
+# 右对齐填充
+def tw_rjust(s, width, fillchar = " "):
+    if len(s) >= width:
+        return s
+    var pad = ""
+    var i = 0
+    while i < width - len(s):
+        pad = pad + fillchar
+        i += 1
+    return pad + s
+# 去除首部指定行
+def tw_strip_lines(s):
+    var lines = s.split("\n")
+    var start = 0
+    while start < len(lines) and len(lines[start]) == 0:
+        start += 1
+    var end = len(lines)
+    while end > start and len(lines[end - 1]) == 0:
+        end -= 1
+    var out = ""
+    var i = start
+    while i < end:
+        if i > start:
+            out = out + "\n"
+        out = out + lines[i]
+        i += 1
+    return out
+# 截断到指定宽度并加省略号
+def tw_shorten(s, width, placeholder = "..."):
+    if len(s) <= width:
+        return s
+    var cut = width - len(placeholder)
+    if cut <= 0:
+        return placeholder
+    return s[0:cut] + placeholder
+# 按段落分割（空行分隔）
+def tw_split_paragraphs(s):
+    var paras = []
+    var lines = s.split("\n")
+    var cur = ""
+    var i = 0
+    while i < len(lines):
+        if len(lines[i]) == 0:
+            if len(cur) > 0:
+                paras.append(cur)
+                cur = ""
+        else:
+            if len(cur) > 0:
+                cur = cur + "\n"
+            cur = cur + lines[i]
+        i += 1
+    if len(cur) > 0:
+        paras.append(cur)
+    return paras
+# 统计行数
+def tw_line_count(s):
+    return len(s.split("\n"))
+# 统计词数
+def tw_word_count(s):
+    var count = 0
+    var lines = s.split("\n")
+    var i = 0
+    while i < len(lines):
+        var words = tw_split_words(lines[i])
+        count = count + len(words)
+        i += 1
+    return count
+# 制表符展开为空格
+def tw_expandtabs(s, tabsize = 8):
+    var out = ""
+    var col = 0
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "\t":
+            var spaces = tabsize - col % tabsize
+            var j = 0
+            while j < spaces:
+                out = out + " "
+                j += 1
+            col = col + spaces
+        elif c == "\n":
+            out = out + c
+            col = 0
+        else:
+            out = out + c
+            col += 1
+        i += 1
+    return out
+# 去除每行尾部空白
+def tw_rstrip_lines(s):
+    var lines = s.split("\n")
+    var out = ""
+    var i = 0
+    while i < len(lines):
+        if i > 0:
+            out = out + "\n"
+        var line = lines[i]
+        var end = len(line)
+        while end > 0 and (line[end - 1] == " " or line[end - 1] == "\t"):
+            end -= 1
+        out = out + line[0:end]
+        i += 1
+    return out
+# 带初始缩进和后续缩进的 fill
+def tw_fill_indent(s, width, initial_indent = "", subsequent_indent = ""):
+    var lines = tw_wrap(s, width)
+    var out = ""
+    var i = 0
+    while i < len(lines):
+        if i > 0:
+            out = out + "\n"
+        if i == 0:
+            out = out + initial_indent + lines[i]
+        else:
+            out = out + subsequent_indent + lines[i]
+        i += 1
+    return out

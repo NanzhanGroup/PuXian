@@ -1,0 +1,22 @@
+# bson 0.2.0 测试
+import "../registry/bson/0.2.0/bson.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var doc = {"name": "Alice", "age": 30}
+    var encoded = bson_encode(doc).unwrap()
+    var decoded = bson_decode(encoded).unwrap()
+    expect(decoded["name"] == "Alice", "encode/decode name: " + str(decoded["name"]))
+    # ---- 0.2.0 doc_keys ----
+    var keys = bson_doc_keys(doc)
+    expect(len(keys) == 2, "doc_keys 2: " + str(len(keys)))
+    # ---- 0.2.0 doc_has ----
+    expect(bson_doc_has(doc, "name") == true, "doc_has name")
+    expect(bson_doc_has(doc, "x") == false, "doc_has x false")
+    # ---- 0.2.0 doc_get ----
+    var v = bson_doc_get(doc, "name").unwrap()
+    expect(v == "Alice", "doc_get name: " + str(v))
+    print("PASS: bson 0.2.0")

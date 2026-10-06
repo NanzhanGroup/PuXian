@@ -1135,3 +1135,27 @@ run m279_std_surface bash examples/m279_std_surface/verify.sh
 #      + [4] 契约行 + 正判据（服务真起 + 客户端真连）
 #      + 负控（注入忙自旋 ⇒ CPU 超限 ⇒ **必须判红**）
 run m280_resource_baseline bash examples/m280_resource_baseline/verify.sh
+
+# M282：**上游 registry-px 0.2.0 全量再引入 + 凭据泄漏守卫**。
+#   ① 引入：上游 01f6048c 的 0.2.0 全量入库（**120 个新版本目录**；上游 122 包全部有 0.2.0，
+#      其中 fsnotify/xlsx 的 0.2.0 早在 M214 已引入）· upstream-tests/ 新增 110 个用例 ·
+#      版本目录 137 → 257。
+#   ② 安全（缺陷 488）：引入器把 `git config remote.origin.url` **原样**写进
+#      `registry/THIRD_PARTY.md`，而该文件**提交并发布到公开仓库** ⇒ 用带 PAT 的 clone URL
+#      会把密钥**永久写进公开仓库**（沙箱实测命中）。修 = 剥离 userinfo + 清洗后仍含 token
+#      形状则**拒写 rc=4**；并新增守卫 `selfhost/check_no_secrets.sh`（全仓 8 类形状 + 私钥实体）。
+#   ③ 运行器三处判据缺口（都属「判据静默变窄」族）：
+#      · 成功判据原要求输出含字面 PASS，而 0.2.0 有 1 个用例打印的是 "… tests done" ⇒ 假红；
+#        改为「rc==0 + 无 FAIL + 非空」。
+#      · 新增 ①b：MANIFEST 条目集 ⇄ *_test.px 集（防「夹具混进清单」—— 实测事故：
+#        重建清单时写成 `sha256sum *.px fixtures/*.px`，一改自己的 mock 就让判据变红）。
+#      · 新增 ①c：EXPECTED ⇄ 用例集 **双向一致 + 无重复**（awk 取末条 ⇒ 重复会静默覆盖；
+#        实测抓到 3 条重复 —— 生成器用 `*2_test.px` 通配把 0.1.0 的 `oauth2_test.px` 也算进去了）。
+#   门 = 表⇔磁盘逐行重算 + 清单/登记双向 + 引用面 + 凭据守卫（含注入假 token 负控）
+#      + 规模下限（版本目录/用例/XFAIL 条数/缺陷文档覆盖 T1–T11+L1）
+#      + 上游逐字节对拍（有检出才跑，无则**响亮 SKIP**）
+#      + **覆盖补丁**：[8] 上游 ftp_2_test 卡在 T9（与 0.1.0 用例对同一夹具互斥）⇒ 0.2.0 新增的
+#        FTP API 上游从没跑到过；本门用**本仓自写探针** ftp020_probe.px + 自建 mock 补齐。
+#   ⚠️ 本门不判上游用例通过率（那是 run_upstream_tests.sh 的职责，登记在 EXPECTED.tsv，
+#      逐条定性见 docs/UPSTREAM_020_DEFECTS.md）。
+run m282_registry_020 bash examples/m282_registry_020/verify.sh

@@ -1,0 +1,269 @@
+# ============================================================
+# 普贤生态库：registry/faker —— 假数据生成（演示/测试夹具）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；fa_uuid 除外，依赖 os_random_hex），
+# 编译（px build）与解释（px run）双模式一致。
+# 对齐 Python Faker 心智（0.1.0 中文子集）：
+#   确定性 API：每个函数吃入种子 int，返回 [新种子, 值]；
+#   fa_rand(seed) / fa_range(seed, lo, hi) / fa_digits(seed, n)
+#   fa_name(seed)    → [新种子, "姓 名"]
+#   fa_surname(seed) / fa_given(seed)
+#   fa_phone(seed)   → [新种子, "1xx-xxxx-xxxx"]（第二位 3-9）
+#   fa_email(seed)   → [新种子, "name@example.com"]
+#   fa_sentence(seed, n) → [新种子, n 个词组成的句子]
+#   随机 API（不可复现，仅格式确定）：
+#   fa_uuid()        → v4 UUID 串（os_random_hex）
+#   fa_uuid_from(hex16) → v4 UUID 串（给定 16 字节 hex，测试用）
+# 说明：
+#   - PRNG 用 splitmix64 风格（64 位乘加 + 2^64 回绕，两模式一致）
+#   - 词表较小（写库规范 <500 行）；性别不区分；域名固定 example.com
+# ============================================================
+# ---- PRNG（splitmix64 风格；i64 乘法/加法按 2^64 回绕） ----
+def fa_rand(seed):
+    var z = seed + 0x9E3779B97F4A7C15
+    var m1 = z ^ (z >> 30)
+    z = m1 * 0xBF58476D1CE4E5B9
+    var m2 = z ^ (z >> 27)
+    z = m2 * 0x94D049BB133111EB
+    z = z ^ (z >> 31)
+    return [z, z]
+# [lo, hi) 区间随机
+def fa_range(seed, lo, hi):
+    var r = fa_rand(seed)
+    if hi <= lo:
+        return [r[0], lo]
+    var span = hi - lo
+    var v = r[1] % span
+    if v < 0:
+        v = v + span
+    return [r[0], lo + v]
+# n 位数字串
+def fa_digits(seed, n):
+    var s = seed
+    var out = ""
+    var i = 0
+    while i < n:
+        var r = fa_range(s, 0, 10)
+        s = r[0]
+        out = out + chr(48 + r[1])
+        i += 1
+    return [s, out]
+# ---- 词表 ----
+const FA_SURNAMES = ["王", "李", "张", "刘", "陈", "杨", "赵", "黄",
+    "周", "吴", "徐", "孙"]
+const FA_GIVENS = ["伟", "芳", "娜", "敏", "静", "磊", "军", "洋", "勇", "艳",
+    "杰", "涛", "明", "超", "秀英", "霞", "平", "刚"]
+const FA_WORDS = ["普贤", "生态", "库", "服务", "接口", "系统", "测试", "数据",
+    "配置", "任务", "队列", "缓存", "网关", "日志", "监控",
+    "告警", "认证", "会话"]
+# ---- 人名 ----
+def fa_surname(seed):
+    var r = fa_range(seed, 0, 12)
+    return [r[0], FA_SURNAMES[r[1]]]
+def fa_given(seed):
+    var r = fa_range(seed, 0, 18)
+    return [r[0], FA_GIVENS[r[1]]]
+def fa_name(seed):
+    var rs = fa_surname(seed)
+    var rg = fa_given(rs[0])
+    return [rg[0], rs[1] + " " + rg[1]]
+# ---- 手机号 / 邮箱 ----
+# 1xx-xxxx-xxxx（第二位 3-9）
+def fa_phone(seed):
+    var p = fa_range(seed, 3, 10)
+    var d0 = fa_digits(p[0], 1)
+    var out = "1" + chr(48 + p[1]) + d0[1]
+    var d1 = fa_digits(d0[0], 4)
+    var d2 = fa_digits(d1[0], 4)
+    return [d2[0], out + "-" + d1[1] + "-" + d2[1]]
+def fa_email(seed):
+    var rn = fa_range(seed, 0, 12)
+    var name = FA_SURNAMES[rn[1]]
+    var rg = fa_range(rn[0], 0, 18)
+    name = name + FA_GIVENS[rg[1]]
+    var d = fa_digits(rg[0], 2)
+    return [d[0], name + d[1] + "@example.com"]
+# ---- 句子（占位文本） ----
+def fa_sentence(seed, n):
+    var s = seed
+    var out = ""
+    var i = 0
+    while i < n:
+        var r = fa_range(s, 0, 18)
+        s = r[0]
+        if i > 0:
+            out = out + " "
+        out = out + FA_WORDS[r[1]]
+        i += 1
+    return [s, out]
+# ---- UUID v4 ----
+def fa_uuid():
+    var h = os_random_hex(16)
+    return fa_uuid_from(h)
+# 给定 16 字节 hex（32 字符）构造 v4：hex 第 13 位（下标 12）设版本 4，
+# 第 17 位（下标 16）设变体 8/9/a/b（这里统一置 8），再插入 4 个横线。
+def fa_uuid_from(hex16):
+    if len(hex16) != 32:
+        return ""
+    var v = hex16[0:12] + "4" + hex16[13:32]
+    var vb = v[0:16] + "8" + v[17:32]
+    return vb[0:8] + "-" + vb[8:12] + "-" + vb[12:16] + "-" + vb[16:20] + "-" + vb[20:32]
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# ---- 地址 ----
+const FA_PROVINCES = ["北京", "上海", "广东", "浙江", "江苏", "四川",
+    "湖北", "湖南", "福建", "山东", "河南", "陕西"]
+const FA_CITIES = ["市", "市", "市", "市", "市", "市",
+    "市", "市", "市", "市", "市", "市"]
+const FA_STREETS = ["中山路", "人民路", "解放路", "建设路", "和平路",
+    "文化路", "新华路", "光明路", "友谊路", "幸福路"]
+def fa_province(seed):
+    var r = fa_range(seed, 0, 12)
+    return [r[0], FA_PROVINCES[r[1]]]
+def fa_city(seed):
+    var rp = fa_province(seed)
+    return [rp[0], rp[1] + FA_CITIES[rp[1] == rp[1]]]
+def fa_address(seed):
+    var rp = fa_province(seed)
+    var rs = fa_range(rp[0], 0, 10)
+    var rn = fa_range(rs[0], 1, 200)
+    return [rn[0], rp[1] + FA_STREETS[rs[1]] + str(rn[1]) + "号"]
+# ---- 日期时间 ----
+def fa_year(seed, lo = 2000, hi = 2026):
+    var r = fa_range(seed, lo, hi)
+    return [r[0], r[1]]
+def fa_month(seed):
+    var r = fa_range(seed, 1, 13)
+    return [r[0], r[1]]
+def fa_day(seed):
+    var r = fa_range(seed, 1, 29)
+    return [r[0], r[1]]
+def fa_date(seed, lo = 2000, hi = 2026):
+    var ry = fa_year(seed, lo, hi)
+    var rm = fa_month(ry[0])
+    var rd = fa_day(rm[0])
+    var m = str(rm[1])
+    var d = str(rd[1])
+    if rm[1] < 10:
+        m = "0" + m
+    if rd[1] < 10:
+        d = "0" + d
+    return [rd[0], str(ry[1]) + "-" + m + "-" + d]
+def fa_time(seed):
+    var rh = fa_range(seed, 0, 24)
+    var rm = fa_range(rh[0], 0, 60)
+    var rs = fa_range(rm[0], 0, 60)
+    var h = str(rh[1])
+    var m = str(rm[1])
+    var s = str(rs[1])
+    if rh[1] < 10:
+        h = "0" + h
+    if rm[1] < 10:
+        m = "0" + m
+    if rs[1] < 10:
+        s = "0" + s
+    return [rs[0], h + ":" + m + ":" + s]
+# ---- 公司 ----
+const FA_COMPANY_PREFIX = ["北京", "上海", "深圳", "杭州", "广州", "成都",
+    "武汉", "南京"]
+const FA_COMPANY_CORE = ["科技", "信息", "网络", "数据", "智能", "云",
+    "软件", "电子"]
+const FA_COMPANY_SUFFIX = ["有限公司", "股份有限公司", "科技有限公司",
+    "信息技术有限公司"]
+def fa_company(seed):
+    var rp = fa_range(seed, 0, 8)
+    var rc = fa_range(rp[0], 0, 8)
+    var rs = fa_range(rc[0], 0, 4)
+    return [rs[0], FA_COMPANY_PREFIX[rp[1]] + FA_COMPANY_CORE[rc[1]] + FA_COMPANY_SUFFIX[rs[1]]]
+# ---- 职业 ----
+const FA_JOBS = ["工程师", "产品经理", "设计师", "测试工程师", "运维工程师",
+    "项目经理", "架构师", "数据分析师", "市场专员", "运营专员"]
+def fa_job(seed):
+    var r = fa_range(seed, 0, 10)
+    return [r[0], FA_JOBS[r[1]]]
+# ---- 颜色 ----
+def fa_color_hex(seed):
+    var r = fa_digits(seed, 6)
+    return [r[0], "#" + r[1]]
+def fa_color_rgb(seed):
+    var rr = fa_range(seed, 0, 256)
+    var rg = fa_range(rr[0], 0, 256)
+    var rb = fa_range(rg[0], 0, 256)
+    return [rb[0], str(rr[1]) + "," + str(rg[1]) + "," + str(rb[1])]
+# ---- IP ----
+def fa_ipv4(seed):
+    var a = fa_range(seed, 1, 255)
+    var b = fa_range(a[0], 0, 256)
+    var c = fa_range(b[0], 0, 256)
+    var d = fa_range(c[0], 1, 255)
+    return [d[0], str(a[1]) + "." + str(b[1]) + "." + str(c[1]) + "." + str(d[1])]
+# ---- 用户代理 ----
+const FA_UA_BROWSERS = ["Chrome", "Firefox", "Safari", "Edge"]
+const FA_UA_PLATFORMS = ["Windows NT 10.0", "Macintosh", "X11; Linux x86_64"]
+def fa_user_agent(seed):
+    var rb = fa_range(seed, 0, 4)
+    var rp = fa_range(rb[0], 0, 3)
+    var rv = fa_range(rp[0], 80, 130)
+    var browser = FA_UA_BROWSERS[rb[1]]
+    var platform = FA_UA_PLATFORMS[rp[1]]
+    return [rv[0], "Mozilla/5.0 (" + platform + ") " + browser + "/" + str(rv[1]) + ".0"]
+# ---- 信用卡号（伪号，仅格式合法，Luhn 校验通过） ----
+def fa_credit_card(seed):
+    var s = seed
+    var digits = []
+    var i = 0
+    while i < 15:
+        var r = fa_range(s, 0, 10)
+        s = r[0]
+        digits.append(r[1])
+        i += 1
+    # Luhn check digit
+    var sum = 0
+    i = 14
+    while i >= 0:
+        var d = digits[i]
+        if (14 - i) % 2 == 0:
+            d = d * 2
+            if d > 9:
+                d = d - 9
+        sum += d
+        i -= 1
+    var check = (10 - (sum % 10)) % 10
+    digits.append(check)
+    var out = ""
+    i = 0
+    while i < 16:
+        out = out + str(digits[i])
+        i += 1
+    return [s, out]
+# ---- 段落 ----
+def fa_paragraph(seed, sentences = 3):
+    var s = seed
+    var out = ""
+    var i = 0
+    while i < sentences:
+        var r = fa_range(s, 3, 10)
+        var sent = fa_sentence(r[0], r[1])
+        s = sent[0]
+        if i > 0:
+            out = out + "。"
+        out = out + sent[1]
+        i += 1
+    return [s, out + "。"]
+# ---- 布尔 ----
+def fa_bool(seed):
+    var r = fa_range(seed, 0, 2)
+    return [r[0], r[1] == 1]
+# ---- 密码 ----
+const FA_PASSWORD_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
+def fa_password(seed, length = 12):
+    var s = seed
+    var out = ""
+    var i = 0
+    while i < length:
+        var r = fa_range(s, 0, 66)
+        s = r[0]
+        out = out + FA_PASSWORD_CHARS[r[1]]
+        i += 1
+    return [s, out]

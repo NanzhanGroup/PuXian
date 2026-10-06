@@ -5,7 +5,7 @@
 #   （当时用 Python 的 pyftpdlib 手搭，未入库）⇒ 本仓用普贤自己写一个 RFC 959 子集服务端，
 #   不引入 python3/pyftpdlib 之类的新依赖。
 #
-# 契约（严格按 `tests/ftp_test.px` 的断言）：
+# 契约（严格按 `tests/ftp_test.px` 与 `tests/ftp_2_test.px` 的断言）：
 #   220 问候；USER px → 331；PASS secret → 230（其它 → 530，用于「错误口令」用例）；
 #   PWD → 257 "/"；TYPE I → 200；PASV → 227（数据口固定 **2122**）；
 #   LIST → 150 + 数据行（含 hello.txt）+ 226；RETR → 150 + 内容 + 226；
@@ -13,6 +13,23 @@
 #   QUIT → 221。
 #   ⚠️ 用例会在**主连接仍开着**时再开一条连接（错误口令用例）⇒ 每条控制连接一个 `spawn`，
 #      否则第二条连接要等第一条 QUIT 才被 accept（用例会死等）。
+#
+# M282 增补（0.2.0 用例 `tests/ftp_2_test.px` 用到、0.1.0 不用）：**SYST / SIZE / MDTM /
+#   MKD / RMD / DELE / RNFR+RNTO / APPE / REST / CWD ..**
+#   ⚠️ 这不是「为了通过而放宽 mock」—— 这些全是 RFC 959 的标准命令，且**代码/文案形状**
+#      由用例断言反推（`ft_syst` 要 215、`ft_size`/`ft_mdtm` 要 213、`ft_mkdir` 要 257 …），
+#      见 registry/ftp/0.2.0/ftp.px 的同名函数。REST 的语义（后续 RETR 从该偏移开始）
+#      也按用例断言（REST 5 后 RETR "0123456789" 必须得 "56789"）。
+#
+# ⚠️⚠️ M282 结构性修正：**数据连接在 PASV 回复之后立刻 accept**（不再推迟到 LIST/RETR/…）。
+#   原实现把 `tcp_accept(FF_DFD)` 放在传输命令的处理分支里 ⇒ 「客户端连了、但传输命令被拒
+#   （如 DELE 后 RETR ⇒ 550）」会留下一个**从未被 accept 的陈旧连接**在 backlog 里，
+#   被**下一次**传输的 accept 取走 ⇒ 数据写到**已关闭的旧连接**上 ⇒ 客户端既读不到数据
+#   也等不到 EOF（**挂死**，无报错）。
+#   实测：本仓探针 `examples/m282_registry_020/ftp020_probe.px` 的顺序是
+#   「DELE → RETR（应失败）→ STOR → REST 5 → RETR」⇒ 正好命中，探针挂到超时、输出为空。
+#   ⇒ 改成**真服务端的做法**：PASV 回 227 之后就地 accept，把 fd 存进 `pasv_fd`，
+#     后续传输命令只管用；传输命令**失败**时显式关掉它（否则同样会残留）。
 #
 # 用法：./ftp_mock            （控制 127.0.0.1:2121 · 数据 127.0.0.1:2122）
 # ============================================================
@@ -30,6 +47,8 @@ var FF_FILES = {
     "/sub/nested.txt": "nested\n"
 }
 var FF_UPLOADED = {}
+# M282：目录表（MKD / RMD / CWD 用）；初值含 "/sub"（因为 /sub/nested.txt 存在 ⇒ 它必须是目录）
+var FF_DIRS = {"/sub": true}
 
 def ff_read_line(fd):
     var buf = bytes("")
@@ -73,6 +92,37 @@ def ff_join(cwd, name):
         return "/" + name
     return cwd + "/" + name
 
+# 父目录（".." 的落点；已是根则原地）
+def ff_parent(cwd):
+    if cwd == "/":
+        return "/"
+    var i = len(cwd) - 1
+    while i > 0 and cwd[i] != "/":
+        i -= 1
+    if i <= 0:
+        return "/"
+    return cwd[0:i]
+
+def ff_has_file(p):
+    return FF_FILES.has(p)
+
+def ff_get(p):
+    return FF_FILES[p]
+
+def ff_put(p, s):
+    FF_FILES.set(p, s)
+
+# 删键：普贤无「删键」原语 ⇒ 重建表（同 concurrent_map 的 cm_delete 先例）
+def ff_del_file(p):
+    var nm = {}
+    var ks = FF_FILES.keys()
+    var i = 0
+    while i < len(ks):
+        if ks[i] != p:
+            nm.set(ks[i], FF_FILES[ks[i]])
+        i += 1
+    FF_FILES = nm
+
 # 路径是否为 cwd 的**直接子项** → [是否, 显示名]
 def ff_child(p, cwd):
     if cwd == "/":
@@ -96,14 +146,35 @@ def ff_listing(cwd):
     while i < len(ks):
         var ch = ff_child(ks[i], cwd)
         if ch[0]:
-            out.append("-rw-r--r-- 1 px px " + str(len(FF_FILES[ks[i]])) + " Jan  1 00:00 " + ch[1])
+            out.append("-rw-r--r-- 1 px px " + str(bytes_len(bytes(FF_FILES[ks[i]]))) + " Jan  1 00:00 " + ch[1])
         i += 1
+    var ds = FF_DIRS.keys()
+    var j = 0
+    while j < len(ds):
+        if FF_DIRS[ds[j]]:
+            var ch2 = ff_child(ds[j], cwd)
+            if ch2[0]:
+                out.append("drwxr-xr-x 2 px px 0 Jan  1 00:00 " + ch2[1])
+        j += 1
     return out
+
+# 发文件内容（支持 REST 设置的起点偏移）→ 走已 accept 的数据连接
+def ff_send_data(cfd, dfd, content, off):
+    if off > bytes_len(content):
+        tcp_close(dfd)
+        ff_send(cfd, "550 offset out of range")
+        return
+    var part = bytes_slice(content, off, bytes_len(content))
+    tcp_send_ex(dfd, part)
+    tcp_close(dfd)
 
 def ff_handle(cfd):
     ff_send(cfd, "220 PuXian FTP fixture ready")
     var cwd = "/"
     var authed = false
+    var rest_off = 0
+    var rnfr = ""
+    var pasv_fd = 0
     while true:
         var l = ff_read_line(cfd)
         if l[1]:
@@ -127,20 +198,85 @@ def ff_handle(cfd):
             ff_send(cfd, "257 \"" + cwd + "\"")
         elif cmd == "TYPE":
             ff_send(cfd, "200 Type set")
+        # M282 新增：SYST（ft_syst 要 215，取第 2 段文本）
+        elif cmd == "SYST":
+            ff_send(cfd, "215 UNIX Type: L8")
         elif cmd == "CWD":
-            if arg == "/":
+            if arg == "..":
+                cwd = ff_parent(cwd)
+                ff_send(cfd, "250 CWD ok")
+            elif arg == "/":
                 cwd = "/"
                 ff_send(cfd, "250 CWD ok")
-            elif arg == "sub":
-                cwd = "/sub"
-                ff_send(cfd, "250 CWD ok")
             else:
-                ff_send(cfd, "550 no such directory")
+                var cand = ff_join(cwd, arg)
+                if FF_DIRS.has(cand) and FF_DIRS[cand]:
+                    cwd = cand
+                    ff_send(cfd, "250 CWD ok")
+                else:
+                    ff_send(cfd, "550 no such directory")
         elif cmd == "PASV":
             ff_send(cfd, "227 Entering Passive Mode (127,0,0,1,8,74)")
+            # M282：回 227 之后**就地 accept**（真服务端做法）—— 见文件头「结构性修正」
+            pasv_fd = tcp_accept(FF_DFD)
+        # M282 新增：MKD / RMD（ft_mkdir 要 257 · ft_rmdir 要 250）
+        elif cmd == "MKD":
+            var nd = ff_join(cwd, arg)
+            FF_DIRS.set(nd, true)
+            ff_send(cfd, "257 \"" + nd + "\" created")
+        elif cmd == "RMD":
+            var rd = ff_join(cwd, arg)
+            if FF_DIRS.has(rd) and FF_DIRS[rd]:
+                FF_DIRS.set(rd, false)
+                ff_send(cfd, "250 RMD ok")
+            else:
+                ff_send(cfd, "550 no such directory")
+        # M282 新增：DELE（ft_delete 要 250；删后 RETR 必须失败）
+        elif cmd == "DELE":
+            var dp = ff_join(cwd, arg)
+            if ff_has_file(dp):
+                ff_del_file(dp)
+                ff_send(cfd, "250 DELE ok")
+            else:
+                ff_send(cfd, "550 no such file")
+        # M282 新增：RNFR + RNTO（ft_rename 要 350 → 250）
+        elif cmd == "RNFR":
+            var rp0 = ff_join(cwd, arg)
+            if ff_has_file(rp0):
+                rnfr = rp0
+                ff_send(cfd, "350 ready for RNTO")
+            else:
+                ff_send(cfd, "550 no such file")
+        elif cmd == "RNTO":
+            if rnfr != "":
+                var np = ff_join(cwd, arg)
+                ff_put(np, ff_get(rnfr))
+                ff_del_file(rnfr)
+                rnfr = ""
+                ff_send(cfd, "250 RNTO ok")
+            else:
+                ff_send(cfd, "503 RNFR required first")
+        # M282 新增：SIZE / MDTM（都要 213，取第 2 段）
+        elif cmd == "SIZE":
+            var sp2 = ff_join(cwd, arg)
+            if ff_has_file(sp2):
+                ff_send(cfd, "213 " + str(bytes_len(bytes(ff_get(sp2)))))
+            else:
+                ff_send(cfd, "550 no such file")
+        elif cmd == "MDTM":
+            var mp = ff_join(cwd, arg)
+            if ff_has_file(mp):
+                ff_send(cfd, "213 20260101000000")
+            else:
+                ff_send(cfd, "550 no such file")
+        # M282 新增：REST（ft_rest 要 350 或 200；设偏移，供后续 RETR 使用）
+        elif cmd == "REST":
+            rest_off = int(arg)
+            ff_send(cfd, "350 restarting at " + str(rest_off))
         elif cmd == "LIST":
             ff_send(cfd, "150 Here comes the directory listing")
-            var dfd = tcp_accept(FF_DFD)
+            var dfd = pasv_fd
+            pasv_fd = 0
             var lines = ff_listing(cwd)
             var i = 0
             while i < len(lines):
@@ -150,24 +286,48 @@ def ff_handle(cfd):
             ff_send(cfd, "226 Directory send OK")
         elif cmd == "RETR":
             var rp = ff_join(cwd, arg)
-            if FF_FILES.has(rp):
+            if ff_has_file(rp):
+                var off = rest_off
+                rest_off = 0
                 ff_send(cfd, "150 Opening data connection")
-                var dfd2 = tcp_accept(FF_DFD)
-                tcp_send_ex(dfd2, bytes(FF_FILES[rp]))
-                tcp_close(dfd2)
+                var dfd2 = pasv_fd
+                pasv_fd = 0
+                ff_send_data(cfd, dfd2, bytes(ff_get(rp)), off)
                 ff_send(cfd, "226 Transfer complete")
             else:
+                # 显式关掉客户端已连上的数据连接（否则残留 ⇒ 下一次 accept 取到旧连接 ⇒ 挂死）
+                if pasv_fd != 0:
+                    tcp_close(pasv_fd)
+                    pasv_fd = 0
                 ff_send(cfd, "550 no such file")
         elif cmd == "STOR":
-            var sp2 = ff_join(cwd, arg)
+            var sp3 = ff_join(cwd, arg)
             ff_send(cfd, "150 ready to receive")
-            var dfd3 = tcp_accept(FF_DFD)
+            var dfd3 = pasv_fd
+            pasv_fd = 0
             var got = ff_drain(dfd3)
             tcp_close(dfd3)
-            FF_FILES.set(sp2, bytes_to_str(got))
-            FF_UPLOADED.set(sp2, true)
+            FF_FILES.set(sp3, bytes_to_str(got))
+            FF_UPLOADED.set(sp3, true)
+            ff_send(cfd, "226 Transfer complete")
+        # M282 新增：APPE（追加写；ft_append 要 226 或 250）
+        elif cmd == "APPE":
+            var ap = ff_join(cwd, arg)
+            ff_send(cfd, "150 ready to receive")
+            var dfd4 = pasv_fd
+            pasv_fd = 0
+            var more = ff_drain(dfd4)
+            tcp_close(dfd4)
+            var old = ""
+            if ff_has_file(ap):
+                old = ff_get(ap)
+            FF_FILES.set(ap, old + bytes_to_str(more))
+            FF_UPLOADED.set(ap, true)
             ff_send(cfd, "226 Transfer complete")
         elif cmd == "QUIT":
+            if pasv_fd != 0:
+                tcp_close(pasv_fd)
+                pasv_fd = 0
             ff_send(cfd, "221 bye")
             break
         else:

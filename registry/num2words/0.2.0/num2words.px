@@ -1,0 +1,159 @@
+# ============================================================
+# 普贤生态库：registry/num2words —— 英文数字转单词
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python num2words / Go numwords 心智（0.1.0 英文整数面）：
+#   nw_convert(n) → Ok(str) | Err  整数（±999,999,999,999）→ 英文单词
+# 规则：
+#   - 0 → "zero"；负 → "minus X"
+#   - 21-99 连字符（forty-two）；百位后接 "and"（one hundred and five）
+#   - 千/百万/十亿分组（one thousand / one million / one billion）
+# ============================================================
+
+def nw_ones(t):
+    var ones = ["zero", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+                "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+    return ones[t]
+
+def nw_tens(t):
+    var tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+                "eighty", "ninety"]
+    return tens[t]
+
+# 0..99
+def nw_two(n):
+    if n < 20:
+        return nw_ones(n)
+    var t = n // 10
+    var o = n % 10
+    var s = nw_tens(t)
+    if o > 0:
+        s = s + "-" + nw_ones(o)
+    return s
+
+# 0..999
+def nw_three(n):
+    if n < 100:
+        return nw_two(n)
+    var h = n // 100
+    var r = n % 100
+    var s = nw_ones(h) + " hundred"
+    if r > 0:
+        s = s + " and " + nw_two(r)
+    return s
+
+# n >= 0
+def nw_abs(n):
+    if n == 0:
+        return "zero"
+    var groups = [[1000000000, "billion"], [1000000, "million"], [1000, "thousand"]]
+    var out = ""
+    var v = n
+    var i = 0
+    while i < len(groups):
+        var gv = v // groups[i][0]
+        if gv > 0:
+            if out != "":
+                out = out + " "
+            out = out + nw_three(gv) + " " + groups[i][1]
+            v = v % groups[i][0]
+        i += 1
+    if v > 0:
+        if out != "":
+            out = out + " "
+        out = out + nw_three(v)
+    return out
+
+def nw_convert(n):
+    if type(n) != "int":
+        return Err("num2words: 需要 int，got " + str(type(n)))
+    if n < 0:
+        return Ok("minus " + nw_abs(0 - n))
+    return Ok(nw_abs(n))
+# ============================================================
+# 0.2.0 新增：to_words_en / to_words_cn / currency
+# ============================================================
+
+# 数字转英文单词 → str
+def nw_to_words_en(n):
+    var ones = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+    var tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+    if n == 0:
+        return "zero"
+    var neg = false
+    if n < 0:
+        neg = true
+        n = -n
+    var out = ""
+    if n >= 1000000:
+        out = out + nw_to_words_en(n // 1000000) + " million "
+        n = n % 1000000
+    if n >= 1000:
+        out = out + nw_to_words_en(n // 1000) + " thousand "
+        n = n % 1000
+    if n >= 100:
+        out = out + ones[n // 100] + " hundred "
+        n = n % 100
+    if n >= 20:
+        out = out + tens[n // 10]
+        if n % 10 > 0:
+            out = out + "-" + ones[n % 10]
+    elif n > 0:
+        out = out + ones[n]
+    out = trim(out)
+    if neg:
+        out = "negative " + out
+    return out
+
+# 数字转中文单词 → str
+def nw_to_words_cn(n):
+    var digits = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"]
+    if n == 0:
+        return "零"
+    var neg = false
+    if n < 0:
+        neg = true
+        n = -n
+    # 特殊处理 10-19：十开头不加"一"
+    if n >= 10 and n < 20:
+        var out = "十"
+        if n % 10 > 0:
+            out = out + digits[n % 10]
+        if neg:
+            out = "负" + out
+        return out
+    var units = ["", "十", "百", "千", "万", "十", "百", "千", "亿"]
+    var out = ""
+    var i = 0
+    while n > 0:
+        var d = n % 10
+        if d > 0:
+            out = digits[d] + units[i] + out
+        elif i == 4 and not starts_with(out, "万"):
+            out = "万" + out
+        n = n // 10
+        i += 1
+    if neg:
+        out = "负" + out
+    return out
+
+# 货币格式 → str
+def nw_currency(n, currency="CNY"):
+    var symbol = "¥"
+    if currency == "USD":
+        symbol = "$"
+    elif currency == "EUR":
+        symbol = "€"
+    var neg = n < 0
+    var abs_n = abs(n)
+    var int_part = abs_n // 100
+    var dec_part = abs_n % 100
+    var s = symbol + str(int_part) + "."
+    if dec_part < 10:
+        s = s + "0"
+    s = s + str(dec_part)
+    if neg:
+        s = "-" + s
+    return s

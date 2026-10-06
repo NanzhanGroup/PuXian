@@ -1,0 +1,24 @@
+# sqlparse 0.2.0 测试
+import "../registry/sqlparse/0.2.0/sqlparse.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var toks = sq_tokenize("SELECT name FROM users").unwrap()
+    expect(len(toks) > 0, "tokenize non-empty: " + str(toks))
+    # ---- 0.2.0 is_select ----
+    expect(sq_is_select("SELECT name FROM users") == true, "is_select true")
+    expect(sq_is_select("DELETE FROM users") == false, "is_select false for DELETE")
+    # ---- 0.2.0 get_tables ----
+    var tables = sq_get_tables("SELECT name FROM users JOIN orders ON users.id = orders.uid")
+    expect(len(tables) == 2, "2 tables: " + str(tables))
+    expect(tables[0] == "users", "first table users: " + str(tables[0]))
+    # ---- 0.2.0 get_columns ----
+    var cols = sq_get_columns("SELECT name, age FROM users")
+    expect(len(cols) == 2, "2 columns: " + str(cols))
+    # ---- 0.2.0 parse_select ----
+    var parsed = sq_parse_select("SELECT * FROM users")
+    expect(parsed["count"] > 0, "parse_select count > 0")
+    print("PASS: sqlparse 0.2.0")

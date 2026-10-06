@@ -1,0 +1,25 @@
+# glob 0.2.0 测试
+import "../registry/glob/0.2.0/glob.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(glob_match("*.txt", "hello.txt") == true, "match *.txt")
+    expect(glob_match("*.txt", "hello.py") == false, "not match *.py")
+    # ---- 0.2.0 compile ----
+    var gc = glob_compile("*.px")
+    expect(gc["has_magic"] == true, "compile has_magic")
+    # ---- 0.2.0 match_list ----
+    var items = ["a.px", "b.py", "c.px", "d.txt"]
+    var matched = glob_match_list("*.px", items)
+    expect(matched == ["a.px", "c.px"], "match_list: " + str(matched))
+    # ---- 0.2.0 match_any ----
+    expect(glob_match_any(["*.px", "*.py"], "b.py") == true, "match_any py")
+    expect(glob_match_any(["*.px", "*.py"], "d.txt") == false, "not match_any txt")
+    # ---- 0.2.0 split_ext ----
+    var se = glob_split_ext("hello.txt")
+    expect(se["base"] == "hello", "split_ext base")
+    expect(se["ext"] == ".txt", "split_ext ext")
+    print("PASS: glob 0.2.0")

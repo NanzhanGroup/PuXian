@@ -1,0 +1,177 @@
+# ============================================================
+# 普贤生态库：registry/edist —— 字符串距离 / 相似度
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python Levenshtein / jellyfish、Go enescakir/levenshtein 心智（0.1.0）：
+#   ed_levenshtein(a, b) → int    编辑距离（插入/删除/替换各 1，DP 两行滚动）
+#   ed_ratio(a, b)       → float  相似度 = 1 - dist / max(len)
+#   ed_hamming(a, b)     → Ok(int) | Err  等长逐位差异数
+# 距离按 rune（M185 起 len/s[i] 为 rune），中文按字符计。
+# ============================================================
+
+# Levenshtein 距离（rune 级；空串边界正确处理）
+def ed_levenshtein(a, b):
+    var la = len(a)
+    var lb = len(b)
+    var prev = []
+    var i = 0
+    while i <= lb:
+        prev.append(i)
+        i += 1
+    var j = 1
+    while j <= la:
+        var cur = [j]
+        var k = 1
+        while k <= lb:
+            var cost = 0
+            if a[j - 1] != b[k - 1]:
+                cost = 1
+            var m1 = prev[k] + 1
+            var m2 = cur[k - 1] + 1
+            var m3 = prev[k - 1] + cost
+            var mn = m1
+            if m2 < mn:
+                mn = m2
+            if m3 < mn:
+                mn = m3
+            cur.append(mn)
+            k += 1
+        prev = cur
+        j += 1
+    return prev[lb]
+
+# 相似度：1 - dist/max(len)；两者皆空记 1.0
+def ed_ratio(a, b):
+    var la = len(a)
+    var lb = len(b)
+    if la == 0 and lb == 0:
+        return 1.0
+    var d = ed_levenshtein(a, b)
+    var mx = la
+    if lb > mx:
+        mx = lb
+    return 1.0 - float(d) / float(mx)
+
+# Hamming：等长逐位差异数；长度不等 Err
+def ed_hamming(a, b):
+    if len(a) != len(b):
+        return Err("edist: hamming 需要等长: " + str(len(a)) + " != " + str(len(b)))
+    var d = 0
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            d += 1
+        i += 1
+    return Ok(d)
+# ============================================================
+# 0.2.0 新增：damerau / jaro / jaro_winkler / osa
+# ============================================================
+
+# Damerau-Levenshtein 距离 → int
+def ed_damerau(a, b):
+    var la = len(a)
+    var lb = len(b)
+    if la == 0:
+        return lb
+    if lb == 0:
+        return la
+    var d = []
+    var i = 0
+    while i <= la:
+        var row = []
+        var j = 0
+        while j <= lb:
+            row.append(0)
+            j += 1
+        d.append(row)
+        i += 1
+    i = 0
+    while i <= la:
+        d[i][0] = i
+        i += 1
+    j = 0
+    while j <= lb:
+        d[0][j] = j
+        j += 1
+    i = 1
+    while i <= la:
+        j = 1
+        while j <= lb:
+            var cost = 1
+            if a[i - 1] == b[j - 1]:
+                cost = 0
+            d[i][j] = min(d[i - 1][j] + 1, min(d[i][j - 1] + 1, d[i - 1][j - 1] + cost))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+            j += 1
+        i += 1
+    return d[la][lb]
+
+# Jaro 相似度 → float
+def ed_jaro(a, b):
+    var la = len(a)
+    var lb = len(b)
+    if la == 0 and lb == 0:
+        return 1.0
+    if la == 0 or lb == 0:
+        return 0.0
+    var match_dist = max(la, lb) // 2 - 1
+    if match_dist < 0:
+        match_dist = 0
+    var a_matches = []
+    var b_matches = []
+    var i = 0
+    while i < la:
+        a_matches.append(false)
+        i += 1
+    i = 0
+    while i < lb:
+        b_matches.append(false)
+        i += 1
+    var matches = 0
+    i = 0
+    while i < la:
+        var start = i - match_dist
+        if start < 0:
+            start = 0
+        var end = i + match_dist + 1
+        if end > lb:
+            end = lb
+        var j = start
+        while j < end:
+            if not b_matches[j] and a[i] == b[j]:
+                a_matches[i] = true
+                b_matches[j] = true
+                matches += 1
+                break
+            j += 1
+        i += 1
+    if matches == 0:
+        return 0.0
+    var t = 0
+    var k = 0
+    i = 0
+    while i < la:
+        if a_matches[i]:
+            while not b_matches[k]:
+                k += 1
+            if a[i] != b[k]:
+                t += 1
+            k += 1
+        i += 1
+    t = t // 2
+    var m = float(matches)
+    return (m / float(la) + m / float(lb) + (m - float(t)) / m) / 3.0
+
+# Jaro-Winkler 相似度 → float
+def ed_jaro_winkler(a, b):
+    var j = ed_jaro(a, b)
+    var prefix = 0
+    var i = 0
+    while i < min(len(a), len(b)) and i < 4:
+        if a[i] == b[i]:
+            prefix += 1
+        else:
+            break
+        i += 1
+    return j + float(prefix) * 0.1 * (1.0 - j)

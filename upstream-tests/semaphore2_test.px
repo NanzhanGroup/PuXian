@@ -1,0 +1,32 @@
+# semaphore 0.2.0 测试
+import "../registry/semaphore/0.2.0/semaphore.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var sem = sp_new(3)
+    expect(sp_try_acquire(sem) == true, "acquire 1")
+    expect(sp_try_acquire(sem) == true, "acquire 2")
+    expect(sp_try_acquire(sem) == true, "acquire 3")
+    expect(sp_try_acquire(sem) == false, "acquire 4 fails")
+    # ---- 0.2.0 stats ----
+    var sem2 = sp_new(5)
+    sp_acquire(sem2)
+    sp_acquire(sem2)
+    var st = sp_stats(sem2)
+    expect(st["count"] == 2, "stats count 2")
+    expect(st["limit"] == 5, "stats limit 5")
+    expect(st["available"] == 3, "stats available 3")
+    # ---- 0.2.0 is_full ----
+    expect(sp_is_full(sem2) == false, "not full")
+    sp_acquire(sem2)
+    sp_acquire(sem2)
+    sp_acquire(sem2)
+    expect(sp_is_full(sem2) == true, "full")
+    # ---- 0.2.0 usage ----
+    var sem3 = sp_new(4)
+    sp_acquire(sem3)
+    expect(sp_usage(sem3) == 0.25, "usage 0.25: " + str(sp_usage(sem3)))
+    print("PASS: semaphore 0.2.0")

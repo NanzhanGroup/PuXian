@@ -1,0 +1,23 @@
+# tzmini 0.2.0 测试
+import "../registry/tzmini/0.2.0/tzmini.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(tz_is_leap(2024) == true, "2024 leap")
+    expect(tz_is_leap(2023) == false, "2023 not leap")
+    expect(tz_weekday(2024, 1, 1) == 1, "2024-01-01 Monday")
+    var zones = tz_zones().unwrap()
+    expect(len(zones) > 0, "zones non-empty")
+    # ---- 0.2.0 zone_offset ----
+    var off = tz_zone_offset("UTC", 2024, 0)
+    expect(off == 0, "UTC offset 0: " + str(off))
+    # ---- 0.2.0 zone_names ----
+    var names = tz_zone_names()
+    expect(len(names) > 0, "zone_names non-empty: " + str(len(names)))
+    # ---- 0.2.0 convert ----
+    var utc_to_utc = tz_convert_utc_to_zone("UTC", 2024, 0)
+    expect(utc_to_utc == 0, "UTC to UTC 0: " + str(utc_to_utc))
+    print("PASS: tzmini 0.2.0")

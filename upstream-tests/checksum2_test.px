@@ -1,0 +1,29 @@
+# checksum 0.2.0 测试
+import "../registry/checksum/0.2.0/checksum.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(crc32("hello") == 907060870, "crc32 hello: " + str(crc32("hello")))
+    expect(crc32_hex("hello") == "3610a686", "crc32_hex: " + crc32_hex("hello"))
+    expect(adler32("hello") == 103547413, "adler32: " + str(adler32("hello")))
+    expect(crc32("123456789") == 3421780262, "crc32 1-9: " + str(crc32("123456789")))
+    # ---- 0.2.0 crc16 ----
+    var c16 = crc16("123456789")
+    expect(c16 == 10673, "crc16 123456789: " + str(c16))
+    expect(len(crc16_hex("test")) == 4, "crc16_hex len 4: " + crc16_hex("test"))
+    # ---- 0.2.0 fletcher32 ----
+    var f32 = fletcher32("hello")
+    expect(f32 > 0, "fletcher32 > 0: " + str(f32))
+    # ---- 0.2.0 checksum_verify ----
+    expect(checksum_verify("hello", "3610a686") == true, "verify true")
+    expect(checksum_verify("hello", "00000000") == false, "verify false")
+    # ---- 0.2.0 hex_digest ----
+    var hd = hex_digest("test")
+    expect(hd.has("crc32") == true, "digest has crc32")
+    expect(hd.has("crc16") == true, "digest has crc16")
+    expect(hd.has("adler32") == true, "digest has adler32")
+    expect(hd.has("fletcher32") == true, "digest has fletcher32")
+    print("PASS: checksum 0.2.0")

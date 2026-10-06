@@ -1,0 +1,85 @@
+# dns 0.2.0 测试
+# 网络测试依赖外部 DNS 服务器，仅测试纯函数部分
+import "../registry/dns/0.2.0/dns.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+def main():
+    # ---- dns_qtype_code ----
+    var a = dns_qtype_code("A")
+    expect(a.is_ok() and a.unwrap() == 1, "qtype A → 1")
+
+    var aaaa = dns_qtype_code("AAAA")
+    expect(aaaa.is_ok() and aaaa.unwrap() == 28, "qtype AAAA → 28")
+
+    var mx = dns_qtype_code("MX")
+    expect(mx.is_ok() and mx.unwrap() == 15, "qtype MX → 15")
+
+    var txt = dns_qtype_code("TXT")
+    expect(txt.is_ok() and txt.unwrap() == 16, "qtype TXT → 16")
+
+    var cname = dns_qtype_code("CNAME")
+    expect(cname.is_ok() and cname.unwrap() == 5, "qtype CNAME → 5")
+
+    var ns = dns_qtype_code("NS")
+    expect(ns.is_ok() and ns.unwrap() == 2, "qtype NS → 2")
+
+    var ptr = dns_qtype_code("PTR")
+    expect(ptr.is_ok() and ptr.unwrap() == 12, "qtype PTR → 12")
+
+    var bad = dns_qtype_code("FOO")
+    expect_err(bad, "qtype FOO → Err")
+
+    # ---- dns_name_encode ----
+    var ne = dns_name_encode("example.com")
+    expect(ne.is_ok(), "name_encode ok")
+    if ne.is_ok():
+        expect(bytes_len(ne.unwrap()) == 13, "name_encode len 13 (7+6+0)")
+
+    var ne2 = dns_name_encode("a.b.c.d")
+    expect(ne2.is_ok(), "name_encode multi-label ok")
+
+    # ---- dns_reverse_ip ----
+    var rip = dns_reverse_ip("1.2.3.4")
+    expect(rip.is_ok(), "reverse_ip ok")
+    if rip.is_ok():
+        expect(rip.unwrap() == "4.3.2.1.in-addr.arpa", "reverse_ip → 4.3.2.1.in-addr.arpa")
+
+    var rip2 = dns_reverse_ip("not.an.ip")
+    expect_err(rip2, "reverse_ip invalid → Err")
+
+    # ---- dns_cache_key ----
+    var ck = dns_cache_key("example.com", "A")
+    expect(ck == "example.com|A", "cache_key → example.com|A")
+
+    # ---- dns_query_cached（模拟缓存逻辑）----
+    var cache = {}
+    # 手动填充缓存
+    var fake_result = {"status": "noerror", "rcode": 0, "answers": []}
+    cache.set("test.com|A", {"result": fake_result, "expire": now_ms() + 60000})
+    var cr = dns_query_cached(cache, "8.8.8.8", "test.com", "A", 60)
+    expect(cr.is_ok(), "cached query ok")
+    if cr.is_ok():
+        expect(cr.unwrap()["status"] == "noerror", "cached query returns cached result")
+
+    # ---- dns_query_multi（空服务器列表）----
+    var mr = dns_query_multi([], "example.com", "A")
+    expect_err(mr, "multi empty servers → Err")
+
+    # ---- 实际 DNS 查询（可能因网络不可用而失败，不强制）----
+    var real = dns_query("8.8.8.8", "example.com", "A")
+    if real.is_ok():
+        var d = real.unwrap()
+        expect(d["status"] == "noerror" or d["status"] == "nxdomain", "real query status valid")
+        print("real DNS query succeeded: " + str(len(d["answers"])) + " answers")
+    else:
+        print("real DNS query failed (network unavailable), skipping")
+
+    print("dns 0.2.0: PASS")
+    return Ok(0)

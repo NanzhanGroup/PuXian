@@ -1,0 +1,78 @@
+# functools 0.2.0 测试：identity/constant/pipe/flip/repeat/until/all_of/any_of/thread_first/compose3/double + 0.1.0 回归
+import "../registry/functools/0.2.0/functools.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var add10 = fn_partial(fn(a, b): a + b, 10)
+    expect(add10(5) == 15, "partial: " + str(add10(5)))
+    var double = fn(x): x * 2
+    var inc = fn(x): x + 1
+    var double_then_inc = fn_compose(inc, double)
+    expect(double_then_inc(3) == 7, "compose: " + str(double_then_inc(3)))
+    var is_even = fn(x): x % 2 == 0
+    var is_odd = fn_negate(is_even)
+    expect(is_odd(3) == true, "negate odd")
+    expect(is_odd(4) == false, "negate even")
+    # ---- 0.2.0 identity ----
+    expect(fn_identity(42) == 42, "identity")
+    expect(fn_identity("hello") == "hello", "identity str")
+    # ---- 0.2.0 constant ----
+    var always_99 = fn_constant(99)
+    expect(always_99(1) == 99, "constant 1")
+    expect(always_99(100) == 99, "constant 100")
+    # ---- 0.2.0 pipe ----
+    var piped = fn_pipe(double, inc)
+    expect(piped(3) == 7, "pipe: " + str(piped(3)))
+    # ---- 0.2.0 flip ----
+    var sub = fn(a, b): a - b
+    var flipped_sub = fn_flip(sub)
+    expect(flipped_sub(3, 10) == 7, "flip: " + str(flipped_sub(3, 10)))
+    # ---- 0.2.0 repeat ----
+    expect(fn_repeat(double, 3, 1) == 8, "repeat double 3x: " + str(fn_repeat(double, 3, 1)))
+    expect(fn_repeat(inc, 5, 0) == 5, "repeat inc 5x: " + str(fn_repeat(inc, 5, 0)))
+    expect(fn_repeat(double, 0, 42) == 42, "repeat 0x: " + str(fn_repeat(double, 0, 42)))
+    # ---- 0.2.0 apply ----
+    expect(fn_apply(double, 21) == 42, "apply: " + str(fn_apply(double, 21)))
+    # ---- 0.2.0 until ----
+    # 不断 +1 直到 >= 10
+    var result = fn_until(inc, fn(x): x >= 10, 0)
+    expect(result == 10, "until: " + str(result))
+    # ---- 0.2.0 all_of / any_of ----
+    var is_positive = fn(x): x > 0
+    var is_small = fn(x): x < 100
+    var preds_all = [is_positive, is_small]
+    var check_all = fn_all_of(preds_all)
+    expect(check_all(50) == true, "all_of 50")
+    expect(check_all(0) == false, "all_of 0")
+    expect(check_all(200) == false, "all_of 200")
+    var preds_any = [is_even, is_positive]
+    var check_any = fn_any_of(preds_any)
+    expect(check_any(4) == true, "any_of 4")
+    expect(check_any(3) == true, "any_of 3 (positive)")
+    expect(check_any(0 - 1) == false, "any_of -1 (neither)")
+    # ---- 0.2.0 thread_first ----
+    var funcs = [double, inc, double]
+    expect(fn_thread_first(3, funcs) == 14, "thread_first: " + str(fn_thread_first(3, funcs)))
+    # ---- 0.2.0 compose3 ----
+    var triple = fn(x): x * 3
+    var c3 = fn_compose3(inc, double, triple)
+    # inc(double(triple(2))) = inc(double(6)) = inc(12) = 13
+    expect(c3(2) == 13, "compose3: " + str(c3(2)))
+    # ---- 0.2.0 double ----
+    var double_apply = fn_double(inc)
+    expect(double_apply(5) == 7, "double: " + str(double_apply(5)))
+    # ---- 0.1.0 memo 回归 ----
+    var cache = {}
+    var call_count = 0
+    var sq = fn(x):
+        call_count = call_count + 1
+        return x * x
+    var r1 = fn_memo(sq, cache, 5)
+    expect(r1[1] == 25, "memo first: " + str(r1[1]))
+    var r2 = fn_memo(sq, r1[0], 5)
+    expect(r2[1] == 25, "memo cached: " + str(r2[1]))
+    expect(call_count == 1, "memo call count: " + str(call_count))
+    print("functools 0.2.0: PASS")

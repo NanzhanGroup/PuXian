@@ -49,7 +49,19 @@ SRC_REG="$SRC/registry"
 PATCHDIR="$ROOT/tools/patches/registry-px"
 [ -d "$SRC_REG" ] || { echo "错误: 源 registry 目录不存在：$SRC_REG" >&2; exit 2; }
 UPSTREAM_REV="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-UPSTREAM_URL="$(git -C "$SRC" config --get remote.origin.url 2>/dev/null || echo unknown)"
+# M282（缺陷 488）：**URL 里的凭据必须剥掉**。
+#   本变量会被写进 registry/THIRD_PARTY.md（**提交并发布到公开仓库**）⇒ 若 clone 用的是
+#   带 PAT 的 URL（`https://x-access-token:<pat>@github.com/...`），密钥就被**永久写进公开仓库**。
+#   实测（沙箱）：未修时 THIRD_PARTY.md 第 4 行出现 `github_pat_…`。
+#   规则：只在 userinfo **含 `:`**（= 带口令/token）时剥离；纯 `user@`（如 `git@github.com`）保留原样。
+UPSTREAM_URL_RAW="$(git -C "$SRC" config --get remote.origin.url 2>/dev/null || echo unknown)"
+UPSTREAM_URL="$(printf '%s' "$UPSTREAM_URL_RAW" | sed -E 's|^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]*:[^@/]*@|\1|')"
+if printf '%s' "$UPSTREAM_URL" | grep -qE '(github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|glpat-|x-access-token:|:[^@/]*@)'; then
+    echo "错误: 上游 URL 清洗后仍呈凭据形状 ⇒ 拒绝写出 THIRD_PARTY.md（缺陷 488 守卫）" >&2
+    echo "      处置: 在源检出里执行  git remote set-url origin <不含凭据的 URL>" >&2
+    echo "      或改用  git clone https://github.com/<owner>/<repo>.git  （凭据走 credential helper）" >&2
+    exit 4
+fi
 
 TMPL=/tmp/m187_import.$$
 mkdir -p "$TMPL"
@@ -72,7 +84,7 @@ cat > "$PROV" <<EOF
 |---|---|---|---|---|---|---|
 EOF
 
-prov_note() {   # 三轨验证列（口径 = **M214** 的上游用例回归：128 用例 × 双轨 —— 随普查更新）
+prov_note() {   # 三轨验证列（口径 = **最新一轮**的上游用例回归；数字**不写死** —— 会腐烂）
     case "$1" in
         concurrent_map|workerpool) echo "编译轨 PASS · 解释轨**设计性**不支持并发（PX-DEF-006）" ;;
         qrcode) echo "编译轨 PASS · 解释轨**超时**（PX-DEF-024 性能：单码 8 掩码罚分 ≈36s）" ;;
@@ -81,7 +93,7 @@ prov_note() {   # 三轨验证列（口径 = **M214** 的上游用例回归：12
         dns) echo "**双轨 SKIP** · 用例要求外网 UDP 解析器 223.5.5.5:53" ;;
         ftp|pop3|oauth2|imap) echo "**双轨 PASS**（本仓自建 mock 服务端，见 upstream-tests/fixtures/）" ;;
         passhash) echo "**双轨 PASS**（M189：打本地补丁后 \`passhash_test\` 通过；M198 起补丁已撤销）" ;;
-        *) echo "**双轨 PASS**（M214 上游用例回归 · 128 用例 × 双轨 · 233 PASS / 0 FAIL / 23 SKIP）" ;;
+        *) echo "**双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`）" ;;
     esac
 }
 
@@ -164,7 +176,7 @@ for libdir in "$SRC_REG"/*/; do
     done
 done
 
-echo "── 源：$UPSTREAM_URL @ $UPSTREAM_REV"
+echo "── 源：$UPSTREAM_URL @ $UPSTREAM_REV（凭据已剥离）"
 echo "── 新引入 $NEW 件 · 已存在 $SKIP 件 · **就地更新 $UPD 件**（上游已删 $REMOVED 个文件）· 冲突/拒收 $CONFLICT 件 · 其中带本地补丁 $PATCHED 件"
 if [ "$APPLY" = 1 ]; then
     cp -f "$PROV" "$ROOT/registry/THIRD_PARTY.md"

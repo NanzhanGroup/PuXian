@@ -1,0 +1,70 @@
+# stats 0.2.0 测试
+import "../registry/stats/0.2.0/stats.px"
+def approx(a, b, eps = 0.001):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < eps
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var data = [2, 4, 4, 4, 5, 5, 7, 9]
+    # ---- 0.1.0 回归 ----
+    expect(stats_count(data) == 8, "count")
+    expect(stats_sum(data) == 40, "sum: " + str(stats_sum(data)))
+    expect(stats_min(data).unwrap() == 2, "min")
+    expect(stats_max(data).unwrap() == 9, "max")
+    expect(stats_mean(data).unwrap() == 5, "mean: " + str(stats_mean(data).unwrap()))
+    expect(stats_median(data).unwrap() == 4.5, "median: " + str(stats_median(data).unwrap()))
+    # ---- 0.2.0 mode ----
+    expect(stats_mode(data).unwrap() == 4, "mode: " + str(stats_mode(data).unwrap()))
+    # ---- 0.2.0 range ----
+    expect(stats_range(data).unwrap() == 7, "range: " + str(stats_range(data).unwrap()))
+    # ---- 0.2.0 percentile ----
+    var p50 = stats_percentile(data, 50)
+    expect(approx(p50.unwrap(), 4.5), "p50: " + str(p50.unwrap()))
+    var p25 = stats_percentile(data, 25)
+    expect(approx(p25.unwrap(), 4.0), "p25: " + str(p25.unwrap()))
+    var p100 = stats_percentile(data, 100)
+    expect(p100.unwrap() == 9, "p100: " + str(p100.unwrap()))
+    # ---- 0.2.0 quartiles ----
+    var qs = stats_quartiles(data).unwrap()
+    expect(approx(qs[0], 4.0), "Q1: " + str(qs[0]))
+    expect(approx(qs[1], 4.5), "Q2: " + str(qs[1]))
+    expect(approx(qs[2], 5.5), "Q3: " + str(qs[2]))
+    # ---- 0.2.0 IQR ----
+    var iqr = stats_iqr(data).unwrap()
+    expect(approx(iqr, 1.5), "IQR: " + str(iqr))
+    # ---- 0.2.0 geomean ----
+    var gm = stats_geomean([1, 4, 16])
+    expect(approx(gm.unwrap(), 4.0), "geomean: " + str(gm.unwrap()))
+    # ---- 0.2.0 harmmean ----
+    var hm = stats_harmmean([1, 2, 4])
+    expect(approx(hm.unwrap(), 1.714, 0.01), "harmmean: " + str(hm.unwrap()))
+    # ---- 0.2.0 weighted_mean ----
+    var wm = stats_weighted_mean([1, 2, 3], [1, 2, 3])
+    expect(approx(wm.unwrap(), 2.333, 0.01), "weighted_mean: " + str(wm.unwrap()))
+    # ---- 0.2.0 mad ----
+    var mad = stats_mad([1, 2, 3, 4, 5])
+    expect(approx(mad.unwrap(), 1.2), "mad: " + str(mad.unwrap()))
+    # ---- 0.2.0 cv ----
+    var cv = stats_cv([10, 20, 30])
+    expect(cv.is_ok(), "cv ok: " + str(cv))
+    # ---- 0.2.0 covariance ----
+    var cov = stats_covariance([1, 2, 3, 4], [2, 4, 6, 8])
+    expect(cov.is_ok(), "cov ok: " + str(cov))
+    expect(approx(cov.unwrap(), 3.333, 0.01), "cov: " + str(cov.unwrap()))
+    # ---- 0.2.0 correlation ----
+    var corr = stats_correlation([1, 2, 3, 4], [2, 4, 6, 8])
+    expect(approx(corr.unwrap(), 1.0), "corr=1: " + str(corr.unwrap()))
+    var corr_neg = stats_correlation([1, 2, 3, 4], [4, 3, 2, 1])
+    expect(approx(corr_neg.unwrap(), 0 - 1.0), "corr=-1: " + str(corr_neg.unwrap()))
+    # ---- 0.2.0 summary ----
+    var s = stats_summary(data).unwrap()
+    expect(s["count"] == 8, "summary count")
+    expect(s["sum"] == 40, "summary sum")
+    expect(s["min"] == 2, "summary min")
+    expect(s["max"] == 9, "summary max")
+    print("stats 0.2.0: PASS")
