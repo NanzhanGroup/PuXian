@@ -411,6 +411,12 @@ for d in $RPM_DIRS; do
   #   现网客户端不受影响（/etc/yum.repos.d/puxian.repo 用 $releasever/$basearch 自己拼）。
   RPM_REPO_JSON="$RPM_REPO_JSON\"$k\": \"rpm/$d/x86_64/\""
 done
+# M279 补丁（缺陷 488 · 晨曦 2026-10-06 12:06 实测）：写入值与落地复核/下游 install 口径**必须同源**。
+#   写侧原用裸 `$A64_TARBALL`，而 ⑦ 落地复核与 packaging/install-rpm.sh（`$MIRROR_ROOT/$a64`）
+#   都按 `releases/<name>` 取 ⇒ 永远匹配不上 ⇒ 每轮必 die「落地后 version.json 未登记 aarch64 引导包」。
+#   ⇒ 两侧共用同一个 `$A64_REL`；无 aarch64 资产的 tag 仍写空串（向后兼容）。
+A64_REL=""
+[ -n "$A64_TARBALL" ] && A64_REL="releases/$A64_TARBALL"
 cat > "$STAGING/version.json" <<JSON
 {
   "version": "$TAG",
@@ -422,7 +428,7 @@ cat > "$STAGING/version.json" <<JSON
   "tarball_sha256": "$SUM",
   "rpm_repo": { $RPM_REPO_JSON },
   "registry": { "included": $REG_FOUND, "files": $REG_N, "base": "registry/" },
-  "bootstrap_aarch64_tarball": "$A64_TARBALL",
+  "bootstrap_aarch64_tarball": "$A64_REL",
   "bootstrap_aarch64_sha256": "$A64_SUM",
   "bootstrap_aarch64_size": ${A64_SIZE:-0}
 }
@@ -436,6 +442,17 @@ fi
 
 # ---------- 7. 发布（先新 rpm，再 repodata，最后删旧） ----------
 log "⑥ 发布到 $DEST"
+# M279 补丁（缺陷 488 的「B 项」）：**发布前**先对 STAGING 做与 ⑦ 同口径的断言
+#   ⇒ 判据不过就不动 DEST（兑现文件头「任一步失败 ⇒ DEST 保持原样」的契约）。
+[ "$(sha256sum "$STAGING/releases/$TARBALL" | awk '{print $1}')" = "$SUM" ] \
+  || die "发布前：STAGING tarball sha256 与 Release 不一致"
+if [ -n "$A64_REL" ]; then
+  [ -f "$STAGING/$A64_REL" ] || die "发布前：STAGING 缺 $A64_REL"
+  [ "$(sha256sum "$STAGING/$A64_REL" | awk '{print $1}')" = "$A64_SUM" ] \
+    || die "发布前：STAGING aarch64 引导包 sha256 与 Release 不一致"
+  grep -q "\"bootstrap_aarch64_tarball\": \"$A64_REL\"" "$STAGING/version.json" \
+    || die "发布前：version.json 未按同源口径登记 aarch64 坐标（$A64_REL）"
+fi
 mkdir -p "$DEST/rpm" "$DEST/releases"
 rsync -a --exclude='repodata/' "$STAGING/rpm/" "$DEST/rpm/"
 rsync -a                "$STAGING/rpm/" "$DEST/rpm/"
@@ -456,11 +473,11 @@ log "⑦ 落地复核"
 grep -q "\"$TAG\"" "$DEST/version.json" || die "落地后 version.json 不含 $TAG"
 # M277：aarch64 引导包若本轮同步了，**落地后**必须真在 DEST 上且 sha256 一致
 #   （只报「同步成功」不够 —— M275 的教训：判定不了不许放行）
-if [ -n "$A64_TARBALL" ]; then
-  [ -f "$DEST/releases/$A64_TARBALL" ] || die "aarch64 引导包未落到 DEST：$A64_TARBALL"
-  [ "$(sha256sum "$DEST/releases/$A64_TARBALL" | awk '{print $1}')" = "$A64_SUM" ] \
+if [ -n "$A64_REL" ]; then
+  [ -f "$DEST/$A64_REL" ] || die "aarch64 引导包未落到 DEST：$A64_REL"
+  [ "$(sha256sum "$DEST/$A64_REL" | awk '{print $1}')" = "$A64_SUM" ] \
     || die "落地后 aarch64 引导包 sha256 不一致"
-  grep -q "\"bootstrap_aarch64_tarball\": \"releases/$A64_TARBALL\"" "$DEST/version.json" \
+  grep -q "\"bootstrap_aarch64_tarball\": \"$A64_REL\"" "$DEST/version.json" \
     || die "落地后 version.json 未登记 aarch64 引导包"
 fi
 log "✅ 完成：$DEST ← $TAG（rpm 7/9 + tarball + version.json）"
