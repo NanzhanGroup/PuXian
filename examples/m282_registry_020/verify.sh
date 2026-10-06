@@ -19,6 +19,10 @@
 #  [3] **登记双向一致 + 无重复**：`EXPECTED.tsv` ⇄ 用例集（重复登记会让 awk 取末条 ⇒ 静默覆盖）
 #  [4] **引用面完整**：每个 `../registry/...` 在 registry 里真实存在（M188 事故族）
 #  [5] **无凭据**：全仓扫描（`check_no_secrets.sh`）+ 反向判据（注入假 token ⇒ 必红）
+#      ⚠️ **扫描面 = 已跟踪 ∪ 未跟踪未忽略** —— M282 实测事故：原实现只扫 `git ls-files`
+#      ⇒ 门**提交前绿、提交后红**（新写的门文件当时还没 `git add`，扫描面里根本不存在）。
+#      [5e] 是这条的判据（临时 git 仓库 · 未 add 的 token 文件必须命中）；
+#      NC-D 是它的对照档（`NO_SECRETS_TRACKED_ONLY=1` ⇒ [5e] 必红）。
 #  [6] **规模下限**：版本目录 / 用例数 / XFAIL 条数（防判据静默变窄）
 #  [7] **上游逐字节对拍**：有检出则逐文件比对；无检出 ⇒ **响亮记 SKIP**（不静默放过）
 #  [8] **覆盖补丁**：上游 `ftp_2_test` 卡在 T9（与 0.1.0 用例对同一夹具互斥）⇒ 0.2.0 新增的
@@ -28,6 +32,8 @@
 #  B 往 `EXPECTED.tsv` **副本**加一条重复登记 ⇒ [3] 必红
 #  C **判据自伤的反面**：干净副本（无凭据）⇒ [5] 必**不**红 ——
 #    证明 A 的红来自**内容**而不是「判据恒红」（否则 A 是空的）。
+#  D **对照档**（`NO_SECRETS_TRACKED_ONLY=1`，只扫已跟踪）⇒ [5e] 的未跟踪面必失效 ——
+#    证明 [5e] 的红来自**扫描面**而不是「判据恒红」。
 #
 # 用法：bash examples/m282_registry_020/verify.sh [--neg-skip]
 # 退出码：0 = 绿，1 = 红，2 = 门自身前置自查失败。
@@ -142,9 +148,26 @@ else
     echo "  FAIL [5b] 全仓扫描判红："; tail -10 "$W/sec.txt" | sed 's/^/      /'; fail=$((fail+1))
 fi
 chk "[5c] THIRD_PARTY.md 无凭据形状（PAT / x-access-token / URL userinfo）" \
-    "! grep -qE 'github_pat_|x-access-token:|://[^/]*:[^/@]*@' '$PROV'"
+    "! grep -qE 'github_pat_|x-access-token[[:punct:]]|://[^/]*:[^/@]*@' '$PROV'"
 chk "[5d] 引入器已剥离 URL userinfo（源码在位）" \
     "grep -q 'userinfo' '$ROOT/tools/import_registry_px.sh'"
+
+# ---------- [5e] 扫描面：未跟踪文件必须被扫到（M282 实测事故的判据）----------
+# 事故：门**提交前**绿、**提交后**红 —— 原实现只扫 `git ls-files`（已跟踪），而新写的门文件
+# 当时还没 `git add` ⇒ 扫描面里根本不存在 ⇒「干跑通过 ≠ 提交后通过」（与缺陷 487 同形）。
+# 判据：临时 git 仓库里放 **已 add 的 205 个 filler + 1 个未 add 的 token 文件** ⇒ 必须判红**且指名它**。
+echo "── [5e] 扫描面（未跟踪文件）──"
+W5="$W/untracked"; rm -rf "$W5"; mkdir -p "$W5"
+( cd "$W5" && git init -q . ) >/dev/null 2>&1
+i=0; while [ "$i" -lt 205 ]; do printf 'filler %s\n' "$i" > "$W5/f_$i.txt"; i=$((i+1)); done
+( cd "$W5" && git add f_*.txt ) >/dev/null 2>&1                    # 只 add filler ⇒ 造「已跟踪 ≥200」
+# ⚠️ 假 token **运行时拼装**（源码里不出现连续凭据形状，否则本门自己的 [5b] 判红；
+#    这不是为了绕开守卫，而是「夹具不该长得像真凭据」的卫生规则）。
+printf 'url=https://x-access-token:%s@github.com/a/b.git\n' \
+    "github_pat_11ABCDEFG0""abcdefghijklmnopqrstuv" > "$W5/newfile.txt"   # 刻意**不** add ⇒ 未跟踪
+NO_SECRETS_ALLOW="$W/allow_empty.tsv" bash selfhost/check_no_secrets.sh --root "$W5" > "$W5.log" 2>&1; R5=$?
+R5TOK=0; grep -q 'newfile.txt' "$W5.log" && R5TOK=1
+chk "[5e] 未跟踪的 token 文件也被扫到（rc=$R5 · 指名=$R5TOK）" "[ '$R5' = 1 ] && [ '$R5TOK' = 1 ]"
 
 # ---------- [6] 规模下限 ----------
 echo "── [6] 规模下限 ──"
@@ -226,7 +249,9 @@ mkneg() {  # $1=目录  $2=1 注入假 token / 0 干净
     local i=0
     while [ "$i" -lt 205 ]; do printf 'filler line %s\n' "$i" > "$1/filler_$i.txt"; i=$((i+1)); done
     if [ "$2" = 1 ]; then
-        printf '# fake\n> `https://x-access-token:github_pat_11AAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBB@github.com/x/y.git`\n' > "$1/THIRD_PARTY.md"
+        # ⚠️ 假 token **运行时拼装**（源码里不出现连续凭据形状 ⇒ 不然本门自己的 [5b] 会判红）
+        printf '# fake\n> `https://x-access-token:%s@github.com/x/y.git`\n' \
+            "github_pat_11AAAAAAA_""BBBBBBBBBBBBBBBBBBBBBBBBBB" > "$1/THIRD_PARTY.md"
     else
         printf '# clean\n> `https://github.com/banshanhanfu/registry-px.git`\n' > "$1/THIRD_PARTY.md"
     fi
@@ -257,8 +282,17 @@ if [ "$NEG" = 1 ]; then
     else
         echo "  PASS NC-B EXPECTED 重复登记 ⇒ 判红 ✓"; pass=$((pass+1))
     fi
+    # NC-D：对照档「只扫已跟踪」⇒ [5e] 的未跟踪面必须失效（证明 [5e] 的红来自**扫描面**，
+    #       不是「判据恒红」—— 同 NC-C 的立论）
+    NO_SECRETS_ALLOW="$W/allow_empty.tsv" NO_SECRETS_TRACKED_ONLY=1 \
+        bash selfhost/check_no_secrets.sh --root "$W5" > "$W/NCD.log" 2>&1; R5D=$?
+    if [ "$R5D" = 0 ]; then
+        echo "  PASS NC-D 对照档（只扫已跟踪）漏掉未跟踪文件 ⇒ [5e] 有牙 ✓"; pass=$((pass+1))
+    else
+        echo "  FAIL NC-D 对照档下仍判红（rc=$R5D）⇒ [5e] 的红与扫描面无关"; fail=$((fail+1))
+    fi
 else
-    echo "  ⊘ NC-A / NC-B / NC-C（--neg-skip）"
+    echo "  ⊘ NC-A / NC-B / NC-C / NC-D（--neg-skip）"
 fi
 
 # ---------- 覆盖边界（如实登记，不假装覆盖）----------
@@ -270,6 +304,8 @@ cat <<'EOF'
   · 本门**不判**上游用例的通过率（那是 selfhost/run_upstream_tests.sh 的职责，登记在 EXPECTED.tsv，
     逐条定性见 docs/UPSTREAM_020_DEFECTS.md）。
   · 凭据守卫扫的是**文本文件**（跳过二进制）；私钥实体按「PEM 头 + ≥200 字符 body」判。
+  · [5e] 用**临时 git 仓库**验证扫描面 —— 真仓在 CI 检出后**未跟踪面为空**，只能这样验。
+  · token 面**刻意不设允许表**（按文件豁免会让真凭据被静默放过）⇒ 假凭据一律运行时拼装。
 EOF
 
 echo "── 结果 ──"

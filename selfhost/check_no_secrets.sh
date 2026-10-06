@@ -15,6 +15,15 @@
 #      本项目多处把 PEM 头当**字符串字面量**用，实测 3 处假阳）。
 #   白名单只允许「**变量引用**」形态（`${TOKEN}` / `${{ secrets.X }}`）—— 扫描前**规范化掉**。
 #   私钥夹具走 `selfhost/no_secrets_allow.tsv`（**带理由 + 过期判据**：表里的路径若不再命中 ⇒ 判红）。
+#   ⚠️ **token 命中刻意不设允许表**：允许表按**文件**豁免，某文件一旦上表，日后**真的**往它里面
+#      写凭据也会被静默放过。⇒ 夹具一律**运行时拼装**（源码里不出现连续凭据形状），判据保持绝对。
+#
+# ⚠️⚠️ **扫描面 = 已跟踪 ∪ 未跟踪未忽略**（M282 事故后改，别再退回只扫 `git ls-files`）：
+#   原实现只扫**已跟踪**文件 ⇒ 新写、还没 `git add` 的文件**不在扫描面里** ⇒
+#   门**提交前绿、提交后红**（实测：19:38/19:44 绿 · 21:22 红；6 处命中全是本次新增的门
+#   自己的 `verify.sh` 与守卫自己的夹具）⇒「干跑通过 ≠ 提交后通过」（与缺陷 487 同形）。
+#   而守卫的职责恰是**提交前**拦住 ⇒ 两种世界必须同一结论。自证 ⑨/⑩ 守这条。
+#   （`NO_SECRETS_TRACKED_ONLY=1` = **对照档**，只扫已跟踪 ⇒ 复现修前行为，仅供负控/自证用。）
 #
 # 用法：selfhost/check_no_secrets.sh [--root DIR] [--self-test] [-v]
 # 退出码：0 干净 · 1 有明文凭据 · 2 用法错 · 3 判据自身失效（自证失败）
@@ -41,6 +50,11 @@ PATTERNS='github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}
 #     · 真夹具（每行 64 字符 body）命中；· 只有头/尾字面量、中间是代码或 `abc` ⇒ **不命中**。
 KEYRX='-----BEGIN [A-Z ]*PRIVATE KEY-----\n[A-Za-z0-9+/=\n]{200,}'
 ALLOW="${NO_SECRETS_ALLOW:-$SELF_DIR/no_secrets_allow.tsv}"
+# 对照档（复现 M282 修前的「只扫已跟踪」行为）—— **仅供自证/负控**，生产与 CI 不得设置。
+TRACKED_ONLY="${NO_SECRETS_TRACKED_ONLY:-0}"
+if [ "$TRACKED_ONLY" = 1 ]; then
+    echo "⚠️ 对照档 NO_SECRETS_TRACKED_ONLY=1：**只扫已跟踪文件** —— 未 git add 的新文件不会被扫（= M282 修前行为，生产/CI 不得使用）" >&2
+fi
 
 normalize() {  # 抹掉变量引用形态 ⇒ 正当用法不假红
     sed -E -e 's/\$\{\{[^}]*\}\}/<VAR>/g' -e 's/\$\{[A-Za-z_][A-Za-z0-9_]*\}/<VAR>/g' -e 's/\$[A-Za-z_][A-Za-z0-9_]*/<VAR>/g'
@@ -48,7 +62,13 @@ normalize() {  # 抹掉变量引用形态 ⇒ 正当用法不假红
 filelist() {   # $1=dir → 受管文件清单（**显式 if/else**：`a&&b||c&&d` 在 bash 里是 ((a&&b)||c)&&d，
     local d="$1"  # 那个写法会让两个来源都跑 ⇒ 命中数翻倍。M282 自证当场抓到，别改回去。）
     if (cd "$d" && git rev-parse --git-dir >/dev/null 2>&1); then
-        (cd "$d" && git ls-files 2>/dev/null)
+        # ⚠️⚠️ **必须含未跟踪未忽略文件**（M282 事故后改，别再退回只扫 `git ls-files`）：
+        #   只扫已跟踪 ⇒ 新写、还没 `git add` 的文件不在扫描面里 ⇒ 门**提交前绿、提交后红**。
+        #   用 `{ a; b; }` 两条独立命令（**不**踩上面那个 `&&/||` 的坑）· `sort -u` 让顺序确定。
+        {
+            (cd "$d" && git ls-files 2>/dev/null)
+            [ "$TRACKED_ONLY" = 1 ] || (cd "$d" && git ls-files --others --exclude-standard 2>/dev/null)
+        } | sort -u
     else
         (cd "$d" && find . -type f -not -path './.git/*' 2>/dev/null | sed 's|^\./||')
     fi
@@ -57,7 +77,7 @@ scan_tokens() {  # $1=dir → 「文件:行:片段」
     local d="$1" f
     filelist "$d" | while IFS= read -r f; do
         [ -n "$f" ] || continue; [ -f "$d/$f" ] || continue
-        normalize < "$d/$f" 2>/dev/null | grep -nE "$PATTERNS" 2>/dev/null | while IFS= read -r hit; do
+        normalize < "$d/$f" 2>/dev/null | grep -InE "$PATTERNS" 2>/dev/null | while IFS= read -r hit; do
             printf '%s:%s\n' "$f" "${hit:0:150}"
         done
     done
@@ -81,11 +101,14 @@ if [ "$SELFTEST" = 1 ]; then
     ck() { if [ "$2" = "$3" ]; then P=$((P+1)); echo "  ✓ $1"; else F=$((F+1)); echo "  ✗ $1（期望 $3，实得 $2）"; fi; }
     emit() { ( cd "$W" && git add -A >/dev/null 2>&1 ); }
 
-    printf 'url=https://x-access-token:github_pat_11ABCDEFG0abcdefghijklmnopqrstuv@github.com/a/b.git\n' > "$W/bad1.txt"; emit
+    # ⚠️ 假凭据一律**运行时拼装**：源码里不出现连续凭据形状（否则本仓自己的 [5b] 会判红）。
+    #    这不是洁癖 —— 编辑器高亮 / GitHub secret scanning / 旁人 copy 都会把真形状当真凭据。
+    printf 'url=https://x-access-token:%s@github.com/a/b.git\n' \
+        "github_pat_11ABCDEFG0""abcdefghijklmnopqrstuv" > "$W/bad1.txt"; emit
     ck "① 明文 github_pat_ 命中" "$(scan_tokens "$W" | grep -c bad1.txt)" 1
     rm -f "$W/bad1.txt"; printf 'url=https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git\n' > "$W/ok1.txt"; emit
     ck "② \${TOKEN} 不误报" "$(scan_tokens "$W" | grep -c ok1.txt)" 0
-    rm -f "$W/ok1.txt"; printf 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n' > "$W/bad2.txt"; emit
+    rm -f "$W/bad1.txt"; printf 'ghp_%s\n' "ABCDEFGHIJKLMNOPQRSTUVWXYZ""0123456789" > "$W/bad2.txt"; emit
     ck "③ ghp_ 命中" "$(scan_tokens "$W" | grep -c bad2.txt)" 1
     rm -f "$W/bad2.txt"; printf 'assert(starts_with(k, "-----BEGIN PRIVATE KEY-----"))\n' > "$W/lit.px"; emit
     ck "④ PEM 头**字面量**不算私钥实体" "$(scan_keys "$W" | grep -c lit.px)" 0
@@ -101,7 +124,17 @@ if [ "$SELFTEST" = 1 ]; then
     SAVE="$PATTERNS"; PATTERNS='$^'
     ck "⑦ 判据自伤（模式清空后不报）" "$(scan_tokens "$W" | grep -c real.pem)" 0
     PATTERNS="$SAVE"
-    ck "⑧ 还原后 token 面仍有效" "$(printf 'github_pat_11ABCDEFG0abcdefghijklmnopqrstuv\n' > "$W/bad4.txt"; emit; scan_tokens "$W" | grep -c bad4.txt)" 1
+    ck "⑧ 还原后 token 面仍有效" "$(printf '%s\n' "github_pat_11ABCDEFG0""abcdefghijklmnopqrstuv" > "$W/bad4.txt"; emit; scan_tokens "$W" | grep -c bad4.txt)" 1
+    # ⑨/⑩ **扫描面**判据（M282 事故的立论）：未跟踪文件必须被扫到 ——
+    #   否则「提交前绿、提交后红」（真实事故：新门自己的文件当时还没 git add）。
+    rm -f "$W/bad3.txt"
+    printf 'url=https://x-access-token:%s@github.com/a/b.git\n' \
+        "github_pat_11ABCDEFG0""abcdefghijklmnopqrstuv" > "$W/bad3.txt"   # 刻意 **不** emit ⇒ 未跟踪
+    ck "⑨ 未跟踪文件也被扫到（提交前 = 提交后）" "$(scan_tokens "$W" | grep -c bad3.txt)" 1
+    TRACKED_ONLY=1
+    ck "⑩ 对照档（只扫已跟踪）会漏掉它 ⇒ 证明 ⑨ 有牙" "$(scan_tokens "$W" | grep -c bad3.txt)" 0
+    TRACKED_ONLY=0
+    rm -f "$W/bad3.txt"
     echo "SELFTEST 通过 $P / 失败 $F"
     [ "$F" = 0 ] || exit 3
     exit 0
