@@ -359,6 +359,41 @@ for d in $RPM_DIRS; do
 done
 # <<< rpm-tree-layout <<<
 
+# ---------- 6.5 registry/（W3：镜像侧 …/puxian/registry/ 可达） ----------
+# 令源：用户 2026-10-05「pxpkg sync 的 A / W3，做」· docs/PXPKG_SYNC_PLAN.md §五 W3。
+# 背景（晨曦实测）：发布段是 `rsync -a --delete --exclude=/rpm/` ⇒ DEST 下**除 rpm/ 外的
+#   内容**都会被 STAGING 覆盖；registry/ 若不在 STAGING 里，上一轮放进去的会被**静默删掉**
+#   （覆盖率无声下降 —— M235 缺陷 355 同族）。
+# 口径：**以发布 tarball 为唯一事实源**（不另取 gh-pages，避免双源漂移）。
+# >>> registry-mirror >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
+REG_FOUND=0
+REG_N=0
+# ⚠ M279 缺陷 487：**不能**写成 `tar -tzf … | grep -q X` —— 本脚本 set -o pipefail，
+#   而 grep -q 命中即退出 ⇒ tar 收 SIGPIPE（141）⇒ 整条管道非零 ⇒ 判据**恒假**
+#   （实测：grep -q 单独 rc=0，带 pipefail 整条管道 rc=141）
+#   ⇒ registry/ 永远不被提取，正是本段注释声称要避免的「覆盖率无声下降」。
+#   口径：**先把清单落盘，再对文件判**（同 packaging/selftest_make_release.sh:17 的既有教训）。
+_TARLIST="$WORK/tarlist.txt"
+tar -tzf "$STAGING/releases/$TARBALL" 2>/dev/null > "$_TARLIST" || true
+if grep -q '/registry/README\.md$' "$_TARLIST"; then
+  if tar -xzf "$STAGING/releases/$TARBALL" -C "$STAGING" --strip-components=1 \
+        --wildcards '*/registry/*' 2>/dev/null; then
+    REG_N="$(find "$STAGING/registry" -type f 2>/dev/null | wc -l)"
+    if [ "$REG_N" -gt 0 ]; then
+      REG_FOUND=1
+      log "⑤ registry/ 已提取：$REG_N 件（镜像侧将提供 …/puxian/registry/）"
+    else
+      die "registry/ 提取后为空（tarball 结构可能变了）"
+    fi
+  else
+    die "registry/ 提取失败（tarball=$TARBALL）"
+  fi
+else
+  log "   ℹ tarball 内不含 registry/（老版本资产）⇒ 本轮不提供，且**保护** DEST 现役内容"
+fi
+# <<< registry-mirror <<<
+
+
 # ---------- 6. 镜像自证文件 ----------
 # M168：rpm_repo 按**实际目录集合**生成（新增 openEuler 后版本对账口径同步）
 RPM_REPO_JSON=""
@@ -398,33 +433,6 @@ if [ "$DRY" = 1 ]; then
   log "🧪 --dry-run：解析与校验全部通过，未写 DEST"
   exit 0
 fi
-
-# ---------- 6.5 registry/（W3：镜像侧 …/puxian/registry/ 可达） ----------
-# 令源：用户 2026-10-05「pxpkg sync 的 A / W3，做」· docs/PXPKG_SYNC_PLAN.md §五 W3。
-# 背景（晨曦实测）：发布段是 `rsync -a --delete --exclude=/rpm/` ⇒ DEST 下**除 rpm/ 外的
-#   内容**都会被 STAGING 覆盖；registry/ 若不在 STAGING 里，上一轮放进去的会被**静默删掉**
-#   （覆盖率无声下降 —— M235 缺陷 355 同族）。
-# 口径：**以发布 tarball 为唯一事实源**（不另取 gh-pages，避免双源漂移）。
-# >>> registry-mirror >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
-REG_FOUND=0
-REG_N=0
-if tar -tzf "$STAGING/releases/$TARBALL" 2>/dev/null | grep -q '/registry/README\.md$'; then
-  if tar -xzf "$STAGING/releases/$TARBALL" -C "$STAGING" --strip-components=1 \
-        --wildcards '*/registry/*' 2>/dev/null; then
-    REG_N="$(find "$STAGING/registry" -type f 2>/dev/null | wc -l)"
-    if [ "$REG_N" -gt 0 ]; then
-      REG_FOUND=1
-      log "⑤ registry/ 已提取：$REG_N 件（镜像侧将提供 …/puxian/registry/）"
-    else
-      die "registry/ 提取后为空（tarball 结构可能变了）"
-    fi
-  else
-    die "registry/ 提取失败（tarball=$TARBALL）"
-  fi
-else
-  log "   ℹ tarball 内不含 registry/（老版本资产）⇒ 本轮不提供，且**保护** DEST 现役内容"
-fi
-# <<< registry-mirror <<<
 
 # ---------- 7. 发布（先新 rpm，再 repodata，最后删旧） ----------
 log "⑥ 发布到 $DEST"

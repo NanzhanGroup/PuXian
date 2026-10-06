@@ -35,15 +35,32 @@ def zip_lists(a, b):
     return result
 ## 分块：chunk([1,2,3,4,5], 2) -> [[1,2],[3,4],[5]]
 def chunk(items, n):
+    ## M279（缺陷 484）：n <= 0 时**旧实现是死循环** ——
+    ##   内层 `while j < n and i < len(items)` 在 n<=0 时恒假 ⇒ 唯一的 `i += 1`
+    ##   永不执行 ⇒ 外层 `while i < len(items)` 永不推进，且 `result` 每轮 append
+    ##   一个空列表 ⇒ **内存无界增长**（实测：解释轨挂住 60s；限内存时报
+    ##   「内存不足【xmalloc 大对象】申请 16777216 字节」——错误信息指不到真因）。
+    ## 修法两层（缺一不可）：
+    ##   ① 入口守卫 —— 把「用户传了非法 n」**响亮**说清（R2001）；
+    ##   ② 循环结构 —— 把推进移回**循环体最外层**（`i = i + take`），
+    ##      使「结构性死循环」在**形状上**不可能（由 selfhost/check_stdlib_loops.py 守）。
+    if type(n) != "int":
+        panic("chunk 的 n 需要 int，实际是 " + type(n))
+    if n <= 0:
+        panic("chunk 的 n 需要正整数，实际是 " + str(n))
     result = []
-    i = 0
-    while i < len(items):
-        part = []
-        j = 0
-        while j < n and i < len(items):
-            part.append(items[i])
-            i += 1
-            j += 1
+    var total = len(items)
+    var i = 0
+    while i < total:
+        var take = n
+        if i + take > total:
+            take = total - i
+        var part = []
+        var k = 0
+        while k < take:
+            part.append(items[i + k])
+            k += 1
+        i = i + take
         result.append(part)
     return result
 ## 按键分组：group_by([1,2,3,4], f) -> {"0": [2,4], "1": [1,3]}

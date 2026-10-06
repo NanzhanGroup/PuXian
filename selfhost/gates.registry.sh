@@ -1104,3 +1104,15 @@ run realhost_smoke bash packaging/realhost_smoke.sh --self-test
 #   门 = 离线自证（三档 fixture · 双向精确相等 · 豁免/过期/无效行 · --json · --rerun）
 #        + 静态判据（缺陷事实与纪律在位）+ 负控（豁免最新 tag ⇒ 必须判 STALE-IGNORE）。
 run m278_release_reconcile bash examples/m278_release_reconcile/verify.sh
+
+# M279：**stdlib 纯函数族「逐位置 × 边界/错类型」+ 结构性死循环**。
+#   真缺陷 484（高）：`std.collections.chunk(items, n)` 在 `n <= 0` 时**死循环 + 内存无界**
+#     —— 内层 `while j < n and i < len(items)` 恒假 ⇒ 唯一的 `i += 1` 永不执行
+#     ⇒ 外层永不推进且 `result` 无限增长（实测：解释轨挂住 60s；限内存时报
+#     「内存不足【xmalloc 大对象】申请 16777216 字节」——错误信息**指不到真因**）。
+#   缺陷 485：`px_call` 兜底报 `R1002 无法调用非函数: <类型名>`，而解释轨是
+#     `R1004 值不可调用: <值>` ⇒ **不同码 + 不同文**，9/10 例分叉（含用户自定义高阶）。
+#   门 = 静态（结构性死循环扫描器 · 自证 8 条 · 豁免表 + 过期判据）
+#      + 动态（chunk 边界三轨必须**响亮且限时**返回，超时即判红）
+#      + 三轨对拍（21 例契约表双向）+ 负控 A/B/C。
+run m279_std_surface bash examples/m279_std_surface/verify.sh

@@ -1,0 +1,75 @@
+import std.collections
+import std.path
+
+def callit(f, v):
+    return f(v)
+
+def main():
+    var a = args()
+    var c = a[1]
+    if c == "u_str":
+        print(unique("abc"))
+    else:
+        if c == "u_dict":
+            print(unique({"a":1}))
+        else:
+            if c == "u_int":
+                print(unique(7))
+            else:
+                if c == "f_str":
+                    print(flatten("abc"))
+                else:
+                    if c == "f_2d":
+                        print(flatten([[1,[2]],3]))
+                    else:
+                        if c == "f_int":
+                            print(flatten(7))
+                        else:
+                            if c == "z_mixed":
+                                print(zip_lists([1,2], "ab"))
+                            else:
+                                if c == "z_int":
+                                    print(zip_lists(7, "ab"))
+                                else:
+                                    if c == "c_str":
+                                        print(chunk("abcd", 2))
+                                    else:
+                                        if c == "c_str2":
+                                            print(chunk("abc", 2))
+                                        else:
+                                            if c == "c_empty":
+                                                print(chunk([], 2))
+                                            else:
+                                                if c == "p_join_str":
+                                                    print(path_join_list("ab"))
+                                                else:
+                                                    if c == "e_int":
+                                                        each(7, print)
+                                                    else:
+                                                        if c == "g_int":
+                                                            print(group_by([1,2], 7))
+                                                        else:
+                                                            if c == "s_int":
+                                                                print(sort_by([1,2], 7))
+                                                            else:
+                                                                if c == "cal_direct":
+                                                                    var f = 7
+                                                                    print(f())
+                                                                else:
+                                                                    if c == "cal_direct_str":
+                                                                        var g = "abc"
+                                                                        print(g())
+                                                                    else:
+                                                                        if c == "cal_hof":
+                                                                            print(callit(7, 1))
+                                                                        else:
+                                                                            if c == "cal_map":
+                                                                                print(map([1,2], 7))
+                                                                            else:
+                                                                                if c == "cal_filter":
+                                                                                    print(filter([1,2], 7))
+                                                                                else:
+                                                                                    if c == "cal_reduce":
+                                                                                        print(reduce([1,2], 7, 0))
+                                                                                    else:
+                                                                                        print("UNKNOWN", c)

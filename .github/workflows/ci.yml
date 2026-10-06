@@ -1071,6 +1071,16 @@ jobs:
           grep -E 'M278 门结果' /tmp/v_m278.log | tail -1 || true
           echo "✅ m278_release_reconcile（离线自证 30/0 · 双向精确相等 · 豁免过期判据 · 负控 STALE-IGNORE 判红）PASS"
 
+      - name: m279_std_surface（stdlib 边界/错类型 + 结构性死循环）
+        run: |
+          set -o pipefail
+          # M279：静态扫描器自证 + stdlib 全量扫描（含豁免表过期判据）
+          python3 selfhost/check_stdlib_loops.py --self-test
+          python3 selfhost/check_stdlib_loops.py --root . --allow selfhost/stdlib_loops.allow
+          # 门（CI 档：负控跳过 —— 负控要改源码 + 重编，成本高）
+          NEG_SKIP=1 bash examples/m279_std_surface/verify.sh > /tmp/v_m279.log 2>&1 || { echo "❌ m279 门失败（静态扫描 / chunk 限时响亮 / 三轨对拍）"; grep -E '^  ❌' /tmp/v_m279.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m279_std_surface（结构性死循环 0 · chunk 边界限时响亮 · 三轨契约 21 例）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
