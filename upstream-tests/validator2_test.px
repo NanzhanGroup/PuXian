@@ -1,0 +1,106 @@
+# validator 0.2.0 测试：新增规则覆盖 + 0.1.0 回归
+import "../registry/validator/0.2.0/validator.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(val_required("x") and not val_required("") and not val_required(null), "required")
+    expect(val_email("a@b.com") and not val_email("not-email"), "email")
+    expect(val_min("abc", 3) and not val_min("ab", 3), "min str")
+    expect(val_min(5, 3) and not val_min(2, 3), "min int")
+    expect(val_max([1, 2], 2) and not val_max([1, 2, 3], 2), "max list")
+    expect(val_int_range(5, 1, 10) and not val_int_range(11, 1, 10), "int_range")
+    var data = {"name": "px", "email": "a@b.com", "age": 30, "role": "admin", "tags": ["x"]}
+    var rules = {
+        "name": "required|min=2|max=20",
+        "email": "required|email",
+        "age": "int_range=18,65",
+        "role": "in=admin,user",
+        "tags": "required|max=3",
+    }
+    var r = val_validate(data, rules)
+    expect(r.is_ok(), "0.1.0 全过应 Ok: " + str(r))
+    # ---- 0.2.0 新增：url ----
+    expect(val_url("https://example.com/path") and val_url("http://x.y"), "url valid")
+    expect(not val_url("ftp://x.y") and not val_url("not-url"), "url invalid")
+    # ---- phone ----
+    expect(val_phone("13812345678") and val_phone("19900001111"), "phone valid")
+    expect(not val_phone("12345678901") and not val_phone("1381234567"), "phone invalid")
+    # ---- ipv4 ----
+    expect(val_ipv4("192.168.1.1") and val_ipv4("0.0.0.0") and val_ipv4("255.255.255.255"), "ipv4 valid")
+    expect(not val_ipv4("256.1.1.1") and not val_ipv4("1.2.3") and not val_ipv4("01.02.03.04"), "ipv4 invalid")
+    # ---- ipv6 ----
+    expect(val_ipv6("2001:0db8:85a3:0000:0000:8a2e:0370:7334"), "ipv6 full valid")
+    expect(val_ipv6("::1") and val_ipv6("fe80::1"), "ipv6 compressed valid")
+    expect(not val_ipv6("not-ip"), "ipv6 invalid")
+    # ---- ip (auto v4/v6) ----
+    expect(val_ip("10.0.0.1") and val_ip("::1"), "ip auto detect")
+    # ---- uuid ----
+    expect(val_uuid("550e8400-e29b-41d4-a716-446655440000"), "uuid with hyphens")
+    expect(val_uuid("550e8400e29b41d4a716446655440000"), "uuid no hyphens")
+    expect(not val_uuid("not-uuid"), "uuid invalid")
+    # ---- alpha / numeric / alnum ----
+    expect(val_alpha("hello") and val_alpha("中文"), "alpha valid")
+    expect(not val_alpha("hello123") and not val_alpha(""), "alpha invalid")
+    expect(val_numeric("12345") and not val_numeric("12a45"), "numeric")
+    expect(val_alnum("abc123") and not val_alnum("abc 123"), "alnum")
+    # ---- credit_card (Luhn) ----
+    expect(val_credit_card("4532015112830366"), "credit_card valid visa test")
+    expect(val_credit_card("4532 0151 1283 0366"), "credit_card with spaces")
+    expect(not val_credit_card("4532015112830367"), "credit_card invalid checksum")
+    expect(not val_credit_card("123"), "credit_card too short")
+    # ---- starts_with / ends_with / contains ----
+    expect(val_starts_with("hello world", "hello"), "starts_with")
+    expect(val_ends_with("hello.txt", ".txt"), "ends_with")
+    expect(val_contains("hello@world", "@"), "contains")
+    # ---- date / datetime ----
+    expect(val_date("2026-10-06") and not val_date("2026/10/06"), "date")
+    expect(val_datetime("2026-10-06 12:30:00") and not val_datetime("2026-10-06"), "datetime")
+    # ---- regex ----
+    expect(regex_match("^[a-z]+$", "abc"), "regex direct")
+    # 通过 val_validate 测试 regex 规则
+    var r2 = val_validate({"code": "abc123"}, {"code": "regex=^[a-z0-9]+$"})
+    expect(r2.is_ok(), "regex rule pass: " + str(r2))
+    var r3 = val_validate({"code": "ABC!"}, {"code": "regex=^[a-z0-9]+$"})
+    expect(r3.is_err(), "regex rule fail")
+    # ---- not_in ----
+    var r4 = val_validate({"role": "guest"}, {"role": "not_in=admin,root"})
+    expect(r4.is_ok(), "not_in pass: " + str(r4))
+    var r5 = val_validate({"role": "admin"}, {"role": "not_in=admin,root"})
+    expect(r5.is_err(), "not_in fail")
+    # ---- 组合新规则 ----
+    var form = {
+        "website": "https://puxian.dev",
+        "mobile": "13800138000",
+        "card": "4532015112830366",
+        "uid": "550e8400-e29b-41d4-a716-446655440000",
+        "ip": "192.168.1.100",
+    }
+    var form_rules = {
+        "website": "required|url",
+        "mobile": "required|phone",
+        "card": "required|credit_card",
+        "uid": "required|uuid",
+        "ip": "required|ip",
+    }
+    var r6 = val_validate(form, form_rules)
+    expect(r6.is_ok(), "组合新规则全过: " + str(r6))
+    # 组合失败
+    var bad_form = {
+        "website": "not-url",
+        "mobile": "12345",
+        "card": "0000",
+        "uid": "xxx",
+        "ip": "999.999.999.999",
+    }
+    var r7 = val_validate(bad_form, form_rules)
+    expect(r7.is_err(), "组合新规则全失败: " + str(r7))
+    var msg = str(r7)
+    expect(contains(msg, "website"), "含 website 错误")
+    expect(contains(msg, "mobile"), "含 mobile 错误")
+    expect(contains(msg, "card"), "含 card 错误")
+    expect(contains(msg, "uid"), "含 uid 错误")
+    expect(contains(msg, "ip"), "含 ip 错误")
+    print("validator 0.2.0: PASS")

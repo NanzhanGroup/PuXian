@@ -1,0 +1,28 @@
+# properties 0.2.0 测试
+import "../registry/properties/0.2.0/properties.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var cfg = pr_parse("name=Alice\nage=30").unwrap()
+    expect(pr_get(cfg, "name").unwrap() == "Alice", "get name: " + pr_get(cfg, "name").unwrap())
+    expect(pr_has(cfg, "age") == true, "has age")
+    # ---- 0.2.0 set ----
+    pr_set(cfg, "city", "Beijing")
+    expect(pr_get(cfg, "city").unwrap() == "Beijing", "set/get city")
+    # ---- 0.2.0 to_string ----
+    var s = pr_to_string(cfg)
+    expect(contains(s, "name=Alice") == true, "to_string has name=Alice")
+    # ---- 0.2.0 merge ----
+    var cfg2 = pr_parse("x=1\ny=2").unwrap()
+    var merged = pr_merge(cfg, cfg2)
+    expect(pr_has(merged, "name") == true, "merge has name")
+    expect(pr_has(merged, "x") == true, "merge has x")
+    # ---- 0.2.0 get_default ----
+    expect(pr_get_default(cfg, "name", "default") == "Alice", "get_default existing")
+    expect(pr_get_default(cfg, "nonexist", "default") == "default", "get_default default")
+    # ---- 0.2.0 len ----
+    expect(pr_len(cfg) == 3, "len 3: " + str(pr_len(cfg)))
+    print("PASS: properties 0.2.0")

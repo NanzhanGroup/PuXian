@@ -1,0 +1,72 @@
+# csv 0.2.0 测试：自定义分隔符/header/注释/筛选 + 0.1.0 回归
+import "../registry/csv/0.2.0/csv.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var s1 = "a,b,c\n1,2,3\n"
+    var r1 = csv_parse(s1)
+    expect(r1.is_ok(), "0.1.0 parse: " + str(r1))
+    expect(r1.unwrap() == [["a", "b", "c"], ["1", "2", "3"]], "0.1.0 rows")
+    # 引号/转义
+    var s2 = "\"hello,world\",\"line\"\"quote\"\n"
+    var r2 = csv_parse(s2)
+    expect(r2.unwrap() == [["hello,world", "line\"quote"]], "quoted: " + str(r2))
+    # 序列化
+    var r3 = csv_serialize([["a", "b"], ["1", "2"]])
+    expect(r3.unwrap() == "a,b\n1,2\n", "serialize: " + str(r3))
+    # 需要引号
+    var r4 = csv_serialize([["a,b", "c"]])
+    expect(r4.unwrap() == "\"a,b\",c\n", "quote needed: " + str(r4))
+    # ---- 0.2.0 自定义分隔符 ----
+    var tsv = "a\tb\tc\n1\t2\t3\n"
+    var r5 = csv_parse_tsv(tsv)
+    expect(r5.unwrap() == [["a", "b", "c"], ["1", "2", "3"]], "tsv: " + str(r5))
+    var r6 = csv_parse_delim("a;b;c\n1;2;3\n", ";")
+    expect(r6.unwrap() == [["a", "b", "c"], ["1", "2", "3"]], "semicolon: " + str(r6))
+    # opts 方式
+    var r7 = csv_parse_opts("a|b\n1|2\n", {"delim": "|"})
+    expect(r7.unwrap() == [["a", "b"], ["1", "2"]], "pipe delim: " + str(r7))
+    # ---- 0.2.0 注释行 ----
+    var s8 = "# comment\na,b\n# another\n1,2\n"
+    var r8 = csv_parse_opts(s8, {"comment": "#"})
+    expect(r8.unwrap() == [["a", "b"], ["1", "2"]], "comment skip: " + str(r8))
+    # ---- 0.2.0 跳空行 ----
+    var s9 = "a,b\n\n1,2\n"
+    var r9 = csv_parse_opts(s9, {"skip_empty": true})
+    expect(r9.unwrap() == [["a", "b"], ["1", "2"]], "skip empty: " + str(r9))
+    # ---- 0.2.0 header 处理 ----
+    var s10 = "name,age,city\nAlice,30,Beijing\nBob,25,Shanghai\n"
+    var r10 = csv_parse_header(s10)
+    expect(r10.is_ok(), "header parse: " + str(r10))
+    var objs = r10.unwrap()
+    expect(len(objs) == 2, "header 2 rows")
+    expect(objs[0]["name"] == "Alice", "header name")
+    expect(objs[0]["age"] == "30", "header age")
+    expect(objs[0]["city"] == "Beijing", "header city")
+    expect(objs[1]["name"] == "Bob", "header name 2")
+    expect(objs[1]["city"] == "Shanghai", "header city 2")
+    # ---- 0.2.0 serialize_header ----
+    var r11 = csv_serialize_header([["Alice", "30"], ["Bob", "25"]], ["name", "age"])
+    expect(r11.unwrap() == "name,age\nAlice,30\nBob,25\n", "serialize header: " + str(r11))
+    # ---- 0.2.0 单行序列化 ----
+    var r12 = csv_serialize_row(["a", "b,c", "d"])
+    expect(r12.unwrap() == "a,\"b,c\",d", "serialize row: " + str(r12))
+    # ---- 0.2.0 提取列 ----
+    var rows = [["a", "1"], ["b", "2"], ["c", "3"]]
+    var col = csv_get_col(rows, 0)
+    expect(col == ["a", "b", "c"], "get col 0: " + str(col))
+    var col2 = csv_get_col(rows, 1)
+    expect(col2 == ["1", "2", "3"], "get col 1: " + str(col2))
+    # ---- 0.2.0 筛选行 ----
+    var data = [["apple", "fruit"], ["carrot", "veg"], ["banana", "fruit"]]
+    var filtered = csv_filter_rows(data, 1, "fruit")
+    expect(len(filtered) == 2, "filter 2 rows: " + str(len(filtered)))
+    expect(filtered[0][0] == "apple", "filter apple")
+    expect(filtered[1][0] == "banana", "filter banana")
+    # ---- 0.2.0 序列化带选项 ----
+    var r13 = csv_serialize_opts([["a", "b"], ["1", "2"]], {"delim": ";"})
+    expect(r13.unwrap() == "a;b\n1;2\n", "serialize delim: " + str(r13))
+    print("csv 0.2.0: PASS")

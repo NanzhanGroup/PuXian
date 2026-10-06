@@ -1,0 +1,20 @@
+# quickcheck 0.2.0 测试
+import "../registry/quickcheck/0.2.0/quickcheck.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def is_positive(n):
+    return n >= 0
+def main():
+    # ---- 0.1.0 回归 ----
+    var gen = qc_int(1, 100)
+    var v = gen()
+    expect(v >= 1 and v <= 100, "qc_int 1-100: " + str(v))
+    # ---- 0.2.0 qc_bool ----
+    var b = qc_bool()
+    expect(b == true or b == false, "qc_bool: " + str(b))
+    # ---- 0.2.0 for_int (non-negative integers are non-negative) ----
+    var result = qc_for_int(0, 100, is_positive, 50)
+    expect(result == 50, "for_int positive: " + str(result))
+    print("PASS: quickcheck 0.2.0")

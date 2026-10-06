@@ -1,0 +1,244 @@
+# ============================================================
+# 普贤生态库：registry/pop3 —— POP3 客户端（RFC 1939）
+# ------------------------------------------------------------
+# 纯 .px 实现（TCP 控制通道），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go go-imap（pop3）、Python poplib 心智：
+#   po_connect(host[, port=110][, opts]) → Ok(conn) | Err   读 "+OK" 问候
+#   po_login(conn, user, password)       → Ok(conn) | Err
+#   po_stat(conn)                        → Ok({count, size})
+#   po_list(conn)                        → Ok([{num, size}])
+#   po_retr(conn, num)                   → Ok(str)（多行直到 "."，点填充还原）
+#   po_top(conn, num, lines)             → Ok(str)（TOP n lines，头+指定行数）
+#   po_uidl(conn[, num])                 → Ok(str) | Ok([{num, uidl}])
+#   po_dele(conn, num)                   → Ok(true)（标记删除）
+#   po_rset(conn)                        → Ok(true)（撤销所有删除标记）
+#   po_noop(conn)                        → Ok(true)（保活）
+#   po_capa(conn)                        → Ok([str])（能力列表）
+#   po_quit(conn)                        → Ok(true)
+# 单行回复 ±OK/-ERR；多行以 "." 结束；点填充还原（前导 ".." → "."）。
+# ============================================================
+
+# ---- 内部 ----
+def po_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var r = tcp_recv_ex(fd, n - bytes_len(buf))
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return [buf, ""]
+
+def po_read_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, ""]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        var bl = bytes_len(buf)
+        if bl > 0 and bytes_get(buf, bl - 1) == 10:
+            var end = bl
+            if end >= 2 and bytes_get(buf, bl - 2) == 13:
+                end = bl - 2
+            else:
+                end = bl - 1
+            return [bytes_slice(buf, 0, end), ""]
+        if bl > 65536:
+            return [buf, "line too long"]
+
+def po_trim(s):
+    var st = 0
+    var en = len(s)
+    while st < en and (s[st] == " " or s[st] == "\t"):
+        st += 1
+    while en > st and (s[en - 1] == " " or s[en - 1] == "\t"):
+        en -= 1
+    return s[st:en]
+
+# 读单行 → [ok, rest]
+def po_reply(fd):
+    var l = po_read_line(fd)
+    if l[1] != "":
+        return [false, l[1]]
+    var t = po_trim(bytes_to_str(l[0]))
+    if t.starts_with("+OK"):
+        return [true, po_trim(t[3:len(t)])]
+    return [false, t]
+
+# 读多行（直到 "."）→ [lines joined \n, err]
+def po_read_dot(fd):
+    var out = []
+    while true:
+        var l = po_read_line(fd)
+        if l[1] != "":
+            return ["", l[1]]
+        var t = bytes_to_str(l[0])
+        if t == ".":
+            break
+        if t.starts_with(".."):
+            t = t[1:len(t)]
+        out.append(t)
+    var joined = ""
+    var i = 0
+    while i < len(out):
+        if i > 0:
+            joined = joined + "\n"
+        joined = joined + out[i]
+        i += 1
+    return [joined, ""]
+
+def po_send(fd, cmd):
+    return tcp_send_ex(fd, bytes(cmd + "\r\n"))["ok"]
+
+def po_expect_ok(fd, cmd):
+    var ok = po_send(fd, cmd)
+    if not ok:
+        return Err("pop3: 发送失败: " + cmd)
+    var r = po_reply(fd)
+    if not r[0]:
+        return Err("pop3: " + cmd + " → " + r[1])
+    return Ok(r[1])
+
+# ---- 公开 API ----
+def po_connect(host, port=110, opts={}):
+    var timeout_ms = 5000
+    if opts.has("timeout_ms"):
+        timeout_ms = opts["timeout_ms"]
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("pop3: connect " + host + ":" + str(port) + " failed: " + c["err"])
+    var fd = c["fd"]
+    var r = po_reply(fd)
+    if not r[0]:
+        tcp_close(fd)
+        return Err("pop3: 问候失败: " + r[1])
+    return Ok({"fd": fd, "host": host, "port": port})
+
+def po_login(conn, user, password):
+    var r = po_expect_ok(conn["fd"], "USER " + user)
+    if r.is_err():
+        return r
+    return po_expect_ok(conn["fd"], "PASS " + password)
+
+def po_stat(conn):
+    var r = po_expect_ok(conn["fd"], "STAT")
+    if r.is_err():
+        return r
+    var parts = split(r.unwrap(), " ")
+    if len(parts) < 2:
+        return Err("pop3: STAT 回复异常")
+    return Ok({"count": int(parts[0]), "size": int(parts[1])})
+
+def po_list(conn):
+    var r = po_expect_ok(conn["fd"], "LIST")
+    if r.is_err():
+        return r
+    var md = po_read_dot(conn["fd"])
+    if md[1] != "":
+        return Err("pop3: LIST 多行: " + md[1])
+    var lines = split(md[0], "\n")
+    var out = []
+    var i = 0
+    while i < len(lines):
+        if lines[i] == "":
+            i += 1
+            continue
+        var p = split(lines[i], " ")
+        if len(p) >= 2:
+            out.append({"num": int(p[0]), "size": int(p[1])})
+        i += 1
+    return Ok(out)
+
+def po_retr(conn, num):
+    var r = po_expect_ok(conn["fd"], "RETR " + str(num))
+    if r.is_err():
+        return r
+    var md = po_read_dot(conn["fd"])
+    if md[1] != "":
+        return Err("pop3: RETR 多行: " + md[1])
+    return Ok(md[0])
+
+# TOP num lines → 头部 + 指定行数正文（多行 "." 结束）
+def po_top(conn, num, lines):
+    var r = po_expect_ok(conn["fd"], "TOP " + str(num) + " " + str(lines))
+    if r.is_err():
+        return r
+    var md = po_read_dot(conn["fd"])
+    if md[1] != "":
+        return Err("pop3: TOP 多行: " + md[1])
+    return Ok(md[0])
+
+# UIDL [num] → 单条返回 Ok(str)，无参数返回 Ok([{num, uidl}])
+def po_uidl(conn, num=null):
+    if num != null:
+        var r = po_expect_ok(conn["fd"], "UIDL " + str(num))
+        if r.is_err():
+            return r
+        var parts = split(r.unwrap(), " ")
+        if len(parts) >= 2:
+            return Ok(parts[1])
+        return Ok("")
+    var r2 = po_expect_ok(conn["fd"], "UIDL")
+    if r2.is_err():
+        return r2
+    var md = po_read_dot(conn["fd"])
+    if md[1] != "":
+        return Err("pop3: UIDL 多行: " + md[1])
+    var lines = split(md[0], "\n")
+    var out = []
+    var i = 0
+    while i < len(lines):
+        if lines[i] == "":
+            i += 1
+            continue
+        var p = split(lines[i], " ")
+        if len(p) >= 2:
+            out.append({"num": int(p[0]), "uidl": p[1]})
+        i += 1
+    return Ok(out)
+
+# DELE num → 标记删除（QUIT 时生效）
+def po_dele(conn, num):
+    return po_expect_ok(conn["fd"], "DELE " + str(num))
+
+# RSET → 撤销所有删除标记
+def po_rset(conn):
+    return po_expect_ok(conn["fd"], "RSET")
+
+# NOOP → 保活
+def po_noop(conn):
+    return po_expect_ok(conn["fd"], "NOOP")
+
+# CAPA → 能力列表
+def po_capa(conn):
+    var r = po_expect_ok(conn["fd"], "CAPA")
+    if r.is_err():
+        return r
+    var md = po_read_dot(conn["fd"])
+    if md[1] != "":
+        return Err("pop3: CAPA 多行: " + md[1])
+    var lines = split(md[0], "\n")
+    var out = []
+    var i = 0
+    while i < len(lines):
+        if lines[i] != "":
+            out.append(lines[i])
+        i += 1
+    return Ok(out)
+
+def po_quit(conn):
+    var r = po_expect_ok(conn["fd"], "QUIT")
+    tcp_close(conn["fd"])
+    return Ok(true)

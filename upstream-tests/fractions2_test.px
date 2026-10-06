@@ -1,0 +1,36 @@
+# fractions 0.2.0 测试
+import "../registry/fractions/0.2.0/fractions.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var a = frac(3, 4).unwrap()
+    var b = frac(1, 2).unwrap()
+    expect(frac_to_str(frac_add(a, b).unwrap()) == "5/4", "add")
+    expect(frac_to_str(frac_mul(a, b).unwrap()) == "3/8", "mul")
+    # ---- 0.2.0 abs/reciprocal ----
+    var neg = frac(-3, 4).unwrap()
+    expect(frac_to_str(frac_abs(neg).unwrap()) == "3/4", "abs")
+    expect(frac_to_str(frac_reciprocal(a).unwrap()) == "4/3", "reciprocal")
+    # ---- 0.2.0 floor/ceil/round ----
+    var f73 = frac(7, 3).unwrap()
+    expect(frac_floor(f73) == 2, "floor 7/3")
+    expect(frac_ceil(f73) == 3, "ceil 7/3")
+    expect(frac_round(f73) == 2, "round 7/3")
+    var fn73 = frac(-7, 3).unwrap()
+    expect(frac_floor(fn73) == -3, "floor -7/3")
+    expect(frac_ceil(fn73) == -2, "ceil -7/3")
+    # ---- 0.2.0 to_mixed/from_mixed ----
+    var mx = frac_to_mixed(f73)
+    expect(mx["whole"] == 2, "mixed whole 2")
+    expect(mx["num"] == 1, "mixed num 1")
+    expect(mx["den"] == 3, "mixed den 3")
+    var fm = frac_from_mixed(2, 1, 3).unwrap()
+    expect(frac_to_str(fm) == "7/3", "from_mixed")
+    # ---- 0.2.0 is_int/to_int ----
+    var f63 = frac(6, 3).unwrap()
+    expect(frac_is_int(f63) == true, "is_int 6/3")
+    expect(frac_is_int(f73) == false, "not is_int 7/3")
+    expect(frac_to_int(f63).unwrap() == 2, "to_int 6/3")
+    print("PASS: fractions 0.2.0")

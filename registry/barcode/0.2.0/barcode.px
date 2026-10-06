@@ -1,0 +1,298 @@
+# ============================================================
+# 普贤生态库：registry/barcode 0.2.0 —— 多制式条形码生成
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 python-barcode / Go boombuler/barcode 心智：
+#
+# 0.1.0：EAN-13 编码
+# 0.2.0 新增：
+#   - UPC-A（12 位，EAN-13 子集首位=0）
+#   - ISBN-13（978/979 前缀 + EAN-13）
+#   - Code128-B（ASCII 32~126 子集，含校验符）
+#   - EAN-8（缩短版）
+#   - bc_verify(type, code) 通用校验
+#
+# EAN-13 API（0.1.0 兼容）：
+#   bc_ean13_check(d12) → Ok(int) | Err
+#   bc_ean13(d12)       → Ok({code, pattern, ascii}) | Err
+# 0.2.0 新增 API：
+#   bc_upc_a_check(d11)   → Ok(int) | Err
+#   bc_upc_a(d11)         → Ok({code, pattern, ascii}) | Err
+#   bc_isbn13_check(isbn) → Ok(int) | Err
+#   bc_isbn13(isbn)       → Ok({code, pattern, ascii}) | Err
+#   bc_ean8_check(d7)     → Ok(int) | Err
+#   bc_ean8(d7)           → Ok({code, pattern, ascii}) | Err
+#   bc_code128(text)      → Ok({code, pattern, ascii}) | Err
+#   bc_verify(type, code) → Ok(bool) | Err
+# ============================================================
+
+# ---- EAN-13 编码表（模块 0/1 串）----
+def bc_tables():
+    var L = ["0001101", "0011001", "0010011", "0111101", "0100011",
+             "0110001", "0101111", "0111011", "0110111", "0001011"]
+    var G = ["0100111", "0110011", "0011011", "0100001", "0011101",
+             "0111001", "0000101", "0010001", "0001001", "0010111"]
+    var R = ["1110010", "1100110", "1101100", "1000010", "1011100",
+             "1001110", "1010000", "1000100", "1001000", "1110100"]
+    var P = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG",
+             "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"]
+    return [L, G, R, P]
+
+def bc_is_digit(c):
+    return c >= "0" and c <= "9"
+
+# ---- 内部：pattern → ascii 渲染 ----
+def bc_render(pat):
+    var ascii = ""
+    var j = 0
+    while j < len(pat):
+        if pat[j] == "1":
+            ascii = ascii + "█"
+        else:
+            ascii = ascii + " "
+        j += 1
+    return ascii
+
+# ---- 内部：宽度 pattern → ascii 渲染（Code128 用）----
+def bc_render_width(pat):
+    var ascii = ""
+    var m = 0
+    while m < len(pat):
+        var w = ord(pat[m]) - 48
+        var n = 0
+        while n < w:
+            if m % 2 == 0:
+                ascii = ascii + "█"
+            else:
+                ascii = ascii + " "
+            n += 1
+        m += 1
+    return ascii
+
+# ---- EAN-13 校验位 ----
+def bc_ean13_check(d12):
+    if len(d12) != 12:
+        return Err("barcode: 需要 12 位数字，got " + str(len(d12)))
+    var sum = 0
+    var i = 0
+    while i < 12:
+        if not bc_is_digit(d12[i]):
+            return Err("barcode: 非法数字: " + d12)
+        var v = ord(d12[i]) - 48
+        if i % 2 == 0:
+            sum = sum + v
+        else:
+            sum = sum + v * 3
+        i += 1
+    return Ok((10 - (sum % 10)) % 10)
+
+# ---- EAN-13 完整编码 ----
+def bc_ean13(d12):
+    var ck = bc_ean13_check(d12)
+    if ck.is_err():
+        return Err(ck.err())
+    var code = d12 + str(ck.unwrap())
+    var tbl = bc_tables()
+    var pat = "101"
+    var first = ord(code[0]) - 48
+    var parity = tbl[3][first]
+    var i = 1
+    while i <= 6:
+        var dg = ord(code[i]) - 48
+        if parity[i - 1] == "G":
+            pat = pat + tbl[1][dg]
+        else:
+            pat = pat + tbl[0][dg]
+        i += 1
+    pat = pat + "01010"
+    var k = 7
+    while k <= 12:
+        var dg2 = ord(code[k]) - 48
+        pat = pat + tbl[2][dg2]
+        k += 1
+    pat = pat + "101"
+    return Ok({"code": code, "pattern": pat, "ascii": bc_render(pat)})
+
+# ---- EAN-8 校验位 ----
+def bc_ean8_check(d7):
+    if len(d7) != 7:
+        return Err("barcode: EAN-8 需要 7 位数字，got " + str(len(d7)))
+    var sum = 0
+    var i = 0
+    while i < 7:
+        if not bc_is_digit(d7[i]):
+            return Err("barcode: 非法数字: " + d7)
+        var v = ord(d7[i]) - 48
+        if i % 2 == 1:
+            sum = sum + v
+        else:
+            sum = sum + v * 3
+        i += 1
+    return Ok((10 - (sum % 10)) % 10)
+
+# ---- EAN-8 完整编码 ----
+def bc_ean8(d7):
+    var ck = bc_ean8_check(d7)
+    if ck.is_err():
+        return Err(ck.err())
+    var code = d7 + str(ck.unwrap())
+    var tbl = bc_tables()
+    var L = tbl[0]
+    var R = tbl[2]
+    var pat = "101"
+    var i = 0
+    while i < 4:
+        var dg = ord(code[i]) - 48
+        pat = pat + L[dg]
+        i += 1
+    pat = pat + "01010"
+    var k = 4
+    while k < 8:
+        var dg2 = ord(code[k]) - 48
+        pat = pat + R[dg2]
+        k += 1
+    pat = pat + "101"
+    return Ok({"code": code, "pattern": pat, "ascii": bc_render(pat)})
+
+# ---- UPC-A 校验位（11 位 → 12 位）----
+def bc_upc_a_check(d11):
+    if len(d11) != 11:
+        return Err("barcode: UPC-A 需要 11 位数字，got " + str(len(d11)))
+    var sum = 0
+    var i = 0
+    while i < 11:
+        if not bc_is_digit(d11[i]):
+            return Err("barcode: 非法数字: " + d11)
+        var v = ord(d11[i]) - 48
+        if i % 2 == 0:
+            sum = sum + v * 3
+        else:
+            sum = sum + v
+        i += 1
+    return Ok((10 - (sum % 10)) % 10)
+
+# ---- UPC-A 完整编码（= EAN-13 首位 0）----
+def bc_upc_a(d11):
+    var ck = bc_upc_a_check(d11)
+    if ck.is_err():
+        return Err(ck.err())
+    var r = bc_ean13("0" + d11)
+    if r.is_err():
+        return r
+    var v = r.unwrap()
+    # UPC-A code = 12 位（去掉 EAN-13 的前导 0）
+    return Ok({"code": d11 + str(ck.unwrap()), "pattern": v["pattern"], "ascii": v["ascii"]})
+
+# ---- 内部：清理 ISBN（去连字符/空格）----
+def bc_clean_isbn(isbn):
+    var clean = ""
+    var i = 0
+    while i < len(isbn):
+        var c = isbn[i]
+        if c != "-" and c != " ":
+            clean = clean + c
+        i += 1
+    return clean
+
+# ---- ISBN-13 校验位 ----
+def bc_isbn13_check(isbn):
+    var clean = bc_clean_isbn(isbn)
+    if len(clean) != 12:
+        return Err("barcode: ISBN-13 需要 12 位（不含校验位），got " + str(len(clean)))
+    if not clean.starts_with("978") and not clean.starts_with("979"):
+        return Err("barcode: ISBN-13 前缀须 978 或 979")
+    return bc_ean13_check(clean)
+
+# ---- ISBN-13 完整编码 ----
+def bc_isbn13(isbn):
+    var clean = bc_clean_isbn(isbn)
+    return bc_ean13(clean)
+
+# ============================================================
+# Code128（Code Set B — ASCII 32~126）
+# ============================================================
+# 标准 ISO/IEC 15417 编码表（107 个 pattern，值 0~106）
+def bc_c128_patterns():
+    return [
+        "212222","222122","222221","121223","121322","131222","122213","122312","132212","221213",
+        "221312","231212","112232","122132","122231","113222","123122","123221","223211","221132",
+        "221231","213212","213221","121323","131322","132321","221323","231213","231312","232112",
+        "132211","311222","312122","312221","321212","321221","322112","322211","212123","212321",
+        "232121","111323","131123","131321","112313","132113","132311","211313","231113","231311",
+        "112133","112331","132131","113123","113321","133121","313112","313211","321113","321311",
+        "311113","311311","431111","111224","111422","121124","121421","141122","141221","112214",
+        "112412","122114","122411","142112","142211","241211","221114","413111","241112","134111",
+        "111242","121142","121241","114212","124112","124211","411212","421112","421211","212141",
+        "214121","412121","111143","111341","131141","114113","114311","411113","411311","113141",
+        "114131","311141","411131","211412","211214","211232","233111"
+    ]
+
+# Code128-B 编码
+def bc_code128(text):
+    if len(text) == 0:
+        return Err("barcode: Code128 输入不能为空")
+    var tbl = bc_c128_patterns()
+    # Code Set B: ASCII 32~126 → value 0~94
+    var values = []
+    var i = 0
+    while i < len(text):
+        var c = ord(text[i])
+        if c < 32 or c > 126:
+            return Err("barcode: Code128-B 仅支持 ASCII 32~126，got char " + str(c))
+        values.append(c - 32)
+        i += 1
+    # 校验符 = (StartB + Σ(i+1)*value_i) mod 103
+    var checksum = 104  # StartB
+    var j = 0
+    while j < len(values):
+        checksum = checksum + (j + 1) * values[j]
+        j += 1
+    checksum = checksum % 103
+    values.append(checksum)
+    # 编码为 pattern
+    var pat = tbl[104]  # StartB
+    var k = 0
+    while k < len(values):
+        pat = pat + tbl[values[k]]
+        k += 1
+    pat = pat + "2331112"  # Stop pattern (7 modules)
+    return Ok({"code": text, "pattern": pat, "ascii": bc_render_width(pat)})
+
+# ---- 通用校验 ----
+def bc_verify(typ, code):
+    if typ == "ean13":
+        if len(code) != 13:
+            return Ok(false)
+        var d12 = code[0:12]
+        var ck = bc_ean13_check(d12)
+        if ck.is_err():
+            return Ok(false)
+        return Ok(str(ck.unwrap()) == code[12:13])
+    if typ == "ean8":
+        if len(code) != 8:
+            return Ok(false)
+        var d7 = code[0:7]
+        var ck2 = bc_ean8_check(d7)
+        if ck2.is_err():
+            return Ok(false)
+        return Ok(str(ck2.unwrap()) == code[7:8])
+    if typ == "upc_a":
+        if len(code) != 12:
+            return Ok(false)
+        var d11 = code[0:11]
+        var ck3 = bc_upc_a_check(d11)
+        if ck3.is_err():
+            return Ok(false)
+        return Ok(str(ck3.unwrap()) == code[11:12])
+    if typ == "isbn13":
+        var clean = bc_clean_isbn(code)
+        if len(clean) != 13:
+            return Ok(false)
+        var d12b = clean[0:12]
+        var ck4 = bc_ean13_check(d12b)
+        if ck4.is_err():
+            return Ok(false)
+        return Ok(str(ck4.unwrap()) == clean[12:13])
+    if typ == "code128":
+        return Ok(len(code) > 0)
+    return Err("barcode: 未知类型: " + typ)

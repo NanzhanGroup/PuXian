@@ -1,0 +1,58 @@
+# log 0.2.0 测试：JSON格式/默认字段/notime/fatal + 0.1.0 回归
+import "../registry/log/0.2.0/log.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var lg = log_new("app", {"level": "info"})
+    expect(log_enabled(lg, "info") == true, "enabled info")
+    expect(log_enabled(lg, "debug") == false, "disabled debug")
+    expect(log_enabled(lg, "warn") == true, "enabled warn")
+    # log_emit 返回字符串
+    var line = log_emit(lg, "info", "hello", {"k": "v"})
+    expect(contains(line, "[INFO]"), "emit has INFO: " + line)
+    expect(contains(line, "app: hello"), "emit has msg: " + line)
+    expect(contains(line, "k=v"), "emit has field: " + line)
+    # 级别过滤
+    var debug_line = log_emit(lg, "debug", "dbg")
+    expect(debug_line == "", "debug filtered")
+    # set level
+    var lg2 = log_set(lg, "debug")
+    expect(log_enabled(lg2, "debug") == true, "set debug enabled")
+    # ---- 0.2.0 JSON 格式 ----
+    var json_line = log_emit_json(lg, "info", "hello", {"user": "px"})
+    expect(contains(json_line, "\"level\":\"info\""), "json level: " + json_line)
+    expect(contains(json_line, "\"msg\":\"hello\""), "json msg: " + json_line)
+    expect(contains(json_line, "\"user\":\"px\""), "json field: " + json_line)
+    expect(contains(json_line, "\"logger\":\"app\""), "json logger: " + json_line)
+    # JSON 过滤
+    var json_filtered = log_emit_json(lg, "debug", "dbg")
+    expect(json_filtered == "", "json debug filtered")
+    # ---- 0.2.0 默认字段 ----
+    var lg3 = log_with_fields(lg, {"service": "api", "version": "1.0"})
+    var line3 = log_emit_notime(lg3, "info", "request", {"path": "/users"})
+    expect(contains(line3, "service=api"), "with_fields service: " + line3)
+    expect(contains(line3, "version=1.0"), "with_fields version: " + line3)
+    expect(contains(line3, "path=/users"), "with_fields path: " + line3)
+    # log_info_f 合并字段
+    var merged = log_merge_fields(lg3, {"path": "/users"})
+    expect(merged["service"] == "api", "merge service")
+    expect(merged["path"] == "/users", "merge path")
+    # ---- 0.2.0 notime ----
+    var notime = log_emit_notime(lg, "warn", "warning", {"code": 42})
+    expect(starts_with(notime, "[WARN]"), "notime starts: " + notime)
+    expect(contains(notime, "code=42"), "notime field: " + notime)
+    # ---- 0.2.0 fatal ----
+    var fatal_code = log_fatal(lg, "crash", {"reason": "oom"})
+    expect(fatal_code == 1, "fatal returns 1")
+    # ---- 0.2.0 trace ----
+    var lg_trace = log_set(lg, "trace")
+    expect(log_enabled(lg_trace, "trace") == true, "trace enabled")
+    var trace_line = log_emit_notime(lg_trace, "trace", "entering func")
+    expect(contains(trace_line, "[TRACE]"), "trace line: " + trace_line)
+    # trace 被 info logger 过滤
+    var trace_filtered = log_emit_notime(lg, "trace", "filtered")
+    expect(trace_filtered == "", "trace filtered by info")
+    print("log 0.2.0: PASS")

@@ -1,0 +1,314 @@
+# ============================================================
+# 普贤生态库：registry/qrcode —— GF(256) 与 Reed-Solomon 纠错（内部模块）
+# ------------------------------------------------------------
+# 被 qr_core.px import。
+# GF(256) 本原多项式 0b100011101（x^8+x^4+x^3+x^2+1）；用生成器多项式
+# （(x-α^0)(x-α^1)...）做多项式除法求余得纠错码字（与 ISO/IEC 18004 一致，
+# 可由 Python segno 对拍验证）。
+# 纯函数：每次调用现算指数/对数表（无模块级状态，守写库规范）。
+# ============================================================
+# 指数/对数表（长度 512 / 256）
+def gf_tables():
+    var exp = []
+    var log = []
+    var i = 0
+    while i < 512:
+        exp.append(0)
+        i += 1
+    var j = 0
+    while j < 256:
+        log.append(0)
+        j += 1
+    var x = 1
+    var k = 0
+    while k < 255:
+        exp[k] = x
+        log[x] = k
+        x = x * 2
+        if x >= 256:
+            x = x ^ 0x11D
+        k += 1
+    var m = 255
+    while m < 512:
+        exp[m] = exp[m - 255]
+        m += 1
+    return [exp, log]
+# 乘法
+# 性能缓存：GF 表与输入无关（本原多项式固定），首次构建后复用；
+# 属私有实现细节，对外仍是纯函数（写库规范"顶层无状态"针对导出状态）。
+var gf_cache = null
+def gf_mul(a, b):
+    if a == 0 or b == 0:
+        return 0
+    if gf_cache == null:
+        gf_cache = gf_tables()
+    return gf_cache[0][gf_cache[1][a] + gf_cache[1][b]]
+# 幂（n 为整数指数）
+def gf_pow(a, n):
+    if n == 0:
+        return 1
+    if a == 0:
+        return 0
+    if gf_cache == null:
+        gf_cache = gf_tables()
+    var idx = (gf_cache[1][a] * n) % 255
+    if idx < 0:
+        idx = idx + 255
+    return gf_cache[0][idx]
+# 生成器多项式系数（degree 个纠错码字；poly[0] 为最高次系数）
+def rs_generator(degree):
+    var poly = [1]
+    var i = 0
+    while i < degree:
+        var alpha = gf_pow(2, i)
+        var next = []
+        var k = 0
+        var n = len(poly)
+        while k <= n:
+            var v = 0
+            if k > 0:
+                v = v ^ poly[k - 1]
+            if k < n:
+                v = v ^ gf_mul(poly[k], alpha)
+            next.append(v)
+            k += 1
+        poly = next
+        i += 1
+    # 逆转：高次在前（poly[0]=1 为最高次系数，配合 rs_encode 的合成除法）
+    var rev = []
+    var x = len(poly) - 1
+    while x >= 0:
+        rev.append(poly[x])
+        x -= 1
+    return rev
+# 对 data 做 RS 编码，返回 degree 个纠错码字（多项式除法求余）
+def rs_encode(data, degree):
+    var poly = rs_generator(degree)
+    var buf = []
+    var i = 0
+    while i < len(data):
+        buf.append(data[i])
+        i += 1
+    var j = 0
+    while j < degree:
+        buf.append(0)
+        j += 1
+    var d = 0
+    while d < len(data):
+        var factor = buf[d]
+        if factor != 0:
+            var k = 0
+            while k < len(poly):
+                buf[d + k] = buf[d + k] ^ gf_mul(poly[k], factor)
+                k += 1
+        d += 1
+    var out = []
+    var m = len(data)
+    while m < len(buf):
+        out.append(buf[m])
+        m += 1
+    return out
+
+# ============================================================
+# RS 译码（decode 侧）：Syndrome → Berlekamp-Massey → Chien → Forney
+# 对齐 Nayuki Reed-Solomon 参考实现（GF(256) · generator base = 0，与 QR 一致）
+# ============================================================
+# 深拷贝 list（PG 中 list 赋值是引用）
+def list_copy(lst):
+    var out = []
+    var i = 0
+    while i < len(lst):
+        out.append(lst[i])
+        i += 1
+    return out
+# 域逆元（a^(254) = 1/a；a != 0）
+def gf_inv(a):
+    if a == 0:
+        return 0
+    return gf_pow(a, 254)
+# 多项式求值（Horner；monomial 例：polyEval([1,2,3], x) = 1·x² + 2·x + 3）
+def gf_poly_eval(poly, x):
+    var result = 0
+    var i = 0
+    while i < len(poly):
+        result = gf_mul(result, x)
+        result = result ^ poly[i]
+        i += 1
+    return result
+# 多项式乘法（GF(256)）
+def gf_poly_mul(a, b):
+    var z = []
+    var i = 0
+    while i < len(a) + len(b) - 1:
+        z.append(0)
+        i += 1
+    var j = 0
+    while j < len(a):
+        var k = 0
+        while k < len(b):
+            z[j + k] = z[j + k] ^ gf_mul(a[j], b[k])
+            k += 1
+        j += 1
+    return z
+# 形式导数（特征 2：i·c_i，i 奇 → c_i，i 偶 → 0）
+def gf_poly_derivative(poly):
+    var out = []
+    var i = 1
+    while i < len(poly):
+        if i % 2 == 1:
+            out.append(poly[i])
+        else:
+            out.append(0)
+        i += 1
+    return out
+# 计算 syndromes：S[i] = msg(α^i)，i=0..nsym-1（全部 0 = 无错误）
+def rs_syndromes(msg, nsym):
+    var synd = []
+    var i = 0
+    while i < nsym:
+        synd.append(gf_poly_eval(msg, gf_pow(2, i)))
+        i += 1
+    return synd
+# Berlekamp-Massey：求错误定位多项式 Λ（errLoc）
+def rs_berlekamp_massey(synd):
+    var n = len(synd)
+    var c = []
+    var b = []
+    var i = 0
+    while i < n:
+        c.append(0)
+        b.append(0)
+        i += 1
+    c[0] = 1
+    b[0] = 1
+    var l = 0
+    var m = 1
+    var bm = 1
+    var idx = 0
+    while idx < n:
+        var d = synd[idx]
+        var i2 = 1
+        while i2 <= l:
+            d = d ^ gf_mul(c[i2], synd[idx - i2])
+            i2 += 1
+        if d == 0:
+            m = m + 1
+        elif 2 * l <= idx:
+            var t = list_copy(c)
+            var coef = gf_mul(d, gf_inv(bm))
+            var i3 = 0
+            while i3 < len(b) and i3 + m < len(c):
+                c[i3 + m] = c[i3 + m] ^ gf_mul(coef, b[i3])
+                i3 += 1
+            l = idx + 1 - l
+            b = t
+            bm = d
+            m = 1
+        else:
+            var coef2 = gf_mul(d, gf_inv(bm))
+            var i4 = 0
+            while i4 < len(b) and i4 + m < len(c):
+                c[i4 + m] = c[i4 + m] ^ gf_mul(coef2, b[i4])
+                i4 += 1
+            m = m + 1
+        idx += 1
+    var out = []
+    var j = 0
+    while j <= l and j < len(c):
+        out.append(c[j])
+        j += 1
+    return out
+# ascending 多项式求值：poly[0] 为常数项（BM 输出的 Λ、syndrome 构成的 S(x) 均此约定）
+def gf_poly_eval_asc(poly, x):
+    var result = 0
+    var i = len(poly) - 1
+    while i >= 0:
+        result = gf_mul(result, x)
+        result = result ^ poly[i]
+        i -= 1
+    return result
+# Chien 搜索：找 Λ 的根 → 错误位置 p（从码字最右端数起）
+# Λ(x) 的根为 x = α^(-p)（QR syndromes 从 α^0 起步），故 p = (255 - t) mod 255
+def rs_find_error_positions(err_loc):
+    var result = []
+    var expected = len(err_loc) - 1
+    if gf_cache == null:
+        gf_cache = gf_tables()
+    var t = 0
+    while t < 255 and len(result) < expected:
+        var x = gf_pow(2, t)
+        if gf_poly_eval_asc(err_loc, x) == 0:
+            var p = 255 - t
+            if p == 255:
+                p = 0
+            result.append(p)
+        t += 1
+    return result
+# Forney：求错误幅值
+def rs_error_magnitudes(err_loc, synd, err_pos):
+    var omega = gf_poly_mul(synd, err_loc)
+    var nsym = len(synd)
+    var truncated = []
+    var i = 0
+    while i < nsym and i < len(omega):
+        truncated.append(omega[i])
+        i += 1
+    var derv = gf_poly_derivative(err_loc)
+    var mags = []
+    var j = 0
+    while j < len(err_pos):
+        var x_j = gf_pow(2, err_pos[j])       # X_j = α^p
+        var x_inv = gf_inv(x_j)               # X_j^-1
+        var num = gf_poly_eval_asc(truncated, x_inv)
+        var den = gf_poly_eval_asc(derv, x_inv)
+        # e_j = X_j * Ω(X_j^-1) / Λ'(X_j^-1)  （b=0 形式）
+        mags.append(gf_mul(x_j, gf_mul(num, gf_inv(den))))
+        j += 1
+    return mags
+# 完整纠错：输入 data+ecc 码字（长度 = total），返回修正后的数据码字（长度 = total-nsym）
+# 错误数 ≤ nsym/2 时可纠正；超出返回原数据（不保证正确，调用方自判）
+def rs_correct(msg, nsym):
+    var synd = rs_syndromes(msg, nsym)
+    var no_error = true
+    var i = 0
+    while i < len(synd):
+        if synd[i] != 0:
+            no_error = false
+        i += 1
+    if no_error:
+        var clean = []
+        var k = 0
+        while k < len(msg) - nsym:
+            clean.append(msg[k])
+            k += 1
+        return Ok(clean)
+    var err_loc = rs_berlekamp_massey(synd)
+    var err_pos = rs_find_error_positions(err_loc)
+    if len(err_pos) != len(err_loc) - 1:
+        # 错误无法定位（超出纠错能力）→ 返回 Err（调用方感知失败）
+        return Err("qrcode: RS 纠错失败（错误过多或无法定位）")
+    var mags = rs_error_magnitudes(err_loc, synd, err_pos)
+    var fixed = list_copy(msg)
+    var j = 0
+    while j < len(err_pos):
+        var pos = len(msg) - 1 - err_pos[j]
+        if pos < 0 or pos >= len(fixed):
+            return Err("qrcode: RS 纠错位置越界")
+        fixed[pos] = fixed[pos] ^ mags[j]
+        j += 1
+    # 复检：修正后的 syndromes 必须全 0（自检，防 RS 误判）
+    var check = rs_syndromes(fixed, nsym)
+    var bad = false
+    var ck = 0
+    while ck < len(check):
+        if check[ck] != 0:
+            bad = true
+        ck += 1
+    if bad:
+        return Err("qrcode: RS 纠错复检失败（超出纠错能力）")
+    var data = []
+    var k3 = 0
+    while k3 < len(fixed) - nsym:
+        data.append(fixed[k3])
+        k3 += 1
+    return Ok(data)

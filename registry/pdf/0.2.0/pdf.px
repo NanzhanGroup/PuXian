@@ -1,0 +1,314 @@
+# ============================================================
+# 普贤生态库：registry/pdf 0.2.0 —— 增强 PDF 写器
+# ------------------------------------------------------------
+# 纯函数库（构建无 IO；写出为字符串），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust printpdf / Python reportlab 心智：
+#
+# 0.1.0 API（兼容）：
+#   pd_new()                              → dict
+#   pd_add_page(doc, w, h)                → dict
+#   pd_add_text(doc, page_idx, x, y, s)   → dict
+#   pd_set_font(doc, font_name)           → dict
+#   pd_bytes(doc)                         → Ok(str) | Err
+#   pd_save(doc, path)                    → Ok | Err
+#
+# 0.2.0 新增：
+#   pd_page_size(name)                    → Ok({w, h}) | Err  标准页面尺寸
+#   pd_add_text_fs(doc, pi, x, y, s, fs)  → dict              指定字号文本
+#   pd_add_line(doc, pi, x1, y1, x2, y2)  → dict              绘制线条
+#   pd_add_rect(doc, pi, x, y, w, h, fill)→ dict              绘制矩形
+#   pd_add_metadata(doc, title, author, subject) → dict      文档元数据
+#   pd_line_width(doc, width)             → dict              线宽
+# ============================================================
+
+# 标准页面尺寸（PDF 点 = 1/72 英寸）
+def pd_page_size(name):
+    if name == "A4":
+        return Ok({"w": 595, "h": 842})
+    if name == "A3":
+        return Ok({"w": 842, "h": 1191})
+    if name == "A5":
+        return Ok({"w": 420, "h": 595})
+    if name == "Letter":
+        return Ok({"w": 612, "h": 792})
+    if name == "Legal":
+        return Ok({"w": 612, "h": 1008})
+    if name == "Tabloid":
+        return Ok({"w": 792, "h": 1224})
+    return Err("pdf: 未知页面尺寸: " + name)
+
+# 新建文档
+def pd_new():
+    var d = {}
+    d.set("pages", [])
+    d.set("font", "Helvetica")
+    d.set("font_size", 12)
+    d.set("line_width", 1.0)
+    d.set("title", "")
+    d.set("author", "")
+    d.set("subject", "")
+    return d
+
+# 追加页面（默认 A4）
+def pd_add_page(doc, w, h):
+    var nd = {}
+    var pages = doc["pages"]
+    var np = []
+    var i = 0
+    while i < len(pages):
+        np.append(pages[i])
+        i += 1
+    var pg = {}
+    pg.set("w", w)
+    pg.set("h", h)
+    pg.set("lines", [])
+    np.append(pg)
+    nd.set("pages", np)
+    nd.set("font", doc["font"])
+    nd.set("font_size", doc["font_size"])
+    nd.set("line_width", doc["line_width"])
+    nd.set("title", doc["title"])
+    nd.set("author", doc["author"])
+    nd.set("subject", doc["subject"])
+    return nd
+
+# 内部：复制 pages
+def pd_copy_pages(doc):
+    var pages = doc["pages"]
+    var np = []
+    var i = 0
+    while i < len(pages):
+        np.append(pages[i])
+        i += 1
+    return np
+
+# 内部：复制 doc 不含 pages
+def pd_copy_meta(doc, np):
+    var nd = {}
+    nd.set("pages", np)
+    nd.set("font", doc["font"])
+    nd.set("font_size", doc["font_size"])
+    nd.set("line_width", doc["line_width"])
+    nd.set("title", doc["title"])
+    nd.set("author", doc["author"])
+    nd.set("subject", doc["subject"])
+    return nd
+
+# 页面追加文本行（默认字号）
+def pd_add_text(doc, page_idx, x, y, s):
+    return pd_add_text_fs(doc, page_idx, x, y, s, -1)
+
+# 页面追加文本行（指定字号）
+def pd_add_text_fs(doc, page_idx, x, y, s, fs):
+    var np = pd_copy_pages(doc)
+    var pg = np[page_idx]
+    var lines = pg["lines"]
+    var nl = []
+    var j = 0
+    while j < len(lines):
+        nl.append(lines[j])
+        j += 1
+    var actual_fs = fs
+    if fs < 0:
+        actual_fs = doc["font_size"]
+    nl.append(["text", x, y, s, actual_fs])
+    var npg = {}
+    npg.set("w", pg["w"])
+    npg.set("h", pg["h"])
+    npg.set("lines", nl)
+    np[page_idx] = npg
+    return pd_copy_meta(doc, np)
+
+# 绘制线条
+def pd_add_line(doc, page_idx, x1, y1, x2, y2):
+    var np = pd_copy_pages(doc)
+    var pg = np[page_idx]
+    var lines = pg["lines"]
+    var nl = []
+    var j = 0
+    while j < len(lines):
+        nl.append(lines[j])
+        j += 1
+    nl.append(["line", x1, y1, x2, y2])
+    var npg = {}
+    npg.set("w", pg["w"])
+    npg.set("h", pg["h"])
+    npg.set("lines", nl)
+    np[page_idx] = npg
+    return pd_copy_meta(doc, np)
+
+# 绘制矩形（fill = true 填充，false 描边）
+def pd_add_rect(doc, page_idx, x, y, w, h, fill):
+    var np = pd_copy_pages(doc)
+    var pg = np[page_idx]
+    var lines = pg["lines"]
+    var nl = []
+    var j = 0
+    while j < len(lines):
+        nl.append(lines[j])
+        j += 1
+    nl.append(["rect", x, y, w, h, fill])
+    var npg = {}
+    npg.set("w", pg["w"])
+    npg.set("h", pg["h"])
+    npg.set("lines", nl)
+    np[page_idx] = npg
+    return pd_copy_meta(doc, np)
+
+# 设置正文 BaseFont
+def pd_set_font(doc, font):
+    var nd = pd_copy_meta(doc, pd_copy_pages(doc))
+    nd.set("font", font)
+    return nd
+
+# 设置默认字号
+def pd_set_font_size(doc, size):
+    var nd = pd_copy_meta(doc, pd_copy_pages(doc))
+    nd.set("font_size", size)
+    return nd
+
+# 设置线宽
+def pd_line_width(doc, width):
+    var nd = pd_copy_meta(doc, pd_copy_pages(doc))
+    nd.set("line_width", width)
+    return nd
+
+# 设置元数据
+def pd_add_metadata(doc, title, author, subject):
+    var nd = pd_copy_meta(doc, pd_copy_pages(doc))
+    nd.set("title", title)
+    nd.set("author", author)
+    nd.set("subject", subject)
+    return nd
+
+# 文本转义（\ 与括号）
+def pd_escape(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "\\" or c == "(" or c == ")":
+            out = out + "\\" + c
+        else:
+            out = out + c
+        i += 1
+    return out
+
+# 内容流
+def pd_content_stream(pg, line_width):
+    var body = ""
+    # 设置线宽
+    body = body + str(line_width) + " w\n"
+    var i = 0
+    while i < len(pg["lines"]):
+        var ln = pg["lines"][i]
+        var typ = ln[0]
+        if typ == "text":
+            body = body + "BT /F1 " + str(ln[4]) + " Tf " + str(ln[1]) + " " + str(ln[2]) +
+                " Td (" + pd_escape(ln[3]) + ") Tj ET\n"
+        elif typ == "line":
+            body = body + str(ln[1]) + " " + str(ln[2]) + " m " +
+                str(ln[3]) + " " + str(ln[4]) + " l S\n"
+        elif typ == "rect":
+            if ln[5]:
+                body = body + str(ln[1]) + " " + str(ln[2]) + " " +
+                    str(ln[3]) + " " + str(ln[4]) + " re f\n"
+            else:
+                body = body + str(ln[1]) + " " + str(ln[2]) + " " +
+                    str(ln[3]) + " " + str(ln[4]) + " re S\n"
+        i += 1
+    return body
+
+# 10 位零填充数字
+def pd_xref_off(v):
+    var s = str(v)
+    while len(s) < 10:
+        s = "0" + s
+    return s
+
+# 生成完整 PDF 文本
+def pd_bytes(doc):
+    var pages = doc["pages"]
+    if len(pages) == 0:
+        return Err("pdf: 无页面")
+    var out = "%PDF-1.4\n"
+    var offsets = [0]
+    var font = doc["font"]
+    var lw = doc["line_width"]
+    var n = len(pages)
+    var has_meta = doc["title"] != "" or doc["author"] != "" or doc["subject"] != ""
+    # 对象计数：Catalog + Pages + Font + 2*n (Page + Content) + optional Info
+    var objcount = 3 + 2 * n
+    if has_meta:
+        objcount = objcount + 1
+    var info_num = objcount
+    # 1: Catalog
+    offsets.append(len(out))
+    out = out + "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    # 2: Pages
+    offsets.append(len(out))
+    var kids = "["
+    var i = 0
+    while i < n:
+        if i > 0:
+            kids = kids + " "
+        kids = kids + str(4 + 2 * i) + " 0 R"
+        i += 1
+    kids = kids + "]"
+    out = out + "2 0 obj\n<< /Type /Pages /Kids " + kids + " /Count " + str(n) + " >>\nendobj\n"
+    # 3: Font
+    offsets.append(len(out))
+    out = out + "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /" + font + " >>\nendobj\n"
+    # 每页：Page + Content
+    var pi = 0
+    while pi < n:
+        var pg = pages[pi]
+        var page_num = 4 + 2 * pi
+        var content_num = 5 + 2 * pi
+        # Page 对象
+        offsets.append(len(out))
+        out = out + str(page_num) + " 0 obj\n" +
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " +
+            str(pg["w"]) + " " + str(pg["h"]) +
+            "] /Resources << /Font << /F1 3 0 R >> >> " +
+            "/Contents " + str(content_num) + " 0 R >>\nendobj\n"
+        # Content 对象
+        var stream = pd_content_stream(pg, lw)
+        var slen = bytes_len(bytes(stream))
+        offsets.append(len(out))
+        out = out + str(content_num) + " 0 obj\n<< /Length " + str(slen) + " >>\nstream\n" +
+            stream + "endstream\nendobj\n"
+        pi += 1
+    # Info 对象（元数据）
+    if has_meta:
+        offsets.append(len(out))
+        var info_body = "<<"
+        if doc["title"] != "":
+            info_body = info_body + " /Title (" + pd_escape(doc["title"]) + ")"
+        if doc["author"] != "":
+            info_body = info_body + " /Author (" + pd_escape(doc["author"]) + ")"
+        if doc["subject"] != "":
+            info_body = info_body + " /Subject (" + pd_escape(doc["subject"]) + ")"
+        info_body = info_body + " /Creator (PuXian registry/pdf 0.2.0) >>"
+        out = out + str(info_num) + " 0 obj\n" + info_body + "\nendobj\n"
+    # xref
+    var xref_off = len(out)
+    out = out + "xref\n0 " + str(objcount + 1) + "\n"
+    out = out + "0000000000 65535 f \n"
+    var k = 1
+    while k <= objcount:
+        out = out + pd_xref_off(offsets[k]) + " 00000 n \n"
+        k += 1
+    var trailer = "trailer\n<< /Size " + str(objcount + 1) + " /Root 1 0 R"
+    if has_meta:
+        trailer = trailer + " /Info " + str(info_num) + " 0 R"
+    trailer = trailer + " >>\nstartxref\n" + str(xref_off) + "\n%%EOF\n"
+    out = out + trailer
+    return Ok(out)
+
+# 写出
+def pd_save(doc, path):
+    var r = pd_bytes(doc)
+    if r.is_err():
+        return r
+    return write_file_opt(path, r.unwrap())

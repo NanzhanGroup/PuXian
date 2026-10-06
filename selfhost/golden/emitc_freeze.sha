@@ -264,6 +264,7 @@ examples/m279_std_surface/drv.px src=8cc5da3073fc9fa7 rc=0 out=be8dd506acce471ed
 examples/m280_resource_baseline/cli_abrupt.px src=ca91ee373c5d6abc rc=0 out=86f717a105a38980071313acd5be241a err=e3b0c44298fc1c14
 examples/m280_resource_baseline/cli_grace.px src=29da2b1d15592012 rc=0 out=05c93fadc44e3c560d8415e9bd29558a err=e3b0c44298fc1c14
 examples/m280_resource_baseline/srv.px src=3cad4d48956c743e rc=0 out=d0fb7b5914d12443b0c9c607e9d8b762 err=e3b0c44298fc1c14
+examples/m282_registry_020/ftp020_probe.px src=f3958cf2eebc8a80 rc=0 out=908fac537e032acaa4970f10a4e39a02 err=c6cb53106f864451
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

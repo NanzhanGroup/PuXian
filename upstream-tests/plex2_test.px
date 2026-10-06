@@ -1,0 +1,25 @@
+# plex 0.2.0 测试
+import "../registry/plex/0.2.0/plex.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var a = cx_new(3.0, 4.0)
+    expect(cx_abs(a) == 5.0, "abs 3+4i = 5: " + str(cx_abs(a)))
+    var b = cx_add(cx_new(1.0, 2.0), cx_new(3.0, 4.0))
+    expect(b["re"] == 4.0 and b["im"] == 6.0, "add: " + str(b))
+    # ---- 0.2.0 phase ----
+    var ph = cx_phase(cx_new(1.0, 0.0))
+    expect(ph == 0.0, "phase 1+0i = 0: " + str(ph))
+    # ---- 0.2.0 from_polar ----
+    var p = cx_from_polar(2.0, 0.0)
+    expect(p["re"] == 2.0, "from_polar 2,0: " + str(p))
+    # ---- 0.2.0 sqr ----
+    var sq = cx_sqr(cx_new(2.0, 0.0))
+    expect(sq["re"] == 4.0, "sqr 2 = 4: " + str(sq))
+    # ---- 0.2.0 inv ----
+    var iv = cx_inv(cx_new(2.0, 0.0)).unwrap()
+    expect(iv["re"] == 0.5, "inv 2 = 0.5: " + str(iv))
+    print("PASS: plex 0.2.0")

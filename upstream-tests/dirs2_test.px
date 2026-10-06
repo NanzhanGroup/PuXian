@@ -1,0 +1,25 @@
+# dirs 0.2.0 测试
+import "../registry/dirs/0.2.0/dirs.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var home = dr_home()
+    expect(len(home) > 0, "home non-empty")
+    # ---- 0.2.0 app dirs ----
+    var cfg = dr_app_config("myapp")
+    expect(contains(cfg, "myapp") == true, "app_config: " + cfg)
+    var data = dr_app_data("myapp")
+    expect(contains(data, "myapp") == true, "app_data: " + data)
+    var cache = dr_app_cache("myapp")
+    expect(contains(cache, "myapp") == true, "app_cache: " + cache)
+    # ---- 0.2.0 standard dirs ----
+    expect(contains(dr_desktop(), "Desktop") == true, "desktop")
+    expect(contains(dr_documents(), "Documents") == true, "documents")
+    expect(contains(dr_downloads(), "Downloads") == true, "downloads")
+    expect(contains(dr_pictures(), "Pictures") == true, "pictures")
+    expect(contains(dr_music(), "Music") == true, "music")
+    expect(contains(dr_videos(), "Videos") == true, "videos")
+    print("PASS: dirs 0.2.0")

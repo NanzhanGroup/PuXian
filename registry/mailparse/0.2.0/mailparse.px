@@ -1,0 +1,232 @@
+# ============================================================
+# 普贤生态库：registry/mailparse —— 邮件消息解析（RFC 5322 子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go net/mail 心智（0.1.0 子集）：
+#   mail_parse(raw)     → Ok({headers, body, from, to, subject, date}) | Err
+#   mail_header(hd, n)  → 值 | null（大小写不敏感）
+# 说明：
+#   - headers 为 dict（键保留原始大小写，值已去首尾空白并解折叠续行）
+#   - body 为空行之后的内容（保留原始）
+#   - 快捷字段 from/to/subject/date 取同名头部第一个
+#   - 0.1.0 不解码 RFC 2047 编码字（=?utf-8?B?...?=）与 MIME 主体
+# ============================================================
+
+# 找第一个冒号
+def mail_find_colon(line):
+    var i = 0
+    while i < len(line):
+        if line[i] == ":":
+            return i
+        i += 1
+    return -1
+
+# 大小写不敏感取头部
+def mail_header(headers, name):
+    var ks = headers.keys()
+    var i = 0
+    while i < len(ks):
+        if to_lower(ks[i]) == to_lower(name):
+            return headers[ks[i]]
+        i += 1
+    return null
+
+# 主解析
+# 0.2.0 新增：RFC 2047 编码字解码
+# ============================================================
+# 格式：=?<charset>?<encoding>?<encoded-text>?=
+#   encoding: B = base64, Q = quoted-printable
+#   相邻编码字（仅由空白分隔）拼接时去中间空白
+# 更新文件头说明：
+#   - 0.2.0 新增：mail_decode_rfc2047(s) 解码头部编码字
+#   - mail_parse 的 subject/from/to 自动解码
+
+# ---- hex 字符 → 值 ----
+def mail_hexval(c):
+    if c >= "0" and c <= "9":
+        return int(c)
+    if c >= "a" and c <= "f":
+        return ord(c) - 87
+    if c >= "A" and c <= "F":
+        return ord(c) - 55
+    return -1
+
+# ---- hex 串 → bytes → UTF-8 string ----
+def mail_hex_to_str(hex_str):
+    if len(hex_str) == 0:
+        return ""
+    var b = hex_to_bytes(hex_str)
+    return bytes_to_str(b)
+
+# ---- Q 编码解码 ----
+# =XX → byte, _ → space, 其余 literal
+def mail_decode_q(text):
+    var hex_str = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        if c == "_":
+            # _ → space (0x20)
+            hex_str = hex_str + "20"
+        elif c == "=" and i + 2 < len(text) + 1 and i + 2 <= len(text):
+            # =XX hex pair
+            if i + 2 <= len(text):
+                var h1 = mail_hexval(text[i + 1])
+                var h2 = mail_hexval(text[i + 2])
+                if h1 >= 0 and h2 >= 0:
+                    hex_str = hex_str + text[i + 1:i + 3]
+                    i += 3
+                    continue
+            # 不是合法 hex，当 literal
+            hex_str = hex_str + mail_char_hex(c)
+        else:
+            hex_str = hex_str + mail_char_hex(c)
+        i += 1
+    return mail_hex_to_str(hex_str)
+
+# ---- 字符 → 2 位 hex ----
+def mail_char_hex(c):
+    var v = ord(c)
+    var h = ""
+    var hex_chars = "0123456789abcdef"
+    h = hex_chars[v % 16] + h
+    v = v // 16
+    h = hex_chars[v % 16] + h
+    return h
+
+# ---- B 编码解码 ----
+def mail_decode_b(text):
+    return base64_decode(text)
+
+# ---- 解码单个编码字 =?charset?encoding?text?= ----
+# 返回 {decoded: string, end: int} 或 null（不合法）
+def mail_decode_word(s, start):
+    # 找 =?
+    if start + 2 > len(s) or s[start:start + 2] != "=?":
+        return null
+    var pos = start + 2
+    # charset（到下一个 ?）
+    var cs_end = mail_find_from(s, "?", pos)
+    if cs_end < 0:
+        return null
+    var charset = to_lower(s[pos:cs_end])
+    pos = cs_end + 1
+    if pos >= len(s):
+        return null
+    # encoding（1 字符）
+    var enc = to_upper(s[pos:pos + 1])
+    pos += 1
+    if pos >= len(s) or s[pos] != "?":
+        return null
+    pos += 1
+    # encoded text（到 ?=）
+    var te_end = mail_find_from(s, "?=", pos)
+    if te_end < 0:
+        return null
+    var encoded_text = s[pos:te_end]
+    var end = te_end + 2
+    # 解码
+    var decoded = ""
+    if enc == "B":
+        decoded = mail_decode_b(encoded_text)
+    elif enc == "Q":
+        decoded = mail_decode_q(encoded_text)
+    else:
+        return null
+    return {"decoded": decoded, "end": end}
+
+# ---- 从 pos 开始找子串 ----
+def mail_find_from(s, sub, pos):
+    var n = len(s)
+    var m = len(sub)
+    var i = pos
+    while i + m <= n:
+        if s[i:i + m] == sub:
+            return i
+        i += 1
+    return -1
+
+# ---- RFC 2047 全量解码 ----
+def mail_decode_rfc2047(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        if i + 1 < len(s) and s[i] == "=" and s[i + 1] == "?":
+            var w = mail_decode_word(s, i)
+            if w != null:
+                out = out + w["decoded"]
+                i = w["end"]
+                # 跳过相邻编码字之间的空白（RFC 2047：相邻编码字仅由空白分隔时拼接去空白）
+                while i < len(s) and (s[i] == " " or s[i] == "\t"):
+                    # 预看下一个是否也是编码字
+                    if i + 1 < len(s) and s[i + 1] == "=" and i + 2 < len(s) and s[i + 2] == "?":
+                        var w2 = mail_decode_word(s, i + 1)
+                        if w2 != null:
+                            i = i + 1  # 跳过空格，进入下一个编码字
+                            break
+                    else:
+                        out = out + s[i]
+                        i += 1
+                continue
+        out = out + s[i]
+        i += 1
+    return out
+
+# ---- 0.2.0 增强版 mail_parse：自动解码 RFC 2047 ----
+def mail_parse(raw):
+    var headers = {}
+    var body_start = -1
+    var lines = split(raw, "\n")
+    var cur_name = ""
+    var cur_val = ""
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if ends_with(line, "\r"):
+            line = line[0:len(line) - 1]
+        if len(line) == 0:
+            body_start = i + 1
+            break
+        if (starts_with(line, " ") or starts_with(line, "\t")) and cur_name != "":
+            cur_val = cur_val + " " + trim(line)
+            i += 1
+            continue
+        if cur_name != "":
+            headers.set(cur_name, trim(cur_val))
+        var colon = mail_find_colon(line)
+        if colon < 0:
+            cur_name = ""
+            cur_val = ""
+            i += 1
+            continue
+        cur_name = trim(line[0:colon])
+        cur_val = trim(line[colon + 1:len(line)])
+        i += 1
+    if cur_name != "":
+        headers.set(cur_name, trim(cur_val))
+    var body = ""
+    if body_start >= 0:
+        var k = body_start
+        while k < len(lines):
+            body = body + lines[k]
+            if k < len(lines) - 1:
+                body = body + "\n"
+            k += 1
+    # 0.2.0：对 from/to/subject 自动 RFC 2047 解码
+    var from_val = mail_header(headers, "From")
+    var to_val = mail_header(headers, "To")
+    var subj_val = mail_header(headers, "Subject")
+    if from_val != null:
+        from_val = mail_decode_rfc2047(from_val)
+    if to_val != null:
+        to_val = mail_decode_rfc2047(to_val)
+    if subj_val != null:
+        subj_val = mail_decode_rfc2047(subj_val)
+    return Ok({
+        "headers": headers,
+        "body": body,
+        "from": from_val,
+        "to": to_val,
+        "subject": subj_val,
+        "date": mail_header(headers, "Date"),
+    })

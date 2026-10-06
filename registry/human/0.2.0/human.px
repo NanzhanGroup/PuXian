@@ -1,0 +1,195 @@
+# ============================================================
+# 普贤生态库：registry/human —— 人类可读格式化
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go dustin/go-humanize / Python humanize 心智（0.1.0）：
+#   hm_filesize(n)    → "B/KB/MB/GB/TB/PB"（1024 进制；<10 时一位小数，否则整数）
+#   hm_number(n, suffix="") → "k/M/B/T/P"（1000 进制；同上规则，可带单位后缀）
+# 格式化规则（自定，对齐常见 CLI 简写，单位无空格）：
+#   1024 → "1KB"；1536 → "1.5KB"；828 → "828B"；1_000_000 → "1M"
+# 实现：float 除法 + int 数学四舍五入（避免 float 序列化尾数噪声）。
+# ============================================================
+# float → 一位小数（若小数位为 0 显示整数；处理进位）
+def hm_fmt1(x):
+    var whole = int(x)
+    var frac = int((x - float(whole)) * 10.0 + 0.5)
+    if frac >= 10:
+        whole = whole + 1
+        frac = frac - 10
+    if frac == 0:
+        return str(whole)
+    return str(whole) + "." + str(frac)
+def hm_filesize(n):
+    var units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    var v = float(n)
+    var ui = 0
+    while v >= 1024.0 and ui < len(units) - 1:
+        v = v / 1024.0
+        ui = ui + 1
+    if ui == 0:
+        return str(n) + units[0]
+    if v < 10.0:
+        return hm_fmt1(v) + units[ui]
+    return str(int(v + 0.5)) + units[ui]
+def hm_number(n, suffix = ""):
+    var neg = false
+    var v = float(n)
+    if v < 0.0:
+        neg = true
+        v = 0.0 - v
+    var units = ["", "k", "M", "B", "T", "P"]
+    var ui = 0
+    while v >= 1000.0 and ui < len(units) - 1:
+        v = v / 1000.0
+        ui = ui + 1
+    var out = ""
+    if ui == 0:
+        if neg:
+            out = str(-int(v))
+        else:
+            out = str(int(v))
+    elif v < 10.0:
+        out = hm_fmt1(v)
+        if neg:
+            out = "-" + out
+    else:
+        out = str(int(v + 0.5))
+        if neg:
+            out = "-" + out
+    return out + units[ui] + suffix
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 序数后缀：1→"1st", 2→"2nd", 3→"3rd", 4→"4th", 11→"11th", 21→"21st"
+def hm_ordinal(n):
+    var abs_n = n
+    if n < 0:
+        abs_n = 0 - n
+    var mod100 = abs_n % 100
+    var mod10 = abs_n % 10
+    var suffix = "th"
+    if mod10 == 1 and mod100 != 11:
+        suffix = "st"
+    elif mod10 == 2 and mod100 != 12:
+        suffix = "nd"
+    elif mod10 == 3 and mod100 != 13:
+        suffix = "rd"
+    return str(n) + suffix
+# 千分位逗号：1000000 → "1,000,000"
+def hm_comma(n):
+    var neg = false
+    var v = n
+    if n < 0:
+        neg = true
+        v = 0 - n
+    var s = str(v)
+    var out = ""
+    var count = 0
+    var i = len(s) - 1
+    while i >= 0:
+        if count > 0 and count % 3 == 0:
+            out = "," + out
+        out = s[i] + out
+        count = count + 1
+        i = i - 1
+    if neg:
+        out = "-" + out
+    return out
+# 百分比：0.15 → "15%", 0.1234 → "12.34%"
+def hm_percentage(v, decimals = 2):
+    var pct = v * 100.0
+    if decimals == 0:
+        return str(int(pct + 0.5)) + "%"
+    var factor = 1
+    var d = 0
+    while d < decimals:
+        factor = factor * 10
+        d += 1
+    var rounded = int(pct * float(factor) + 0.5)
+    var whole = rounded // factor
+    var frac = rounded % factor
+    var frac_str = str(frac)
+    while len(frac_str) < decimals:
+        frac_str = "0" + frac_str
+    # 去掉末尾零
+    while len(frac_str) > 0 and frac_str[len(frac_str) - 1] == "0":
+        frac_str = frac_str[0:len(frac_str) - 1]
+    if len(frac_str) == 0:
+        return str(whole) + "%"
+    return str(whole) + "." + frac_str + "%"
+# 持续时间（秒 → "1h 2m 3s"）
+def hm_duration(seconds):
+    var neg = false
+    var s = seconds
+    if s < 0:
+        neg = true
+        s = 0 - s
+    var hours = s // 3600
+    s = s % 3600
+    var minutes = s // 60
+    s = s % 60
+    var parts = []
+    if hours > 0:
+        parts.append(str(hours) + "h")
+    if minutes > 0 or hours > 0:
+        parts.append(str(minutes) + "m")
+    parts.append(str(s) + "s")
+    var out = ""
+    var i = 0
+    while i < len(parts):
+        if i > 0:
+            out = out + " "
+        out = out + parts[i]
+        i += 1
+    if neg:
+        out = "-" + out
+    return out
+# 文本截断：hm_truncate("hello world", 8) → "hello..."
+def hm_truncate(s, max_len, ellipsis = "..."):
+    if len(s) <= max_len:
+        return s
+    var cut = max_len - len(ellipsis)
+    if cut <= 0:
+        return ellipsis
+    return s[0:cut] + ellipsis
+# SI 文件大小（1000 进制）
+def hm_filesize_si(n):
+    var units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    var v = float(n)
+    var ui = 0
+    while v >= 1000.0 and ui < len(units) - 1:
+        v = v / 1000.0
+        ui = ui + 1
+    if ui == 0:
+        return str(n) + units[0]
+    if v < 10.0:
+        return hm_fmt1(v) + units[ui]
+    return str(int(v + 0.5)) + units[ui]
+# 相对时间（秒数差 → "3 minutes ago" / "in 2 hours"）
+def hm_relative_time(delta_seconds):
+    var neg = delta_seconds < 0
+    var s = delta_seconds
+    if neg:
+        s = 0 - s
+    var unit = ""
+    var val = 0
+    if s < 60:
+        val = s
+        unit = "second"
+    elif s < 3600:
+        val = s // 60
+        unit = "minute"
+    elif s < 86400:
+        val = s // 3600
+        unit = "hour"
+    elif s < 2592000:
+        val = s // 86400
+        unit = "day"
+    else:
+        val = s // 2592000
+        unit = "month"
+    if val != 1:
+        unit = unit + "s"
+    if neg:
+        return str(val) + " " + unit + " ago"
+    return "in " + str(val) + " " + unit

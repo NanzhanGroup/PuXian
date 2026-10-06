@@ -1,0 +1,32 @@
+# rate 0.2.0 测试
+import "../registry/rate/0.2.0/rate.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var b = rt_new(10, 5)
+    var r0 = rt_allow(b, 0.0)
+    expect(r0[1] == true, "allow initial")
+    # ---- 0.2.0 take_n ----
+    var b2 = rt_new(10, 5)
+    var taken = rt_take_n(b2, 3, 0.0).unwrap()
+    expect(taken == 3, "take_n 3: " + str(taken))
+    # ---- 0.2.0 wait_time ----
+    var b3 = rt_new(10, 5)
+    rt_take_n(b3, 10, 0.0)
+    var wt = rt_wait_time(b3, 5, 0.0)
+    expect(wt > 0.0, "wait_time > 0: " + str(wt))
+    # ---- 0.2.0 reset ----
+    var b4 = rt_new(10, 5)
+    rt_take_n(b4, 10, 0.0)
+    rt_reset(b4)
+    var r4 = rt_allow(b4, 0.0)
+    expect(r4[1] == true, "reset allows")
+    # ---- 0.2.0 stats ----
+    var b5 = rt_new(10, 5)
+    var st = rt_stats(b5, 0.0)
+    expect(st["capacity"] == 10, "stats capacity")
+    expect(st["rate"] == 5, "stats rate")
+    print("PASS: rate 0.2.0")

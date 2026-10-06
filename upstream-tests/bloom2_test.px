@@ -1,0 +1,25 @@
+# bloom 0.2.0 测试
+import "../registry/bloom/0.2.0/bloom.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var bf = bloom_new(256, 3).unwrap()
+    bloom_add(bf, "hello")
+    bloom_add(bf, "world")
+    expect(bloom_may_contain(bf, "hello").unwrap() == true, "contains hello")
+    expect(bloom_may_contain(bf, "world").unwrap() == true, "contains world")
+    # ---- 0.2.0 count ----
+    expect(bloom_count(bf) > 0, "count > 0")
+    # ---- 0.2.0 false_positive_rate ----
+    var fpr = bloom_false_positive_rate(bf, 2)
+    expect(fpr >= 0.0 and fpr <= 1.0, "fpr in range: " + str(fpr))
+    # ---- 0.2.0 clear ----
+    bloom_clear(bf)
+    expect(bloom_count(bf) == 0, "clear count 0")
+    # ---- 0.2.0 bit_list ----
+    bloom_add(bf, "test")
+    var bits = bloom_bit_list(bf)
+    expect(len(bits) > 0, "bit_list non-empty")
+    print("PASS: bloom 0.2.0")

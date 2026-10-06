@@ -1,0 +1,74 @@
+# template 0.2.0 测试：比较运算/索引/过滤器/with + 0.1.0 回归
+import "../registry/template/0.2.0/template.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var tpl1 = "Hello {{name}}!"
+    var r1 = tmpl_render(tpl1, {"name": "PuXian"})
+    expect(r1.is_ok(), "0.1.0 var: " + str(r1))
+    expect(r1.unwrap() == "Hello PuXian!", "var value")
+    # 点路径
+    var r2 = tmpl_render("{{user.name}}", {"user": {"name": "px"}})
+    expect(r2.unwrap() == "px", "dot path")
+    # if/else
+    var tpl3 = "{{if show}}YES{{else}}NO{{end}}"
+    expect(tmpl_render(tpl3, {"show": true}).unwrap() == "YES", "if true")
+    expect(tmpl_render(tpl3, {"show": false}).unwrap() == "NO", "if false")
+    # each
+    var tpl4 = "{{each items as x}}{{x}},{{end}}"
+    expect(tmpl_render(tpl4, {"items": ["a", "b", "c"]}).unwrap() == "a,b,c,", "each basic")
+    # 嵌套 each
+    var tpl5 = "{{each rows as row}}{{each row as cell}}{{cell}} {{end}}{{end}}"
+    var data5 = {"rows": [["1", "2"], ["3", "4"]]}
+    expect(tmpl_render(tpl5, data5).unwrap() == "1 2 3 4 ", "nested each")
+    # ---- 0.2.0 比较运算 ----
+    var tpl6 = "{{if count > 5}}big{{else}}small{{end}}"
+    expect(tmpl_render(tpl6, {"count": 10}).unwrap() == "big", "if > true")
+    expect(tmpl_render(tpl6, {"count": 3}).unwrap() == "small", "if > false")
+    var tpl7 = "{{if status == 'active'}}ON{{else}}OFF{{end}}"
+    expect(tmpl_render(tpl7, {"status": "active"}).unwrap() == "ON", "if == true")
+    expect(tmpl_render(tpl7, {"status": "idle"}).unwrap() == "OFF", "if == false")
+    var tpl8 = "{{if n != 0}}nonzero{{end}}"
+    expect(tmpl_render(tpl8, {"n": 0}).unwrap() == "", "if != false")
+    expect(tmpl_render(tpl8, {"n": 42}).unwrap() == "nonzero", "if != true")
+    var tpl9 = "{{if age >= 18}}adult{{else}}minor{{end}}"
+    expect(tmpl_render(tpl9, {"age": 18}).unwrap() == "adult", "if >= boundary")
+    expect(tmpl_render(tpl9, {"age": 17}).unwrap() == "minor", "if >= false")
+    var tpl10 = "{{if x < y}}less{{end}}"
+    expect(tmpl_render(tpl10, {"x": 1, "y": 2}).unwrap() == "less", "if < true")
+    # ---- 0.2.0 循环索引 ----
+    var tpl11 = "{{each items as x, i}}{{i}}:{{x}} {{end}}"
+    expect(tmpl_render(tpl11, {"items": ["a", "b", "c"]}).unwrap() == "0:a 1:b 2:c ", "each with index")
+    # ---- 0.2.0 过滤器 ----
+    var tpl12 = "{{name | upper}}"
+    expect(tmpl_render(tpl12, {"name": "hello"}).unwrap() == "HELLO", "filter upper")
+    var tpl13 = "{{name | lower}}"
+    expect(tmpl_render(tpl13, {"name": "WORLD"}).unwrap() == "world", "filter lower")
+    var tpl14 = "{{name | trim}}"
+    expect(tmpl_render(tpl14, {"name": "  px  "}).unwrap() == "px", "filter trim")
+    var tpl15 = "{{items | len}}"
+    expect(tmpl_render(tpl15, {"items": [1, 2, 3]}).unwrap() == "3", "filter len")
+    var tpl16 = "{{name | default('fallback')}}"
+    expect(tmpl_render(tpl16, {"name": ""}).unwrap() == "fallback", "filter default empty")
+    expect(tmpl_render(tpl16, {"name": "real"}).unwrap() == "real", "filter default keep")
+    var tpl17 = "{{msg | replace('x', 'y')}}"
+    expect(tmpl_render(tpl17, {"msg": "axbxc"}).unwrap() == "aybyc", "filter replace")
+    # 过滤器链
+    var tpl18 = "{{name | trim | upper}}"
+    expect(tmpl_render(tpl18, {"name": "  hello  "}).unwrap() == "HELLO", "filter chain")
+    # ---- 0.2.0 with 作用域 ----
+    var tpl19 = "{{with user}}{{name}} is {{age}}{{end}}"
+    var data19 = {"user": {"name": "px", "age": 30}}
+    expect(tmpl_render(tpl19, data19).unwrap() == "px is 30", "with scope")
+    # with else
+    var tpl20 = "{{with user}}{{name}}{{else}}no user{{end}}"
+    expect(tmpl_render(tpl20, {"user": null}).unwrap() == "no user", "with else null")
+    expect(tmpl_render(tpl20, {"user": {"name": "x"}}).unwrap() == "x", "with else has value")
+    # ---- 组合：each + if + filter + index ----
+    var tpl21 = "{{each items as x, i}}{{if i > 0}}, {{end}}{{x | upper}}{{end}}"
+    var data21 = {"items": ["apple", "banana", "cherry"]}
+    expect(tmpl_render(tpl21, data21).unwrap() == "APPLE, BANANA, CHERRY", "combo: " + str(tmpl_render(tpl21, data21)))
+    print("template 0.2.0: PASS")

@@ -1,0 +1,26 @@
+# units 0.2.0 测试
+import "../registry/units/0.2.0/units.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var r = un_convert(1.0, "m", "cm").unwrap()
+    expect(r == 100.0, "1m = 100cm: " + str(r))
+    # ---- 0.2.0 convert_temp ----
+    expect(un_convert_temp(0, "C", "F") == 32.0, "0C = 32F: " + str(un_convert_temp(0, "C", "F")))
+    expect(un_convert_temp(100, "C", "F") == 212.0, "100C = 212F")
+    expect(un_convert_temp(0, "C", "K") == 273.15, "0C = 273.15K: " + str(un_convert_temp(0, "C", "K")))
+    expect(un_convert_temp(32, "F", "C") == 0.0, "32F = 0C")
+    # ---- 0.2.0 convert_data ----
+    expect(un_convert_data(1, "KB", "B") == 1024.0, "1KB = 1024B: " + str(un_convert_data(1, "KB", "B")))
+    expect(un_convert_data(1024, "B", "KB") == 1.0, "1024B = 1KB")
+    expect(un_convert_data(1, "MB", "KB") == 1024.0, "1MB = 1024KB")
+    # ---- 0.2.0 convert_speed ----
+    expect(un_convert_speed(36, "km/h", "m/s") == 10.0, "36km/h = 10m/s: " + str(un_convert_speed(36, "km/h", "m/s")))
+    expect(un_convert_speed(10, "m/s", "km/h") == 36.0, "10m/s = 36km/h: " + str(un_convert_speed(10, "m/s", "km/h")))
+    # ---- 0.2.0 list_units ----
+    var lu = un_list_units()
+    expect(len(lu) == 5, "list_units 5")
+    print("PASS: units 0.2.0")

@@ -1,0 +1,153 @@
+# x509 0.2.0 测试
+import "../registry/x509/0.2.0/x509.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+const TEST_PEM =
+    "-----BEGIN CERTIFICATE-----\n" +
+    "MIIDEDCCAfigAwIBAgIUCihvEeOizeSQCzhdZHZMdTvq72gwDQYJKoZIhvcNAQEL\n" +
+    "BQAwQjEZMBcGA1UEAwwQdGVzdC5leGFtcGxlLmNvbTEYMBYGA1UECgwPUHVYaWFu\n" +
+    "IFRlc3QgT3JnMQswCQYDVQQGEwJDTjAeFw0yNDAxMDEwMDAwMDBaFw0yNjEyMzEy\n" +
+    "MzU5MDBaMEIxGTAXBgNVBAMMEHRlc3QuZXhhbXBsZS5jb20xGDAWBgNVBAoMD1B1\n" +
+    "WGlhbiBUZXN0IE9yZzELMAkGA1UEBhMCQ04wggEiMA0GCSqGSIb3DQEBAQUAA4IB\n" +
+    "DwAwggEKAoIBAQCq9l73o5TFj46M2ZmYTfKb7J3w11VmsFNausrL5z12KKNiyrUD\n" +
+    "dquotMQFQEQZfnSEiqfkRzjX69v5VHkX/9gDvz0NPPXOL8sj0PtIJTM8O5RaHQHa\n" +
+    "+NL/JR5D6AYDGPzGyLJhy9RTlTCEDQP4EW3328mvvGSx4d2cFqjVfY5gkytWkEt5\n" +
+    "cl9qyL7A92S/i7KVPdZPdvTcyye7xdQh4Z5lZO1TUA6MvOCfTWZzwIYCxQgN3g6e\n" +
+    "uKDd1KilQwL7uDbnizMM/LUEt1x45ZXvnvsho904zqx+lskuLq1ubHJ4ndHb1ioy\n" +
+    "mrR9HgiUpKX1IVEz7FC29j6g27iaxJ+JlsyHAgMBAAEwDQYJKoZIhvcNAQELBQAD\n" +
+    "ggEBAD45nIc/c4rBELhebMAZbuqlkijbcla5eHAlSN6w6IPLJiZVMYPj0FoXS8cN\n" +
+    "otTH8fVRkOGWyizZ/5YvIqruOSMBY1PBd8DSkA7iF2k7Rih3hetClEQzDuC/TKnj\n" +
+    "SBQ7RpwMzKkDKFP9kNwDbNcmrX213+RjSNqn+mt3CnAl6b6Si8qWZEEe+6AO7RUP\n" +
+    "CQ0BNSRurvkwZCk2LHbY6EmLKoAGaASkt2GHxy1JRQeT22lYNIh2OGQiMkKGpopP\n" +
+    "leSxUvlwfMU6PBBDuut1e1jlriFsbDltWl3HNodF9iqG7k8zS8jZQIDA1NdLcylD\n" +
+    "QZMcsac/dzogxPHpsAH4WZHblW4=\n" +
+    "-----END CERTIFICATE-----\n"
+
+def main():
+    # ---- 0.1.0 兼容 ----
+    var pd = x509_parse_pem(TEST_PEM)
+    expect(pd.is_ok(), "PEM 解析 Ok")
+    var der = pd.unwrap()
+    var c = x509_parse_der(der)
+    expect(c.is_ok(), "DER 解析 Ok")
+    var cert = c.unwrap()
+    expect(cert["version"] == 3, "version 3")
+    expect(cert["subject"]["cn"] == "test.example.com", "subject cn")
+    expect(cert["not_before"] == "240101000000Z", "not_before")
+    expect(cert["not_after"] == "261231235900Z", "not_after")
+
+    # 验签
+    var v = x509_verify_pem(TEST_PEM)
+    expect(v.is_ok() and v.unwrap()["valid"] == true, "验签 true")
+
+    # ---- 0.2.0 新增：x509_cn ----
+    var cn = x509_cn(cert)
+    expect(cn.is_ok() and cn.unwrap() == "test.example.com", "x509_cn → test.example.com")
+
+    # ---- x509_issuer_cn ----
+    var icn = x509_issuer_cn(cert)
+    expect(icn.is_ok() and icn.unwrap() == "test.example.com", "x509_issuer_cn")
+
+    # ---- x509_is_self_signed ----
+    expect(x509_is_self_signed(cert), "is_self_signed → true (issuer==subject)")
+
+    # ---- x509_serial_int ----
+    var si = x509_serial_int(cert)
+    expect(len(si) > 0, "serial_int non-empty")
+
+    # ---- x509_parse_time ----
+    var t1 = x509_parse_time("240101000000Z")
+    expect(t1.is_ok(), "parse UTCTime ok")
+    if t1.is_ok():
+        var tv1 = t1.unwrap()
+        expect(tv1["year"] == 2024, "UTCTime year 2024")
+        expect(tv1["month"] == 1, "UTCTime month 1")
+        expect(tv1["day"] == 1, "UTCTime day 1")
+
+    var t2 = x509_parse_time("261231235900Z")
+    expect(t2.is_ok(), "parse UTCTime 2 ok")
+    if t2.is_ok():
+        var tv2 = t2.unwrap()
+        expect(tv2["year"] == 2026, "UTCTime year 2026")
+        expect(tv2["month"] == 12, "UTCTime month 12")
+        expect(tv2["day"] == 31, "UTCTime day 31")
+        expect(tv2["hour"] == 23, "UTCTime hour 23")
+        expect(tv2["minute"] == 59, "UTCTime minute 59")
+
+    # GeneralizedTime
+    var t3 = x509_parse_time("20240101000000Z")
+    expect(t3.is_ok(), "parse GeneralizedTime ok")
+    if t3.is_ok():
+        expect(t3.unwrap()["year"] == 2024, "GeneralizedTime year 2024")
+
+    var t4 = x509_parse_time("invalid")
+    expect_err(t4, "parse invalid time → Err")
+
+    # ---- x509_cmp_time ----
+    var ta = x509_parse_time("240101000000Z").unwrap()
+    var tb = x509_parse_time("261231235900Z").unwrap()
+    expect(x509_cmp_time(ta, tb) == -1, "cmp 2024 < 2026 → -1")
+    expect(x509_cmp_time(tb, ta) == 1, "cmp 2026 > 2024 → 1")
+    expect(x509_cmp_time(ta, ta) == 0, "cmp same → 0")
+
+    # ---- x509_is_valid_period ----
+    # 证书有效期: 2024-01-01 ~ 2026-12-31
+    var now_valid = {"year": 2025, "month": 6, "day": 15, "hour": 12, "minute": 0, "second": 0}
+    var vp1 = x509_is_valid_period(cert, now_valid)
+    expect(vp1.is_ok() and vp1.unwrap() == true, "is_valid_period 2025 → true")
+
+    var before = {"year": 2023, "month": 1, "day": 1, "hour": 0, "minute": 0, "second": 0}
+    var vp2 = x509_is_valid_period(cert, before)
+    expect(vp2.is_ok() and vp2.unwrap() == false, "is_valid_period 2023 → false")
+
+    var after = {"year": 2027, "month": 1, "day": 1, "hour": 0, "minute": 0, "second": 0}
+    var vp3 = x509_is_valid_period(cert, after)
+    expect(vp3.is_ok() and vp3.unwrap() == false, "is_valid_period 2027 → false")
+
+    # ---- x509_is_expired ----
+    var exp1 = x509_is_expired(cert, now_valid)
+    expect(exp1.is_ok() and exp1.unwrap() == false, "is_expired 2025 → false")
+
+    var exp2 = x509_is_expired(cert, after)
+    expect(exp2.is_ok() and exp2.unwrap() == true, "is_expired 2027 → true")
+
+    # ---- x509_fingerprint_sha256 ----
+    var fp = x509_fingerprint_sha256(der)
+    expect(len(fp) == 64, "fingerprint len 64, got " + str(len(fp)))
+
+    # ---- x509_issuer_info / x509_subject_info ----
+    var ii = x509_issuer_info(cert)
+    expect(ii.is_ok(), "issuer_info ok")
+    if ii.is_ok():
+        expect(ii.unwrap()["cn"] == "test.example.com", "issuer_info cn")
+
+    var si2 = x509_subject_info(cert)
+    expect(si2.is_ok(), "subject_info ok")
+    if si2.is_ok():
+        expect(si2.unwrap()["cn"] == "test.example.com", "subject_info cn")
+
+    # ---- x509_pubkey_info ----
+    var pk = x509_pubkey_info(cert)
+    expect(pk.is_ok(), "pubkey_info ok")
+    if pk.is_ok():
+        expect(pk.unwrap()["alg"] == "1.2.840.113549.1.1.1", "pubkey_info alg")
+
+    # ---- x509_chain_verify（自签根 = 单元素链）----
+    var chain_r = x509_chain_verify([cert])
+    expect(chain_r.is_ok(), "chain_verify ok")
+    if chain_r.is_ok():
+        expect(chain_r.unwrap()["valid"] == true, "self-signed chain valid")
+
+    # ---- 错误路径 ----
+    expect(x509_parse_pem("no cert").is_err(), "无证书 Err")
+    expect(x509_parse_der(bytes("abc")).is_err(), "垃圾 DER Err")
+
+    print("x509 0.2.0: PASS")
+    return Ok(0)

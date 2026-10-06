@@ -1,0 +1,24 @@
+# jsonpath 0.2.0 测试
+import "../registry/jsonpath/0.2.0/jsonpath.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var data = {"name": "Alice", "age": 30, "hobbies": ["reading", "coding"]}
+    # ---- 0.1.0 回归 ----
+    var name = jp_get(data, "name").unwrap()
+    expect(name == "Alice", "get name: " + str(name))
+    expect(jp_has(data, "age") == true, "has age")
+    # ---- 0.2.0 exists ----
+    expect(jp_exists(data, "name") == true, "exists name")
+    # ---- 0.2.0 count ----
+    var cnt = jp_count(data, "hobbies")
+    expect(cnt == 2, "count hobbies 2: " + str(cnt))
+    # ---- 0.2.0 get_index ----
+    var h = jp_get_index(data, "hobbies", 0).unwrap()
+    expect(h == "reading", "get_index 0: " + str(h))
+    # ---- 0.2.0 keys ----
+    var ks = jp_keys(data, "")
+    expect(len(ks) == 3, "keys len 3: " + str(len(ks)))
+    print("PASS: jsonpath 0.2.0")

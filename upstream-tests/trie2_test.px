@@ -1,0 +1,31 @@
+# trie 0.2.0 测试
+import "../registry/trie/0.2.0/trie.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var t = tr_new()
+    tr_insert(t, "apple")
+    tr_insert(t, "app")
+    tr_insert(t, "banana")
+    expect(tr_search(t, "apple") == true, "search apple")
+    expect(tr_search(t, "app") == true, "search app")
+    expect(tr_search(t, "banana") == true, "search banana")
+    expect(tr_search(t, "apt") == false, "search apt false")
+    # ---- 0.1.0 keys_with_prefix ----
+    var prefix = tr_keys_with_prefix(t, "app")
+    expect(len(prefix) == 2, "prefix app 2: " + str(prefix))
+    # ---- 0.2.0 delete ----
+    var deleted = tr_delete(t, "app")
+    expect(deleted == true, "delete app")
+    expect(tr_search(t, "app") == false, "search app after delete")
+    expect(tr_search(t, "apple") == true, "search apple still")
+    # ---- 0.2.0 longest_prefix ----
+    var lp = tr_longest_prefix(t, "applesauce")
+    expect(lp == "apple", "longest_prefix apple: " + lp)
+    # ---- 0.2.0 size ----
+    var sz = tr_size(t)
+    expect(sz == 2, "size 2: " + str(sz))
+    print("PASS: trie 0.2.0")

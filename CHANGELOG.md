@@ -1,4 +1,140 @@
 
+## M282（2026-10-06）— 上游 registry-px **0.2.0 全量再引入** + **凭据泄漏守卫**（缺陷 488）
+
+### 一 来历（用户令）
+
+> 用户 2026-10-06：「上游 `github.com/banshanhanfu/registry-px` 仓库中的类库已升级为 0.2.0，
+> 你自己决定什么时候引入。」
+
+原 `PLAN.md` 把「上游再引入」排在 **M288**；本轮**提前到 M282**，理由是它**纯增量、零冲突**
+（不新增包名、不改既有文件、不动 13 个本建包、不改 `.px`/runtime ⇒ 无需重烘），
+越早引入，后面几轮的门就都在更丰富的生态上跑。
+
+### 二 ⭐ 安全发现：缺陷 488（高）—— 引入器会把 PAT 写进**公开仓库**
+
+`tools/import_registry_px.sh:52` 把 `git config remote.origin.url` **原样**写进
+`registry/THIRD_PARTY.md`，而该文件是**提交并发布到公开仓库**的。
+
+我在沙箱里按常规用「带 token 的 URL」克隆（`https://x-access-token:<PAT>@github.com/…`），
+**预演输出的第 4 行就出现了 `github_pat_…`**：
+
+```
+> `https://x-access-token:github_pat_11ADKMQXQ…@github.com/banshanhanfu/registry-px.git` @ `01f6048`
+```
+
+⇒ 若直接跑，**PAT 会被永久写进 GitHub 公开仓库**（且 git 历史里抹不掉）。
+
+| 处置 | 内容 |
+|---|---|
+| **修源头** | 剥离 URL userinfo（仅当含 `:`）+ 清洗后仍含 token 形状 ⇒ **拒写（rc=4）** |
+| **纵深防御** | 链里**无条件**清洗检出 remote（原实现只在 clone 分支 set-url，`/tmp/m283/up` 是先前**带 PAT 克隆**的 ⇒ 目录已存在就跳过清洗 ⇒ 输入仍带 token） |
+| **新守卫** | `selfhost/check_no_secrets.sh` —— 全仓扫 8 类凭据形状 + 私钥实体（PEM 头 + ≥200 字符 body）· 自证 **9 通过 / 0 失败**（含 3 条判据自伤/反向）· **真仓实扫 2536 个受管文件 ⇒ rc=0 干净** |
+| **核实现役** | `THIRD_PARTY.md` 与全仓 **0 处** ⇒ **无既发泄漏**（历史导入用的是无凭据 URL），但**潜伏** |
+
+### 三 引入（纯增量 · 零冲突）
+
+| 项 | 值 |
+|---|---|
+| 上游 HEAD | `01f6048c`（2026-10-06T02:52Z）· 距已引入的 `8b2e9ef` **69 个新提交** |
+| 上游包 | **122 个，全部都有 `0.2.0`**（`0.1.0` 并存 ⇒ 每包两版本目录） |
+| 待引入 | **120 个新版本目录**（`fsnotify`/`xlsx` 的 0.2.0 早在 M214 已引入） |
+| 版本目录 | `registry/` **137 → 257** |
+| 上游用例 | `upstream-tests/` **128 → 238**（新增 110 个 `*2_test.px`，逐字节照搬） |
+| 同版本内容变更 | **0** · 新包名 **0** · 新 native 依赖 **0** |
+| 沙箱 `--apply` | 新增 120 · 已存在 124 · 就地更新 0 · **冲突 0** |
+
+### 四 ⭐ 先说自己的：我方修掉的 5 项（R1–R4）
+
+**纪律：失败不自动等于上游的错。** 40 条失败里，**10 条是我方跑法/夹具缺口**，已修：
+
+| # | 现象 | 真因（我方） | 修法 |
+|---|---|---|---|
+| **R1** | `walk2` 两轨 `stat 失败: registry/walk` | 0.2.0 用例改用**相对路径**访问 registry，而运行器把产物 cwd 设成 `$WORK/tests`（`$WORK/registry` 才是指向被测 registry 的软链） | 跑产物时 cwd 改 `$WORK` |
+| **R2** | `ftp_2` → `SYST → 502` | ftp mock 只实现了 0.1.0 用到的子集 | mock 补 **SYST/SIZE/MDTM/MKD/RMD/DELE/RNFR+RNTO/APPE/REST/CWD ..**（全是 RFC 959 标准命令，回复码由用例断言反推） |
+| **R3** | `imap_2` → 连 `:2143` 失败 | 0.1.0 用 **1143**、0.2.0 用 **2143**，mock 只听 1143 | 同听 1143+2143；补 EXAMINE/SEARCH/NOOP/STORE/COPY/CREATE/DELETE/RENAME/CLOSE（`CREATE` 后 `LIST` 必须看得见 ⇒ 邮箱表进程内可变） |
+| **R4** | `cli2`/`config2` → `… from env: localhost` | 用例要求 shell 提供 `PX_TEST_HOST=env-host` / `APP_DB_HOST=env-db-host`（**用例明写的契约**） | 运行器导出这两个 fixture 变量，并 `unset PX_NONEXISTENT_ENV` |
+
+**运行器自身三处判据缺口**（都属「判据静默变窄」族，M199/M226/M227 同族）：
+
+1. **成功判据过窄**：原要求输出含字面 `PASS`；而 0.2.0 的 113 个用例里 `barcode2_test` 打印的是
+   `barcode 0.2.0 tests done`（**无 PASS**）⇒ **假红**。改为「`rc==0` **且无 `FAIL`** **且非空**」
+   —— 与上游「失败即 `print("FAIL: …"); exit(1)`」的实现一致，且比原判据**多**了两条。
+2. **新增 ①b**：`MANIFEST.sha256` 条目集 ⇄ `*_test.px` 集。直接原因是实测事故 ——
+   重建清单时写成 `sha256sum *.px fixtures/*.px` ⇒ **我们一改自己的 mock 就让「用例逐字节照搬」
+   判据变红**（mock 是本仓文件，按 `fixtures/README.md` 本就不该进清单）—— 判据指不到真因。
+3. **新增 ①c**：`EXPECTED.tsv` ⇄ 用例集 **双向一致 + 无重复**。实测抓到 **3 条重复登记**：
+   生成器用 `*2_test.px` 通配，把 **0.1.0 的 `oauth2_test.px`**（名字恰以 `2` 结尾！）也当成新用例，
+   另有 2 个 0.2.0 用例在 M214 已登记。⚠️ 而 `exp_for` 的 awk 取**最后一个匹配** ⇒ 重复会**静默覆盖**。
+
+### 五 上游缺陷：**12 条 XFAIL**（不是「把红记成绿」）
+
+逐条对读源码后确认：上游 0.2.0 的 `tests/*2_test.px` 与**同一次提交里的** `registry/<n>/0.2.0/<n>.px`
+**自相矛盾**（或与同库 0.1.0 用例互斥）。全表 + 行号证据见 **`docs/UPSTREAM_020_DEFECTS.md`**。
+
+| 编号 | 用例 | 一句话 |
+|---|---|---|
+| T1/T2 | `protobuf2` `targz2` | 用例传 **list**，库要 **dict**（0.1.0 用例传的是 dict；两个库 0.1.0→0.2.0 **逐字节未变**） |
+| T3 | `zlib2` | 用例把 `list[int]` 传进 `zl_compress`（要 str/bytes） |
+| T4 | `tdtest2` | 用例的 case 缺 `"args"`，而 `td_one`（未变）读 `c["args"]` |
+| T5 | `shutil2` | 对 `sh_read_text` 漏 `.unwrap()`（该函数返回 Result）⇒ `string + result` |
+| T6 | `sched2` | 丢弃 `sched_add` 的返回值（库注释明写「返回新调度器 dict，**不改入参**」）⇒ 任务没进调度器 |
+| T7 | `readstat2` | 断言 `rs_words == 12`，而该句按空白切是 **11**（`rs_words` 未变） |
+| T8 | `pop3_2` | 同一条断言自相矛盾：消息写 `2/100`、断言写 `size==114`（0.1.0 断言 100） |
+| T9 | `ftp_2` | 断言 RETR 内容含 `"hello ftp"`，而 0.1.0 断言同一文件**精确等于** `"hello from ftp 普贤\n"` ⇒ 两用例对**同一夹具互斥** |
+| T10 | `workerpool2`(build) | 读 `pool["results"]`，而 `wp_run` 返回 `Ok({results})`（不写回 pool） |
+| T11 | `semaphore2`(build) | 对 `sp_new` 漏 `.unwrap()`（返回 Result）⇒ 对 result 取索引 |
+| **L1** | `concurrent_map2`(build) | **库自身**：0.2.0 新增的 `cm_clear`/`cm_values`/`cm_to_string` 用 `m["data"]`，而 0.1.0 全集用 `m["m"]` ⇒ 清空后长度仍 2 |
+
+⭐ **XFAIL 带反向判据**：一旦某条 XFAIL **实测通过**，运行器**判红**并提示
+「上游可能已修，请复核并更新 EXPECTED.tsv」⇒ 它**不隐藏**失败，也**不会**在上游修好后悄悄漂绿。
+
+### 六 ⭐ 覆盖补丁：上游用例**走不到**的那批 API，本门自己补
+
+T9 让 `ftp_2_test` 在**第一条 RETR 断言**就中止 ⇒ 0.2.0 新增的
+`ft_syst` / `ft_size` / `ft_mdtm` / `ft_mkdir` / `ft_rmdir` / `ft_delete` / `ft_rename` /
+`ft_append` / `ft_rest` **在上游用例里从来没被跑到过**。
+
+⇒ 本门用**本仓自写探针** `examples/m282_registry_020/ftp020_probe.px` + 自建 mock 补齐
+（**只断言 RFC 959 语义**，不依赖任何上游夹具的字节内容 ⇒ 与 T9 无关）。
+（**没有**为了让 `ftp_2_test` 通过而去改 mock 的 `hello.txt` —— 那属于「为了绿而放宽夹具」。）
+
+### 七 门 `examples/m282_registry_020/`
+
+8 层正判据 + 3 道负控：
+
+| 层 | 判据 |
+|---|---|
+| [1] | **表 ⇔ 磁盘**：`THIRD_PARTY.md` 每行重算 sha256 / 文件数（**244 行**；`registry/` 版本目录 257 = 244 + 13 个本仓自建包） |
+| [1b] | 0.2.0 行已入表（≥120） |
+| [2][3] | 运行器前置判据：MANIFEST **双向** + EXPECTED **双向 + 无重复** |
+| [4] | **引用面完整**（每个 `../registry/...` 真实存在 —— M188 事故族） |
+| [5] | **凭据守卫**：自证 + 全仓扫描 + `THIRD_PARTY.md` 无形状 + 引入器源码在位 |
+| [6] | **规模下限**：版本目录 ≥250 · 用例 ≥235 · XFAIL ≥12 · 缺陷文档覆盖 T1–T11+L1 |
+| [7] | **上游逐字节对拍**（有检出才跑；无 ⇒ **响亮记 SKIP**，不静默放过） |
+| [8] | **ftp 0.2.0 补充覆盖**（本仓自写探针 + mock） |
+| NC-A | 注入假 `github_pat_…` ⇒ 守卫**必红** |
+| NC-B | EXPECTED 副本加重复登记 ⇒ `--list` **必红** |
+| NC-C | **干净副本必不红** ⇒ 证明 NC-A 的红来自**内容**，判据不是恒红 |
+
+已注册：`selfhost/gates.registry.sh` + `.github/workflows/ci.yml`（CI 用 `NEG_SKIP=1`）。
+
+### 八 验收（数字来自本轮实跑）
+
+- `selfhost/run_upstream_tests.sh`（**238 用例 × 双轨 = 476 次**）：
+  **通过 419 · 失败 0 · 跳过 36 · 期望失败(XFAIL) 21 · 期望值缺失 0（用例 × 双轨 = 476 次）**
+- `emitc_freeze --check`：仅 **1 件新增**（本门探针 `ftp020_probe.px`）⇒ **类别 B 为空**
+  ⇒ `--freeze` 重定基 **450 → 451**
+- 全量门 `selfhost/run_gates.sh`：**失败 0 项**（双路判据：汇总行 + 逐门红计数）
+- 本门 `examples/m282_registry_020/verify.sh`：**M282-VERIFY-OK**
+- CI / Tag Guard / Release：三绿（见文末）
+
+### 九 下一轮候选
+
+① 上游未定性的 5 条（`tdtest2` 之外，`docs/UPSTREAM_020_DEFECTS.md` §七 已给上游 4 条建议）；
+② `registry/README.md` 的普查口径随生态扩张持续更新；
+③ 门时长：`run_upstream_tests` 用例数已 ×1.9，`m187_registry_import` 的包装/import 行数也翻倍
+⇒ 需实测并考虑分批。
+
 ## M281（2026-10-06）— 镜像「权威版本回落」：未发版窗口不再连累已发版本（缺陷 488）
 
 ### 一 问题（用户报障链的**第一层**）

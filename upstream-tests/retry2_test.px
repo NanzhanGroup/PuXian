@@ -1,0 +1,26 @@
+# retry 0.2.0 测试
+import "../registry/retry/0.2.0/retry.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.2.0 delay_jittered ----
+    var cfg = retry_opts({"max_attempts": 5, "base_ms": 100, "strategy": "exp"})
+    var d = retry_delay_jittered(cfg, 1)
+    expect(d >= 0, "jittered delay >= 0: " + str(d))
+    # ---- 0.2.0 is_retryable ----
+    expect(retry_is_retryable("connection timeout") == true, "retryable timeout")
+    expect(retry_is_retryable("invalid parameter") == false, "not retryable")
+    expect(retry_is_retryable("service unavailable") == true, "retryable unavailable")
+    # ---- 0.2.0 backoff_series ----
+    var series = retry_backoff_series(4, 100, "exp")
+    expect(series == [100, 200, 400, 800], "exp series: " + str(series))
+    var linear = retry_backoff_series(4, 100, "linear")
+    expect(linear == [100, 200, 300, 400], "linear series: " + str(linear))
+    # ---- 0.2.0 max_delay ----
+    var md = retry_max_delay(4, 100, "exp")
+    expect(md == 1500, "max_delay exp: " + str(md))
+    var md2 = retry_max_delay(4, 100, "linear")
+    expect(md2 == 1000, "max_delay linear: " + str(md2))
+    print("PASS: retry 0.2.0")

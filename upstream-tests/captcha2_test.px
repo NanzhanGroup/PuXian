@@ -1,0 +1,27 @@
+# captcha 0.2.0 测试
+import "../registry/captcha/0.2.0/captcha.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var cap = cp_generate(4).unwrap()
+    expect(len(cap["answer"]) == 4, "answer len 4")
+    expect(cp_valid(cap["answer"]) == true, "answer valid")
+    expect(cp_verify(cap["answer"], cap["answer"]) == true, "verify match")
+    expect(cp_verify(cap["answer"], "0000") == false or cp_verify(cap["answer"], "0000") == true, "verify random")
+    # ---- 0.2.0 generate_alpha ----
+    var alpha = cp_generate_alpha(6).unwrap()
+    expect(len(alpha["answer"]) == 6, "alpha len 6")
+    # ---- 0.2.0 render ----
+    var img = cp_render("1234")
+    expect(len(img) > 0, "render non-empty")
+    expect(contains(img, "\n") == true, "render has newlines")
+    # ---- 0.2.0 compare ----
+    expect(cp_compare("ABC123", "abc123") == true, "compare case insensitive")
+    expect(cp_compare("ABC123", "abc124") == false, "compare different")
+    # ---- 0.2.0 generate_hex ----
+    var hex_cap = cp_generate_hex(8).unwrap()
+    expect(len(hex_cap["answer"]) == 8, "hex len 8")
+    print("PASS: captcha 0.2.0")

@@ -1,0 +1,182 @@
+# ============================================================
+# 普贤生态库：registry/netprobe —— TCP 端口探测 / banner 读取
+# ------------------------------------------------------------
+# 纯函数库（网络客户端，无并发原语），编译（px build）与解释（px run）双模式一致。
+# 对应缺口表「网络探测（ping/端口）」的最小可实现面（ICMP 需 raw socket → 仅 TCP 探测）：
+#   np_check(host, port[, timeout_ms]) → Ok({open, err})
+#   np_banner(host, port[, timeout_ms, maxlen]) → Ok({banner}) | Err
+#   np_scan(host, ports[, timeout_ms]) → Ok([{port, open, err}])
+#   np_ports(start, end) → Ok([port, ...])
+# 实现：tcp_connect_ex（安全变体，永不杀进程）+ tcp_opt 读超时 + tcp_recv_ex。
+#   连接失败/拒绝返回 open=false（Err 仅留给参数错误）。
+# ============================================================
+# 探测单端口 → Ok({open: true|false, err?})
+def np_check(host, port, timeout_ms = 800):
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if c["ok"]:
+        tcp_close(c["fd"])
+        return Ok({"open": true})
+    var d = {"open": false}
+    d.set("err", c["err"])
+    return Ok(d)
+# 读取 banner（连接后首包；读超时视为无 banner）→ Ok({banner}) | Err
+def np_banner(host, port, timeout_ms = 800, maxlen = 256):
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("netprobe: 连接失败 " + host + ":" + str(port) + " " + c["err"])
+    tcp_opt(c["fd"], {"read_timeout_ms": timeout_ms})
+    var r = tcp_recv_ex(c["fd"], maxlen)
+    tcp_close(c["fd"])
+    if r["ok"] and r["n"] > 0:
+        return Ok({"banner": bytes_to_str(r["data"])})
+    if r["timeout"]:
+        return Ok({"banner": ""})
+    return Err("netprobe: 读取失败 " + str(r["err"]))
+# 批量扫描端口 → Ok([{port, open, err?}, ...])
+def np_scan(host, ports, timeout_ms = 300):
+    var out = []
+    var i = 0
+    while i < len(ports):
+        var p = ports[i]
+        var r = np_check(host, p, timeout_ms)
+        if r.is_err():
+            out.append({"port": p, "open": false, "err": str(r.err())})
+        else:
+            var d = r.unwrap()
+            d.set("port", p)
+            out.append(d)
+        i += 1
+    return Ok(out)
+# 生成端口区间 [start, end]（闭区间）→ Ok([...])
+def np_ports(start, end):
+    var out = []
+    var i = start
+    while i <= end:
+        out.append(i)
+        i += 1
+    return Ok(out)
+
+
+# ============================================================
+# 0.2.0 新增 API
+# ============================================================
+
+# 测量 TCP 连接延迟（毫秒）→ Ok({latency_ms, open}) | Err
+def np_latency(host, port, timeout_ms = 800):
+    var t0 = now_ms()
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    var t1 = now_ms()
+    if c["ok"]:
+        tcp_close(c["fd"])
+        return Ok({"latency_ms": t1 - t0, "open": true})
+    var d = {"latency_ms": t1 - t0, "open": false}
+    d.set("err", c["err"])
+    return Ok(d)
+
+# 扫描端口区间 [start, end] → Ok([{port, open, err?}, ...])
+def np_scan_range(host, start_port, end_port, timeout_ms = 300):
+    var ports = np_ports(start_port, end_port)
+    if ports.is_err():
+        return ports
+    return np_scan(host, ports.unwrap(), timeout_ms)
+
+# 多主机检测同一端口 → Ok([{host, open, err?}, ...])
+def np_check_multi(hosts, port, timeout_ms = 800):
+    var out = []
+    var i = 0
+    while i < len(hosts):
+        var h = hosts[i]
+        var r = np_check(h, port, timeout_ms)
+        if r.is_err():
+            out.append({"host": h, "open": false, "err": str(r.err())})
+        else:
+            var d = r.unwrap()
+            d.set("host", h)
+            out.append(d)
+        i += 1
+    return Ok(out)
+
+# 汇总扫描结果 → {total, open, closed}
+def np_summary(results):
+    var total = len(results)
+    var open_count = 0
+    var closed_count = 0
+    var i = 0
+    while i < total:
+        if results[i]["open"]:
+            open_count = open_count + 1
+        else:
+            closed_count = closed_count + 1
+        i += 1
+    return {"total": total, "open": open_count, "closed": closed_count}
+
+# 常见端口 → 服务名
+def np_port_name(port):
+    if port == 20:
+        return "ftp-data"
+    if port == 21:
+        return "ftp"
+    if port == 22:
+        return "ssh"
+    if port == 23:
+        return "telnet"
+    if port == 25:
+        return "smtp"
+    if port == 53:
+        return "dns"
+    if port == 80:
+        return "http"
+    if port == 110:
+        return "pop3"
+    if port == 143:
+        return "imap"
+    if port == 443:
+        return "https"
+    if port == 465:
+        return "smtps"
+    if port == 587:
+        return "submission"
+    if port == 993:
+        return "imaps"
+    if port == 995:
+        return "pop3s"
+    if port == 3306:
+        return "mysql"
+    if port == 5432:
+        return "postgresql"
+    if port == 6379:
+        return "redis"
+    if port == 27017:
+        return "mongodb"
+    if port == 9200:
+        return "elasticsearch"
+    return "unknown"
+
+# 带服务名的扫描结果 → Ok([{port, open, service, err?}, ...])
+def np_scan_named(host, ports, timeout_ms = 300):
+    var r = np_scan(host, ports, timeout_ms)
+    if r.is_err():
+        return r
+    var results = r.unwrap()
+    var out = []
+    var i = 0
+    while i < len(results):
+        var d = results[i]
+        d.set("service", np_port_name(d["port"]))
+        out.append(d)
+        i += 1
+    return Ok(out)
+
+# 连续探测（重试）→ Ok({open, attempts, latency_ms})
+def np_check_retry(host, port, attempts = 3, timeout_ms = 800):
+    var i = 0
+    while i < attempts:
+        var r = np_latency(host, port, timeout_ms)
+        if r.is_err():
+            return r
+        var d = r.unwrap()
+        if d["open"]:
+            d.set("attempts", i + 1)
+            return Ok(d)
+        i += 1
+    return Ok({"open": false, "attempts": attempts, "latency_ms": 0})

@@ -1,0 +1,144 @@
+# ============================================================
+# 普贤生态库：registry/interval —— 闭区间
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python portion / interval、Go interval 心智（0.1.0）：
+#   区间 = {"lo": 数, "hi": 数}，闭区间 [lo, hi]。
+#   iv_new(lo, hi)  → Ok(iv) | Err（lo>hi Err）
+#   iv_overlap(a, b) → bool            是否有交集
+#   iv_contains(a, x) → bool / iv_contains_iv(a, b) → bool
+#   iv_intersect(a, b) → Ok(iv) | Err  无交集 Err
+#   iv_merge(l)     → Ok([iv])          合并重叠/相邻区间列表
+# ============================================================
+def iv_new(lo, hi):
+    if lo > hi:
+        return Err("interval: lo>hi: " + str(lo) + " > " + str(hi))
+    return Ok({"lo": lo, "hi": hi})
+# 闭区间端点都 > 对方端点则不重叠
+def iv_overlap(a, b):
+    return not (a["hi"] < b["lo"] or b["hi"] < a["lo"])
+def iv_contains(a, x):
+    return x >= a["lo"] and x <= a["hi"]
+def iv_contains_iv(a, b):
+    return a["lo"] <= b["lo"] and a["hi"] >= b["hi"]
+def iv_intersect(a, b):
+    if not iv_overlap(a, b):
+        return Err("interval: 无交集")
+    var lo = a["lo"]
+    var hi = a["hi"]
+    if b["lo"] > lo:
+        lo = b["lo"]
+    if b["hi"] < hi:
+        hi = b["hi"]
+    return Ok({"lo": lo, "hi": hi})
+# 合并重叠区间列表（[lo,hi] 对排序后扫描；仅合并真正重叠，闭区间相邻不合并）
+def iv_merge(l):
+    if len(l) == 0:
+        return Ok([])
+    var pairs = []
+    var i = 0
+    while i < len(l):
+        pairs.append([l[i]["lo"], l[i]["hi"]])
+        i += 1
+    var s = sorted(pairs)
+    var out = [{"lo": s[0][0], "hi": s[0][1]}]
+    var k = 1
+    while k < len(s):
+        var cur = out[len(out) - 1]
+        var lo2 = s[k][0]
+        var hi2 = s[k][1]
+        if cur["hi"] >= lo2:
+            if hi2 > cur["hi"]:
+                cur.set("hi", hi2)
+        else:
+            out.append({"lo": lo2, "hi": hi2})
+        k += 1
+    return Ok(out)
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 区间长度
+def iv_len(a):
+    return a["hi"] - a["lo"]
+# 区间并集（返回合并后的区间列表）
+def iv_union(a, b):
+    return iv_merge([a, b]).unwrap()
+# 区间差集 a - b → list[iv]（可能 0/1/2 段）
+def iv_subtract(a, b):
+    if not iv_overlap(a, b):
+        return [a]
+    var result = []
+    # 左段：a.lo ~ min(b.lo-1, a.hi)（闭区间，差集不包含 b 的端点）
+    if a["lo"] < b["lo"]:
+        var left_hi = b["lo"]
+        if b["lo"] > 0 and type(b["lo"]) == "int":
+            left_hi = b["lo"] - 1
+        if left_hi > a["hi"]:
+            left_hi = a["hi"]
+        if a["lo"] <= left_hi:
+            result.append({"lo": a["lo"], "hi": left_hi})
+    # 右段：max(b.hi+1, a.lo) ~ a.hi
+    if a["hi"] > b["hi"]:
+        var right_lo = b["hi"]
+        if type(b["hi"]) == "int":
+            right_lo = b["hi"] + 1
+        if right_lo < a["lo"]:
+            right_lo = a["lo"]
+        if right_lo <= a["hi"]:
+            result.append({"lo": right_lo, "hi": a["hi"]})
+    return result
+# 对称差集：(a-b) ∪ (b-a)
+def iv_symmetric_diff(a, b):
+    var diff_a = iv_subtract(a, b)
+    var diff_b = iv_subtract(b, a)
+    var all = []
+    var i = 0
+    while i < len(diff_a):
+        all.append(diff_a[i])
+        i += 1
+    i = 0
+    while i < len(diff_b):
+        all.append(diff_b[i])
+        i += 1
+    return iv_merge(all).unwrap()
+# 区间列表总长度（合并后）
+def iv_total_len(l):
+    var merged = iv_merge(l)
+    if merged.is_err():
+        return 0
+    var m = merged.unwrap()
+    var total = 0
+    var i = 0
+    while i < len(m):
+        total = total + iv_len(m[i])
+        i += 1
+    return total
+# 扩展区间（两端各加 n）
+def iv_expand(a, n):
+    return {"lo": a["lo"] - n, "hi": a["hi"] + n}
+# 平移区间
+def iv_shift(a, n):
+    return {"lo": a["lo"] + n, "hi": a["hi"] + n}
+# 区间相等
+def iv_eq(a, b):
+    return a["lo"] == b["lo"] and a["hi"] == b["hi"]
+# 区间列表是否完全覆盖 [lo, hi]
+def iv_covers(l, lo, hi):
+    var merged = iv_merge(l)
+    if merged.is_err():
+        return false
+    var m = merged.unwrap()
+    var i = 0
+    while i < len(m):
+        if m[i]["lo"] <= lo and m[i]["hi"] >= hi:
+            return true
+        i += 1
+    return false
+# 从区间列表中找到包含 x 的区间
+def iv_find_containing(l, x):
+    var i = 0
+    while i < len(l):
+        if iv_contains(l[i], x):
+            return l[i]
+        i += 1
+    return null

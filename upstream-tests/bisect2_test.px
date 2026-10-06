@@ -1,0 +1,58 @@
+# bisect 0.2.0 测试：search/contains/count_range/slice_range/nearest/insort_unique/batch + 0.1.0 回归
+import "../registry/bisect/0.2.0/bisect.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var a = [1, 3, 5, 7, 9, 11]
+    # ---- 0.1.0 回归 ----
+    expect(bi_left(a, 5) == 2, "left 5: " + str(bi_left(a, 5)))
+    expect(bi_left(a, 6) == 3, "left 6: " + str(bi_left(a, 6)))
+    expect(bi_right(a, 5) == 3, "right 5: " + str(bi_right(a, 5)))
+    expect(bi_left(a, 0) == 0, "left 0")
+    expect(bi_left(a, 100) == 6, "left 100")
+    var ins = bi_insort_left(a, 6)
+    expect(ins == [1, 3, 5, 6, 7, 9, 11], "insort left: " + str(ins))
+    var insr = bi_insort_right(a, 5)
+    expect(insr == [1, 3, 5, 5, 7, 9, 11], "insort right: " + str(insr))
+    # ---- 0.2.0 search ----
+    expect(bi_search(a, 5) == 2, "search 5: " + str(bi_search(a, 5)))
+    expect(bi_search(a, 1) == 0, "search 1")
+    expect(bi_search(a, 11) == 5, "search 11")
+    expect(bi_search(a, 6) == 0 - 1, "search 6 not found")
+    expect(bi_search(a, 0) == 0 - 1, "search 0 not found")
+    expect(bi_search(a, 100) == 0 - 1, "search 100 not found")
+    # ---- 0.2.0 contains ----
+    expect(bi_contains(a, 5) == true, "contains 5")
+    expect(bi_contains(a, 6) == false, "not contains 6")
+    expect(bi_contains(a, 1) == true, "contains 1")
+    expect(bi_contains(a, 11) == true, "contains 11")
+    # ---- 0.2.0 slice_range ----
+    var sl = bi_slice_range(a, 3, 8)
+    expect(sl == [3, 5, 7], "slice [3,8): " + str(sl))
+    var sl2 = bi_slice_range(a, 0, 5)
+    expect(sl2 == [1, 3], "slice [0,5): " + str(sl2))
+    var sl3 = bi_slice_range(a, 5, 12)
+    expect(sl3 == [5, 7, 9, 11], "slice [5,12): " + str(sl3))
+    # ---- 0.2.0 nearest ----
+    expect(bi_nearest(a, 5) == 2, "nearest 5: " + str(bi_nearest(a, 5)))
+    expect(bi_nearest(a, 6) == 2, "nearest 6: " + str(bi_nearest(a, 6)))
+    expect(bi_nearest(a, 8) == 3, "nearest 8: " + str(bi_nearest(a, 8)))
+    expect(bi_nearest(a, 0) == 0, "nearest 0: " + str(bi_nearest(a, 0)))
+    expect(bi_nearest(a, 100) == 5, "nearest 100: " + str(bi_nearest(a, 100)))
+    expect(bi_nearest(a, 2) == 0, "nearest 2: " + str(bi_nearest(a, 2)))
+    # ---- 0.2.0 insort_unique ----
+    var u = bi_insort_unique(a, 5)
+    expect(u == [1, 3, 5, 7, 9, 11], "unique existing: " + str(u))
+    var u2 = bi_insort_unique(a, 6)
+    expect(u2 == [1, 3, 5, 6, 7, 9, 11], "unique new: " + str(u2))
+    # ---- 0.2.0 batch ----
+    var b = bi_insort_batch(a, [6, 4, 10])
+    expect(b == [1, 3, 4, 5, 6, 7, 9, 10, 11], "batch: " + str(b))
+    # ---- 空列表 ----
+    var empty = []
+    expect(bi_search(empty, 5) == 0 - 1, "search empty")
+    expect(bi_nearest(empty, 5) == 0 - 1, "nearest empty")
+    expect(bi_left(empty, 5) == 0, "left empty")
+    print("bisect 0.2.0: PASS")

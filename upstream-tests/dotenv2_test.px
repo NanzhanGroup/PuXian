@@ -1,0 +1,70 @@
+# dotenv 0.2.0 测试
+import "../registry/dotenv/0.2.0/dotenv.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var env_text = "DB_HOST=localhost\nDB_PORT=5432\nDB_NAME=mydb\n# comment\nexport DEBUG=true"
+    var d = dotenv_parse(env_text)
+    expect(d["DB_HOST"] == "localhost", "parse host")
+    expect(d["DB_PORT"] == "5432", "parse port")
+    expect(d["DB_NAME"] == "mydb", "parse name")
+    expect(d["DEBUG"] == "true", "parse export")
+    expect(len(d) == 4, "parse 4 keys: " + str(len(d)))
+    var d2 = dotenv_parse("KEY=\"hello world\"\nSINGLE='single val'\nPLAIN=plain_value")
+    expect(d2["KEY"] == "hello world", "parse quoted: " + d2["KEY"])
+    expect(d2["SINGLE"] == "single val", "parse single: " + d2["SINGLE"])
+    expect(d2["PLAIN"] == "plain_value", "parse plain")
+    # ---- 0.2.0 dump ----
+    var d3 = {"A": "simple", "B": "has space", "C": "no_special"}
+    var dumped = dotenv_dump(d3)
+    expect(contains(dumped, "A=simple"), "dump A")
+    expect(contains(dumped, "B=\"has space\""), "dump B quoted")
+    expect(contains(dumped, "C=no_special"), "dump C")
+    # ---- 0.2.0 merge ----
+    var base = {"A": "1", "B": "2"}
+    var override = {"B": "3", "C": "4"}
+    var merged = dotenv_merge(base, override)
+    expect(merged["A"] == "1", "merge A")
+    expect(merged["B"] == "3", "merge B override")
+    expect(merged["C"] == "4", "merge C")
+    # ---- 0.2.0 expand ----
+    var with_refs = {"BASE": "/app", "DATA": "$" + "{BASE}/data", "LOG": "$" + "{DATA}/log"}
+    var expanded = dotenv_expand(with_refs)
+    expect(expanded["BASE"] == "/app", "expand base")
+    expect(expanded["DATA"] == "/app/data", "expand data: " + expanded["DATA"])
+    expect(expanded["LOG"] == "/app/data/log", "expand log: " + expanded["LOG"])
+    # ---- 0.2.0 get ----
+    expect(dotenv_get(d, "DB_HOST") == "localhost", "get host")
+    expect(dotenv_get(d, "MISSING", "default") == "default", "get default")
+    expect(dotenv_get(d, "DB_PORT") == "5432", "get port")
+    # ---- 0.2.0 get_required ----
+    expect(dotenv_get_required(d, "DB_HOST").is_ok(), "required ok")
+    expect(dotenv_get_required(d, "MISSING").is_err(), "required err")
+    # ---- 0.2.0 get_int ----
+    expect(dotenv_get_int(d, "DB_PORT") == 5432, "get_int: " + str(dotenv_get_int(d, "DB_PORT")))
+    expect(dotenv_get_int(d, "MISSING", 8080) == 8080, "get_int default")
+    # ---- 0.2.0 get_bool ----
+    expect(dotenv_get_bool(d, "DEBUG") == true, "get_bool true")
+    expect(dotenv_get_bool(d, "MISSING", false) == false, "get_bool default")
+    var d4 = dotenv_parse("ENABLED=yes\nACTIVE=1\nOFF=false")
+    expect(dotenv_get_bool(d4, "ENABLED") == true, "get_bool yes")
+    expect(dotenv_get_bool(d4, "ACTIVE") == true, "get_bool 1")
+    expect(dotenv_get_bool(d4, "OFF") == false, "get_bool false")
+    # ---- 0.2.0 validate ----
+    expect(dotenv_validate(d, ["DB_HOST", "DB_PORT"]).is_ok(), "validate ok")
+    expect(dotenv_validate(d, ["DB_HOST", "MISSING"]).is_err(), "validate err")
+    # ---- 0.2.0 to_shell ----
+    var shell_str = dotenv_to_shell({"A": "1", "B": "2"})
+    expect(contains(shell_str, "export A=\"1\""), "shell A: " + shell_str)
+    expect(contains(shell_str, "export B=\"2\""), "shell B")
+    # ---- 0.2.0 dump + parse roundtrip ----
+    var orig = {"KEY1": "val1", "KEY2": "val2", "KEY3": "val with space"}
+    var dumped2 = dotenv_dump(orig)
+    var reparsed = dotenv_parse(dumped2)
+    expect(reparsed["KEY1"] == "val1", "roundtrip 1")
+    expect(reparsed["KEY2"] == "val2", "roundtrip 2")
+    expect(reparsed["KEY3"] == "val with space", "roundtrip 3: " + reparsed["KEY3"])
+    print("dotenv 0.2.0: PASS")

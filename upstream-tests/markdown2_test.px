@@ -1,0 +1,22 @@
+# markdown 0.2.0 测试
+import "../registry/markdown/0.2.0/markdown.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var src = "# Title\nHello world"
+    var out = md_render(src).unwrap()
+    expect(len(out) > 0, "render non-empty")
+    # ---- 0.2.0 render_html ----
+    var html = md_render_html("# Hello\n- item1\n- item2")
+    expect(contains(html, "<h1>Hello</h1>"), "html h1: " + html)
+    expect(contains(html, "<li>item1</li>"), "html li item1")
+    # ---- 0.2.0 extract_headings ----
+    var heads = md_extract_headings("# H1\n## H2\n## H2b")
+    expect(len(heads) == 3, "3 headings: " + str(len(heads)))
+    # ---- 0.2.0 word_count ----
+    var wc = md_word_count("hello world foo")
+    expect(wc == 3, "word_count 3: " + str(wc))
+    print("PASS: markdown 0.2.0")

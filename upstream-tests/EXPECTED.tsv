@@ -1,7 +1,9 @@
 # 上游 registry-px 真实用例的期望值（M190 建立）
 # 来源：github.com/banshanhanfu/registry-px @ 8b2e9ef（tests/*.px 共 128 个，逐字节照搬 · MANIFEST.sha256 对拍）
 # 字段：<测试名>\t<build 期望>\t<interp 期望>\t<理由>
-# 取值：PASS / SKIP。**SKIP 必须写理由**（环境不具备 / 设计性不支持 / 性能性）。
+# 取值：PASS / SKIP / **XFAIL**（期望失败 —— 上游 0.2.0 的用例/库自相矛盾，见
+#   docs/UPSTREAM_020_DEFECTS.md；带**反向判据**：一旦通过则判红，逼我们回来复核）。
+#   **SKIP / XFAIL 都必须写理由**（环境不具备 / 设计性不支持 / 性能性 / 上游缺陷编号）。
 # 纪律：本文件是**登记的数据**，不是"跑一遍把结果抄下来"——改这里等于改判据，
 #   必须在 CHANGELOG 里写清楚"为什么这条不该 PASS"。缺登记 ⇒ 回归器报 MISMATCH（防新用例默默不跑）。
 actor_test	PASS	SKIP	interp 设计性不支持 spawn/chan（Mini 子集排除）
@@ -134,3 +136,115 @@ statx_test	PASS	PASS	上游 d4ae476 新增（描述统计/分位数/相关系数
 targz_test	PASS	PASS	上游 d4ae476 新增（uStar tar.gz 联合流 · Python tarfile 互通）
 tempfile_test	PASS	PASS	上游 d4ae476 新增（临时目录/文件/清理）
 xlsx_read_test	PASS	PASS	上游 d4ae476 新增；fixture 内联（XLSX_MIN_HEX 自造 /tmp/px_min_shared.xlsx）无外部依赖
+
+# ---- M282：上游 registry-px 0.2.0（01f6048c）新增 113 个用例登记 ----
+actor2_test	PASS	SKIP	build：上游 01f6048c 新增 0.2.0 ｜ interp：解释轨不支持 通道/mutex（Mini 子集排除，设计如此）
+ansi2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+barcode2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+base582_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bcrypt2_test	PASS	SKIP	build：上游 01f6048c 新增 0.2.0 ｜ interp：interp 轨 rc=124（120s 超时）；同 bcrypt_test 先例（M214 实测 1801s 未完成）
+bench2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bisect2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bitset2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bloom2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bson2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bytes_pack2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+cache2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+captcha2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+checksum2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+cli2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+concurrent_map2_test	XFAIL	SKIP	build：上游缺陷 L1（仅 build 轨）：0.2.0 新增的 cm_clear/cm_values/cm_to_string 用 m["data"]，而 0.1.0 全集用 m["m"] ⇒ 清空后长度仍 2 ｜ interp：解释轨不支持 通道/mutex（Mini 子集排除，设计如此）
+config2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+counter2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+csv2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+datastruct2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+datetime2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+decimal2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+dirs2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+dist2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+dns2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+dotenv2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+edist2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+faker2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+fractions2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+ftp_2_test	XFAIL	XFAIL	上游缺陷 T9：0.2.0 断言 RETR 内容含 "hello ftp"，而 0.1.0 断言同一文件**精确等于** "hello from ftp 普贤\n" ⇒ 两用例对同一夹具互斥
+functools2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+glob2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+graph2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+hant2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+holidays2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+htmlparse2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+human2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+imap_2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+inflect2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+ini2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+interval2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+itertools2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+jsonpath2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+log2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+luhn2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+lz42_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+markdown2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+metrics2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+mock2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+money2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+mongodb_2_test	SKIP	SKIP	需真实 mongod 7.0 127.0.0.1:27017（本机与 CI 均无；--run-skipped 可跑）
+mqtt_2_test	SKIP	SKIP	需真实 MQTT broker 127.0.0.1:1883（本机与 CI 均无；--run-skipped 可跑）
+msgpack2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+mysql_2_test	SKIP	SKIP	需真实 MySQL 127.0.0.1:3306（本机与 CI 均无；--run-skipped 可跑）
+nanoid2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+natsort2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+netprobe2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+num2words2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+oauth2_2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+parser2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+passhash2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+pdf2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+percent2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+pinyin2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+plex2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+pop3_2_test	XFAIL	XFAIL	上游缺陷 T8：0.2.0 用例自相矛盾（消息写 2/100、断言 size==114；0.1.0 断言 100）
+progress2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+properties2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+protobuf2_test	XFAIL	XFAIL	上游缺陷 T1：0.2.0 用例把 schema 传成 list，而 pb_encode（0.2.0 与 0.1.0 逐字节相同）要 dict
+punycode2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+pwgen2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+qrcode2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+quickcheck2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+rate2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+readstat2_test	XFAIL	XFAIL	上游缺陷 T7：0.2.0 用例断言 rs_words == 12，而该句按空白切是 11（rs_words 未变）
+redis2_test	SKIP	SKIP	需真实 Redis 127.0.0.1:6379（本机与 CI 均无；用例自身会打印 SKIP，--run-skipped 可跑）
+retry2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+richmd2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+sched2_test	XFAIL	XFAIL	上游缺陷 T6：0.2.0 用例丢弃 sched_add 的返回值（0.1.0 用例写 s = sched_add(s,…)）⇒ 任务没进调度器
+seg2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+semaphore2_test	XFAIL	SKIP	build：上游缺陷 T11（仅 build 轨）：0.2.0 用例对 sp_new 漏 .unwrap()（该函数返回 Result）⇒ 对 result 取索引 ｜ interp：解释轨不支持 通道/mutex（Mini 子集排除，设计如此）
+set2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+shutil2_test	XFAIL	XFAIL	上游缺陷 T5：0.2.0 用例对 sh_read_text 漏 .unwrap()（该函数返回 Result）⇒ string + result
+slug2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+snowflake2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+sqlparse2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+stats2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+statx2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+strcase2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+strength2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+tar2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+targz2_test	XFAIL	XFAIL	上游缺陷 T2：0.2.0 用例把 files 传成 list，而 tz_tar 要 dict（0.1.0 用例传的是 dict）
+tdtest2_test	XFAIL	XFAIL	上游缺陷 T4：0.2.0 用例的 case 缺 "args" 键，而 td_one（未变）读 c["args"]
+tempfile2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+template2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+testkit2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+textwrap2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+thousep2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+toml2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+totp2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+trie2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+tzmini2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+ulid2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+units2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+uuid2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+validator2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+walk2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+workerpool2_test	XFAIL	SKIP	build：上游缺陷 T10（仅 build 轨）：0.2.0 用例读 pool["results"]，而 wp_run 返回 Ok({results})（0.1.0 用例用 r.unwrap()["results"]） ｜ interp：解释轨不支持 通道/mutex（Mini 子集排除，设计如此）
+x509_2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+zlib2_test	XFAIL	XFAIL	上游缺陷 T3：0.2.0 用例把 list[int] 传进 zl_compress（要 str/bytes；0.1.0 用例传的是 bytes）

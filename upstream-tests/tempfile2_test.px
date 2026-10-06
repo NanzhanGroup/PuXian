@@ -1,0 +1,29 @@
+# tempfile 0.2.0 测试
+import "../registry/tempfile/0.2.0/tempfile.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var name = tf_tempname("test_").unwrap()
+    expect(len(name) > 0, "tempname non-empty")
+    # ---- 0.2.0 tempname_ext ----
+    var extname = tf_tempname_ext("test_", ".txt")
+    expect(ends_with(extname, ".txt") == true, "tempname_ext .txt: " + extname)
+    # ---- 0.2.0 create ----
+    var path = tf_create("test_", "hello world")
+    var content = tf_read(path).unwrap()
+    expect(content == "hello world", "create/read: " + content)
+    tf_remove_file(path)
+    # ---- 0.2.0 with_tempfile ----
+    def read_upper(p):
+        return to_upper(tf_read(p).unwrap())
+    var result = tf_with_tempfile("test_", "data", read_upper)
+    expect(result == "DATA", "with_tempfile: " + result)
+    # ---- 0.2.0 cleanup ----
+    var p1 = tf_create("test_", "a")
+    var p2 = tf_create("test_", "b")
+    var cleaned = tf_cleanup([p1, p2])
+    expect(cleaned == 2, "cleanup 2: " + str(cleaned))
+    print("PASS: tempfile 0.2.0")

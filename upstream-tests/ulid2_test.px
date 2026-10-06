@@ -1,0 +1,29 @@
+# ulid 0.2.0 测试
+import "../registry/ulid/0.2.0/ulid.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var u1 = ul_new_at(1700000000000, "0123456789abcdef0123")
+    expect(ul_valid(u1) == true, "valid")
+    expect(ul_ts(u1).unwrap() == 1700000000000, "ts")
+    # ---- 0.2.0 compare ----
+    var u2 = ul_new_at(1700000000001, "0123456789abcdef0123")
+    expect(ul_compare(u1, u2) == -1, "compare u1<u2")
+    expect(ul_compare(u2, u1) == 1, "compare u2>u1")
+    expect(ul_compare(u1, u1) == 0, "compare equal")
+    # ---- 0.2.0 min/max ----
+    expect(ul_min(u1, u2) == u1, "min")
+    expect(ul_max(u1, u2) == u2, "max")
+    # ---- 0.2.0 increase ----
+    var inc = ul_increase(u1).unwrap()
+    expect(ul_valid(inc) == true, "increase valid")
+    expect(ul_ts(inc).unwrap() == 1700000000000, "increase same ts")
+    expect(ul_compare(inc, u1) == 1, "increase > original")
+    # ---- 0.2.0 short ----
+    var u3 = ul_new_at(0, "0123456789abcdef0123")
+    # ts=0 → first 10 chars all "0" → short strips all 10
+    expect(len(ul_short(u3)) == 16, "short strips leading zeros: " + str(len(ul_short(u3))))
+    print("PASS: ulid 0.2.0")

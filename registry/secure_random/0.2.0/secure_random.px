@@ -1,0 +1,114 @@
+# ============================================================
+# 普贤生态库：registry/secure_random —— 密码学安全随机
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go crypto/rand 心智：
+#   sr_hex(n_bytes)       → Ok(hex str)        # 2n 个 hex 字符
+#   sr_bytes(n)           → Ok(bytes)
+#   sr_token(n)           → Ok(base64url)      # n 字节 → 无 padding base64url
+#   sr_int(max)           → Ok(0..max-1)       # 拒绝采样，严格均匀
+#   sr_int_range(lo, hi)  → Ok(lo..hi-1)       # 区间随机
+#   sr_choice(list)       → Ok(list[i])        # 随机选一个元素
+#   sr_shuffle(list)      → Ok(shuffled)       # Fisher-Yates 洗牌
+# 底层：os_random_hex（runtime 原生，假定 /dev/urandom 或等价安全源）。
+# 0.2.0 改进：sr_int 用拒绝采样消除模偏差（对齐 Go crypto/rand.Int）；
+#   新增 sr_int_range / sr_choice / sr_shuffle。
+# ============================================================
+
+# n 字节 → hex 文本（2n 字符）
+def sr_hex(n):
+    return Ok(os_random_hex(n))
+
+# n 字节 → bytes
+def sr_bytes(n):
+    return Ok(hex_to_bytes(os_random_hex(n)))
+
+# n 字节 → base64url（无 padding，JWT 兼容）
+def sr_token(n):
+    var hex = os_random_hex(n)
+    var b64 = bytes_base64(hex_to_bytes(hex))
+    b64 = replace(b64, "+", "-")
+    b64 = replace(b64, "/", "_")
+    b64 = replace(b64, "=", "")
+    return Ok(b64)
+
+# ---- 位长计算 ----
+def sr_bitlen(n):
+    var b = 0
+    var v = n
+    while v > 0:
+        b += 1
+        v = v // 2
+    return b
+
+# ---- 2^k ----
+def sr_pow2(k):
+    var r = 1
+    var i = 0
+    while i < k:
+        r = r * 2
+        i += 1
+    return r
+
+# ---- 0..max-1 的随机整数（拒绝采样，严格均匀）----
+# 对齐 Go crypto/rand.Int：
+#   1. bitlen = max 的位长
+#   2. k = (bitlen + 7) / 8 字节
+#   3. mask = (1 << bitlen) - 1
+#   4. 生成 k 字节随机 → 整数 v，v &= mask
+#   5. 若 v < max 返回，否则重试（拒绝概率 < 50%）
+def sr_int(max):
+    if max <= 0:
+        return Err("secure_random: max 须 > 0")
+    if max == 1:
+        return Ok(0)
+    var bl = sr_bitlen(max)
+    var k = (bl + 7) // 8
+    var mask = sr_pow2(bl) - 1
+    var retries = 0
+    while retries < 256:
+        var hex = os_random_hex(k)
+        var v = bytes_to_int(hex_to_bytes(hex))
+        if v < 0:
+            v = -v
+        v = v & mask
+        if v < max:
+            return Ok(v)
+        retries += 1
+    # 256 次全被拒绝的概率 < 2^(-256)，实际不可能到达
+    return Err("secure_random: 拒绝采样重试超限")
+
+# ---- lo..hi-1 的随机整数 ----
+def sr_int_range(lo, hi):
+    if hi <= lo:
+        return Err("secure_random: hi 须 > lo")
+    var r = sr_int(hi - lo)
+    if r.is_err():
+        return r
+    return Ok(lo + r.unwrap())
+
+# ---- 随机选一个元素 ----
+def sr_choice(lst):
+    if len(lst) == 0:
+        return Err("secure_random: 空列表")
+    var r = sr_int(len(lst))
+    if r.is_err():
+        return r
+    return Ok(lst[r.unwrap()])
+
+# ---- Fisher-Yates 洗牌 ----
+def sr_shuffle(lst):
+    if len(lst) <= 1:
+        return Ok(lst)
+    var out = lst
+    var i = len(out) - 1
+    while i > 0:
+        var r = sr_int(i + 1)
+        if r.is_err():
+            return r
+        var j = r.unwrap()
+        var tmp = out[i]
+        out[i] = out[j]
+        out[j] = tmp
+        i -= 1
+    return Ok(out)

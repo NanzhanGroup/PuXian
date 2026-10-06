@@ -1,0 +1,254 @@
+# ============================================================
+# 普贤生态库：registry/stats —— 描述统计
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go gonum/stat 子集心智（0.1.0）：
+#   stats_min/max/sum/count/mean/median/var/stddev
+# 说明：
+#   - nums 为 list[number]；空列表：min/max/mean/median/var → Err
+#   - var 默认样本方差（n-1 分母）；stats_var(nums, false) → 总体方差（n）
+#   - median 偶数长度取中间两数平均
+# ============================================================
+def stats_count(nums):
+    return len(nums)
+def stats_sum(nums):
+    var s = 0
+    var i = 0
+    while i < len(nums):
+        s = s + nums[i]
+        i += 1
+    return s
+def stats_min(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    var m = nums[0]
+    var i = 1
+    while i < len(nums):
+        if nums[i] < m:
+            m = nums[i]
+        i += 1
+    return Ok(m)
+def stats_max(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    var m = nums[0]
+    var i = 1
+    while i < len(nums):
+        if nums[i] > m:
+            m = nums[i]
+        i += 1
+    return Ok(m)
+def stats_mean(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    return Ok(stats_sum(nums) / len(nums))
+# 中位数（n 排序；偶数取中间两数平均）
+def stats_median(nums):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    var s = sorted(nums)
+    if n % 2 == 1:
+        return Ok(s[n // 2])
+    return Ok((s[n // 2 - 1] + s[n // 2]) / 2)
+# 方差：sample=true（默认）用 n-1；否则总体 n
+def stats_var(nums, sample = true):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    if sample and n < 2:
+        return Err("stats: 样本方差至少 2 个元素")
+    var mean = stats_sum(nums) / n
+    var ss = 0.0
+    var i = 0
+    while i < n:
+        var d = nums[i] - mean
+        ss = ss + d * d
+        i += 1
+    var denom = n
+    if sample:
+        denom = n - 1
+    return Ok(ss / denom)
+def stats_stddev(nums, sample = true):
+    var r = stats_var(nums, sample)
+    if r.is_err():
+        return r
+    return Ok(sqrt(r.unwrap()))
+# ============================================================
+# 0.2.0 新增函数
+# ============================================================
+# 众数：出现次数最多的值
+def stats_mode(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    var counts = {}
+    var i = 0
+    while i < len(nums):
+        var key = str(nums[i])
+        if not counts.has(key):
+            counts.set(key, 0)
+        counts.set(key, counts[key] + 1)
+        i += 1
+    var best_key = ""
+    var best_count = 0
+    var keys = counts.keys()
+    i = 0
+    while i < len(keys):
+        if counts[keys[i]] > best_count:
+            best_count = counts[keys[i]]
+            best_key = keys[i]
+        i += 1
+    return Ok(int(best_key))
+# 极差：max - min
+def stats_range(nums):
+    var mn = stats_min(nums)
+    var mx = stats_max(nums)
+    if mn.is_err():
+        return mn
+    return Ok(mx.unwrap() - mn.unwrap())
+# 百分位数（线性插值法）
+def stats_percentile(nums, p):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    if p < 0 or p > 100:
+        return Err("stats: 百分位须 0-100")
+    var s = sorted(nums)
+    if n == 1:
+        return Ok(s[0])
+    var rank = float(p) / 100.0 * float(n - 1)
+    var lo = int(rank)
+    var hi = lo + 1
+    if hi >= n:
+        return Ok(s[n - 1])
+    var frac = rank - float(lo)
+    return Ok(float(s[lo]) + frac * float(s[hi] - s[lo]))
+# 四分位数 → [Q1, Q2, Q3]
+def stats_quartiles(nums):
+    var q1 = stats_percentile(nums, 25)
+    var q2 = stats_percentile(nums, 50)
+    var q3 = stats_percentile(nums, 75)
+    if q1.is_err():
+        return q1
+    return Ok([q1.unwrap(), q2.unwrap(), q3.unwrap()])
+# 四分位距 IQR = Q3 - Q1
+def stats_iqr(nums):
+    var q = stats_quartiles(nums)
+    if q.is_err():
+        return q
+    var qs = q.unwrap()
+    return Ok(qs[2] - qs[0])
+# 几何平均
+def stats_geomean(nums):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    var log_sum = 0.0
+    var i = 0
+    while i < n:
+        if nums[i] <= 0:
+            return Err("stats: 几何均值要求正数")
+        log_sum = log_sum + log(nums[i])
+        i += 1
+    return Ok(exp(log_sum / float(n)))
+# 调和平均
+def stats_harmmean(nums):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    var inv_sum = 0.0
+    var i = 0
+    while i < n:
+        if nums[i] == 0:
+            return Err("stats: 调和均值遇零")
+        inv_sum = inv_sum + 1.0 / float(nums[i])
+        i += 1
+    return Ok(float(n) / inv_sum)
+# 加权平均
+def stats_weighted_mean(nums, weights):
+    var n = len(nums)
+    if n == 0 or n != len(weights):
+        return Err("stats: 空列表或长度不匹配")
+    var wsum = 0.0
+    var wvsum = 0.0
+    var i = 0
+    while i < n:
+        wsum = wsum + float(weights[i])
+        wvsum = wvsum + float(nums[i]) * float(weights[i])
+        i += 1
+    if wsum == 0.0:
+        return Err("stats: 权重和为零")
+    return Ok(wvsum / wsum)
+# 平均绝对偏差
+def stats_mad(nums):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    var mean = stats_sum(nums) / n
+    var dev_sum = 0.0
+    var i = 0
+    while i < n:
+        var d = float(nums[i]) - float(mean)
+        if d < 0.0:
+            d = 0.0 - d
+        dev_sum = dev_sum + d
+        i += 1
+    return Ok(dev_sum / float(n))
+# 变异系数 CV = stddev / mean
+def stats_cv(nums):
+    var sd = stats_stddev(nums)
+    var m = stats_mean(nums)
+    if sd.is_err():
+        return sd
+    if m.unwrap() == 0:
+        return Err("stats: 均值为零")
+    return Ok(sd.unwrap() / m.unwrap())
+# 协方差
+def stats_covariance(a, b, sample = true):
+    var n = len(a)
+    if n == 0 or n != len(b):
+        return Err("stats: 空列表或长度不匹配")
+    if sample and n < 2:
+        return Err("stats: 样本协方差至少 2 个元素")
+    var ma = stats_sum(a) / n
+    var mb = stats_sum(b) / n
+    var s = 0.0
+    var i = 0
+    while i < n:
+        s = s + (float(a[i]) - float(ma)) * (float(b[i]) - float(mb))
+        i += 1
+    var denom = n
+    if sample:
+        denom = n - 1
+    return Ok(s / float(denom))
+# Pearson 相关系数
+def stats_correlation(a, b):
+    var cov = stats_covariance(a, b)
+    var va = stats_var(a)
+    var vb = stats_var(b)
+    if cov.is_err():
+        return cov
+    if va.is_err():
+        return va
+    if vb.is_err():
+        return vb
+    var denom = sqrt(va.unwrap() * vb.unwrap())
+    if denom == 0.0:
+        return Err("stats: 方差为零")
+    return Ok(cov.unwrap() / denom)
+# 汇总统计 → dict
+def stats_summary(nums):
+    var n = stats_count(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    var r = {}
+    r.set("count", n)
+    r.set("sum", stats_sum(nums))
+    r.set("min", stats_min(nums).unwrap())
+    r.set("max", stats_max(nums).unwrap())
+    r.set("mean", stats_mean(nums).unwrap())
+    r.set("median", stats_median(nums).unwrap())
+    r.set("var", stats_var(nums).unwrap())
+    r.set("stddev", stats_stddev(nums).unwrap())
+    r.set("range", stats_range(nums).unwrap())
+    return Ok(r)

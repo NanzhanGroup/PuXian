@@ -1,0 +1,26 @@
+# strength 0.2.0 测试
+import "../registry/strength/0.2.0/strength.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(st_score("password").unwrap() < st_score("Xy7#mP2!kQ9w").unwrap(), "weak < strong")
+    # ---- 0.2.0 issues ----
+    var issues = st_issues("123")
+    expect(len(issues) > 0, "weak has issues: " + str(issues))
+    var issues2 = st_issues("Xy7#mP2!kQ9wRt")
+    expect(len(issues2) == 0, "strong no issues: " + str(issues2))
+    # ---- 0.2.0 time_to_crack ----
+    var ttc = st_time_to_crack("password")
+    expect(len(ttc) > 0, "time_to_crack weak: " + ttc)
+    var ttc2 = st_time_to_crack("Xy7#mP2!kQ9wRtZp")
+    expect(len(ttc2) > 0, "time_to_crack strong: " + ttc2)
+    # ---- 0.2.0 recommend ----
+    var recs = st_recommend("123")
+    expect(len(recs) > 0, "recommend weak")
+    # ---- 0.2.0 check_common ----
+    expect(st_check_common("123456") == true, "common 123456")
+    expect(st_check_common("Xy7#mP2!") == false, "not common")
+    print("PASS: strength 0.2.0")

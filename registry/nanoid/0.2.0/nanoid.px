@@ -1,0 +1,108 @@
+# ============================================================
+# 普贤生态库：registry/nanoid —— NanoID（URL 友好随机 ID）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go jaevor/go-nanoid / Python pynanoid 心智（0.1.0）：
+#   nd_generate(n=21) → Ok(str) | Err   默认 21 位 URL 安全 ID
+#   nd_alphabet()     → str             默认字母表（64 字符）
+#   nd_valid(s)       → bool            是否全由字母表构成
+# 字母表 64 字符（- _ 0-9 a-z A-Z）；os_random_hex 逐字节 → b % 64，
+#   因 256 % 64 == 0，索引**无取模偏差**（无需拒绝采样）。
+# ============================================================
+
+const ND_ALPHA = "-_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+def nd_alphabet():
+    return ND_ALPHA
+
+def nd_generate(n=21):
+    if n <= 0:
+        return Err("nanoid: 长度须 > 0")
+    var raw = hex_to_bytes(os_random_hex(n))
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + ND_ALPHA[bytes_get(raw, i) % 64]
+        i += 1
+    return Ok(out)
+
+def nd_valid(s):
+    var i = 0
+    while i < len(s):
+        if ND_ALPHA.find(s[i]) < 0:
+            return false
+        i += 1
+    return true
+# ============================================================
+# 0.2.0 新增：custom alphabet / nonsecure / size / parse
+# ============================================================
+
+# 自定义字母表生成 NanoID → Ok(str) | Err
+# 当 256 % len(alphabet) != 0 时使用拒绝采样消除取模偏差
+def nd_generate_custom(alphabet, n=21):
+    if n <= 0:
+        return Err("nanoid: 长度须 > 0")
+    var alen = len(alphabet)
+    if alen < 2 or alen > 255:
+        return Err("nanoid: 字母表长度须 2..255")
+    # 检查字母表无重复
+    var i = 0
+    while i < alen:
+        var j = i + 1
+        while j < alen:
+            if alphabet[i] == alphabet[j]:
+                return Err("nanoid: 字母表含重复字符")
+            j += 1
+        i += 1
+    var out = ""
+    var mask = 1
+    while mask < alen:
+        mask = (mask << 1) | 1
+    # mask 是 >= alen-1 的最小 2^k-1
+    var step = 0
+    var raw = hex_to_bytes(os_random_hex(n * 4))
+    var raw_len = bytes_len(raw)
+    while len(out) < n:
+        if step >= raw_len:
+            raw = hex_to_bytes(os_random_hex(n * 4))
+            raw_len = bytes_len(raw)
+            step = 0
+        var idx = bytes_get(raw, step) & mask
+        step += 1
+        if idx < alen:
+            out = out + alphabet[idx]
+    return Ok(out)
+
+# 非安全随机生成（使用 random()，测试/非加密场景）→ Ok(str) | Err
+def nd_generate_nonsecure(n=21):
+    if n <= 0:
+        return Err("nanoid: 长度须 > 0")
+    var out = ""
+    var i = 0
+    while i < n:
+        var idx = int(random() * 64.0)
+        if idx >= 64:
+            idx = 63
+        out = out + ND_ALPHA[idx]
+        i += 1
+    return Ok(out)
+
+# 默认长度常量
+def nd_default_size():
+    return 21
+
+# 从自定义字母表验证 → bool
+def nd_valid_custom(s, alphabet):
+    var i = 0
+    while i < len(s):
+        if alphabet.find(s[i]) < 0:
+            return false
+        i += 1
+    return true
+
+# 生成带前缀的 NanoID → Ok(str) | Err
+def nd_generate_prefix(prefix, n=21):
+    var r = nd_generate(n)
+    if r.is_err():
+        return r
+    return Ok(prefix + r.unwrap())

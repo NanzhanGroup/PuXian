@@ -1,0 +1,52 @@
+# mysql 0.2.0 测试：ping/select_db/begin/commit/rollback/escape/query
+import "../registry/mysql/0.2.0/mysql.px"
+import "../registry/mysql/0.2.0/proto.px"
+import "../registry/mysql/0.2.0/stmt.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var c = mysql_connect("127.0.0.1", 3306, "root", "pass", "testdb", {})
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    # query SELECT
+    var r1 = mysql_query(conn, "SELECT * FROM users")
+    expect(r1.is_ok(), "SELECT * FROM users: " + str(r1))
+    # query INSERT
+    var r2 = mysql_query(conn, "INSERT INTO users VALUES (4, 'dave', 28)")
+    expect(r2.is_ok(), "INSERT: " + str(r2))
+    # query UPDATE
+    var r3 = mysql_query(conn, "UPDATE users SET age = 31 WHERE name = 'alice'")
+    expect(r3.is_ok(), "UPDATE: " + str(r3))
+    # mysql_ping
+    var p = mysql_ping(conn)
+    expect(p.is_ok(), "ping: " + str(p))
+    # mysql_select_db
+    var sd = mysql_select_db(conn, "otherdb")
+    expect(sd.is_ok(), "select_db: " + str(sd))
+    # mysql_begin
+    var b = mysql_begin(conn)
+    expect(b.is_ok(), "begin: " + str(b))
+    # 在事务中修改
+    mysql_query(conn, "DELETE FROM users WHERE name = 'bob'")
+    # mysql_rollback
+    var rb = mysql_rollback(conn)
+    expect(rb.is_ok(), "rollback: " + str(rb))
+    # 验证 rollback 后数据还在
+    var r4 = mysql_query(conn, "SELECT * FROM users")
+    expect(r4.is_ok(), "SELECT after rollback: " + str(r4))
+    # mysql_begin + commit
+    mysql_begin(conn)
+    mysql_query(conn, "DELETE FROM users WHERE name = 'carol'")
+    var cm = mysql_commit(conn)
+    expect(cm.is_ok(), "commit: " + str(cm))
+    # mysql_escape
+    var esc = mysql_escape("it's a test")
+    expect(esc == "it\\'s a test", "escape: got " + esc)
+    # close
+    mysql_close(conn)
+    print("mysql: PASS")
+    return Ok(0)

@@ -1,0 +1,78 @@
+# pop3 0.2.0 测试：TOP/UIDL/DELE/RSET/NOOP/CAPA（双模式一致）
+import "../registry/pop3/0.2.0/pop3.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    return s.find(sub) >= 0
+def main():
+    var c = po_connect("127.0.0.1", 2110)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    # 登录
+    var lg = po_login(conn, "u", "ok")
+    if lg.is_err():
+        print("FAIL: login: " + str(lg))
+        exit(1)
+    # STAT
+    var st = po_stat(conn).unwrap()
+    expect(st["count"] == 2 and st["size"] == 114, "STAT 2/100, got " + str(st))
+    # LIST
+    var ls = po_list(conn).unwrap()
+    expect(len(ls) == 2 and ls[0]["num"] == 1 and ls[0]["size"] == 60, "LIST, got " + str(ls))
+    # RETR 1
+    var m1 = po_retr(conn, 1).unwrap()
+    expect(contains(m1, "message one 普贤"), "RETR 1 内容")
+    expect(contains(m1, "Subject: one"), "RETR 1 头")
+    # TOP 1 0 — 仅头部
+    var top0 = po_top(conn, 1, 0).unwrap()
+    expect(contains(top0, "Subject: one"), "TOP 1 0 含 Subject")
+    expect(not contains(top0, "message one"), "TOP 1 0 不含正文")
+    # TOP 1 10 — 头部 + 全部正文
+    var top10 = po_top(conn, 1, 10).unwrap()
+    expect(contains(top10, "Subject: one"), "TOP 1 10 含 Subject")
+    expect(contains(top10, "message one"), "TOP 1 10 含正文")
+    # UIDL（单条）
+    var uid1 = po_uidl(conn, 1).unwrap()
+    expect(uid1 == "uid-001-abc", "UIDL 1, got " + str(uid1))
+    var uid2 = po_uidl(conn, 2).unwrap()
+    expect(uid2 == "uid-002-def", "UIDL 2, got " + str(uid2))
+    # UIDL（全部）
+    var uidall = po_uidl(conn).unwrap()
+    expect(len(uidall) == 2, "UIDL all 2 条, got " + str(len(uidall)))
+    expect(uidall[0]["uidl"] == "uid-001-abc", "UIDL all[0]")
+    expect(uidall[1]["uidl"] == "uid-002-def", "UIDL all[1]")
+    # NOOP
+    expect(po_noop(conn).is_ok(), "NOOP")
+    # CAPA
+    var caps = po_capa(conn).unwrap()
+    expect(len(caps) >= 3, "CAPA 至少 3 项, got " + str(len(caps)))
+    var has_top = false
+    var has_uidl = false
+    var i = 0
+    while i < len(caps):
+        if caps[i] == "TOP":
+            has_top = true
+        if caps[i] == "UIDL":
+            has_uidl = true
+        i += 1
+    expect(has_top, "CAPA 含 TOP")
+    expect(has_uidl, "CAPA 含 UIDL")
+    # DELE + RSET
+    expect(po_dele(conn, 1).is_ok(), "DELE 1")
+    var st2 = po_stat(conn).unwrap()
+    expect(st2["count"] == 1, "DELE 后 STAT count=1, got " + str(st2))
+    expect(po_rset(conn).is_ok(), "RSET")
+    var st3 = po_stat(conn).unwrap()
+    expect(st3["count"] == 2, "RSET 后 STAT count=2, got " + str(st3))
+    # QUIT
+    expect(po_quit(conn).is_ok(), "QUIT")
+    # 错误登录
+    var c2 = po_connect("127.0.0.1", 2110).unwrap()
+    expect(po_login(c2, "u", "badpass").is_err(), "错误口令 Err")
+    po_quit(c2)
+    print("pop3: PASS")
+    return Ok(0)

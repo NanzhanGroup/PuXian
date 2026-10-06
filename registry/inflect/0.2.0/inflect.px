@@ -1,0 +1,191 @@
+# ============================================================
+# 普贤生态库：registry/inflect —— 英文词形变化（复数化）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust inflector / Python inflection 心智（0.1.0）：
+#   if_plural(s)  → Ok(str) | Err   单数 → 复数
+#   if_singular(s) → Ok(str) | Err  复数 → 单数（常用规则子集）
+#   if_count(n, s) → str            带数量："1 apple" / "3 apples"
+# 规则（0.1.0 子集）：
+#   - 不规则词表：man/men, child/children, foot/feet, tooth/teeth,
+#     goose/geese, mouse/mice, person/people, ox/oxen, sheep/sheep…
+#   - s/x/z/ch/sh 结尾 → +es（box→boxes, church→churches, bus→buses）
+#   - 辅音+y → ies（city→cities）；元音+y → +s（boy→boys）
+#   - 常见 f/fe 结尾 → ves（wolf→wolves, knife→knives）
+#   - 其余 → +s
+# ============================================================
+
+const IF_IRREG_PL = [
+    "man men", "woman women", "child children", "foot feet", "tooth teeth",
+    "goose geese", "mouse mice", "person people", "ox oxen", "sheep sheep",
+    "fish fish", "deer deer", "series series", "species species"
+]
+const IF_IRREG_SG = [
+    "men man", "women woman", "children child", "feet foot", "teeth tooth",
+    "geese goose", "mice mouse", "people person", "oxen ox", "sheep sheep",
+    "fish fish", "deer deer"
+]
+# 常见 f/fe → ves
+const IF_F_VES = [
+    "wolf wolves", "knife knives", "wife wives", "life lives", "leaf leaves",
+    "shelf shelves", "loaf loaves", "half halves", "thief thieves"
+]
+# 元音字母
+def if_is_vowel(c):
+    return c == "a" or c == "e" or c == "i" or c == "o" or c == "u" or c == "y"
+
+def if_plural(s):
+    if len(s) == 0:
+        return Ok("")
+    var i = 0
+    while i < len(IF_IRREG_PL):
+        var kv = split(IF_IRREG_PL[i], " ")
+        if s == kv[0]:
+            return Ok(kv[1])
+        i += 1
+    var last = s[len(s) - 1]
+    var last2 = ""
+    if len(s) >= 2:
+        last2 = s[len(s) - 2]
+    if last == "s" or last == "x" or last == "z" or (last == "h" and (last2 == "c" or last2 == "s")):
+        return Ok(s + "es")
+    if last == "y" and not if_is_vowel(last2):
+        return Ok(s[0:len(s) - 1] + "ies")
+    var j = 0
+    while j < len(IF_F_VES):
+        var kv2 = split(IF_F_VES[j], " ")
+        if s == kv2[0]:
+            return Ok(kv2[1])
+        j += 1
+    if s.has_suffix("fe"):
+        return Ok(s[0:len(s) - 2] + "ves")
+    if last == "f" and len(s) > 1:
+        return Ok(s[0:len(s) - 1] + "ves")
+    return Ok(s + "s")
+
+def if_singular(s):
+    if len(s) == 0:
+        return Ok("")
+    var i = 0
+    while i < len(IF_IRREG_SG):
+        var kv = split(IF_IRREG_SG[i], " ")
+        if s == kv[0]:
+            return Ok(kv[1])
+        i += 1
+    if s.has_suffix("ies") and len(s) > 3:
+        return Ok(s[0:len(s) - 3] + "y")
+    if s.has_suffix("ves") and len(s) > 3:
+        return Ok(s[0:len(s) - 3] + "f")
+    if s.has_suffix("es") and len(s) > 2:
+        return Ok(s[0:len(s) - 2])
+    if s.has_suffix("s") and len(s) > 1:
+        return Ok(s[0:len(s) - 1])
+    return Ok(s)
+
+def if_count(n, s):
+    if n == 1:
+        return "1 " + s
+    return str(n) + " " + if_plural(s).unwrap()
+# ============================================================
+# 0.2.0 新增：ordinal / article / pluralize / singularize / table
+# ============================================================
+
+# 不规则复数表
+def if_irregular_table():
+    return {
+        "child": "children", "person": "people", "man": "men",
+        "woman": "women", "mouse": "mice", "goose": "geese",
+        "tooth": "teeth", "foot": "feet", "ox": "oxen",
+        "leaf": "leaves", "life": "lives", "knife": "knives",
+        "wife": "wives", "half": "halves", "self": "selves",
+        "calf": "calves", "loaf": "loaves", "sheaf": "sheaves",
+        "wolf": "wolves", "shelf": "shelves"
+    }
+
+# 序数词 → str（1st 2nd 3rd 4th...）
+def if_ordinal(n):
+    var v = abs(n)
+    var s = str(n)
+    var last2 = v % 100
+    var last1 = v % 10
+    var suffix = "th"
+    if last2 >= 11 and last2 <= 13:
+        suffix = "th"
+    elif last1 == 1:
+        suffix = "st"
+    elif last1 == 2:
+        suffix = "nd"
+    elif last1 == 3:
+        suffix = "rd"
+    return s + suffix
+
+# 冠词 a/an → str
+def if_article(s):
+    if len(s) == 0:
+        return "a"
+    var lower = to_lower(s)
+    var c = lower[0]
+    # 特殊：hour, honest, honor 等 h 不发音
+    if starts_with(lower, "hour") or starts_with(lower, "honest") or starts_with(lower, "honor"):
+        return "an"
+    # 特殊：one, eight 等元音开头
+    if starts_with(lower, "one") or starts_with(lower, "eight"):
+        return "an"
+    # u 发音为 /juː/ 时用 a
+    if c == "u":
+        if starts_with(lower, "uni") or starts_with(lower, "use") or starts_with(lower, "usu") or starts_with(lower, "ube") or starts_with(lower, "uke") or starts_with(lower, "uro"):
+            return "a"
+        return "an"
+    if c == "a" or c == "e" or c == "i" or c == "o":
+        return "an"
+    return "a"
+
+# 智能复数化 → str
+def if_pluralize(s):
+    var tbl = if_irregular_table()
+    if tbl.has(s):
+        return tbl[s]
+    # 不可数名词
+    var uncountable = ["sheep", "deer", "fish", "species", "series", "moose", "swine", "buffalo", "shrimp", "salmon", "trout", "aircraft", "spacecraft", "watercraft", "information", "equipment", "rice", "money", "news", "luggage", "baggage", "furniture"]
+    var i = 0
+    while i < len(uncountable):
+        if s == uncountable[i]:
+            return s
+        i += 1
+    # 以 s/x/z/ch/sh 结尾 → +es
+    if ends_with(s, "s") or ends_with(s, "x") or ends_with(s, "z"):
+        return s + "es"
+    if ends_with(s, "ch") or ends_with(s, "sh"):
+        return s + "es"
+    # 辅音+y → ies
+    if ends_with(s, "y") and len(s) >= 2:
+        var before_y = s[len(s) - 2]
+        if before_y != "a" and before_y != "e" and before_y != "i" and before_y != "o" and before_y != "u":
+            return s[0:len(s) - 1] + "ies"
+    # f/fe → ves
+    if ends_with(s, "fe"):
+        return s[0:len(s) - 2] + "ves"
+    return s + "s"
+
+# 智能单数化 → str
+def if_singularize(s):
+    var tbl = if_irregular_table()
+    var keys = tbl.keys()
+    var i = 0
+    while i < len(keys):
+        if tbl[keys[i]] == s:
+            return keys[i]
+        i += 1
+    # ies → y
+    if ends_with(s, "ies") and len(s) > 3:
+        return s[0:len(s) - 3] + "y"
+    # es → e (以 s/x/z/ch/sh 结尾的)
+    if ends_with(s, "es"):
+        var stem = s[0:len(s) - 2]
+        if ends_with(stem, "s") or ends_with(stem, "x") or ends_with(stem, "z") or ends_with(stem, "ch") or ends_with(stem, "sh"):
+            return stem
+        return s[0:len(s) - 1]
+    # s → ""
+    if ends_with(s, "s") and len(s) > 1:
+        return s[0:len(s) - 1]
+    return s

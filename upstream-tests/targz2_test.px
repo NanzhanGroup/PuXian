@@ -1,0 +1,23 @@
+# targz 0.2.0 测试
+import "../registry/targz/0.2.0/targz.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var files = [{"name": "a.txt", "data": [65, 66, 67]}]
+    var packed = tz_pack(files)
+    expect(len(packed) > 0, "pack non-empty")
+    var unpacked = tz_unpack_tar(packed)
+    expect(len(unpacked) == 1, "unpack 1 file: " + str(len(unpacked)))
+    # ---- 0.2.0 list_files ----
+    var names = tz_list_files(packed)
+    expect(len(names) == 1 and names[0] == "a.txt", "list_files: " + str(names))
+    # ---- 0.2.0 has_file ----
+    expect(tz_has_file(packed, "a.txt") == true, "has_file a.txt")
+    expect(tz_has_file(packed, "b.txt") == false, "has_file b.txt false")
+    # ---- 0.2.0 get_file ----
+    var data = tz_get_file(packed, "a.txt")
+    expect(data != null, "get_file non-null")
+    print("PASS: targz 0.2.0")

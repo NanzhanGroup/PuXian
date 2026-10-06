@@ -1,0 +1,21 @@
+# statx 0.2.0 测试
+import "../registry/statx/0.2.0/statx.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+    # ---- 0.1.0 回归 ----
+    expect(st_mean(xs).unwrap() == 3.0, "mean 3.0: " + str(st_mean(xs)))
+    expect(st_median(xs).unwrap() == 3.0, "median 3.0: " + str(st_median(xs)))
+    # ---- 0.2.0 sum ----
+    expect(st_sum(xs) == 15.0, "sum 15: " + str(st_sum(xs)))
+    # ---- 0.2.0 min ----
+    expect(st_min(xs) == 1.0, "min 1: " + str(st_min(xs)))
+    # ---- 0.2.0 max ----
+    expect(st_max(xs) == 5.0, "max 5: " + str(st_max(xs)))
+    # ---- 0.2.0 mode ----
+    var m = st_mode([1.0, 2.0, 2.0, 3.0])
+    expect(m == 2.0, "mode 2: " + str(m))
+    print("PASS: statx 0.2.0")

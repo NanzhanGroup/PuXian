@@ -1,0 +1,59 @@
+# mqtt 0.2.0 测试：QoS1 发布/mqtt_unsubscribe/username_password/retain/will（双模式一致）
+import "../registry/mqtt/0.2.0/mqtt.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 1. 基本连接 + QoS 0 发布/订阅
+    var c1 = mqtt_connect("127.0.0.1", 1883, "client_sub", {"keepalive": 60})
+    if c1.is_err():
+        print("FAIL: connect sub: " + str(c1))
+        exit(1)
+    var sub = c1.unwrap()
+    expect(mqtt_subscribe(sub, "test/topic", 0).is_ok(), "subscribe")
+    # 发布 QoS 0
+    var c2 = mqtt_connect("127.0.0.1", 1883, "client_pub", {})
+    if c2.is_err():
+        print("FAIL: connect publisher: " + str(c2))
+        exit(1)
+    var publisher = c2.unwrap()
+    expect(mqtt_publish(publisher, "test/topic", "hello mqtt 普贤", 0).is_ok(), "publish QoS0")
+    # 读订阅消息
+    var msg = mqtt_read(sub).unwrap()
+    expect(msg["topic"] == "test/topic", "recv topic, got " + str(msg["topic"]))
+    expect(msg["payload"] == "hello mqtt 普贤", "recv payload, got " + str(msg["payload"]))
+    # 2. QoS 1 发布（等 PUBACK）
+    expect(mqtt_publish(publisher, "test/topic", "qos1 message", 1).is_ok(), "publish QoS1")
+    var msg2 = mqtt_read(sub).unwrap()
+    expect(msg2["payload"] == "qos1 message", "recv QoS1 payload")
+    # 3. retain 标志
+    expect(mqtt_publish(publisher, "test/retain", "retained data", 0, true).is_ok(), "publish retain")
+    # 新订阅者应收到 retained 消息
+    var c3 = mqtt_connect("127.0.0.1", 1883, "client_retain", {})
+    if c3.is_err():
+        print("FAIL: connect retain: " + str(c3))
+        exit(1)
+    var rcv = c3.unwrap()
+    expect(mqtt_subscribe(rcv, "test/retain", 0).is_ok(), "subscribe retain")
+    var rmsg = mqtt_read(rcv).unwrap()
+    expect(rmsg["payload"] == "retained data", "retain 消息, got " + str(rmsg["payload"]))
+    # 4. 退订
+    expect(mqtt_unsubscribe(sub, "test/topic").is_ok(), "unsubscribe")
+    expect(mqtt_publish(publisher, "test/topic", "after unsub", 0).is_ok(), "publish after unsub")
+    # 退订后不应收到（用 ping 验证连接仍活）
+    expect(mqtt_ping(sub).is_ok(), "ping after unsub")
+    # 5. username/password 认证
+    var c4 = mqtt_connect("127.0.0.1", 1883, "client_auth", {"username": "user1", "password": "pass1"})
+    expect(c4.is_ok(), "connect with auth")
+    if c4.is_ok():
+        mqtt_close(c4.unwrap())
+    # 6. PING
+    expect(mqtt_ping(publisher).is_ok(), "ping publisher")
+    expect(mqtt_ping(sub).is_ok(), "ping sub")
+    # 7. 关闭
+    expect(mqtt_close(publisher).is_ok(), "close publisher")
+    expect(mqtt_close(sub).is_ok(), "close sub")
+    expect(mqtt_close(rcv).is_ok(), "close rcv")
+    print("mqtt: PASS")
+    return Ok(0)

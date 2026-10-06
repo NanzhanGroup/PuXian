@@ -1,0 +1,27 @@
+# pwgen 0.2.0 测试
+import "../registry/pwgen/0.2.0/pwgen.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var pw = pw_generate().unwrap()
+    expect(len(pw) > 0, "generate non-empty")
+    # ---- 0.2.0 generate_pin ----
+    var pin = pw_generate_pin(6)
+    expect(len(pin) == 6, "pin len 6: " + pin)
+    # ---- 0.2.0 generate_passphrase ----
+    var pp = pw_generate_passphrase(4, "-")
+    var parts = split(pp, "-")
+    expect(len(parts) == 4, "passphrase 4 words: " + pp)
+    # ---- 0.2.0 check_rules ----
+    var r = pw_check_rules("Abc123!@")
+    expect(r["ok"] == true, "check_rules strong: " + str(r["issues"]))
+    var r2 = pw_check_rules("abc")
+    expect(r2["ok"] == false, "check_rules weak")
+    expect(len(r2["issues"]) > 0, "weak has issues")
+    # ---- 0.2.0 generate_strong ----
+    var strong = pw_generate_strong(16)
+    expect(len(strong) >= 16, "strong len >= 16: " + str(len(strong)))
+    print("PASS: pwgen 0.2.0")

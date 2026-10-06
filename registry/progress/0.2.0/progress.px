@@ -1,0 +1,112 @@
+# ============================================================
+# 普贤生态库：registry/progress —— 进度条渲染
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；不直接改终端，返回可打印字符串），双模式一致。
+# 对齐 Python tqdm / Rust indicatif 心智（0.1.0）：
+#   pg_bar(done, total, width=40, opts={}) → Ok(str) | Err
+# opts: {fill(默认"#"), empty(默认"-"), show_pct(默认 true), show_count(默认 false)}
+# 输出形如 "[#####-----] 50%"；done 夹取 0..total；total<=0 Err。
+# ============================================================
+
+def pg_bar(done, total, width=40, opts={}):
+    if total <= 0:
+        return Err("progress: total 须 > 0")
+    if width <= 0:
+        return Err("progress: width 须 > 0")
+    var d = done
+    if d < 0:
+        d = 0
+    if d > total:
+        d = total
+    var fill = "#"
+    var empty = "-"
+    var show_pct = true
+    var show_count = false
+    if opts.has("fill"):
+        fill = opts["fill"]
+    if opts.has("empty"):
+        empty = opts["empty"]
+    if opts.has("show_pct"):
+        show_pct = opts["show_pct"]
+    if opts.has("show_count"):
+        show_count = opts["show_count"]
+    var n = int(float(d) / float(total) * float(width) + 0.5)
+    var inner = ""
+    var i = 0
+    while i < width:
+        if i < n:
+            inner = inner + fill
+        else:
+            inner = inner + empty
+        i += 1
+    var out = "[" + inner + "]"
+    if show_count:
+        out = out + " " + str(d) + "/" + str(total)
+    elif show_pct:
+        var pct = int(float(d) / float(total) * 100.0)
+        out = out + " " + str(pct) + "%"
+    return Ok(out)
+# ============================================================
+# 0.2.0 新增：spinner / percent / eta / bar_custom / format_time
+# ============================================================
+
+# 旋转字符 → str
+def pg_spinner(frame):
+    var chars = "|/-\\"
+    return chars[frame % 4]
+
+# 百分比 → str
+def pg_percent(done, total):
+    if total == 0:
+        return "100%"
+    var p = int(float(done) * 100.0 / float(total))
+    return str(p) + "%"
+
+# 预估剩余时间 → str
+def pg_eta(done, total, elapsed_sec):
+    if done == 0 or done >= total:
+        return "--"
+    var rate = float(done) / elapsed_sec
+    var remaining = float(total - done) / rate
+    return pg_format_time(int(remaining))
+
+# 格式化时间 → str
+def pg_format_time(sec):
+    if sec < 60:
+        return str(sec) + "s"
+    if sec < 3600:
+        return str(sec // 60) + "m" + str(sec % 60) + "s"
+    return str(sec // 3600) + "h" + str((sec % 3600) // 60) + "m"
+
+# 自定义样式进度条 → str
+def pg_bar_custom(done, total, width, fill_char, empty_char):
+    if total == 0:
+        return fill_char * width
+    var filled = int(float(done) * float(width) / float(total))
+    if filled > width:
+        filled = width
+    var bar = ""
+    var i = 0
+    while i < filled:
+        bar = bar + fill_char
+        i += 1
+    while i < width:
+        bar = bar + empty_char
+        i += 1
+    return bar
+
+# 带数字的进度条 → str
+def pg_bar_num(done, total, width=30):
+    var bar = pg_bar(done, total, width).unwrap()
+    return bar + " " + str(done) + "/" + str(total)
+
+# 下载速度格式 → str
+def pg_speed(bytes_done, elapsed_sec):
+    if elapsed_sec == 0:
+        return "--"
+    var bps = float(bytes_done) / float(elapsed_sec)
+    if bps < 1024.0:
+        return str(int(bps)) + " B/s"
+    if bps < 1048576.0:
+        return str(int(bps / 1024.0)) + " KB/s"
+    return str(int(bps / 1048576.0)) + " MB/s"

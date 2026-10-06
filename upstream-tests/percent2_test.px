@@ -1,0 +1,31 @@
+# percent 0.2.0 测试
+import "../registry/percent/0.2.0/percent.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(percent_encode("hello world").unwrap() == "hello%20world", "encode space")
+    expect(percent_decode("hello%20world").unwrap() == "hello world", "decode space")
+    expect(percent_encode("a/b", "").unwrap() == "a%2Fb", "encode slash")
+    # ---- 0.2.0 encode_path ----
+    expect(percent_encode_path("a/b c").unwrap() == "a/b%20c", "path keeps slash")
+    # ---- 0.2.0 encode_query ----
+    expect(percent_encode_query("a=b&c").unwrap() == "a=b&c", "query keeps &=&")
+    # ---- 0.2.0 encode_kv ----
+    expect(percent_encode_kv("name", "a b").unwrap() == "name=a%20b", "kv encode")
+    # ---- 0.2.0 encode_params ----
+    var ps = percent_encode_params([["a", "1"], ["b", "2"]]).unwrap()
+    expect(ps == "a=1&b=2", "params: " + ps)
+    var ps2 = percent_encode_params([["q", "hello world"], ["page", "1"]]).unwrap()
+    expect(ps2 == "q=hello%20world&page=1", "params with space: " + ps2)
+    # ---- 0.2.0 is_encoded ----
+    expect(percent_is_encoded("hello%20world") == true, "is encoded")
+    expect(percent_is_encoded("hello world") == true, "plain is encoded (no %)")
+    expect(percent_is_encoded("hello%2") == false, "incomplete escape")
+    expect(percent_is_encoded("hello%GGworld") == false, "bad hex")
+    # ---- 0.2.0 decode_form ----
+    expect(percent_decode_form("a+b").unwrap() == "a b", "form decode plus")
+    expect(percent_decode_form("a%20b").unwrap() == "a b", "form decode percent")
+    print("PASS: percent 0.2.0")

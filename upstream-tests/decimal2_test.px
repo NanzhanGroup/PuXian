@@ -1,0 +1,53 @@
+# decimal 0.2.0 测试：pow/sqrt/mod/min/max/format + 0.1.0 回归
+import "../registry/decimal/0.2.0/decimal.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(dec_add("1.5", "2.3").unwrap() == "3.8", "add")
+    expect(dec_sub("5.0", "1.2").unwrap() == "3.8", "sub")
+    expect(dec_mul("1.5", "2.0").unwrap() == "3", "mul")
+    expect(dec_div("10", "3", 4).unwrap() == "3.3333", "div")
+    expect(dec_cmp("1.5", "1.5") == 0, "cmp eq")
+    expect(dec_cmp("1.5", "1.6") == -1, "cmp lt")
+    expect(dec_cmp("1.6", "1.5") == 1, "cmp gt")
+    expect(dec_round("1.555", 2).unwrap() == "1.56", "round half_up")
+    expect(dec_round("1.555", 2, "half_even").unwrap() == "1.56", "round half_even")
+    expect(dec_abs("-3.14").unwrap() == "3.14", "abs")
+    expect(dec_neg("3.14").unwrap() == "-3.14", "neg")
+    expect(dec_is_zero("0.00") == true, "is_zero")
+    expect(dec_is_zero("0.01") == false, "not zero")
+    # ---- 0.2.0 pow ----
+    expect(dec_pow("2", 3).unwrap() == "8", "pow 2^3: " + dec_pow("2", 3).unwrap())
+    expect(dec_pow("10", 2).unwrap() == "100", "pow 10^2")
+    expect(dec_pow("1.5", 2).unwrap() == "2.25", "pow 1.5^2: " + dec_pow("1.5", 2).unwrap())
+    expect(dec_pow("5", 0).unwrap() == "1", "pow 5^0")
+    expect(dec_pow("3", 4).unwrap() == "81", "pow 3^4")
+    # ---- 0.2.0 sqrt ----
+    var sq2 = dec_sqrt("2", 6).unwrap()
+    expect(dec_cmp(sq2, "1.414214") == 0, "sqrt(2): " + sq2)
+    var sq9 = dec_sqrt("9", 4).unwrap()
+    expect(sq9 == "3", "sqrt(9): " + sq9)
+    var sq0 = dec_sqrt("0", 4).unwrap()
+    expect(sq0 == "0", "sqrt(0)")
+    var sq100 = dec_sqrt("100", 4).unwrap()
+    expect(sq100 == "10", "sqrt(100): " + sq100)
+    # ---- 0.2.0 mod ----
+    expect(dec_mod("10", "3").unwrap() == "1", "mod 10%3: " + dec_mod("10", "3").unwrap())
+    expect(dec_mod("7.5", "2").unwrap() == "1.5", "mod 7.5%2: " + dec_mod("7.5", "2").unwrap())
+    expect(dec_mod("10", "5").unwrap() == "0", "mod 10%5")
+    expect(dec_mod("-7", "3").unwrap() == "-1", "mod -7%3: " + dec_mod("-7", "3").unwrap())
+    # ---- 0.2.0 min/max ----
+    expect(dec_min("3", "5").unwrap() == "3", "min")
+    expect(dec_min("5", "3").unwrap() == "3", "min rev")
+    expect(dec_max("3", "5").unwrap() == "5", "max")
+    expect(dec_max("5", "3").unwrap() == "5", "max rev")
+    expect(dec_min("-1", "1").unwrap() == "-1", "min neg")
+    # ---- 0.2.0 千分位格式化 ----
+    expect(dec_format_thousands("1234567.89", 2).unwrap() == "1,234,567.89", "fmt thousands: " + dec_format_thousands("1234567.89", 2).unwrap())
+    expect(dec_format_thousands("1000", 0).unwrap() == "1,000", "fmt 1000: " + dec_format_thousands("1000", 0).unwrap())
+    expect(dec_format_thousands("-1234567.89", 2).unwrap() == "-1,234,567.89", "fmt neg: " + dec_format_thousands("-1234567.89", 2).unwrap())
+    expect(dec_format_thousands("999", 2).unwrap() == "999", "fmt 999: " + dec_format_thousands("999", 2).unwrap())
+    print("decimal 0.2.0: PASS")

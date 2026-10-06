@@ -1,0 +1,99 @@
+# ============================================================
+# examples/m282_registry_020/ftp020_probe.px —— **本仓自写**探针（不是上游用例）
+# ------------------------------------------------------------
+# 为什么需要它：上游 `tests/ftp_2_test.px` 在**第一条 RETR 断言**就卡住 ——
+#   它要求 `hello.txt` 的内容含子串 "hello ftp"（:39），而同一夹具被
+#   `tests/ftp_test.px`（0.1.0）要求**精确等于** "hello from ftp 普贤\n"（:46）
+#   ⇒ 两条上游用例对**同一夹具**互斥（见 docs/UPSTREAM_020_DEFECTS.md §T9），
+#   任何单一服务端都无法同时满足。因此 **0.2.0 新增的那批 FTP API 在上游用例里
+#   从来没被跑到过**：`ft_syst` / `ft_size` / `ft_mdtm` / `ft_mkdir` / `ft_rmdir` /
+#   `ft_delete` / `ft_rename` / `ft_append` / `ft_rest`。
+#
+# 本探针补这一段覆盖：**只断言 RFC 959 的语义**（由 `registry/ftp/0.2.0/ftp.px`
+# 的函数契约决定），**不依赖**任何上游夹具的字节内容 ⇒ 与 T9 无关，也不会被它带偏。
+#
+# 跑法（由 examples/m282_registry_020/verify.sh 自动做）：
+#   ① 拷到 <工作区>/tests/  ② <工作区>/registry → 本仓 registry（软链）
+#   ③ tools/px build ftp020_probe.px  ④ cwd=<工作区> 跑产物
+#   （import 路径按「用例目录的上一级是 registry」写，与 upstream-tests/ 同约定）
+#
+# 成功标记：`M282-FTP020-PROBE-OK`
+# ============================================================
+import "../registry/ftp/0.2.0/ftp.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    var c = ft_connect("127.0.0.1", 2121)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    var lg = ft_login(conn, "px", "secret")
+    if lg.is_err():
+        print("FAIL: login: " + str(lg))
+        exit(1)
+    expect(ft_pwd(conn).unwrap().find("/") >= 0, "PWD 含 /")
+    expect(ft_type(conn, "I").is_ok(), "TYPE I")
+
+    # ---- SYST（ft_syst：要 215，取第 2 段文本）----
+    var syst = ft_syst(conn).unwrap()
+    expect(len(syst) > 0, "SYST 非空, got " + str(syst))
+
+    # ---- SIZE / MDTM（都要 213）----
+    expect(ft_size(conn, "hello.txt").unwrap() > 0, "SIZE hello.txt > 0")
+    expect(len(ft_mdtm(conn, "hello.txt").unwrap()) >= 14, "MDTM 长度 >= 14")
+
+    # ---- STOR + SIZE 一致性（10 字节 ASCII）----
+    expect(ft_stor(conn, "m282_probe.txt", "0123456789").is_ok(), "STOR")
+    expect(ft_size(conn, "m282_probe.txt").unwrap() == 10, "SIZE == 10")
+
+    # ---- APPE（追加）----
+    expect(ft_append(conn, "m282_probe.txt", "abc").is_ok(), "APPE")
+    expect(ft_retr(conn, "m282_probe.txt").unwrap() == "0123456789abc", "APPE 后内容")
+
+    # ---- MKD / CWD / CWD .. / RMD ----
+    expect(ft_mkdir(conn, "m282dir").is_ok(), "MKD")
+    expect(ft_cwd(conn, "m282dir").is_ok(), "CWD 进新目录")
+    expect(ft_cwd(conn, "..").is_ok(), "CWD ..")
+    expect(ft_rmdir(conn, "m282dir").is_ok(), "RMD")
+
+    # ---- RNFR + RNTO ----
+    expect(ft_rename(conn, "m282_probe.txt", "m282_probe2.txt").is_ok(), "RENAME")
+    expect(ft_retr(conn, "m282_probe2.txt").unwrap() == "0123456789abc", "RENAME 后内容")
+
+    # ---- DELE ⇒ 之后 RETR 必须失败 ----
+    expect(ft_delete(conn, "m282_probe2.txt").is_ok(), "DELE")
+    expect(ft_retr(conn, "m282_probe2.txt").is_err(), "DELE 后 RETR 应 Err")
+
+    # ---- REST（断点续传）：设偏移 → PASV → 裸 RETR → 从偏移读 ----
+    expect(ft_stor(conn, "m282_rest.txt", "0123456789").is_ok(), "STOR rest")
+    expect(ft_rest(conn, 5).is_ok(), "REST 5")
+    var pd = ft_pasv_open(conn)
+    expect(pd[1] == "", "PASV: " + str(pd[1]))
+    var dfd = pd[0]
+    var r150 = ft_expect(conn["fd"], "RETR m282_rest.txt", [125, 150])
+    if r150.is_err():
+        tcp_close(dfd)
+        print("FAIL: RETR after REST: " + str(r150))
+        exit(1)
+    var rdata = bytes("")
+    while true:
+        var rr = tcp_recv_ex(dfd, 65536)
+        if rr["eof"] or not rr["ok"]:
+            break
+        var d = rr["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        rdata = bytes_concat(rdata, d)
+    tcp_close(dfd)
+    ft_read_reply(conn["fd"])
+    expect(bytes_to_str(rdata) == "56789", "REST 5 后 RETR, got " + str(bytes_to_str(rdata)))
+    ft_delete(conn, "m282_rest.txt")
+
+    expect(ft_quit(conn).is_ok(), "QUIT")
+    print("M282-FTP020-PROBE-OK")
+    return Ok(0)

@@ -1,0 +1,111 @@
+# barcode 0.2.0 测试
+import "../registry/barcode/0.2.0/barcode.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+
+def expect_err(r, msg):
+    if not r.is_err():
+        print("FAIL (expected err): " + msg)
+
+# ---- EAN-13（0.1.0 兼容）----
+var r1 = bc_ean13_check("400638133393")
+expect(r1.is_ok() and r1.unwrap() == 1, "ean13 check 400638133393 → 1")
+
+var r2 = bc_ean13("400638133393")
+expect(r2.is_ok(), "ean13 encode ok")
+if r2.is_ok():
+    var v2 = r2.unwrap()
+    expect(v2["code"] == "4006381333931", "ean13 code = 4006381333931")
+    expect(len(v2["pattern"]) == 95, "ean13 pattern len = 95")
+    expect(len(v2["ascii"]) == 95, "ean13 ascii len = 95")
+
+# ---- EAN-8 ----
+var r3 = bc_ean8_check("4017072")
+expect(r3.is_ok(), "ean8 check ok")
+if r3.is_ok():
+    expect(r3.unwrap() == 5, "ean8 check 4017072 → 5")
+
+var r4 = bc_ean8("4017072")
+expect(r4.is_ok(), "ean8 encode ok")
+if r4.is_ok():
+    expect(r4.unwrap()["code"] == "40170725", "ean8 code = 40170725")
+
+# ---- UPC-A ----
+var r5 = bc_upc_a_check("03600029145")
+expect(r5.is_ok(), "upc_a check ok")
+if r5.is_ok():
+    expect(r5.unwrap() == 2, "upc_a check 03600029145 → 2")
+
+var r6 = bc_upc_a("03600029145")
+expect(r6.is_ok(), "upc_a encode ok")
+if r6.is_ok():
+    expect(r6.unwrap()["code"] == "036000291452", "upc_a code = 036000291452")
+
+# ---- ISBN-13 ----
+var r7 = bc_isbn13_check("978-0-306-40615")
+expect(r7.is_ok(), "isbn13 check ok")
+if r7.is_ok():
+    expect(r7.unwrap() == 7, "isbn13 check 978-0-306-40615 → 7")
+
+var r8 = bc_isbn13("978-0-306-40615")
+expect(r8.is_ok(), "isbn13 encode ok")
+if r8.is_ok():
+    expect(r8.unwrap()["code"] == "9780306406157", "isbn13 code = 9780306406157")
+
+# ISBN-13 with 979 prefix
+var r9 = bc_isbn13_check("979-1-234-56789")
+expect(r9.is_ok(), "isbn13 979 prefix ok")
+
+# ISBN-13 invalid prefix
+var r10 = bc_isbn13_check("977-1-234-56789")
+expect_err(r10, "isbn13 977 prefix should fail")
+
+# ---- Code128-B ----
+var r11 = bc_code128("Hello")
+expect(r11.is_ok(), "code128 'Hello' ok")
+if r11.is_ok():
+    var v11 = r11.unwrap()
+    expect(len(v11["pattern"]) > 0, "code128 pattern non-empty")
+    expect(len(v11["ascii"]) > 0, "code128 ascii non-empty")
+
+var r12 = bc_code128("ABC123")
+expect(r12.is_ok(), "code128 'ABC123' ok")
+
+var r13 = bc_code128("")
+expect_err(r13, "code128 empty should fail")
+
+# Code128 checksum verification: "Hello" = H(40), e(69), l(76), l(76), o(79)
+# StartB=104, checksum = (104 + 1*40 + 2*69 + 3*76 + 4*76 + 5*79) mod 103
+# = (104 + 40 + 138 + 228 + 304 + 395) mod 103 = 1209 mod 103 = 86
+# Value 86 = pattern "411212"
+var r14 = bc_code128("Hello")
+if r14.is_ok():
+    # pattern should start with StartB (211214) + value for 'H'
+    var pat = r14.unwrap()["pattern"]
+    expect(pat.starts_with("211214"), "code128 starts with StartB pattern")
+
+# ---- bc_verify ----
+var v1 = bc_verify("ean13", "4006381333931")
+expect(v1.is_ok() and v1.unwrap() == true, "verify ean13 valid")
+
+var v2 = bc_verify("ean13", "4006381333930")
+expect(v2.is_ok() and v2.unwrap() == false, "verify ean13 invalid")
+
+var v3 = bc_verify("ean8", "40170725")
+expect(v3.is_ok() and v3.unwrap() == true, "verify ean8 valid")
+
+var v4 = bc_verify("upc_a", "036000291452")
+expect(v4.is_ok() and v4.unwrap() == true, "verify upc_a valid")
+
+var v5 = bc_verify("isbn13", "9780306406157")
+expect(v5.is_ok() and v5.unwrap() == true, "verify isbn13 valid")
+
+var v6 = bc_verify("isbn13", "978-0-306-40615-7")
+expect(v6.is_ok() and v6.unwrap() == true, "verify isbn13 with dashes")
+
+var v7 = bc_verify("code128", "Hello")
+expect(v7.is_ok() and v7.unwrap() == true, "verify code128 valid")
+
+print("barcode 0.2.0 tests done")

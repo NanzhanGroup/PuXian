@@ -1,0 +1,65 @@
+# human 0.2.0 测试：ordinal/comma/percentage/duration/truncate/SI/relative_time + 0.1.0 回归
+import "../registry/human/0.2.0/human.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(hm_filesize(0) == "0B", "fs 0: " + hm_filesize(0))
+    expect(hm_filesize(1024) == "1KB", "fs 1024: " + hm_filesize(1024))
+    expect(hm_filesize(1536) == "1.5KB", "fs 1536: " + hm_filesize(1536))
+    expect(hm_filesize(1048576) == "1MB", "fs 1MB: " + hm_filesize(1048576))
+    expect(hm_number(1000) == "1k", "num 1k: " + hm_number(1000))
+    expect(hm_number(1500) == "1.5k", "num 1.5k: " + hm_number(1500))
+    expect(hm_number(1000000) == "1M", "num 1M: " + hm_number(1000000))
+    # ---- 0.2.0 ordinal ----
+    expect(hm_ordinal(1) == "1st", "ord 1: " + hm_ordinal(1))
+    expect(hm_ordinal(2) == "2nd", "ord 2: " + hm_ordinal(2))
+    expect(hm_ordinal(3) == "3rd", "ord 3: " + hm_ordinal(3))
+    expect(hm_ordinal(4) == "4th", "ord 4: " + hm_ordinal(4))
+    expect(hm_ordinal(11) == "11th", "ord 11: " + hm_ordinal(11))
+    expect(hm_ordinal(12) == "12th", "ord 12: " + hm_ordinal(12))
+    expect(hm_ordinal(21) == "21st", "ord 21: " + hm_ordinal(21))
+    expect(hm_ordinal(22) == "22nd", "ord 22: " + hm_ordinal(22))
+    expect(hm_ordinal(100) == "100th", "ord 100: " + hm_ordinal(100))
+    expect(hm_ordinal(103) == "103rd", "ord 103: " + hm_ordinal(103))
+    # ---- 0.2.0 comma ----
+    expect(hm_comma(1000) == "1,000", "comma 1000: " + hm_comma(1000))
+    expect(hm_comma(1000000) == "1,000,000", "comma 1M: " + hm_comma(1000000))
+    expect(hm_comma(123456789) == "123,456,789", "comma big: " + hm_comma(123456789))
+    expect(hm_comma(999) == "999", "comma 999: " + hm_comma(999))
+    expect(hm_comma(0) == "0", "comma 0: " + hm_comma(0))
+    # ---- 0.2.0 percentage ----
+    expect(hm_percentage(0.15) == "15%", "pct 15%: " + hm_percentage(0.15))
+    expect(hm_percentage(0.1234) == "12.34%", "pct 12.34%: " + hm_percentage(0.1234))
+    expect(hm_percentage(1.0) == "100%", "pct 100%: " + hm_percentage(1.0))
+    expect(hm_percentage(0.5, 0) == "50%", "pct 50%: " + hm_percentage(0.5, 0))
+    # ---- 0.2.0 duration ----
+    expect(hm_duration(0) == "0s", "dur 0: " + hm_duration(0))
+    expect(hm_duration(45) == "45s", "dur 45: " + hm_duration(45))
+    expect(hm_duration(60) == "1m 0s", "dur 60: " + hm_duration(60))
+    expect(hm_duration(125) == "2m 5s", "dur 125: " + hm_duration(125))
+    expect(hm_duration(3600) == "1h 0m 0s", "dur 3600: " + hm_duration(3600))
+    expect(hm_duration(3725) == "1h 2m 5s", "dur 3725: " + hm_duration(3725))
+    expect(hm_duration(90000) == "25h 0m 0s", "dur 90000: " + hm_duration(90000))
+    # ---- 0.2.0 truncate ----
+    expect(hm_truncate("hello", 10) == "hello", "trunc no-op")
+    expect(hm_truncate("hello world", 8) == "hello...", "trunc 8: " + hm_truncate("hello world", 8))
+    expect(hm_truncate("abcdef", 6) == "abcdef", "trunc exact")
+    expect(hm_truncate("abcdefgh", 5) == "ab...", "trunc 5: " + hm_truncate("abcdefgh", 5))
+    # ---- 0.2.0 SI filesize ----
+    expect(hm_filesize_si(0) == "0B", "si 0: " + hm_filesize_si(0))
+    expect(hm_filesize_si(1000) == "1KB", "si 1000: " + hm_filesize_si(1000))
+    expect(hm_filesize_si(1500) == "1.5KB", "si 1500: " + hm_filesize_si(1500))
+    expect(hm_filesize_si(1000000) == "1MB", "si 1MB: " + hm_filesize_si(1000000))
+    # ---- 0.2.0 relative time ----
+    expect(hm_relative_time(30) == "in 30 seconds", "rt 30: " + hm_relative_time(30))
+    expect(hm_relative_time(60) == "in 1 minute", "rt 60: " + hm_relative_time(60))
+    expect(hm_relative_time(120) == "in 2 minutes", "rt 120: " + hm_relative_time(120))
+    expect(hm_relative_time(3600) == "in 1 hour", "rt 3600: " + hm_relative_time(3600))
+    expect(hm_relative_time(7200) == "in 2 hours", "rt 7200: " + hm_relative_time(7200))
+    expect(hm_relative_time(86400) == "in 1 day", "rt 86400: " + hm_relative_time(86400))
+    expect(hm_relative_time(0 - 60) == "1 minute ago", "rt -60: " + hm_relative_time(0 - 60))
+    expect(hm_relative_time(0 - 3600) == "1 hour ago", "rt -3600: " + hm_relative_time(0 - 3600))
+    print("human 0.2.0: PASS")

@@ -1,0 +1,115 @@
+# cli 0.2.0 测试：子命令/help/env/required/choices + 0.1.0 回归
+import "../registry/cli/0.2.0/cli.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var spec = {
+        "name": {"short": "n", "type": "str", "default": "world"},
+        "port": {"short": "p", "type": "int", "default": 8080},
+        "verbose": {"short": "v", "type": "bool", "default": false},
+    }
+    var r = cli_parse(["--name", "px", "-p", "3000"], spec)
+    expect(r.is_ok(), "0.1.0 basic: " + str(r))
+    var opts = r.unwrap()["opts"]
+    expect(opts["name"] == "px", "name=px")
+    expect(opts["port"] == 3000, "port=3000")
+    expect(opts["verbose"] == false, "verbose default false")
+    # --name=value 形式
+    var r2 = cli_parse(["--name=hello", "-v"], spec)
+    expect(r2.is_ok(), "eq form: " + str(r2))
+    expect(r2.unwrap()["opts"]["name"] == "hello", "name=hello")
+    expect(r2.unwrap()["opts"]["verbose"] == true, "verbose=true")
+    # 位置参数
+    var r3 = cli_parse(["file1.txt", "file2.txt", "--name", "test"], spec)
+    expect(r3.is_ok(), "pos args: " + str(r3))
+    expect(r3.unwrap()["args"] == ["file1.txt", "file2.txt"], "pos files")
+    # -- 分隔符
+    var r4 = cli_parse(["--name", "x", "--", "--not-an-option"], spec)
+    expect(r4.is_ok(), "dd sep: " + str(r4))
+    expect(r4.unwrap()["args"] == ["--not-an-option"], "dd arg")
+    # ---- 0.2.0 required ----
+    var spec2 = {
+        "config": {"short": "c", "type": "str", "required": true, "desc": "配置文件路径"},
+    }
+    var r5 = cli_parse([], spec2)
+    expect(r5.is_err(), "required missing: " + str(r5))
+    var r6 = cli_parse(["-c", "app.yaml"], spec2)
+    expect(r6.is_ok(), "required provided: " + str(r6))
+    # ---- 0.2.0 choices ----
+    var spec3 = {
+        "mode": {"short": "m", "type": "str", "default": "dev", "choices": ["dev", "staging", "prod"]},
+    }
+    var r7 = cli_parse(["-m", "prod"], spec3)
+    expect(r7.is_ok(), "choices valid: " + str(r7))
+    var r8 = cli_parse(["-m", "invalid"], spec3)
+    expect(r8.is_err(), "choices invalid: " + str(r8))
+    # ---- 0.2.0 env 默认值 ----
+    # PX_TEST_HOST 由 shell 设置；env 优先于 default
+    var spec4 = {
+        "host": {"short": "h", "type": "str", "env": "PX_TEST_HOST", "default": "localhost"},
+    }
+    # 不传命令行 → 用 env
+    var r9 = cli_parse([], spec4)
+    expect(r9.is_ok(), "env default: " + str(r9))
+    expect(r9.unwrap()["opts"]["host"] == "env-host", "host from env: " + str(r9.unwrap()["opts"]["host"]))
+    # 命令行优先于 env
+    var r10 = cli_parse(["-h", "cli-host"], spec4)
+    expect(r10.is_ok(), "cli override env: " + str(r10))
+    expect(r10.unwrap()["opts"]["host"] == "cli-host", "host from cli")
+    # env 不存在时用 default
+    var spec5 = {
+        "port": {"short": "p", "type": "int", "env": "PX_NONEXISTENT_ENV", "default": 9999},
+    }
+    var r11 = cli_parse([], spec5)
+    expect(r11.is_ok(), "env missing use default: " + str(r11))
+    expect(r11.unwrap()["opts"]["port"] == 9999, "port default")
+    # ---- 0.2.0 子命令 ----
+    var cmds = {
+        "serve": {
+            "spec": {
+                "port": {"short": "p", "type": "int", "default": 8080, "desc": "端口"},
+                "host": {"short": "h", "type": "str", "default": "0.0.0.0", "desc": "监听地址"},
+            },
+            "desc": "启动服务",
+        },
+        "build": {
+            "spec": {
+                "output": {"short": "o", "type": "str", "default": "dist", "desc": "输出目录"},
+                "debug": {"short": "d", "type": "bool", "default": false, "desc": "调试模式"},
+            },
+            "desc": "构建项目",
+        },
+    }
+    var r12 = cli_parse_cmds(["serve", "-p", "3000", "-h", "127.0.0.1"], cmds)
+    expect(r12.is_ok(), "subcmd serve: " + str(r12))
+    var s12 = r12.unwrap()
+    expect(s12["cmd"] == "serve", "cmd=serve")
+    expect(s12["opts"]["port"] == 3000, "serve port")
+    expect(s12["opts"]["host"] == "127.0.0.1", "serve host")
+    var r13 = cli_parse_cmds(["build", "-o", "build/", "-d"], cmds)
+    expect(r13.is_ok(), "subcmd build: " + str(r13))
+    var s13 = r13.unwrap()
+    expect(s13["cmd"] == "build", "cmd=build")
+    expect(s13["opts"]["output"] == "build/", "build output")
+    expect(s13["opts"]["debug"] == true, "build debug")
+    # 未知子命令
+    var r14 = cli_parse_cmds(["unknown"], cmds)
+    expect(r14.is_err(), "unknown subcmd: " + str(r14))
+    # 缺少子命令
+    var r15 = cli_parse_cmds([], cmds)
+    expect(r15.is_err(), "no subcmd: " + str(r15))
+    # ---- 0.2.0 help 生成 ----
+    var help_text = cli_help(spec2)
+    expect(contains(help_text, "Usage"), "help has Usage")
+    expect(contains(help_text, "--config"), "help has --config")
+    expect(contains(help_text, "required"), "help shows required")
+    expect(contains(help_text, "配置文件路径"), "help shows desc")
+    var help_cmds = cli_help_cmds(cmds)
+    expect(contains(help_cmds, "Commands"), "help_cmds has Commands")
+    expect(contains(help_cmds, "serve"), "help_cmds has serve")
+    expect(contains(help_cmds, "build"), "help_cmds has build")
+    expect(contains(help_cmds, "启动服务"), "help_cmds has serve desc")
+    print("cli 0.2.0: PASS")

@@ -1,0 +1,52 @@
+# mongodb 0.2.0 测试：update_one/update_many/delete_one/delete_many/distinct/drop/create_index/aggregate
+import "../registry/mongodb/0.2.0/mongodb.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var c = mg_connect("127.0.0.1", 27017, 5000)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    # hello
+    var h = mg_hello(conn)
+    expect(h.is_ok(), "hello")
+    # ping
+    expect(mg_ping(conn).is_ok(), "ping")
+    # insert 测试数据
+    mg_insert(conn, "testdb", "users", {"name": "alice", "age": 30, "city": "北京"})
+    mg_insert(conn, "testdb", "users", {"name": "bob", "age": 25, "city": "上海"})
+    mg_insert(conn, "testdb", "users", {"name": "carol", "age": 30, "city": "北京"})
+    # find
+    var docs = mg_find(conn, "testdb", "users", null, null).unwrap()
+    expect(len(docs) >= 3, "find >= 3, got " + str(len(docs)))
+    # count
+    var n = mg_count(conn, "testdb", "users", null).unwrap()
+    expect(n >= 3, "count >= 3, got " + str(n))
+    # update_one
+    var u1 = mg_update_one(conn, "testdb", "users", {"name": "alice"}, {"$set": {"age": 31}}).unwrap()
+    expect(u1 >= 1, "update_one >= 1, got " + str(u1))
+    # update_many
+    var u2 = mg_update_many(conn, "testdb", "users", {"city": "北京"}, {"$set": {"region": "north"}}).unwrap()
+    expect(u2 >= 2, "update_many >= 2, got " + str(u2))
+    # distinct
+    var cities = mg_distinct(conn, "testdb", "users", "city", null).unwrap()
+    expect(len(cities) >= 2, "distinct city >= 2, got " + str(cities))
+    # aggregate $match + $sort
+    var agg = mg_aggregate(conn, "testdb", "users", [{"$match": {"city": "北京"}}, {"$sort": {"age": 1}}]).unwrap()
+    expect(len(agg) >= 2, "aggregate >= 2, got " + str(len(agg)))
+    # delete_one
+    var d1 = mg_delete_one(conn, "testdb", "users", {"name": "bob"}).unwrap()
+    expect(d1 >= 1, "delete_one >= 1, got " + str(d1))
+    # delete_many
+    var d2 = mg_delete_many(conn, "testdb", "users", {"city": "北京"}).unwrap()
+    expect(d2 >= 2, "delete_many >= 2, got " + str(d2))
+    # create_index
+    expect(mg_create_index(conn, "testdb", "users", {"name": 1}, null).is_ok(), "create_index")
+    # drop
+    expect(mg_drop(conn, "testdb", "users").is_ok(), "drop")
+    mg_close(conn)
+    print("mongodb: PASS")
+    return Ok(0)

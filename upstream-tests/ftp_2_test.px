@@ -1,0 +1,103 @@
+# ftp 0.2.0 测试：MKD/RMD/DELE/RENAME/SIZE/MDTM/TYPE/SYST/APPE/REST（双模式一致）
+import "../registry/ftp/0.2.0/ftp.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def in_list(l, v):
+    var i = 0
+    while i < len(l):
+        if l[i] == v:
+            return true
+        i += 1
+    return false
+def main():
+    var c = ft_connect("127.0.0.1", 2121)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    var lg = ft_login(conn, "px", "secret")
+    if lg.is_err():
+        print("FAIL: login: " + str(lg))
+        exit(1)
+    expect(ft_pwd(conn).unwrap().find("/") >= 0, "pwd")
+    # TYPE I
+    expect(ft_type(conn, "I").is_ok(), "TYPE I")
+    # SYST
+    var syst = ft_syst(conn).unwrap()
+    expect(len(syst) > 0, "SYST 非空, got " + str(syst))
+    # LIST
+    var ls = ft_list(conn)
+    if ls.is_err():
+        print("FAIL: list: " + str(ls))
+        exit(1)
+    var entries = ls.unwrap()
+    expect(len(entries) >= 1, "LIST 至少 1 项")
+    # RETR
+    var data = ft_retr(conn, "hello.txt").unwrap()
+    expect(data.find("hello ftp") >= 0, "RETR hello.txt")
+    expect(data.find("普贤") >= 0, "RETR 含中文")
+    # SIZE
+    var sz = ft_size(conn, "hello.txt").unwrap()
+    expect(sz > 0, "SIZE > 0, got " + str(sz))
+    # MDTM
+    var mt = ft_mdtm(conn, "hello.txt").unwrap()
+    expect(len(mt) >= 14, "MDTM 长度, got " + str(mt))
+    # STOR + RETR roundtrip
+    expect(ft_stor(conn, "test_upload.txt", "uploaded content 普贤").is_ok(), "STOR")
+    var rt = ft_retr(conn, "test_upload.txt").unwrap()
+    expect(rt == "uploaded content 普贤", "RETR roundtrip, got " + str(rt))
+    # APPE 追加
+    expect(ft_append(conn, "test_upload.txt", " appended").is_ok(), "APPE")
+    var rt2 = ft_retr(conn, "test_upload.txt").unwrap()
+    expect(rt2 == "uploaded content 普贤 appended", "APPE 后 RETR, got " + str(rt2))
+    # SIZE 验证追加后变大
+    var sz2 = ft_size(conn, "test_upload.txt").unwrap()
+    expect(sz2 > sz, "APPE 后 SIZE 增大")
+    # MKD + RMD
+    expect(ft_mkdir(conn, "newdir").is_ok(), "MKD newdir")
+    expect(ft_cwd(conn, "newdir").is_ok(), "CWD newdir")
+    expect(ft_cwd(conn, "..").is_ok(), "CWD ..")
+    expect(ft_rmdir(conn, "newdir").is_ok(), "RMD newdir")
+    # RENAME
+    expect(ft_stor(conn, "old_name.txt", "rename test").is_ok(), "STOR old_name")
+    expect(ft_rename(conn, "old_name.txt", "new_name.txt").is_ok(), "RENAME")
+    var rn = ft_retr(conn, "new_name.txt").unwrap()
+    expect(rn == "rename test", "RENAME 后 RETR")
+    # DELE
+    expect(ft_delete(conn, "new_name.txt").is_ok(), "DELE new_name")
+    expect(ft_delete(conn, "test_upload.txt").is_ok(), "DELE test_upload")
+    expect(ft_retr(conn, "test_upload.txt").is_err(), "DELE 后 RETR 应失败")
+    # REST（设置偏移，后续 RETR 从偏移开始）
+    expect(ft_stor(conn, "rest_test.txt", "0123456789").is_ok(), "STOR rest_test")
+    expect(ft_type(conn, "I").is_ok(), "TYPE I for REST")
+    expect(ft_rest(conn, 5).is_ok(), "REST 5")
+    var pd = ft_pasv_open(conn)
+    if pd[1] != "":
+        print("FAIL: PASV after REST: " + pd[1])
+        exit(1)
+    var dfd = pd[0]
+    var r150 = ft_expect(conn["fd"], "RETR rest_test.txt", [125, 150])
+    if r150.is_err():
+        tcp_close(dfd)
+        print("FAIL: RETR after REST: " + str(r150))
+        exit(1)
+    var rdata = bytes("")
+    while true:
+        var rr = tcp_recv_ex(dfd, 65536)
+        if rr["eof"] or not rr["ok"]:
+            break
+        var d = rr["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        rdata = bytes_concat(rdata, d)
+    tcp_close(dfd)
+    ft_read_reply(conn["fd"])
+    var rstr = bytes_to_str(rdata)
+    expect(rstr == "56789", "REST 5 后 RETR, got " + str(rstr))
+    ft_delete(conn, "rest_test.txt")
+    # QUIT
+    expect(ft_quit(conn).is_ok(), "QUIT")
+    print("ftp: PASS")
+    return Ok(0)

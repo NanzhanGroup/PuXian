@@ -1,0 +1,44 @@
+# slug 0.2.0 测试
+import "../registry/slug/0.2.0/slug.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(sl_slug("Hello World") == "hello-world", "slug: " + sl_slug("Hello World"))
+    expect(sl_slug("foo bar baz") == "foo-bar-baz", "slug 3")
+    expect(sl_slug("  spaced  ") == "spaced", "slug trim")
+    expect(sl_slug_ascii("Héllo Wörld") == "h-llo-w-rld", "slug ascii: " + sl_slug_ascii("Héllo Wörld"))
+    expect(sl_slug("你好世界") == "你好世界", "slug cjk: " + sl_slug("你好世界"))
+    # ---- 0.2.0 slug_sep ----
+    expect(sl_slug_sep("Hello World", "_") == "hello_world", "slug_sep: " + sl_slug_sep("Hello World", "_"))
+    expect(sl_slug_sep("foo bar baz", ".") == "foo.bar.baz", "slug_sep dot: " + sl_slug_sep("foo bar baz", "."))
+    # ---- 0.2.0 slug_max ----
+    expect(sl_slug_max("hello world foo bar", 10) == "hello-worl", "slug_max: " + sl_slug_max("hello world foo bar", 10))
+    expect(sl_slug_max("hi", 10) == "hi", "slug_max no-op")
+    # ---- 0.2.0 slug_prefix ----
+    expect(sl_slug_prefix("Hello World", "en") == "en-hello-world", "slug_prefix: " + sl_slug_prefix("Hello World", "en"))
+    expect(sl_slug_prefix("Hello", "") == "hello", "slug_prefix empty")
+    # ---- 0.2.0 is_valid ----
+    expect(sl_is_valid("hello-world") == true, "valid true")
+    expect(sl_is_valid("hello_world") == false, "valid underscore false")
+    expect(sl_is_valid("-hello") == false, "valid leading dash")
+    expect(sl_is_valid("hello-") == false, "valid trailing dash")
+    expect(sl_is_valid("hello--world") == false, "valid double dash")
+    expect(sl_is_valid("") == false, "valid empty")
+    expect(sl_is_valid("abc123") == true, "valid alnum")
+    # ---- 0.2.0 slug_unique ----
+    var existing = ["hello-world", "foo"]
+    expect(sl_slug_unique("Hello World", existing) == "hello-world-2", "unique 2: " + sl_slug_unique("Hello World", existing))
+    existing = ["hello-world", "hello-world-2", "foo"]
+    expect(sl_slug_unique("Hello World", existing) == "hello-world-3", "unique 3: " + sl_slug_unique("Hello World", existing))
+    existing = ["foo", "bar"]
+    expect(sl_slug_unique("Hello World", existing) == "hello-world", "unique new: " + sl_slug_unique("Hello World", existing))
+    # ---- 0.2.0 unslug ----
+    expect(sl_unslug("hello-world") == "Hello World", "unslug: " + sl_unslug("hello-world"))
+    expect(sl_unslug("foo-bar-baz") == "Foo Bar Baz", "unslug 3: " + sl_unslug("foo-bar-baz"))
+    expect(sl_unslug("single") == "Single", "unslug single: " + sl_unslug("single"))
+    # ---- 0.2.0 slug_id ----
+    expect(sl_slug_id("Hello World", "2026") == "hello-world-2026", "slug_id: " + sl_slug_id("Hello World", "2026"))
+    print("slug 0.2.0: PASS")

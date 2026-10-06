@@ -1,0 +1,219 @@
+# ============================================================
+# 普贤生态库：registry/base58 —— Base58 / Base58Check 编码
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go mr-tron/go-base58、Python base58 心智（0.1.0 子集）：
+#   base58_encode(s)        → str     字节串 → Base58
+#   base58_decode(s)        → Ok(str) | Err
+#   base58check_encode(s)   → str     4 字节校验（双 SHA-256 前 4 字节）附加
+#   base58check_decode(s)   → Ok(str) | Err（校验失败 → Err）
+# 字母表：Bitcoin 标准
+#   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"（去 0/O/I/l）
+# 实现：大数除 58 / 除 256 的长除法（无 64 位溢出，可处理任意长度输入）；
+#   前导 0 字节 → 前缀 '1'（编码）/ 前导 '1' → 0x00 字节（解码）。
+# 说明：PuXian 字符串为字节串，任意二进制可原样承载（\x00 等）。
+# ============================================================
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+def b58_val(c):
+    var i = 0
+    while i < 58:
+        if BASE58_ALPHABET[i] == c:
+            return i
+        i += 1
+    return -1
+
+# 内部：bytes → base58 串
+def b58_encode_bytes(raw):
+    var zeros = 0
+    while zeros < bytes_len(raw) and bytes_get(raw, zeros) == 0:
+        zeros += 1
+    var digits = []
+    var i = zeros
+    while i < bytes_len(raw):
+        digits.append(bytes_get(raw, i))
+        i += 1
+    var out = []
+    while len(digits) > 0:
+        var rem = 0
+        var nd = []
+        var j = 0
+        while j < len(digits):
+            var cur = rem * 256 + digits[j]
+            var q = cur // 58
+            rem = cur % 58
+            if len(nd) > 0 or q > 0:
+                nd.append(q)
+            j += 1
+        out.append(BASE58_ALPHABET[rem])
+        digits = nd
+    var s = ""
+    var k = 0
+    while k < zeros:
+        s = s + "1"
+        k += 1
+    var z = len(out) - 1
+    while z >= 0:
+        s = s + out[z]
+        z -= 1
+    return s
+
+# 追加单个原始字节：不用 bytes(chr(n))（n>=128 会变 2 字节 UTF-8），
+# 转 2 位小写 hex 再 hex_to_bytes 保原始字节（PX-DEF-016 同族）
+def b58_hex2(n):
+    var d = "0123456789abcdef"
+    return d[n // 16] + d[n % 16]
+
+def b58_append_byte(b, n):
+    return bytes_concat(b, hex_to_bytes(b58_hex2(n)))
+
+def base58_encode(s):
+    return b58_encode_bytes(bytes(s))
+
+def base58_decode(s):
+    var zeros = 0
+    while zeros < len(s) and s[zeros] == "1":
+        zeros += 1
+    var digits = []
+    var i = zeros
+    while i < len(s):
+        var v = b58_val(s[i])
+        if v < 0:
+            return Err("base58: 非法字符: " + s[i])
+        digits.append(v)
+        i += 1
+    var low = []
+    while len(digits) > 0:
+        var rem = 0
+        var nd = []
+        var j = 0
+        while j < len(digits):
+            var cur = rem * 58 + digits[j]
+            var q = cur // 256
+            rem = cur % 256
+            if len(nd) > 0 or q > 0:
+                nd.append(q)
+            j += 1
+        low.append(rem)
+        digits = nd
+    var b = bytes("")
+    var k = 0
+    while k < zeros:
+        b = b58_append_byte(b, 0)
+        k += 1
+    var z = len(low) - 1
+    while z >= 0:
+        b = b58_append_byte(b, low[z])
+        z -= 1
+    return Ok(bytes_to_str(b))
+
+def b58_double_sha256_hex(s):
+    # 标准双 SHA-256：对输入原始字节取摘要，再对摘要原始字节取摘要
+    # （M188 原生 sha256_bytes 直接落 bytes，避开 PX-DEF-016 的 hex 文本再哈希陷阱）
+    var h1 = sha256_bytes(bytes(s))
+    var h2 = sha256_bytes(h1)
+    return bytes_to_hex(h2)
+
+def base58check_encode(s):
+    var h2 = b58_double_sha256_hex(s)
+    var ck = h2[0:8]
+    var full = bytes_concat(bytes(s), hex_to_bytes(ck))
+    return b58_encode_bytes(full)
+
+def base58check_decode(s):
+    var dec = base58_decode(s)
+    if dec.is_err():
+        return Err("base58: 非法 base58check: " + s)
+    var raw = bytes(dec.unwrap())
+    var n = bytes_len(raw)
+    if n < 4:
+        return Err("base58: 长度不足 4 字节校验: " + s)
+    var payload = bytes_slice(raw, 0, n - 4)
+    var ck = bytes_slice(raw, n - 4, n)
+    var payload_str = bytes_to_str(payload)
+    var h2 = b58_double_sha256_hex(payload_str)
+    var want = hex_to_bytes(h2[0:8])
+    var ok = true
+    var i = 0
+    while i < 4:
+        if bytes_get(ck, i) != bytes_get(want, i):
+            ok = false
+            break
+        i += 1
+    if not ok:
+        return Err("base58: 校验和不匹配")
+    return Ok(payload_str)
+# ============================================================
+# 0.2.0 新增：encode_int / decode_int / is_valid / random
+# ============================================================
+
+# 编码整数 → str
+def base58_encode_int(n):
+    if n == 0:
+        return "1"
+    var alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    var neg = false
+    if n < 0:
+        neg = true
+        n = -n
+    var out = ""
+    while n > 0:
+        var r = n % 58
+        out = alphabet[r] + out
+        n = n // 58
+    if neg:
+        out = "-" + out
+    return out
+
+# 解码整数 → int
+def base58_decode_int(s):
+    var alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    var neg = false
+    var idx = 0
+    if len(s) > 0 and s[0] == "-":
+        neg = true
+        idx = 1
+    var n = 0
+    while idx < len(s):
+        var v = b58_val(s[idx])
+        n = n * 58 + v
+        idx += 1
+    if neg:
+        n = -n
+    return n
+
+# 验证是否为合法 base58 → bool
+def base58_is_valid(s):
+    var alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    var i = 0
+    while i < len(s):
+        if not contains(alphabet, s[i]):
+            return false
+        i += 1
+    return true
+
+# 编码 hex 字符串 → str
+def base58_encode_hex(hex_str):
+    var raw = ""
+    var i = 0
+    while i < len(hex_str):
+        var h = hex_str[i:i + 2]
+        var v = 0
+        var c = h[0]
+        if c >= "0" and c <= "9":
+            v = (ord(c) - ord("0")) * 16
+        elif c >= "a" and c <= "f":
+            v = (ord(c) - ord("a") + 10) * 16
+        elif c >= "A" and c <= "F":
+            v = (ord(c) - ord("A") + 10) * 16
+        c = h[1]
+        if c >= "0" and c <= "9":
+            v = v + (ord(c) - ord("0"))
+        elif c >= "a" and c <= "f":
+            v = v + (ord(c) - ord("a") + 10)
+        elif c >= "A" and c <= "F":
+            v = v + (ord(c) - ord("A") + 10)
+        raw = raw + chr(v)
+        i += 2
+    return base58_encode(raw)

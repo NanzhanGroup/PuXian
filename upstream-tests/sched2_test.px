@@ -1,0 +1,28 @@
+# sched 0.2.0 测试
+import "../registry/sched/0.2.0/sched.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+var g_count = 0
+def my_cb():
+    g_count = g_count + 1
+def main():
+    # ---- 0.1.0 回归 ----
+    var s = sched_new()
+    sched_add(s, "task1", 100, my_cb)
+    sched_run(s, 300)
+    expect(g_count >= 2, "run 300ms: " + str(g_count))
+    # ---- 0.2.0 remove ----
+    sched_remove(s, "task1")
+    expect(sched_counts(s) == 0, "after remove: " + str(sched_counts(s)))
+    # ---- 0.2.0 tick ----
+    g_count = 0
+    var s2 = sched_new()
+    sched_add(s2, "t", 50, my_cb)
+    var ran = sched_tick(s2, 50)
+    expect(ran == 1, "tick ran 1: " + str(ran))
+    # ---- 0.2.0 next_run ----
+    var nr = sched_next_run(s2)
+    expect(nr >= 50, "next_run >= 50: " + str(nr))
+    print("PASS: sched 0.2.0")

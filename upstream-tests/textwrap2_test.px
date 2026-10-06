@@ -1,0 +1,53 @@
+# textwrap 0.2.0 测试
+import "../registry/textwrap/0.2.0/textwrap.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var lines = tw_wrap("hello world foo bar", 10)
+    expect(len(lines) >= 2, "wrap lines: " + str(lines))
+    expect(lines[0] == "hello", "wrap first: " + lines[0])
+    var filled = tw_fill("hello world foo bar", 10)
+    expect(contains(filled, "\n"), "fill has newline")
+    var indented = tw_indent("a\n\nb", "  ")
+    expect(indented == "  a\n\n  b", "indent: " + indented)
+    var dedented = tw_dedent("    a\n    b")
+    expect(dedented == "a\nb", "dedent: " + dedented)
+    # ---- 0.2.0 center ----
+    expect(tw_center("hi", 6) == "  hi  ", "center 6: '" + tw_center("hi", 6) + "'")
+    expect(tw_center("hi", 5) == " hi  ", "center 5: '" + tw_center("hi", 5) + "'")
+    expect(tw_center("hello", 3) == "hello", "center no-op")
+    # ---- 0.2.0 ljust / rjust ----
+    expect(tw_ljust("hi", 5) == "hi   ", "ljust: '" + tw_ljust("hi", 5) + "'")
+    expect(tw_ljust("hi", 5, "-") == "hi---", "ljust dash: " + tw_ljust("hi", 5, "-"))
+    expect(tw_rjust("hi", 5) == "   hi", "rjust: '" + tw_rjust("hi", 5) + "'")
+    expect(tw_rjust("hi", 5, "0") == "000hi", "rjust zero: " + tw_rjust("hi", 5, "0"))
+    # ---- 0.2.0 strip_lines ----
+    expect(tw_strip_lines("\n\nhello\nworld\n\n") == "hello\nworld", "strip_lines: '" + tw_strip_lines("\n\nhello\nworld\n\n") + "'")
+    expect(tw_strip_lines("hello") == "hello", "strip_lines no-op")
+    # ---- 0.2.0 shorten ----
+    expect(tw_shorten("hello world", 10) == "hello w...", "shorten: " + tw_shorten("hello world", 10))
+    expect(tw_shorten("hi", 10) == "hi", "shorten no-op")
+    expect(tw_shorten("abcdefghij", 5) == "ab...", "shorten 5: " + tw_shorten("abcdefghij", 5))
+    # ---- 0.2.0 split_paragraphs ----
+    var paras = tw_split_paragraphs("para1 line1\npara1 line2\n\npara2")
+    expect(len(paras) == 2, "2 paras: " + str(len(paras)))
+    expect(paras[0] == "para1 line1\npara1 line2", "para 1: " + paras[0])
+    expect(paras[1] == "para2", "para 2: " + paras[1])
+    # ---- 0.2.0 line_count / word_count ----
+    expect(tw_line_count("a\nb\nc") == 3, "line_count: " + str(tw_line_count("a\nb\nc")))
+    expect(tw_word_count("hello world foo") == 3, "word_count: " + str(tw_word_count("hello world foo")))
+    expect(tw_word_count("a\nb c\nd e f") == 6, "word_count multi: " + str(tw_word_count("a\nb c\nd e f")))
+    # ---- 0.2.0 expandtabs ----
+    expect(tw_expandtabs("a\tb", 4) == "a   b", "expandtabs: '" + tw_expandtabs("a\tb", 4) + "'")
+    expect(tw_expandtabs("ab\tc", 4) == "ab  c", "expandtabs 2: '" + tw_expandtabs("ab\tc", 4) + "'")
+    expect(tw_expandtabs("abc\td", 4) == "abc d", "expandtabs 1: '" + tw_expandtabs("abc\td", 4) + "'")
+    # ---- 0.2.0 rstrip_lines ----
+    expect(tw_rstrip_lines("a   \nb  \nc") == "a\nb\nc", "rstrip_lines: '" + tw_rstrip_lines("a   \nb  \nc") + "'")
+    # ---- 0.2.0 fill_indent ----
+    var fi = tw_fill_indent("hello world foo bar", 15, "> ", "  ")
+    expect(starts_with(fi, "> "), "fill_indent initial: " + fi)
+    expect(contains(fi, "\n  "), "fill_indent subsequent: " + fi)
+    print("textwrap 0.2.0: PASS")

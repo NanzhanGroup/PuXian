@@ -1,0 +1,23 @@
+# mock 0.2.0 测试
+import "../registry/mock/0.2.0/mock.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var route = mk_route("GET", "/hello", 200, "world")
+    expect(route["path"] == "/hello", "route path")
+    # ---- 0.2.0 is_success ----
+    expect(mk_is_success(200) == true, "200 success")
+    expect(mk_is_success(301) == false, "301 not success")
+    # ---- 0.2.0 is_redirect ----
+    expect(mk_is_redirect(301) == true, "301 redirect")
+    expect(mk_is_redirect(200) == false, "200 not redirect")
+    # ---- 0.2.0 is_error ----
+    expect(mk_is_error(404) == true, "404 error")
+    expect(mk_is_error(200) == false, "200 not error")
+    # ---- 0.2.0 format_url ----
+    var url = mk_format_url("localhost", 8080, "/api")
+    expect(url == "http://localhost:8080/api", "format_url: " + url)
+    print("PASS: mock 0.2.0")

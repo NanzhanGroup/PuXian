@@ -1,0 +1,61 @@
+# ini 0.2.0 测试
+import "../registry/ini/0.2.0/ini.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var text = "[database]\nhost = localhost\nport = 5432\n\n[server]\nhost = 0.0.0.0\ndebug = true"
+    var cfg = ini_parse(text).unwrap()
+    expect(ini_get(cfg, "database", "host").unwrap() == "localhost", "get db host")
+    expect(ini_get(cfg, "database", "port").unwrap() == "5432", "get db port")
+    expect(ini_get(cfg, "server", "host").unwrap() == "0.0.0.0", "get server host")
+    expect(ini_has(cfg, "server", "debug") == true, "has debug")
+    expect(ini_has(cfg, "server", "missing") == false, "not has missing")
+    var secs = ini_sections(cfg)
+    expect(len(secs) == 2, "2 sections: " + str(secs))
+    var keys = ini_keys(cfg, "database").unwrap()
+    expect(len(keys) == 2, "2 keys: " + str(keys))
+    # ---- 0.2.0 dump ----
+    var dumped = ini_dump(cfg)
+    expect(contains(dumped, "[database]"), "dump has [database]")
+    expect(contains(dumped, "host = localhost"), "dump has host")
+    expect(contains(dumped, "[server]"), "dump has [server]")
+    # ---- 0.2.0 dump + parse roundtrip ----
+    var reparsed = ini_parse(dumped).unwrap()
+    expect(ini_get(reparsed, "database", "host").unwrap() == "localhost", "roundtrip host")
+    expect(ini_get(reparsed, "server", "debug").unwrap() == "true", "roundtrip debug")
+    # ---- 0.2.0 get_default ----
+    expect(ini_get_default(cfg, "database", "host") == "localhost", "get_default existing")
+    expect(ini_get_default(cfg, "database", "missing", "fallback") == "fallback", "get_default fallback")
+    # ---- 0.2.0 get_int ----
+    expect(ini_get_int(cfg, "database", "port") == 5432, "get_int: " + str(ini_get_int(cfg, "database", "port")))
+    expect(ini_get_int(cfg, "database", "missing", 8080) == 8080, "get_int default")
+    # ---- 0.2.0 get_bool ----
+    expect(ini_get_bool(cfg, "server", "debug") == true, "get_bool true")
+    expect(ini_get_bool(cfg, "server", "missing", false) == false, "get_bool default")
+    # ---- 0.2.0 set ----
+    ini_set(cfg, "database", "name", "mydb")
+    expect(ini_get(cfg, "database", "name").unwrap() == "mydb", "set new key")
+    ini_set(cfg, "newsec", "key1", "val1")
+    expect(ini_get(cfg, "newsec", "key1").unwrap() == "val1", "set new section")
+    # ---- 0.2.0 remove ----
+    ini_remove(cfg, "database", "name")
+    expect(ini_has(cfg, "database", "name") == false, "removed key")
+    ini_remove_section(cfg, "newsec")
+    expect(ini_has(cfg, "newsec", "key1") == false, "removed section")
+    # ---- 0.2.0 merge ----
+    var cfg2 = ini_parse("[database]\nport = 3306\n\n[extra]\nfoo = bar").unwrap()
+    var merged = ini_merge(cfg, cfg2)
+    expect(ini_get(merged, "database", "port").unwrap() == "3306", "merge override port")
+    expect(ini_get(merged, "database", "host").unwrap() == "localhost", "merge keep host")
+    expect(ini_get(merged, "extra", "foo").unwrap() == "bar", "merge new section")
+    # ---- 0.2.0 section_len ----
+    expect(ini_section_len(cfg, "database") == 2, "section_len: " + str(ini_section_len(cfg, "database")))
+    expect(ini_section_len(cfg, "nonexist") == 0, "section_len nonexist")
+    # ---- 0.2.0 无节键值 ----
+    var cfg3 = ini_parse("key1 = val1\nkey2 = val2\n[sec]\nkey3 = val3").unwrap()
+    expect(ini_get(cfg3, "", "key1").unwrap() == "val1", "default section key1")
+    expect(ini_get(cfg3, "", "key2").unwrap() == "val2", "default section key2")
+    print("ini 0.2.0: PASS")

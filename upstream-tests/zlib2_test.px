@@ -1,0 +1,23 @@
+# zlib 0.2.0 测试
+import "../registry/zlib/0.2.0/zlib.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var data = [72, 101, 108, 108, 111]
+    var c = zl_compress(data).unwrap()
+    expect(len(c) > 0, "compress non-empty")
+    var d = zl_uncompress(c).unwrap()
+    expect(d == data, "roundtrip: " + str(d))
+    # ---- 0.2.0 adler32 ----
+    var a = zl_adler32([65, 66, 67])
+    expect(a > 0, "adler32 > 0: " + str(a))
+    # ---- 0.2.0 is_compressed ----
+    expect(zl_is_compressed(c) == true, "is_compressed true")
+    expect(zl_is_compressed([1, 2]) == false, "is_compressed false")
+    # ---- 0.2.0 level_valid ----
+    expect(zl_level_valid(6) == true, "level 6 valid")
+    expect(zl_level_valid(10) == false, "level 10 invalid")
+    print("PASS: zlib 0.2.0")

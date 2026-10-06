@@ -1,0 +1,28 @@
+# snowflake 0.2.0 测试
+import "../registry/snowflake/0.2.0/snowflake.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var st = sf_new(100).unwrap()
+    var id1 = sf_next(st, 1700000000000).unwrap()
+    var id2 = sf_next(st, 1700000000000).unwrap()
+    expect((id2 - id1) > 0, "same ms seq increase (use diff, PX-DEF-040)")
+    var p = sf_parse(id1)
+    expect(p["machine"] == 100, "parse machine")
+    expect(p["seq"] == 0, "parse seq 0")
+    # ---- 0.2.0 base36 ----
+    var b36 = sf_to_base36(id1)
+    expect(sf_from_base36(b36) == id1, "base36 roundtrip: " + str(id1) + " <-> " + b36)
+    expect(sf_from_base36(sf_to_base36(0)) == 0, "base36 zero")
+    expect(sf_from_base36(sf_to_base36(999999999999)) == 999999999999, "base36 large")
+    # ---- 0.2.0 extract ----
+    expect(sf_extract_time(id1) == 1700000000000, "extract time")
+    expect(sf_extract_machine(id1) == 100, "extract machine")
+    expect(sf_extract_seq(id1) == 0, "extract seq")
+    expect(sf_extract_seq(id2) == 1, "extract seq 1")
+    # ---- 0.2.0 max_sequence ----
+    expect(sf_max_sequence() == 4095, "max seq 4095")
+    print("PASS: snowflake 0.2.0")

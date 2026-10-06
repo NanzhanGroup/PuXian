@@ -1,0 +1,73 @@
+# htmlparse 0.2.0 测试：实体解码/按属性查找/表格/链接/图片 + 0.1.0 回归
+import "../registry/htmlparse/0.2.0/htmlparse.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var html = "<div><p class=\"x\">hello</p><br><span>world</span></div>"
+    var r1 = hp_parse(html)
+    expect(r1.is_ok(), "0.1.0 parse")
+    var root = r1.unwrap()
+    var ps = hp_find(root, "p")
+    expect(len(ps) == 1, "find p")
+    expect(hp_text(ps[0]) == "hello", "p text")
+    expect(hp_attr(ps[0], "class") == "x", "p class attr")
+    var spans = hp_find(root, "span")
+    expect(hp_text(spans[0]) == "world", "span text")
+    # ---- 0.2.0 实体解码 ----
+    expect(hp_decode_entities("a &amp; b") == "a & b", "decode amp")
+    expect(hp_decode_entities("&lt;tag&gt;") == "<tag>", "decode lt/gt")
+    expect(hp_decode_entities("&quot;hi&quot;") == "\"hi\"", "decode quot")
+    expect(hp_decode_entities("&apos;x&apos;") == "'x'", "decode apos")
+    expect(hp_decode_entities("a&nbsp;b") == "a b", "decode nbsp")
+    expect(hp_decode_entities("&#65;") == "A", "decode numeric: " + hp_decode_entities("&#65;"))
+    expect(hp_decode_entities("plain text") == "plain text", "decode no entities")
+    # ---- 0.2.0 按属性查找 ----
+    var html2 = "<div><a href=\"/page1\">P1</a><a href=\"/page2\" class=\"active\">P2</a><a href=\"/page3\">P3</a></div>"
+    var root2 = hp_parse(html2).unwrap()
+    var active = hp_find_by_attr(root2, "a", "class", "active")
+    expect(len(active) == 1, "find_by_attr 1: " + str(len(active)))
+    expect(hp_text(active[0]) == "P2", "find_by_attr text")
+    # find_first
+    var first_a = hp_find_first(root2, "a")
+    expect(first_a != null, "find_first not null")
+    expect(hp_text(first_a) == "P1", "find_first text")
+    # ---- 0.2.0 inner/outer HTML ----
+    var html3 = "<div id=\"main\"><p>hello</p></div>"
+    var root3 = hp_parse(html3).unwrap()
+    var div = hp_find_first(root3, "div")
+    var inner = hp_inner_html(div)
+    expect(contains(inner, "hello"), "inner_html: " + inner)
+    var outer = hp_outer_html(div)
+    expect(starts_with(outer, "<div"), "outer_html starts: " + outer)
+    expect(contains(outer, "id=\"main\""), "outer_html attr: " + outer)
+    # ---- 0.2.0 表格提取 ----
+    var table_html = "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr><tr><td>Bob</td><td>25</td></tr></table>"
+    var root4 = hp_parse(table_html).unwrap()
+    var table = hp_find_first(root4, "table")
+    var rows = hp_table_parse(table)
+    expect(len(rows) == 3, "table 3 rows: " + str(len(rows)))
+    expect(rows[0] == ["Name", "Age"], "table header: " + str(rows[0]))
+    expect(rows[1] == ["Alice", "30"], "table row 1: " + str(rows[1]))
+    expect(rows[2] == ["Bob", "25"], "table row 2: " + str(rows[2]))
+    # ---- 0.2.0 链接提取 ----
+    var links = hp_extract_links(root2)
+    expect(len(links) == 3, "3 links: " + str(len(links)))
+    expect(links[0]["href"] == "/page1", "link 0 href")
+    expect(links[0]["text"] == "P1", "link 0 text")
+    expect(links[1]["href"] == "/page2", "link 1 href")
+    expect(links[2]["text"] == "P3", "link 2 text")
+    # ---- 0.2.0 图片提取 ----
+    var img_html = "<div><img src=\"a.png\" alt=\"A\"><img src=\"b.png\"></div>"
+    var root5 = hp_parse(img_html).unwrap()
+    var images = hp_extract_images(root5)
+    expect(len(images) == 2, "2 images: " + str(len(images)))
+    expect(images[0]["src"] == "a.png", "img 0 src")
+    expect(images[0]["alt"] == "A", "img 0 alt")
+    expect(images[1]["src"] == "b.png", "img 1 src")
+    # ---- 0.2.0 strip_tags ----
+    expect(hp_strip_tags("<p>hello <b>world</b></p>") == "hello world", "strip_tags: " + hp_strip_tags("<p>hello <b>world</b></p>"))
+    expect(hp_strip_tags("plain") == "plain", "strip_tags plain")
+    print("htmlparse 0.2.0: PASS")

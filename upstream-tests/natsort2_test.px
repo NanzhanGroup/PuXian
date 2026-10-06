@@ -1,0 +1,24 @@
+# natsort 0.2.0 测试
+import "../registry/natsort/0.2.0/natsort.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var l = ["a10", "a2", "a1", "a20"]
+    expect(na_sorted(l) == ["a1", "a2", "a10", "a20"], "sorted: " + str(na_sorted(l)))
+    expect(na_compare("a2", "a10") == -1, "compare a2 < a10")
+    # ---- 0.2.0 split_key ----
+    var segs = na_split_key("a10b2")
+    expect(len(segs) == 4, "split_key 4 segs: " + str(segs))
+    # ---- 0.2.0 is_sorted ----
+    expect(na_is_sorted(["a1", "a2", "a10"]) == true, "is sorted true")
+    expect(na_is_sorted(["a10", "a2", "a1"]) == false, "is sorted false")
+    # ---- 0.2.0 rank ----
+    var r = na_rank(["a10", "a2", "a1"])
+    expect(r == [2, 1, 0], "rank: " + str(r))
+    # ---- 0.2.0 join ----
+    var j = na_join(["a10", "a2", "a1"], ", ")
+    expect(j == "a1, a2, a10", "join: " + j)
+    print("PASS: natsort 0.2.0")

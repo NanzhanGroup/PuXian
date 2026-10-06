@@ -1,0 +1,24 @@
+# workerpool 0.2.0 测试（仅编译模式）
+import "../registry/workerpool/0.2.0/workerpool.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def task1():
+    return 1
+def task2():
+    return 2
+def main():
+    # ---- 0.1.0 回归 ----
+    var pool = wp_new(2)
+    wp_run(pool, [task1, task2], [[], []])
+    expect(len(pool["results"]) == 2, "results 2: " + str(len(pool["results"])))
+    wp_close(pool)
+    # ---- 0.2.0 size ----
+    expect(wp_size(pool) == 2, "size 2: " + str(wp_size(pool)))
+    # ---- 0.2.0 is_closed ----
+    expect(wp_is_closed(pool) == true, "is_closed true")
+    # ---- 0.2.0 results ----
+    var r = wp_results(pool)
+    expect(len(r) == 2, "results len 2: " + str(len(r)))
+    print("PASS: workerpool 0.2.0")

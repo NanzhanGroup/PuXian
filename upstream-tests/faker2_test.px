@@ -1,0 +1,82 @@
+# faker 0.2.0 测试
+import "../registry/faker/0.2.0/faker.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var seed = 42
+    # ---- 0.1.0 回归 ----
+    var r1 = fa_rand(seed)
+    expect(r1[0] == r1[1], "rand returns [z,z]")
+    var r2 = fa_range(seed, 0, 100)
+    expect(r2[1] >= 0 and r2[1] < 100, "range in [0,100): " + str(r2[1]))
+    var r3 = fa_digits(seed, 6)
+    expect(len(r3[1]) == 6, "digits len 6")
+    var r4 = fa_name(seed)
+    expect(len(r4[1]) > 0, "name non-empty: " + r4[1])
+    var r5 = fa_phone(seed)
+    expect(r5[1][0] == '1', "phone starts with 1: " + r5[1])
+    var r6 = fa_email(seed)
+    expect(contains(r6[1], "@example.com"), "email format: " + r6[1])
+    var r7 = fa_sentence(seed, 5)
+    expect(len(r7[1]) > 0, "sentence non-empty")
+    var r8 = fa_uuid()
+    expect(len(r8) == 36, "uuid len 36: " + str(len(r8)))
+    # ---- 0.2.0 address ----
+    var ra = fa_address(seed)
+    expect(len(ra[1]) > 0, "address: " + ra[1])
+    expect(contains(ra[1], "号"), "address has 号: " + ra[1])
+    # ---- 0.2.0 date ----
+    var ry = fa_year(seed)
+    expect(ry[1] >= 2000 and ry[1] < 2026, "year range: " + str(ry[1]))
+    var rd = fa_date(seed)
+    expect(len(rd[1]) == 10, "date format: " + rd[1])
+    expect(rd[1][4] == '-' and rd[1][7] == '-', "date dashes: " + rd[1])
+    # ---- 0.2.0 time ----
+    var rt = fa_time(seed)
+    expect(len(rt[1]) == 8, "time format: " + rt[1])
+    expect(rt[1][2] == ':' and rt[1][5] == ':', "time colons: " + rt[1])
+    # ---- 0.2.0 company ----
+    var rc = fa_company(seed)
+    expect(contains(rc[1], "有限公司") or contains(rc[1], "股份有限公司"), "company: " + rc[1])
+    # ---- 0.2.0 job ----
+    var rj = fa_job(seed)
+    expect(len(rj[1]) > 0, "job: " + rj[1])
+    # ---- 0.2.0 color ----
+    var rcol = fa_color_hex(seed)
+    expect(rcol[1][0] == '#' and len(rcol[1]) == 7, "color hex: " + rcol[1])
+    var rrgb = fa_color_rgb(seed)
+    expect(contains(rrgb[1], ","), "color rgb: " + rrgb[1])
+    # ---- 0.2.0 ipv4 ----
+    var rip = fa_ipv4(seed)
+    var parts = rip[1].split(".")
+    expect(len(parts) == 4, "ipv4 4 parts: " + rip[1])
+    # ---- 0.2.0 user_agent ----
+    var rua = fa_user_agent(seed)
+    expect(contains(rua[1], "Mozilla/5.0"), "ua Mozilla: " + rua[1])
+    # ---- 0.2.0 credit_card ----
+    var rcc = fa_credit_card(seed)
+    expect(len(rcc[1]) == 16, "credit card 16 digits: " + str(len(rcc[1])))
+    # Luhn check
+    var sum = 0
+    var i = 0
+    while i < 16:
+        var d = int(rcc[1][i])
+        if i % 2 == 0:
+            d = d * 2
+            if d > 9:
+                d = d - 9
+        sum += d
+        i += 1
+    expect(sum % 10 == 0, "credit card Luhn: sum=" + str(sum))
+    # ---- 0.2.0 paragraph ----
+    var rp = fa_paragraph(seed, 3)
+    expect(contains(rp[1], "。"), "paragraph has 。: " + rp[1])
+    # ---- 0.2.0 bool ----
+    var rb = fa_bool(seed)
+    expect(rb[1] == true or rb[1] == false, "bool value")
+    # ---- 0.2.0 password ----
+    var rpw = fa_password(seed, 16)
+    expect(len(rpw[1]) == 16, "password len 16: " + str(len(rpw[1])))
+    print("faker 0.2.0: PASS")

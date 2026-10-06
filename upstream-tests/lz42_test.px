@@ -1,0 +1,22 @@
+# lz4 0.2.0 测试
+import "../registry/lz4/0.2.0/lz4.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var data = bytes("HelloHello")
+    var comp = lz_compress(data).unwrap()
+    var decomp = lz_decompress(comp).unwrap()
+    expect(decomp == data, "compress/decompress roundtrip")
+    # ---- 0.2.0 compress_string ----
+    var cs = lz_compress_string("HelloHello").unwrap()
+    expect(bytes_len(cs) > 0, "compress_string non-empty")
+    # ---- 0.2.0 decompress_string ----
+    var ds = lz_decompress_string(cs)
+    expect(ds == "HelloHello", "decompress_string roundtrip: " + ds)
+    # ---- 0.2.0 ratio ----
+    var r = lz_ratio(100, 50)
+    expect(r == 0.5, "ratio 0.5: " + str(r))
+    print("PASS: lz4 0.2.0")

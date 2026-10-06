@@ -1,0 +1,26 @@
+# qrcode 0.2.0 测试
+import "../registry/qrcode/0.2.0/qrcode.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var r = qrcode_encode("Hello", "M").unwrap()
+    var m = r[2]
+    expect(len(m) > 0, "encode non-empty")
+    var ascii = qrcode_ascii(m)
+    expect(len(ascii) > 0, "ascii non-empty")
+    # ---- 0.2.0 encode_auto ----
+    var m2 = qrcode_encode_auto("Test", "L")
+    expect(len(m2) > 0, "encode_auto non-empty")
+    # ---- 0.2.0 matrix_size ----
+    var sz = qrcode_matrix_size(m)
+    expect(sz > 0, "matrix_size > 0: " + str(sz))
+    # ---- 0.2.0 module_at ----
+    var mod = qrcode_module_at(m, 0, 0)
+    expect(mod == true or mod == false, "module_at 0,0: " + str(mod))
+    # ---- 0.2.0 count_black ----
+    var cnt = qrcode_count_black(m)
+    expect(cnt > 0, "count_black > 0: " + str(cnt))
+    print("PASS: qrcode 0.2.0")

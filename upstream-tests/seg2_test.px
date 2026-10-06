@@ -1,0 +1,20 @@
+# seg 0.2.0 测试
+import "../registry/seg/0.2.0/seg.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    var tokens = sg_tokenize("中国语言", [])
+    expect(len(tokens) > 0, "tokenize non-empty: " + str(tokens))
+    # ---- 0.2.0 tokenize_default ----
+    var td = sg_tokenize_default("中国")
+    expect(len(td) > 0, "tokenize_default non-empty: " + str(td))
+    # ---- 0.2.0 count ----
+    var cnt = sg_count("中国语言")
+    expect(cnt > 0, "count > 0: " + str(cnt))
+    # ---- 0.2.0 has_word ----
+    var hw = sg_has_word("中国")
+    expect(hw == true or hw == false, "has_word bool: " + str(hw))
+    print("PASS: seg 0.2.0")

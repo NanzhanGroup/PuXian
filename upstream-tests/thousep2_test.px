@@ -1,0 +1,33 @@
+# thousep 0.2.0 测试
+import "../registry/thousep/0.2.0/thousep.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 回归 ----
+    expect(th_thousands(1234567) == "1,234,567", "thousands int")
+    expect(th_thousands(-1000) == "-1,000", "thousands neg")
+    expect(th_thousands_str("1234567.89").unwrap() == "1,234,567.89", "thousands str")
+    expect(th_ordinal(1) == "1st", "ordinal 1")
+    expect(th_ordinal(2) == "2nd", "ordinal 2")
+    expect(th_ordinal(3) == "3rd", "ordinal 3")
+    expect(th_ordinal(11) == "11th", "ordinal 11")
+    expect(th_ordinal(21) == "21st", "ordinal 21")
+    # ---- 0.2.0 compact ----
+    expect(th_compact(1234) == "1.23K", "compact K: " + th_compact(1234))
+    expect(th_compact(1000000) == "1M", "compact M: " + th_compact(1000000))
+    expect(th_compact(1500) == "1.5K", "compact 1.5K: " + th_compact(1500))
+    expect(th_compact(999) == "999", "compact 999: " + th_compact(999))
+    expect(th_compact(1234567) == "1.23M", "compact M2: " + th_compact(1234567))
+    # ---- 0.2.0 bytes ----
+    expect(th_bytes(0) == "0.0B", "bytes 0: " + th_bytes(0))
+    expect(th_bytes(1024) == "1.0KB", "bytes 1KB: " + th_bytes(1024))
+    expect(th_bytes(1536) == "1.5KB", "bytes 1.5KB: " + th_bytes(1536))
+    expect(th_bytes(1048576) == "1.0MB", "bytes 1MB: " + th_bytes(1048576))
+    # ---- 0.2.0 thousands_float ----
+    expect(th_thousands_float(1234567.5).unwrap() == "1,234,567.5", "thousands float")
+    # ---- 0.2.0 parse ----
+    expect(th_parse("1,234,567").unwrap() == "1234567", "parse")
+    expect(th_parse("1,234,567.89").unwrap() == "1234567.89", "parse float")
+    print("PASS: thousep 0.2.0")
