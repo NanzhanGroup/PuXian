@@ -100,7 +100,8 @@ if /usr/bin/pxc build hello.px > /tmp/pxt/build.log 2>&1; then
     GOT="$(/tmp/pxt/build/hello)"
     [ "$GOT" = "el7-pkg-ok" ] || { echo "❌ 产物运行输出异常：[$GOT]"; exit 1; }
     echo "   编译产物运行 OK：$GOT"
-    /usr/bin/pxc run hello.px | grep -q el7-pkg-ok || { echo "❌ px run 失败"; exit 1; }
+    _pxout="$(/usr/bin/pxc run hello.px 2>&1)" || { echo "❌ px run 失败"; exit 1; }
+    grep -q 'el7-pkg-ok' <<<"$_pxout" || { echo "❌ px run 输出不含 el7-pkg-ok：[$_pxout]"; exit 1; }
     echo "✅ el7 正式签名仓库 yum 双验签 + 安装 + 真编译运行全部通过"
 else
     if grep -q "不支持 C11 原子\|stdatomic" /tmp/pxt/build.log; then
