@@ -56,7 +56,8 @@ restore_all() {
 trap 'restore_all' EXIT
 
 devkey() { grep -m1 '源码链指纹：' "$1" 2>/dev/null | sed 's/.*：//' | awk '{print $1}'; }
-run_dev() { timeout 900 bash "$1" pxc > "$2" 2>&1; echo $?; }
+DV_ENV=()   # M287s2：可临时追加环境（见 [3]）；空数组 ⇒ 行为与以前一致
+run_dev() { timeout 900 env "${DV_ENV[@]}" bash "$1" pxc > "$2" 2>&1; echo $?; }
 
 # ── 层②的判据抽成函数：负控 C 要用「自伤档」重调它，证明"红来自比对" ──
 judge_touch() {   # $1=基线日志 $2=touch 后日志 → rc 0=通过（即"没红"）
@@ -129,8 +130,15 @@ fi
 
 # ───────────────────────── ③ 内容敏感 + 归因 ─────────────────────────
 hdr "[3/7] 动态：改**一个字节** ⇒ 必须重建 + **归因指名**（缺陷 325 正面判据）"
+# ⚠️ M287s2：本条测的是**源码链指纹层**（含「为什么重建」的归因），而 M287 的多槽缓存对
+#   **同一份内容**会命中（⏭）⇒ 既无重建、也无归因（实测：`或未重建（建 0）` + `归因未指名`）。
+#   ⇒ 显式关多槽，回到「指纹层单独作用」的场景。
+#   ⚠️ 这不是「放水」：多槽层的正确性由 examples/m287_devbuild_slots/ **独立**验证
+#      （45 断言 + 3 道负控）；本条要保的是**归因能力**，那道判据只有走指纹层才可达。
+DV_ENV=(DEVB_SLOTS=0)
 printf '\n# M223-GATE-PROBE\n' >> "$TS"
 rc2=$(run_dev "$D" "$W/change.log"); K2=$(devkey "$W/change.log")
+DV_ENV=()
 B2=$(grep -c '^✅' "$W/change.log")
 note "改内容后：rc=$rc2 key=$K2（建 $B2）"
 if [ "$K2" != "$K0" ] && [ "$B2" -ge 1 ]; then
