@@ -50,9 +50,43 @@ entry_src() { echo "$ENTRIES" | grep "^$1|" | cut -d'|' -f2; }
 #     再由 ci.yml 的一个 `if: always()` step 合成 `::notice::`。
 #   ⚠️ 台账只**追加**、不影响任何判据；`DEVB_STATS` 可覆盖路径。
 DEVB_STATS_FILE="${DEVB_STATS:-/tmp/devbuild_stats.tsv}"
-devb_stat() {   # $1=reuse|rebuild  $2=件名  $3=key  [$4=选料来源]
-    printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "${4:-${CACHE_SRC:-?}}" \
-        >>"$DEVB_STATS_FILE" 2>/dev/null || true
+devb_stat() {   # $1=reuse|rebuild  $2=件名  $3=key  [$4=选料来源] [$5=命中层]
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" \
+        "${4:-${CACHE_SRC:-?}}" "${5:--}" >>"$DEVB_STATS_FILE" 2>/dev/null || true
+}
+
+# ── M287（第 165 轮）：**多槽产物缓存** —— devbuild 的稳态加速 ──────────────
+#   实测（本机 2026-10-07 · 全量门 193 门 / 5848s）：
+#     · devbuild 重建 152 次 × 14.7s = **54 分钟 = 全量门的 55%**
+#     · 而这 152 次里 **148 次的 key 在之前就已经建过**（只有 3 个 key 是全新的）
+#   根因：产物路径**只有一份** `/tmp/<name>dev` ⇒ 每换一次 key 就覆盖写，
+#   下一轮回到同一个 key 又要从零重编一遍（哪怕上一轮刚建过一模一样的二进制）。
+#   ⚠️ 这不是「短路坏了」—— 短路本身有效（14.7s → 0.18s，82×）；
+#      是「**单槽覆盖写**」把跨轮的复用机会丢掉了。
+#   ⇒ 按 key 分槽持久保存；命中即复制回契约路径（≈0.05s）。
+#   ⚠️ 命中判据与既有指纹短路**同一条**（key 逐字节相等）⇒ 正确性保证不变。
+#   ⚠️ 命中后必须 `touch` 契约路径：既有门（m210 `neg_dev`）用 `-nt` 判
+#      「产物比源码新」，而 `cp -a` 保留的是槽里的旧 mtime。
+#   ⚠️ 命中时打印 **`⏭`**（不是新符号）—— 全仓多处用 `grep -c '^⏭'` 判「复用」，
+#      换符号会让它们**静默变成 0**；命中层记在台账第 6 列（不依赖 stdout）。
+#   ⚠️ key 变了（改任一源码 ⇒ 全 key 一起变）⇒ 旧槽自然失效，靠 LRU 上限回收。
+DEVB_SLOTS="${DEVB_SLOTS:-/tmp/devbuild_slots}"
+DEVB_SLOTS_MAX="${DEVB_SLOTS_MAX:-1200}"   # 槽数上限（单槽 ≈9.5MB ⇒ 1200 ≈ 11GB 上界）
+                                           #   实测每轮新增相异 (件,key) ≈116 ⇒ 该上限约容纳
+                                           #   10 个里程碑的历史；命中时 touch 槽目录 ⇒ 天然 LRU
+case "$DEVB_SLOTS" in 0|off|no|"") DEVB_SLOTS_SKIP=1 ;; *) DEVB_SLOTS_SKIP=0 ;; esac
+
+slot_prune() {   # 按「最后使用时间」（命中时 touch 槽目录）从旧到新删到 70% 上限
+    [ "$DEVB_SLOTS_SKIP" = 0 ] || return 0
+    [ -d "$DEVB_SLOTS" ] || return 0
+    local n keep
+    n=$(find "$DEVB_SLOTS" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l)
+    [ "${n:-0}" -gt "$DEVB_SLOTS_MAX" ] || return 0
+    keep=$(( DEVB_SLOTS_MAX * 7 / 10 ))
+    echo "── devbuild 多槽：$n > 上限 $DEVB_SLOTS_MAX ⇒ 清理 $(( n - keep )) 个最旧的"
+    find "$DEVB_SLOTS" -mindepth 2 -maxdepth 2 -type d -printf '%T@\t%p\n' 2>/dev/null \
+      | LC_ALL=C sort -n | head -n "$(( n - keep ))" | cut -f2- \
+      | while IFS= read -r d; do rm -rf -- "$d"; done
 }
 # ── M223（缺陷 325）：汇总**必须给出 key 的取值** ──────────────────────
 #   修前只报「出现过的 key N 个」⇒ CI 上实测「3 个」，但**哪 3 个、为什么是 3 个**
@@ -86,6 +120,13 @@ devb_summary() {
     local cs
     cs=$(cut -f5 "$DEVB_STATS_FILE" 2>/dev/null | sort | uniq -c | awk '{printf "%s×%s ", $2, $1}')
     echo "── 选料来源：${cs:-（本台账无第 5 列 —— 旧版 devbuild 写的）}"
+    # ── M287：命中层（slot = 多槽跨轮命中 / fp = 单槽同轮命中 / - = 真建）──
+    local hl
+    hl=$(awk -F'\t' 'NF>=6{c[$6]++} END{for(k in c) printf "%s×%s ", k, c[k]}' "$DEVB_STATS_FILE" 2>/dev/null)
+    [ -n "$hl" ] && echo "── 命中层（M287）：${hl}"
+    if [ "$DEVB_SLOTS_SKIP" = 0 ] && [ -d "$DEVB_SLOTS" ]; then
+        echo "── 多槽：$(find "$DEVB_SLOTS" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l) 个槽（上限 $DEVB_SLOTS_MAX）· $(du -sh "$DEVB_SLOTS" 2>/dev/null | cut -f1)"
+    fi
 }
 
 # 选 .rtcache（全 runtime 对象）
@@ -162,13 +203,26 @@ $RT/third_party/openssl/lib/libssl.a $RT/third_party/openssl/lib/libcrypto.a
 $RT/third_party/zlib/lib/libz.a -lm -ldl -lpthread"
 
 build_one() {   # $1=件名 → /tmp/${1}dev
-    local name="$1" src out fp
+    local name="$1" src out fp mf slot
     src=$(entry_src "$name")
     [ -n "$src" ] || { echo "❌ 未知件：$name（可用：$(echo "$ENTRIES" | cut -d'|' -f1 | tr '\n' ' '))" >&2; return 1; }
     out="/tmp/${name}dev"; fp="/tmp/devbuild_${name}.fp"; mf="/tmp/devbuild_${name}.src"
+    slot="$DEVB_SLOTS/$name/$DEVB_KEY"
+    # ── M287：多槽命中（**先于**单槽短路 —— 槽是跨轮的稳态路径）──
+    if [ "$FORCE_REBUILD" = 0 ] && [ "$DEVB_SLOTS_SKIP" = 0 ] \
+       && [ -f "$slot/$name" ] && [ "$(cat "$slot/key" 2>/dev/null)" = "$DEVB_KEY" ]; then
+        if cp -a "$slot/$name" "$out" 2>/dev/null; then
+            touch "$out"; touch "$slot" 2>/dev/null || true
+            printf '%s\n' "$DEVB_KEY" > "$fp"
+            [ -f "$slot/src" ] && cp -a "$slot/src" "$mf" 2>/dev/null
+            echo "⏭  $name：多槽命中（key=$DEVB_KEY）⇒ 复用 $out"
+            devb_stat reuse "$name" "$DEVB_KEY" "$CACHE_SRC" "slot"
+            return 0
+        fi
+    fi
     if [ "$FORCE_REBUILD" = 0 ] && [ -f "$out" ] && [ -f "$fp" ] && [ "$(cat "$fp" 2>/dev/null)" = "$DEVB_KEY" ]; then
         echo "⏭  $name：源码链未变（key=$DEVB_KEY）⇒ 复用 $out"
-        devb_stat reuse "$name" "$DEVB_KEY"
+        devb_stat reuse "$name" "$DEVB_KEY" "$CACHE_SRC" "fp"
         return 0
     fi
     # ── M223（缺陷 325）：**为什么重建** —— 只报「key 变了」等于没报（本仓纪律：
@@ -196,7 +250,16 @@ build_one() {   # $1=件名 → /tmp/${1}dev
         echo "❌ $name：链接失败"; tail -10 "/tmp/devbuild_$name.link.log" >&2; return 1; }
     echo "$DEVB_KEY" > "$fp"
     src_manifest > "$mf"
-    devb_stat rebuild "$name" "$DEVB_KEY"
+    if [ "$DEVB_SLOTS_SKIP" = 0 ]; then    # ── M287：回填多槽（失败不影响构建）──
+        if mkdir -p "$slot" 2>/dev/null; then
+            cp -a "$out" "$slot/$name" 2>/dev/null
+            printf '%s\n' "$DEVB_KEY" > "$slot/key"
+            cp -a "$mf" "$slot/src" 2>/dev/null
+        else
+            echo "   ⚠️ 多槽回填失败（$slot）—— 不影响本次构建" >&2
+        fi
+    fi
+    devb_stat rebuild "$name" "$DEVB_KEY" "$CACHE_SRC" "-"
     echo "✅ $name → $out（$(stat -c %s "$out") 字节）"
 }
 
@@ -234,12 +297,19 @@ src_manifest() {   # stdout：逐文件「名 哈希」清单（**已排序** �
         done
         echo "base=$(sha256sum "$BASE" 2>/dev/null | cut -c1-16)"
         echo "rtcache=$(basename "$CACHE")"
+        # ── M287：把「**产出规则**」也纳入指纹 ─────────────────────────────
+        #   此前不在 key 里 ⇒ 改 devbuild.sh 的 gcc 旗标 / 换 gcc 大版本时
+        #   指纹**不变** ⇒ 多槽会命中**旧规则产出的**二进制（M223 R75 候选②同族）。
+        #   单槽时代靠「/tmp 被清」兜底，多槽让它跨轮持久 ⇒ 必须显式纳入。
+        echo "devbuild=$(sha256sum "$ROOT/selfhost/devbuild.sh" 2>/dev/null | cut -c1-16)"
+        echo "gcc=$(gcc -dumpversion 2>/dev/null)"
     } | LC_ALL=C sort
 }
 src_line() { src_manifest; }    # 兼容旧调用（`src_line | sha256sum | cut -c1-16`）
 DEVB_KEY="$(src_line | sha256sum | cut -c1-16)"
 echo "── 源码链指纹：$DEVB_KEY$([ "$FORCE_REBUILD" = 1 ] && echo "（--rebuild：忽略缓存）")"
 echo "── rtcache: ${CACHE#$ROOT/}"
+slot_prune
 for n in $NAMES; do build_one "$n" || exit 1; done
 
 if [ "$WANT_VM" = "1" ]; then
@@ -247,9 +317,23 @@ if [ "$WANT_VM" = "1" ]; then
     #    `devbuild pxi --vm`（不带 pxc）时 pxcdev 可能是**别的**源码链的产物，
     #    拿它 emit-c 会得到与实际源码不符的 VM 件（m216 门头注记过这个坑）。
     VM_KEY="$DEVB_KEY/$(sha256sum /tmp/pxcdev 2>/dev/null | cut -c1-16)"
-    if [ "$FORCE_REBUILD" = 0 ] && [ -f /tmp/pxcdev_vm ] && [ -f /tmp/devbuild_vm.fp ] && [ "$(cat /tmp/devbuild_vm.fp 2>/dev/null)" = "$VM_KEY" ]; then
+    VM_SLOT="$DEVB_SLOTS/vm/$VM_KEY"; VM_HIT=0
+    # ── M287：VM 轨多槽命中（VM_KEY 已含 /tmp/pxcdev 的内容 sha ⇒ 输入不同则不同槽）──
+    if [ "$FORCE_REBUILD" = 0 ] && [ "$DEVB_SLOTS_SKIP" = 0 ] \
+       && [ -f "$VM_SLOT/pxcdev_vm" ] && [ "$(cat "$VM_SLOT/key" 2>/dev/null)" = "$VM_KEY" ]; then
+        if cp -a "$VM_SLOT/pxcdev_vm" /tmp/pxcdev_vm 2>/dev/null; then
+            touch /tmp/pxcdev_vm; touch "$VM_SLOT" 2>/dev/null || true
+            printf '%s\n' "$VM_KEY" > /tmp/devbuild_vm.fp
+            echo "⏭  VM 轨：多槽命中（key=$VM_KEY）⇒ 复用 /tmp/pxcdev_vm"
+            devb_stat reuse vm "$VM_KEY" "$CACHE_SRC" "slot"
+            VM_HIT=1
+        fi
+    fi
+    if [ "$VM_HIT" = 1 ]; then
+        :    # 多槽已命中
+    elif [ "$FORCE_REBUILD" = 0 ] && [ -f /tmp/pxcdev_vm ] && [ -f /tmp/devbuild_vm.fp ] && [ "$(cat /tmp/devbuild_vm.fp 2>/dev/null)" = "$VM_KEY" ]; then
         echo "⏭  VM 轨：源码链未变（key=$VM_KEY）⇒ 复用 /tmp/pxcdev_vm"
-        devb_stat reuse vm "$VM_KEY"
+        devb_stat reuse vm "$VM_KEY" "$CACHE_SRC" "fp"
     else
     if [ -f /tmp/devbuild_vm.fp ] && [ "$(cat /tmp/devbuild_vm.fp 2>/dev/null)" != "$VM_KEY" ]; then
         echo "── vm：VM 轨指纹变化 $(cat /tmp/devbuild_vm.fp 2>/dev/null) → $VM_KEY"
@@ -263,7 +347,17 @@ if [ "$WANT_VM" = "1" ]; then
         echo "❌ VM 轨链接失败"; tail -10 /tmp/devbuild_vm.link.log >&2; exit 1; }
     echo "✅ VM 轨：/tmp/pxcdev_vm（$(stat -c %s /tmp/pxcdev_vm) 字节）"
     echo "$VM_KEY" > /tmp/devbuild_vm.fp
-    devb_stat rebuild vm "$VM_KEY"
+    if [ "$DEVB_SLOTS_SKIP" = 0 ]; then    # ── M287：VM 回填 ──
+        if mkdir -p "$VM_SLOT" 2>/dev/null; then
+            cp -a /tmp/pxcdev_vm "$VM_SLOT/pxcdev_vm" 2>/dev/null
+            printf '%s\n' "$VM_KEY" > "$VM_SLOT/key"
+        else
+            echo "   ⚠️ VM 多槽回填失败（$VM_SLOT）—— 不影响本次构建" >&2
+        fi
+    fi
+    devb_stat rebuild vm "$VM_KEY" "$CACHE_SRC" "-"
+
+
     fi
 fi
 
