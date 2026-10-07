@@ -142,7 +142,11 @@ PY
 
     # C：循环不遍历 ⇒ 静态红
     restore_all; snapshot
-    sed -i 's|for (i = 0; i < g_ffi_n; i++) {|for (i = 0; i < 0; i++) {   /* NEGCTL-C */|' runtime/runtime_ffi.c
+    # ⚠️ M286（判据 A4 · 锚点唯一性）：`for (i = 0; i < g_ffi_n; i++) {` 在 runtime_ffi.c 里
+    #    出现 **3 行**（:51 发布循环 + :164 `ffi_call` + :202 `px_ffi_has`），而 sed **逐行替换**
+    #    ⇒ 裸写法会**同时改掉后两个别的函数**（超范围）。故用**范围地址**限定到
+    #    `px_ffi_publish_globals` 函数体内 ⇒ 实测只改 1 处（原写法 3 处）。
+    sed -i '/^void px_ffi_publish_globals/,/^}/ s|for (i = 0; i < g_ffi_n; i++) {|for (i = 0; i < 0; i++) {   /* NEGCTL-C */|' runtime/runtime_ffi.c
     sweep_static; rc=$?
     chk "[3C] 发布循环不遍历整表 ⇒ 静态 [S11] 红" \
         "[ \$rc != 0 ] && grep -q '不一致' '$W/s11.log'"

@@ -1,0 +1,5 @@
+head
+ANCHOR_MULTI_X
+mid
+ANCHOR_MULTI_X
+tail
