@@ -30,10 +30,10 @@ restore_all(){ cp -a "$BAK" "$G"; }
 neg_start(){ restore_all; }
 trap 'restore_all; rm -rf "$W"' EXIT
 
-echo "== [1] 守卫自证（内置夹具 · 10 断言）=="
+echo "== [1] 守卫自证（内置夹具 · 12 断言）=="
 out="$(bash "$G" --self-test 2>&1)"; rc=$?
 chk "自证 rc=0" "$rc" "0"
-chk "自证 10 通过 / 0 失败" "$(grep -c '自证：通过 10 / 失败 0' <<<"$out")" "1"
+chk "自证 12 通过 / 0 失败" "$(grep -c '自证：通过 12 / 失败 0' <<<"$out")" "1"
 chk "自证含反向判据（登记后 rc=0）" "$(grep -c '⑤ 全部登记后 rc=0' <<<"$out")" "1"
 chk "自证含判据自伤（清空表 ⇒ rc=1）" "$(grep -c '⑥ 判据自伤' <<<"$out")" "1"
 
@@ -108,8 +108,10 @@ cat <<'EDGE'
   · P3 只判**危险清单**左侧（cat/tar/readelf/nm/strings/objdump/ldd/dnf/rpm/curl/ssh/git/find/du/sort/程序和 ./）；
     `echo "$VAR"` / `printf '%s' "$VAR"` 理论上也可能超管道缓冲（64KB）但内容不可静态判定 ⇒ 不判
   · P4 已知盲区：**变量形式的创建**（`> /tmp/x_${LABEL}.press`）⇒ 会误报为外部前提（issue28_b1 已登记）
+  · P4 **豁免构建工具产物命名空间**（/tmp/<件>dev · /tmp/devbuild_*）—— 门调用 devbuild 后读其产物属白盒验证；
+    该命名空间由**正则**界定（BUILD_TOOL_OUT_RE）；改 devbuild 产物路径须同步正则（[7f]/[7g] 锚定其依据仍在位）
 EDGE
-ok "[6] 覆盖边界已打印（4 条）"
+ok "[6] 覆盖边界已打印（5 条）"
 
 echo "== [7] 静态断言 =="
 [ -x "$G" ] && ok "[7a] 守卫可执行" || bad "[7a] 守卫不可执行"
@@ -118,6 +120,8 @@ chk "[7c] 允许表 P3 段为空（发现即修，零豁免）" "$(awk -F'\t' '!
 chk "[7d] 允许表每条都有理由+日期+依据" \
     "$(awk -F'\t' '!/^#/ && NF>0 && (NF<5 || $3=="" || $4=="" || $5=="")' "$ALLOW" | wc -l)" "0"
 chk "[7e] 守卫头注声明四类判据" "$(grep -cE '^#   P[1-4] ' "$G")" "4"
+chk "[7f] 豁免依据：devbuild 契约产物行在位" "$(grep -cF 'out="/tmp/${name}dev"' ../../selfhost/devbuild.sh)" "1"
+chk "[7g] 豁免依据：devbuild 指纹产物行在位" "$(grep -cF 'fp="/tmp/devbuild_${name}.fp"' ../../selfhost/devbuild.sh)" "1"
 
 echo "────────────────────────────"
 echo "M283 门：通过 $PASS / 失败 $FAIL"

@@ -252,6 +252,15 @@ scan_p3() {
 # 只认「读取位置」：cat / read_file / [ -f X ] / source / . X / grep … X
 READFILE_RE='(\[\[?[[:space:]]+-[efr][[:space:]]+|cat[[:space:]]+|read_file\(|source[[:space:]]+|grep[[:space:]]+-[a-zA-Z]*[[:space:]]+\S+[[:space:]]+)(/tmp/[A-Za-z0-9_./-]+|/var/[A-Za-z0-9_./-]+)'
 CREATEFILE_RE='(mkdir[[:space:]]+-p[[:space:]]+|touch[[:space:]]+|>+[[:space:]]*|mktemp|install[[:space:]]+-d)'
+# ⚠️ **构建工具（selfhost/devbuild.sh）的产物命名空间** —— 门调用该工具后读取其产物属**白盒验证**，
+#    不是外部前提（与它并列的 pxcdev/pxidev 早已豁免；M287s1 把**整族**补齐）。
+#    依据（devbuild.sh:209）：out="/tmp/${name}dev" · fp="/tmp/devbuild_${name}.fp" · mf="/tmp/devbuild_${name}.src"
+#      · 契约产物  /tmp/<件>dev · /tmp/<件>dev_vm（+ 后缀变体）
+#      · 辅助产物  /tmp/devbuild_<件>.{fp,src,c,err,o} 与 *.log
+#    ⚠️ 首版只列 pxcdev|pxidev 两条字面量 ⇒ 漏掉辅助产物 ⇒ 新门读 .fp 即误报（m283 判红抓住）。
+#    ⚠️ 正则刻意**窄**（不含 `/` 与多级路径）⇒ 嵌套路径 /tmp/m283_prem_absent/x.txt 不会被误放。
+#    自证 ⑩（豁免生效）· ⑪（豁免不越界）守窄性；m283 [7f]/[7g] 锚定依据仍在位。
+BUILD_TOOL_OUT_RE='^/tmp/(devbuild_[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)?|[A-Za-z0-9_]+dev(_vm)?(\.[A-Za-z0-9_]+)?)$'
 
 scan_p4() {
   local tmp; tmp="$(mktemp)"
@@ -272,7 +281,7 @@ scan_p4() {
     # ⚠️ 判据校准（M283 实测）：首版「读但未创建」把三类**假阳**都算成外部前提 ——
     #   ① 门启动的**子进程**产出（服务日志：门把路径传给服务，由服务写）
     #   ② 门内**变量形式**的创建（字面量判据看不见）
-    #   ③ **工具**产物（devbuild 的 /tmp/pxidev）
+    #   ③ **构建工具**产物（devbuild 的 /tmp/<件>dev 与 /tmp/devbuild_*）—— 整族豁免，见 BUILD_TOOL_OUT_RE
     #   ⇒ 加**命名空间过滤**：路径含本门标识（m150 / issue28 / 目录名）⇒ 视为门自己的产物。
     local gid gnum
     gid="$(basename "$g")"
@@ -283,7 +292,7 @@ scan_p4() {
       grep -qxF "$p" <<<"$created" && continue
       if [ -n "$gnum" ] && grep -qF "$gnum" <<<"$p"; then continue; fi
       if grep -qF "$gid" <<<"$p"; then continue; fi
-      case "$p" in /tmp/pxidev|/tmp/pxcdev|/tmp/pxidev.*|/tmp/pxcdev.*) continue ;; esac
+      [[ "$p" =~ $BUILD_TOOL_OUT_RE ]] && continue
       printf '%s|%s\n' "$g" "$p" >> "$tmp"
     done < <(printf '%s' "$reads" | sort -u | grep -v '^$' || true)
   done < <(gate_dirs)
@@ -324,6 +333,12 @@ selftest() {
   printf '#!/bin/bash\nset -o pipefail\nreadelf -d x | grep -q NEEDED\nprintf %%s "%%s" "$v" | grep -q yes\n' > "$W/examples/g_pipe/verify.sh"
   # ④ 外部前提：读 /tmp/m283_prem_absent/x.txt 但不创建 ⇒ 必须命中 P4
   printf '#!/bin/bash\nif [ -f /tmp/m283_prem_absent/x.txt ]; then cat /tmp/m283_prem_absent/x.txt; fi\n' > "$W/examples/g_prem/verify.sh"
+  # ⑩ 构建工具产物：读 devbuild 的产物（不创建）⇒ 必须**不**判 P4（豁免族完整 —— M287s1）
+  mkdir -p "$W/examples/g_tool"
+  printf '#!/bin/bash\n[ -f /tmp/devbuild_pxc.fp ] && cat /tmp/devbuild_pxc.fp\n' > "$W/examples/g_tool/verify.sh"
+  # ⑪ 窄性反向判据：**非**构建工具产物 ⇒ 仍必须判 P4（豁免不许越界）
+  mkdir -p "$W/examples/g_other"
+  printf '#!/bin/bash\ncat /tmp/other_tool.state\n' > "$W/examples/g_other/verify.sh"
   : > "$W/selfhost/premise_allow.tsv"
   local out rc
   chk(){ if [ "$2" = "$3" ]; then ok=$((ok+1)); echo "  ✅ $1"; else ng=$((ng+1)); echo "  ❌ $1 （actual=[$2] want=[$3]）"; fi; }
@@ -334,9 +349,11 @@ selftest() {
   chk "③ 禁形命中 P3（readelf 行）" "$(grep -c '^P3 .*g_pipe/verify.sh:3' <<<"$out" || true)" "1"
   chk "③b printf 左侧不判（白名单）" "$(grep -c '^P3 .*g_pipe/verify.sh:4' <<<"$out" || true)" "0"
   chk "④ 外部前提命中 P4"           "$(grep -c '^P4 .*g_prem' <<<"$out" || true)" "1"
+  chk "⑩ 构建工具产物豁免（不判 P4）"   "$(grep -c '^P4 .*g_tool'  <<<"$out" || true)" "0"
+  chk "⑪ 非工具产物仍判 P4（豁免不越界）" "$(grep -c '^P4 .*g_other' <<<"$out" || true)" "1"
   chk "⑨ 未登记时 rc=1"             "$rc" "1"
   # 反向判据：登记后必须**不**判红
-  printf 'P1\t39001\tr\t2026-10-07\tM283\nP2\texamples/g_ready\tr\t2026-10-07\tM283\nP3\texamples/g_pipe/verify.sh:3\tr\t2026-10-07\tM283\nP4\texamples/g_prem|/tmp/m283_prem_absent/x.txt\tr\t2026-10-07\tM283\n' > "$W/selfhost/premise_allow.tsv"
+  printf 'P1\t39001\tr\t2026-10-07\tM283\nP2\texamples/g_ready\tr\t2026-10-07\tM283\nP3\texamples/g_pipe/verify.sh:3\tr\t2026-10-07\tM283\nP4\texamples/g_prem|/tmp/m283_prem_absent/x.txt\tr\t2026-10-07\tM283\nP4\texamples/g_other|/tmp/other_tool.state\tr\t2026-10-08\tM287s1\n' > "$W/selfhost/premise_allow.tsv"
   out="$(bash "$SELF" --root "$W" 2>&1)"; rc=$?
   chk "⑤ 全部登记后 rc=0（反向判据）" "$rc" "0"
   # 判据自伤：把允许表清空 ⇒ 必须重新判红（证明 ⑤ 的绿来自登记，不是判据恒绿）
