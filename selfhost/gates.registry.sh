@@ -1200,4 +1200,7 @@ run m283_gate_premise bash examples/m283_gate_premise/verify.sh
 #         O3 每挂 p1 m<N>-… 必须有 resolve-topic m<N>（否则只能等升级）
 #   门 = 守卫自证 5/0 + 真仓 0 违例（67 个 .sh / 13 个编排脚本）+ 裁决器**六档**判对
 #      + 回归（M283 同形绿日志 ⇒ GREEN）+ 负控 3 道各自独立判红 + 覆盖边界
+#      + **M284s1（缺陷 496）**：未跟踪面**两档对照**（默认 ⇒ 在场 / `ORCH_TRACKED_ONLY=1` ⇒ 凭空）
+#        · 查询工具调用行不算生产者 · `--untracked` 与 `QUERY_RE` 的代码形态在位 = **26 项**
+#    ⚠️ 本门**不提供** `--neg-skip`：三道负控不重建 runtime（≈1s）⇒ 任何档位全跑。
 run m284_orchestrator bash examples/m284_orchestrator/verify.sh

@@ -1112,7 +1112,9 @@ jobs:
       - name: m284_orchestrator（编排骨架入仓 + 判据串「在场」守卫 · 缺陷 490/495）
         if: always()
         run: |
-          NEG_SKIP=1 bash examples/m284_orchestrator/verify.sh > /tmp/v_m284.log 2>&1 || { echo "❌ m284 门失败（编排守卫 O1/O2/O3 未逐条判 / 裁决器六档 / 负控）"; grep -E '^(  ❌|== )' /tmp/v_m284.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          # ⚠️ M284s1：**去掉 `NEG_SKIP=1`** —— 本门从未实现该开关（传了也只是被忽略），
+          #   而它的三道负控不重建 runtime（≈1s）⇒ 让它**全跑**覆盖率更高（不再假装可跳）。
+          bash examples/m284_orchestrator/verify.sh > /tmp/v_m284.log 2>&1 || { echo "❌ m284 门失败（编排守卫 O1/O2/O3 未逐条判 / 裁决器六档 / 负控）"; grep -E '^(  ❌|== )' /tmp/v_m284.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '汇总：通过' /tmp/v_m284.log | tail -1 || true
           echo "✅ m284_orchestrator（守卫自证 5/0 · 真仓 0 违例 67 个 .sh · 裁决器六档 · 回归 M283 假警报形状 ⇒ GREEN）PASS"
 

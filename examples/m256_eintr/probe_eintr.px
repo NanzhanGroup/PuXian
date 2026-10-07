@@ -80,13 +80,17 @@ def press(n):
     return acc
 
 mkdir(D)
+# ⚠️ M284s1（缺陷 497）：UDP 接收端必须**先 bind，再 spawn 发送端**。
+#   修前 `udp_open(UPORT)` 排在 `spawn usrv()` 与两个 `press` **之后** —— 压力档下主协程
+#   可能被 GC 饿死 >1s，而发送端只 `sleep(1000)` 就开始发 ⇒ 包打到**未绑定**的端口
+#   ⇒ ICMP port unreachable ⇒ 发送端后续 `sendto` 报 ECONNREFUSED ⇒ `px_error` **中止进程**。
+#   实测指纹（CI run 37569198043 · step[36]）：stdout 只有 `T1=…`、没有 U2/DONE
+#   ⇒ 门报「探针未跑完」。绑定提前后这条竞态**在原理上消失**（与下方注释同一意图）。
+let u = udp_open(UPORT)
 spawn srv()
 spawn usrv()
 spawn press(120000)
 spawn press(120000)
-
-# 接收端**尽早 bind**（此后早发的包会排队，不会触发 ICMP）
-let u = udp_open(UPORT)
 
 # ── 用例 T1：TCP read(fd, 64)（fd 带 SO_RCVTIMEO = 3000ms）──
 var fd = -1

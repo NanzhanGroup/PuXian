@@ -66,23 +66,43 @@ CACHE = {}
 #   v2 首版用「全仓字面在场」，结果被**我自己的取证文本**污染 —— CHANGELOG（M284 节）
 #   与 gate_verdict.sh 的**注释**里都**引用**了 `双路判据一致`（作为「它不存在」的证据），
 #   ⇒ git grep 找得到 ⇒ 判据串"在场" ⇒ `bad_o1` 自证当场失去牙（实测：自证 5/0 → 4/1）。
-#   ⇒ 规则收紧为：骨架必须出现在**非注释行**且该行含输出关键词（echo/printf/print…）。
-#   语义也更准：判据串是「某处**会打印**的文本」，注释与文档里的**引用**不产生它。
+# 判据串的**生产者** = 该串出现在某个代码文件里，且**该行不是在消费/查询它**。
+#
+# 演化史（每一步都是实测逼出来的，**不要"顺手简化"回去**）：
+#   v1 「全仓字面在场」：被**我自己在 CHANGELOG / 注释里的取证引用**污染 ⇒ 判据失去牙
+#      （自证 5/0 → 4/1）。⇒ 加"非注释行"。
+#   v2 「非注释行 + 不含 grep」：修好 v1，但**只看已跟踪文件** ⇒ 提交前绿、提交后红
+#      —— 缺陷 491 的同族第 2 次（496①）。
+#   v3 想再加「该行必须含输出关键词（echo/printf/print…）」：**实测被否**。
+#      真生产者有两种不该被排除的形状 ——
+#        · `.px` 里的**字符串字面量赋值**（`codegen.px` 的 `/* 由普贤 …` 头）；
+#        · 由别的脚本 `echo` 出来的中文短语（`packaging/selftest_pxrepo_mirror.sh` 的 4 条）。
+#      加该条件后**凭空 0 → 7**（7 条全是误伤）⇒ 按「校准到 0 误伤」**撤回**该条，
+#      并删掉那个**定义了却从没用过**的 `OUTPUT_KW` 常量（判据与注释必须一致 —— M214 同族）。
+#   v4（M284s1）只做**两件必需**的事：① 扫描面补 `--untracked`；② 查询工具的调用行也算"查询"。
 CODE_EXT = (".sh", ".py", ".px", ".c", ".h", ".go", ".mk", ".bash")
-OUTPUT_KW = re.compile(r"\b(?:echo|printf|println|print|say|fputs|puts|write)\b")
+# **查询/消费**该串的行不产生它：`grep` 取数、`--probe` / `--count` 是本守卫自己的查询入口。
+QUERY_RE = re.compile(r"\bgrep\b|--probe|--count")
+# 对照档：复现**修前**口径（只看已跟踪）—— 只给门做 A/B，正常运行不得设置。
+TRACKED_ONLY = os.environ.get("ORCH_TRACKED_ONLY") == "1"
 
 
 def findable(s):
-    """骨架是否由**某条输出语句**产生（排除注释与文档里的引用）。"""
+    """骨架是否有**生产者**（出现在代码里、且那一行不是在注释/查询它）。"""
     if s in CACHE:
         return CACHE[s]
     ok = False
     try:
         # ⚠️ pathspec 必须是 **glob**（`*.sh`）—— 写成 `.sh` 会被当**字面路径**，
         #    git grep 找不到任何文件却**返回空**（不报错）⇒ 判据恒假（本仓第 N 次同形）。
+        # ⚠️ M284s1：**必须** `--untracked`（缺陷 496①）—— 否则「提交前」与「提交后」
+        #    是两个世界、两套结论，而本判据的职责恰恰是**在提交前**拦住。
         paths = ["*" + e for e in CODE_EXT]
-        r = subprocess.run(["git", "-C", ROOT, "grep", "-nF", "-e", s, "--"] + paths,
-                           capture_output=True, text=True, timeout=180)
+        cmd = ["git", "-C", ROOT, "grep", "-nF", "-e", s]
+        if not TRACKED_ONLY:
+            cmd.append("--untracked")
+        cmd += ["--"] + paths
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         for line in (r.stdout or "").split("\n"):
             if ":" not in line:
                 continue
@@ -92,8 +112,8 @@ def findable(s):
             st = _rest.strip()
             if st.startswith(("#", "//", "/*", "*", "--")):
                 continue                       # 注释里的**引用**不产生它
-            if re.search(r"\bgrep\b", _rest):
-                continue                       # **查询**它的行也不产生它
+            if QUERY_RE.search(_rest):
+                continue                       # **查询/消费**它的行也不产生它（496③）
             ok = True
             break
     except Exception:
