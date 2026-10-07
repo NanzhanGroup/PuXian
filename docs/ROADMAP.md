@@ -2,24 +2,31 @@
 
 > 定位：PuXian 主线公开路线图。展示已实现能力与规划方向，保持单一事实源。
 > 原则：每个里程碑完成后，更新本文档 + `CHANGELOG.md`，一次 commit 推送。
+> ⚠️ **现状如实说明**：本文件的「能力基线 / 验证体系」随里程碑更新（当前 = M285）；
+> 「已完成主线」表**逐条维护至 M183**，其后的里程碑记录在 `CHANGELOG.md`（根 `README.md` 有按波次归并的年表）。
 
 ## 一、能力基线
 
 | 能力 | 状态 |
 |---|---|
-| 语言自举 | ✅ 编译器由 PuXian 自身编写：**C 轨**（A.c == B.c == B2.c 逐字节一致）+ **BC 轨**（`compiler.bc.dump` 37,296 行逐字节对拍）双证明；14 件入库二进制带**源码链指纹门**（`rebake_bin.sh --check-all`，`PXSRC-…`/`PXRT-…`） |
+| 语言自举 | ✅ 编译器由 PuXian 自身编写：**C 轨**（A.c == B.c == B2.c 逐字节一致）+ **BC 轨**（`compiler.bc.dump` **41,405 行**逐字节对拍；C 轨基准 `golden/compiler.c` **18,974 行**）双证明；14 件入库二进制带**源码链指纹门**（`rebake_bin.sh --check-all`，`PXSRC-…`/`PXRT-…`） |
 | 工具链 | ✅ `tools/px`（build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp/refs）+ `bootstrap/` 14 件自举二进制，零 Rust 依赖（`pxc` 为兼容别名） |
 | 三轨执行 | ✅ tree-walking 解释轨 + **VM 字节码轨（`px build` 默认）** + C 文本轨（`--c`），**三轨行为一致**：diffcheck 六路 + 逐里程碑专属门逐字节对拍 |
 | 类型系统 | ✅ Result/Option（`?`/`!`）、不可变（E3002）、空安全（E3003）、定义级泛型 |
-| 语义一致性 | ✅ **M159–M167 收口**：求值顺序 = 词法左→右 · 迭代期间改容器 ⇒ `R1003`（长度快照）· 解包严格 · 字典键严格（构造位置 ⇒ `R1002`）· `sorted` 值比较 + 稳定 · 闭包按引用 / 生成器按值快照（详见 spec §17） |
+| 语义一致性 | ✅ **M159 起持续收口（至 M285）**：求值顺序 = 词法左→右 · 迭代期间改容器 ⇒ `R1003`（长度快照）· 解包严格 · 字典键严格（构造位置 ⇒ `R1002`）· `sorted` 值比较 + 稳定 · 闭包按引用 / 生成器按值快照 · 帧内绑定「未初始化即读」⇒ `R1001` · 真值性表 · 索引/切片族 · 运算符 × 类型全量矩阵（详见 spec §17 与 `docs/ERROR_CODES.md`） |
 | 多架构 | ✅ x86_64 / aarch64 / armv7 / riscv64 四档（CI 矩阵）；**aarch64 官方通道**（M159：`native_bootstrap.sh` gcc-only 自举 + 自证 · CI `native-arm64` 真机 job · Release 并列资产） |
-| 回归体系 | ✅ `m116_gates.sh` 全量门（语义门 + 发射冻结 + 重烘三连 + diffcheck 六路）+ capability + 双轨自举证明 + **每里程碑专属门（三轨一致 + 负控独立判红）** |
+| 回归体系 | ✅ **全量门 192 门 / 63 步**（单一注册源 `selfhost/gates.registry.sh` + 运行器 `run_gates.sh`：PID 互斥 / 脏树检查 / 逐门超时 / 计时 TSV / `--only`·`--skip`·`--list`）+ capability + 双轨自举证明 + **每里程碑专属门（三轨一致 + 负控各自独立判红）** |
+| **判据基础设施** | ✅ **26 个结构守卫**（`selfhost/check_*`：门注册一致性 ⇄ CI 双向 · 路径卫生 · 负控**打桩锚点在位** · 判据串**在场** · 门前提自证 · 嵌套密钥 · native 名册/覆盖面 · 锁内可失败分配 · 包架构卫生 · 二进制可移植性 · 门间 `/tmp` 隔离 · 孤儿门 …）+ **编排链入仓**（`packaging/chain/`：全量门裁决器 + 通用观察器） |
 | WebServer | ✅ HTTP/1.1/2/3、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
 | HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** → **生产化（M54：1-RTT resumption / 0-RTT early data / 连接迁移 / BLOCKED_STREAMS）** |
 | 边缘设备层 | ✅ M57：fd 原语（`open`/`close`/`ioctl`/`os_errno`，ioctl arg 三形态 int/bytes 就地 buffer）+ `read`/`write` 数据通道 + **mmap/munmap 活映射**（MAP_SHARED 帧缓冲/共享内存直访，GC 自动 munmap）+ GPIO/I2C 示例 + **aarch64 交叉编译**（`--no-quic` 裁剪 + qemu 验证）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制 |
-| 生态 | 仓库外私有生产应用（dogfood）+ **130 个示例目录 / 120 个单文件 `.px`**（docs/ECOSYSTEM.md 能力导航）+ **AI 速查包**（PUXIAN_CHEATSHEET，**native 367 项**单一事实源 `docs/native_index.json`）+ **13 个公开标准库**（`registry/` 随库分发，pxpkg fetch→import 双模式闭环） |
+| 生态 | 仓库外私有生产应用（dogfood）+ **229 个示例目录 / 120 个单文件 `.px`**（docs/ECOSYSTEM.md 能力导航）+ **AI 速查包**（PUXIAN_CHEATSHEET，**native 392 项**单一事实源 `docs/native_index.json`）+ **27 个标准库**（其中 13 个公开库）+ **registry 135 个包 / 257 个版本目录**（13 官方 + **122 第三方**来自 `registry-px` @ `01f6048` · Apache-2.0 · **238 个上游用例 × 双轨**回归）· pxpkg（init/add/install/list/remove）· `px.pkg.lock` 可复现（**`pxpkg sync` 见 §三 已立项**） |
 
 ## 二、已完成主线（里程碑记录，详见 CHANGELOG.md）
+
+> ⚠️ **本表逐条维护至 M183 为止**（更早 M0–M40 / M-B / M41–M67 为压缩行）。
+> **M184 之后的 100 个里程碑**（生态引入 → 逐值/逐型全量度量 → 判据基础设施）见
+> `CHANGELOG.md` 逐节，或根 `README.md` §里程碑 的「主线年表」（按波次归并）。
 
 | 里程碑 | 主题 |
 |---|---|
@@ -146,8 +153,10 @@
 | 自举不回归 | `bootstrap_prove.sh`（C 轨 B.c == `golden/compiler.c`）+ `bootstrap_prove_bc.sh`（BC 轨镜像逐字节） | 逐字节一致 |
 | **入库件 = 当前源码** | `./selfhost/rebake_bin.sh --check-all`（14 件指纹）+ `--check`（55 例行为）+ `--check-vm`（字节码镜像） | 全绿；改源码后需重烘 |
 | **发射冻结** | `./selfhost/emitc_freeze.sh` | 类别 B（既有产物漂移）为空，或逐行核对「变化全属本次改动族」后重定基 |
-| **全量门** | `./selfhost/m116_gates.sh` | 失败 0 项（本地跑负控；CI 用 `--neg-skip`） |
-| **语义门 + 负控** | `examples/m<NNN>_*/verify.sh`（M159–M167 每条规则一门） | 三轨 stdout 逐字节一致 + 严格性用例 `rc≠0` 同码同文 + **负控各自独立判红** |
+| **全量门** | `./selfhost/run_gates.sh`（旧名 `m116_gates.sh` 兼容转发） | 失败 0 项（本地跑负控；CI 用 `--neg-skip`）· 清单在 `gates.registry.sh`（**单一注册源**，与 `ci.yml` 双向一致由门守） |
+| **语义门 + 负控** | `examples/m<NNN>_*/verify.sh`（M159 起每条规则/每个面一门） | 三轨 stdout 逐字节一致 + 严格性用例 `rc≠0` 同码同文 + **负控各自独立判红** |
+| **结构守卫族** | `selfhost/check_*.sh` / `*.py`（26 个） | 各自 `--self-test` 通过 + 真仓 0 违例 + **规模锚点**（防判据静默变窄） |
+| **编排链** | `packaging/chain/gate_verdict.sh`（三路求交裁决）· `watch_chain.sh` | `VERDICT=GREEN/RED/INCONSISTENT`；**判红必须列得出红门** |
 | 跨架构 | `examples/m67_multiarch/verify.sh`（四档）/ `selfhost/native_bootstrap.sh`（真机 aarch64 自举 + 自证） | 一致 / 自证通过 |
 | 端到端示例 | examples/ 新增用例编译运行 | 输出符合预期 |
 
@@ -155,7 +164,7 @@
 
 - 多步骤里程碑用 task_checkpoint 记录子步进度（网关重启后可续）。
 - 完成一个里程碑：更新本文档状态 + CHANGELOG.md + README.md（示例/能力表）+ **docs/README.md（若新增文档）** + spec.md（若语义有变，**须落进 §17**）+ 一次 commit 推送。
-- **改语言语义/发射路径的硬约束**（M159–M167 教训成文）：
+- **改语言语义/发射路径的硬约束**（M159 起持续积累，以下为**实测教训成文**）：
   1. **先定规则再看代码**：规则要能一句话说清、三轨可同（「跟随某一家」不算规则）；
   2. 三轨一致 + **专属门 + 负控**（负控必须各自独立判红 —— 同时验证「门本身有牙」）；
   3. **重定基三件套**：`golden/compiler.c` / `compiler.bc.dump` / `selfhost/golden/*.c`（`cg_*.px` 改动查 `diffcheck --codegen`）+ 冻结门 `--freeze`；

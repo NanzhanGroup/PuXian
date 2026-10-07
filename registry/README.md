@@ -27,24 +27,27 @@ registry/<name>/<version>/<分包>.px          # 可选：多文件包（M187 �
 
 > **为什么 stdlib 还要 registry 化**：stdlib 随编译器/发布包内置（`import std.*`）；registry 形态供「按需拉取 + 版本锁定 + 可复现构建」场景（第三方项目/离线分发/自定义 registry），两者内容同源、import 名不同（`std.*` vs 裸名）。
 
-## 第三方包（52 · M187 引入 · 来源与许可见 `THIRD_PARTY.md`）
+## 第三方包（M187 引入 · **M282 上游 0.2.0 全量再引入** · 来源与许可见 `THIRD_PARTY.md`）
 
-> 来源：`github.com/banshanhanfu/registry-px`（**Apache-2.0**，与本仓同族）@ `db5f210`。
+> 来源：`github.com/banshanhanfu/registry-px`（**Apache-2.0**，与本仓同族）@ `01f6048`。
 > 纪律：**逐字节照搬**（不改上游一个字节）—— 来源/许可登记在 [`THIRD_PARTY.md`](THIRD_PARTY.md)，
 > 便于与上游 sha256 直接对拍；引入器 `tools/import_registry_px.sh`（`--apply` 才写盘）。
 
-| 面 | 包 |
-|---|---|
-| 编码/校验（二进制族） | base58 · checksum · bytes_pack · tar · xlsx · pdf |
-| 解析/格式 | csv · toml · ini · dotenv · glob · jsonpath · diff · parser · template |
-| 数据结构/算法 | big · datastruct · fractions · decimal · bisect · itertools · functools · stats · rate · table · textwrap |
-| Web/文本 | cli · log · ansi · strcase · shutil · metrics |
-| 安全/标识 | jwt · uuid · ulid · secure_random · validator · idcard · cnnum · faker |
-| 系统/资源 | config · retry · testkit · fsnotify · mailparse |
-| 差异化（需外部条件） | qrcode（解释轨慢：PX-DEF-024）· pg / mysql（测试需真实服务端）· concurrent_map / workerpool（并发 ⇒ **需编译模式**，解释器不跑并发） |
+> **逐包清单不在这里** —— 权威表是 [`THIRD_PARTY.md`](THIRD_PARTY.md)（**由引入器自动生成**，
+> 逐包记版本 / 文件数 / 入口 sha256 / 三轨验证 / 补丁），并由 `examples/m187_registry_import/verify.sh`
+> **重算 sha256 与磁盘对拍**防漂移。本文件只讲结构、纪律与消费路径，避免复述易腐烂的计数。
+>
+> 按用途粗分（**完整名单见 `THIRD_PARTY.md`**）：编码/校验（base58 / checksum / bytes_pack / xlsx / pdf …）·
+> 解析/格式（csv / toml / ini / dotenv / glob / template …）· 数据结构与算法（big / decimal /
+> fractions / bisect / itertools / stats …）· Web 与文本（cli / log / ansi / strcase …）·
+> 安全与标识（jwt / uuid / ulid / validator / idcard / cnnum …）· 系统与资源（config / retry /
+> testkit / fsnotify …）· **需外部条件**（qrcode 解释轨慢 · pg / mysql 需真实服务端 ·
+> concurrent_map / workerpool 需编译模式）。
+>
+> ⚠️ **`passhash`**：其 `pass_verify` 用 `int(parts[1])` 直接吃畸形 hash 串，在 M184「严格解析」
+> 后语义不再正确 —— 已由 **M189 加本地补丁**引入（见 `THIRD_PARTY.md` 的「补丁」列与
+> `tools/patches/registry-px/`），**上游修好后撤销补丁即可**。
 
-- **未引入**：`passhash` —— 其 `pass_verify` 用 `int(parts[1])` 直接吃畸形 hash 串，
-  在 M184「严格解析」后语义不再正确，**待上游先修**（登记在 `THIRD_PARTY.md`）。
 - 验证：`bash examples/m187_registry_import/verify.sh`（引入表逐行 sha256 对拍 + **全量**包装/import +
   抽样双轨编译 + 多文件包语义 + 负控 A/B/C）。
 - 验证（本轮口径）：`bash examples/m282_registry_020/verify.sh`（0.2.0 引入完整性 + 凭据守卫 +
