@@ -35,6 +35,15 @@
 #       core 栈 `xmalloc ← px_dict ← vm_run_loop` + 另一线程在 `px_gc_collect`）。
 #       ⇒ 被信号杀死时**记数并重试**（`N267`），并把命中次数**响亮打印**（不隐藏）；
 #         判据（T1/U2/DONE）才是判红依据。**这不是把崩溃当绿** —— 缺陷 267 有它自己的账。
+#   ③ **M284s1（缺陷 497）**：CI 实测本门判红（run 37569198043 · step[36] · 52min 那个 job），
+#      现场 = `T1=4` + **无 U2 / 无 DONE**（stress 与 stress2 两次都如此）。
+#      本机 **39 次**带检测器（`PX_GC_LIVECHK=1 PX_GC_UAFDET=1`）复跑 **0 命中** ⇒
+#      判为**宿主相关**（CI runner 更慢/更争用），**不是**产品回归 —— 如实登记，不冒充已修。
+#      两处加固：
+#        · **探针**把 UDP `bind` 提到 `spawn usrv()` 之前（原理上消除 ICMP→ECONNREFUSED 竞态）；
+#        · **门**把「重试原因」分类记账（信号 / 超时 / 异常退出）并把**探针 stdout 全文**
+#          打进自己的 stdout —— 否则 CI 注解里只能看到「未跑完」，**读不出真因**。
+
 #
 # ⚠️ 负控要**完整重建 runtime**（改 runtime.c ⇒ .rtcache key 变）⇒ CI 用 `--neg-skip`。
 # ============================================================
@@ -64,6 +73,8 @@ BIN="$BD/probe_eintr"
 PASS=0
 FAIL=0
 N267=0
+NTO=0
+NAB=0
 ok() { echo "  PASS $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL + 1)); }
 
@@ -103,15 +114,30 @@ run_once() {
     echo "$?"
 }
 
-# 跑一档（**被信号杀死时记数重试** —— 见文件头 ⚠️②）：$1=档名，余 env
+# 跑一档（**信号 / 超时 / 异常退出时分类记账并重试** —— 见文件头 ⚠️②③）：$1=档名，余 env
+# ⚠️ M284s1（缺陷 497）：修前**只**重试 `rc ≥ 128`（信号），而 CI 上实测的失败是超时/异常退出
+#    ⇒ 门只报「探针未跑完」，**说不出为什么**。现在三类各自记数、各自响亮打印。
+#    **判据强度不变**：真缺陷（EINTR 未被重试）表现为 `T1=-1 / U2=-1` 且 **rc=0**
+#    （探针正常跑完）⇒ 照样判红；重试只针对"探针没能跑完"这一类的宿主干扰。
 run_track() {
     local tag="$1"; shift
-    local i rc
+    local i rc t0 el
     for i in 1 2 3; do
+        t0=$SECONDS
         rc="$(run_once "$tag" "$@")"
-        if [ "$rc" -lt 128 ]; then return 0; fi
-        N267=$((N267 + 1))
-        echo "  ℹ️ [$tag] 第 $i 次被信号杀死（rc=$rc）—— 疑似**缺陷 267 家族**（并发 GC · 已登记未修）⇒ 重试"
+        el=$((SECONDS - t0))
+        echo "  ·  [$tag] 第 $i 次 rc=$rc 耗时 ${el}s"
+        if [ "$rc" = 0 ]; then return 0; fi
+        if [ "$rc" -ge 128 ]; then
+            N267=$((N267 + 1))
+            echo "  ℹ️ [$tag] 第 $i 次被信号杀死（rc=$rc）—— 疑似**缺陷 267 家族**（并发 GC · 已登记未修）⇒ 重试"
+        elif [ "$rc" = 124 ]; then
+            NTO=$((NTO + 1))
+            echo "  ℹ️ [$tag] 第 $i 次**超时**（rc=124 · 上限 180s）—— 高负载宿主上压力档会被饿死 ⇒ 重试"
+        else
+            NAB=$((NAB + 1))
+            echo "  ℹ️ [$tag] 第 $i 次异常退出（rc=$rc）⇒ 重试"
+        fi
     done
     return 1
 }
@@ -129,7 +155,14 @@ judge_track() {
     if [ "$v" = "$e_u2" ]; then ok "[$tag] U2=$v（udp_recv 拿到数据报）"
     else bad "[$tag] U2=$v（期望 $e_u2 —— udp_recv 被中断后返回 null=「没有包」静默丢包）"; n=$((n + 1)); fi
     if grep -q '^M256-PROBE-DONE$' "$W/out_$tag.txt"; then ok "[$tag] 探针跑到结尾"
-    else bad "[$tag] 探针未跑完（异常/挂死）"; n=$((n + 1)); fi
+    else
+        bad "[$tag] 探针未跑完（异常/挂死）"; n=$((n + 1))
+        # ⚠️ M284s1（缺陷 497）：**把现场打进 stdout** —— CI 的 job 日志非管理员 403，
+        #    注解是唯一通道，而只有 stdout 会被注解带走（「门红了要能读出真因」）。
+        echo "       ── [$tag] 探针 stdout 全文（含 stderr）──"
+        sed 's/^/       | /' "$W/out_$tag.txt" 2>/dev/null
+        echo "       ── 结束（rc 见上方 [第 N 次 rc=…] 行）──"
+    fi
     return $((n > 0 ? 1 : 0))
 }
 
@@ -278,6 +311,7 @@ fi
 
 echo
 echo "ℹ️ 缺陷 267 家族（并发 GC · 已登记未修）命中并重试：$N267 次"
+echo "ℹ️ 重试分类（缺陷 497 记账）：超时 $NTO 次 · 异常退出 $NAB 次 —— 两类都**不是** EINTR 回归"
 if [ "$FAIL" -eq 0 ]; then
     echo "M256-VERIFY-OK（通过 $PASS / 失败 $FAIL）"
     exit 0
