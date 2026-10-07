@@ -21,6 +21,12 @@ done
 if ! grep -q READY "$UP" 2>/dev/null; then
     echo "FAIL 上游桩未就绪"; tail -5 "$UP"; kill $UPPID 2>/dev/null; exit 1
 fi
+# M283（前提守卫 P2）：READY **字样**不等于**可服务** —— M280 的事故形态正是
+#   「先写 ready、后绑定失败」⇒ 判据全绿而服务没起来。⇒ 补一条**真连接探测**。
+if ! timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then
+    echo "FAIL 上游桩已写 READY，但端口 $PORT **连不上**（M283 强就绪判据）"
+    tail -5 "$UP"; kill $UPPID 2>/dev/null; exit 1
+fi
 
 run_track() {
     local track="$1"

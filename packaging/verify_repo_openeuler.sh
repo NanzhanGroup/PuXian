@@ -100,6 +100,7 @@ GOT="$(/tmp/pxt/build/hello)"
 echo "   编译产物运行 OK：$GOT"
 
 echo "== [verify-oe] 解释轨（px run）=="
-/usr/bin/pxc run hello.px | grep -q openeuler-pkg-ok || { echo "❌ px run 失败"; exit 1; }
+_pxout="$(/usr/bin/pxc run hello.px 2>&1)" || { echo "❌ px run 失败"; exit 1; }
+grep -q 'openeuler-pkg-ok' <<<"$_pxout" || { echo "❌ px run 输出不含 openeuler-pkg-ok：[$_pxout]"; exit 1; }
 
 echo "✅ openEuler $OE_VER 正式签名仓库：dnf 双验签 + 安装 + 真编译运行 全部通过"

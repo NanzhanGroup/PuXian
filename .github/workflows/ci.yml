@@ -1102,6 +1102,13 @@ jobs:
           grep -E '通过 [0-9]+ · 失败' /tmp/v_m282.log | tail -1 || true
           echo "✅ m282_registry_020（表⇔磁盘 244 行 · 清单/登记双向 · 无凭据 · ftp 0.2.0 补覆盖）PASS"
 
+      - name: m283_gate_premise（判据的「第 0 维：前提」—— P1 端口互斥 / P2 强就绪 / P3 禁形 / P4 前提可得）
+        if: always()
+        run: |
+          NEG_SKIP=1 bash examples/m283_gate_premise/verify.sh > /tmp/v_m283.log 2>&1 || { echo "❌ m283 门失败（前提守卫：4 类反例未逐类指名 / 登记过期判据 / 负控）"; grep -E '^(  ❌|== )' /tmp/v_m283.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'M283 门：通过' /tmp/v_m283.log | tail -1 || true
+          echo "✅ m283_gate_premise（守卫自证 10/0 · 真仓 rc=0 · 4 类反例逐类指名 · 覆盖边界 4 条）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

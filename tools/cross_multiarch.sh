@@ -135,7 +135,7 @@ echo "== 架构校验（file 断言 $FILE_RE）=="
 CHK="$(mktemp -d)"
 ok=1
 ( cd "$CHK" && ar x "$MBED_DIR/libmbedcrypto.a" "$(ar t "$MBED_DIR/libmbedcrypto.a" | head -1)" \
-    && file *.o | grep -qE "$FILE_RE" ) || { echo "mbedtls 架构不符"; ok=0; }
+    && file *.o > "$CHK/.file.out" && grep -qE "$FILE_RE" "$CHK/.file.out" ) || { echo "mbedtls 架构不符"; ok=0; }
 ( cd "$CHK" && ar x "$ZLIB_DIR/libz.a" crc32.o \
     && file crc32.o | grep -qE "$FILE_RE" ) || { echo "zlib 架构不符"; ok=0; }
 file "$SQLITE_OBJ" | grep -qE "$FILE_RE" || { echo "sqlite3 架构不符"; ok=0; }
