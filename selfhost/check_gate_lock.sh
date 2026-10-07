@@ -79,8 +79,20 @@ res = {'gates': len(gates), 'marked': 0, 'no_src': [], 'bad_order': [], 'run_ok'
        'lock_exists': False, 'src_gates': 0}
 for d, v in gates:
     raw = open(v, encoding='utf-8', errors='ignore').read()
-    if SRC.search(raw):
+    # ── J1：**每个**门都要 source（M285 收尾收紧 · 缺陷 499-b）────────
+    #   原文只对「含改源码标记」的门查 source（`if mark_ln is None: continue`），
+    #   而头注写的是「每个」⇒ **头注与实现不符**（缺陷 496 同族）。
+    #   为什么「每个」才对：锁保护的是**读写双方** —— 只**读**源码的门（扫描 / 对拍 /
+    #   判据点）同样会被并发打桩的中间态污染（M276 记的假红 / 假绿就是这么来的）。
+    src_ln = None
+    for i, line in enumerate(raw.split('\n')):
+        if SRC.match(line):
+            src_ln = i
+            break
+    if src_ln is not None:
         res['src_gates'] += 1
+    else:
+        res['no_src'].append(d)   # ← 缺陷 499-c：与 J1 的计数口径**对齐**
     # ⚠️ 顺序判据必须比**行号**，不能比**字节偏移** ——
     #   `strip_hash_comments` 会**删掉**注释字符 ⇒ 两个串长度不同，偏移不可比
     #   （M276 自伤：首版用 start() 比较 ⇒ 194 门里 84 门假报「source 在标记之后」）。
@@ -92,14 +104,7 @@ for d, v in gates:
     if mark_ln is None:
         continue
     res['marked'] += 1
-    src_ln = None
-    for i, line in enumerate(raw.split('\n')):
-        if SRC.match(line):
-            src_ln = i
-            break
-    if src_ln is None:
-        res['no_src'].append(d)
-    elif src_ln > mark_ln:
+    if src_ln is not None and src_ln > mark_ln:
         res['bad_order'].append(d)
 
 rg = open(os.path.join(root, 'selfhost/run_gates.sh'), encoding='utf-8', errors='ignore').read()

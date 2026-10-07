@@ -15,6 +15,7 @@
 #   [3] 三轨对拍：stdlib 纯函数族 × 边界/错类型 ⇒ 分叉 0 + 契约表双向
 # ============================================================
 set -u
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 W="${M279_W:-/tmp/m279}"
