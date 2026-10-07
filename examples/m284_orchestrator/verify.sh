@@ -23,6 +23,7 @@
 #    （bash 5.1 + set -u 下会取到外层变量）。
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 
 ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$ROOT" || exit 1

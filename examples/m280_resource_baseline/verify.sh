@@ -18,6 +18,7 @@
 #   ⇒ 首版「每轮增量 ≤ 2MB / 线程 ≤ 2」把**预热**误报成**泄漏**（3 连红）。
 # ============================================================
 set -u
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 W="${M280_W:-/tmp/m280gate}"
