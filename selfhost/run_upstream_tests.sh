@@ -27,6 +27,8 @@
 #                                  [--no-fixtures] [--run-skipped] [--timeout <sec>]
 #                                  [--expected <file>] [--json <file>] [-v]
 # 退出码：0 = 与 EXPECTED 完全一致；非 0 = 有偏离（未预期失败 / XFAIL 意外通过 / 清单漂移）
+#         **抖动（首跑失败、确认步通过）不判非零**，但响亮计数；≥3 次视为系统性问题 ⇒ 非零。
+#   --no-confirm：关掉确认步（仅用于定性排查，不用于验收）
 # ============================================================
 set -u
 
@@ -59,6 +61,7 @@ while [ $# -gt 0 ]; do
         --keep) KEEP=1; shift ;;
         --no-fixtures) FIXTURES=0; shift ;;
         --run-skipped) RUN_SKIPPED=1; shift ;;
+        --no-confirm) CONFIRM=0; shift ;;
         --list) LIST=1; shift ;;
         -v) VERBOSE=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
@@ -263,7 +266,8 @@ echo "── 环境 fixture：PX_TEST_HOST=env-host · APP_DB_HOST=env-db-host�
 : > "${JSON:-/dev/null}"
 
 # ---------- 跑 ----------
-PASS=0; FAIL=0; SKIP=0; XFAIL=0; MISMATCH=0
+PASS=0; FAIL=0; SKIP=0; XFAIL=0; MISMATCH=0; FLAKE=0
+CONFIRM=${CONFIRM:-1}   # 失败确认步（M287s2）：1=启用（默认）／0=关闭（仅用于定性排查）
 : > /tmp/.ut_res.$$
 run_one() {  # $1=track  $2=test  → 设 RC / OUT
     local trk="$1" t="$2" log="$WORK/$1-$2.log"
@@ -320,6 +324,21 @@ for t in "${SEL[@]}"; do
         else
             got=FAIL
         fi
+        # ── M287s2：**失败确认步**（先例：M207 gcstress_sweep.sh「FAIL 先自证稳定」）──
+        #   动机（实测）：上游 `mock_test` 的 `mk_start_server` = `spawn mk_server_loop(...)`
+        #   后**立即返回**（listener 在协程里创建）⇒ 客户端靠 `req_retry`（20×20ms）兜住
+        #   启动竞态；而 `max_conns=10` 会被重试产生的**额外连接**吃掉 ⇒ 重负载下后续
+        #   `mk_request` 撞 ECONNREFUSED。全量门内 1 次红；单独跑 2/2 全绿（419/0）。
+        #   ⇒ 上游用例的**负载敏感设计**，不是 PuXian 缺陷。
+        #   ⚠️ 只对「期望 PASS 却 FAIL」重跑：**真缺陷两次都失败 ⇒ 仍是 FAIL**，不被掩盖。
+        #   ⚠️ 抖动**响亮计数**（汇总 + --json + ≥3 判非零），不静默。
+        if [ "$got" = FAIL ] && [ "$ex" = PASS ] && [ "$CONFIRM" = 1 ]; then
+            echo "  … $t[$trk] 首跑失败 ⇒ 确认步（重跑一次）"
+            run_one "$trk" "$t"
+            if [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -qE 'PASS|done'; then
+                got=FLAKE
+            fi
+        fi
         if [ "$ex" = SKIP ]; then   # --run-skipped 下跑了期望跳过的：只作信息
             [ "$VERBOSE" = 1 ] && echo "  ℹ $t[$trk] 期望 SKIP，实跑 $got"
         elif [ "$ex" = XFAIL ]; then
@@ -333,6 +352,10 @@ for t in "${SEL[@]}"; do
                 XFAIL=$((XFAIL + 1))
                 [ "$VERBOSE" = 1 ] && echo "  ⊘ $t[$trk] 期望失败（上游缺陷）· 实跑 $got"
             fi
+        elif [ "$ex" = PASS ] && [ "$got" = FLAKE ]; then
+            # M287s2：**抖动**（首跑失败、确认步通过）—— 响亮计数，**不判红**
+            echo "  ⚠ $t[$trk] 抖动：首跑失败、确认步通过（负载敏感，见脚本头注）"
+            FLAKE=$((FLAKE + 1))
         elif [ "$got" = "$ex" ]; then
             PASS=$((PASS + 1))
             [ "$VERBOSE" = 1 ] && echo "  ✓ $t[$trk]"
@@ -348,17 +371,23 @@ done
 # ---------- 汇总 ----------
 echo "── 结果 ──"
 awk -F'\t' '{c[$3]++} END {for (k in c) printf "  %-8s %d\n", k, c[k]}' /tmp/.ut_res.$$ | sort
-echo "  通过 $PASS · 失败 $FAIL · 跳过 $SKIP · 期望失败(XFAIL) $XFAIL · 期望值缺失 $MISMATCH"
+echo "  通过 $PASS · 失败 $FAIL · 跳过 $SKIP · 期望失败(XFAIL) $XFAIL · 期望值缺失 $MISMATCH · 抖动(FLAKE) $FLAKE"
 if [ -n "$JSON" ]; then
     # ⚠️ SKIP 行的第 4 列是**理由**（不是 rc）⇒ 生成 JSON 时必须区分，
     #   否则产出 `"rc":interp 设计性不支持 …`（非法 JSON —— 首版就踩了这个）。
     { echo "{"; echo '  "tests": [';
       awk -F'\t' 'BEGIN{n=0} {n++; rc=($4 ~ /^-?[0-9]+$/ ? $4 : "null");
         printf "%s    {\"test\":\"%s\",\"track\":\"%s\",\"result\":\"%s\",\"rc\":%s}", (n>1?",\n":""), $1,$2,$3,rc} END{print ""}' /tmp/.ut_res.$$;
-      echo "  ],"; echo "  \"pass\": $PASS, \"fail\": $FAIL, \"skip\": $SKIP, \"xfail\": $XFAIL, \"mismatch\": $MISMATCH"; echo "}"; } > "$JSON"
+      echo "  ],"; echo "  \"pass\": $PASS, \"fail\": $FAIL, \"skip\": $SKIP, \"xfail\": $XFAIL, \"mismatch\": $MISMATCH, \"flake\": $FLAKE"; echo "}"; } > "$JSON"
 fi
 rm -f /tmp/.ut_res.$$
-if [ "$FAIL" != 0 ] || [ "$MISMATCH" != 0 ]; then
+if [ "$FLAKE" != 0 ] && [ "$FAIL" = 0 ] && [ "$MISMATCH" = 0 ]; then
+    echo "══ 注意：与 EXPECTED 一致，但有 $FLAKE 次**抖动**（首跑失败、确认步通过）══"
+fi
+if [ "$FLAKE" -ge 3 ] && [ "$FAIL" = 0 ]; then
+    echo "   ⚠️ 抖动 $FLAKE 次（≥3）—— 不再是「偶发」，请查负载/端口争用"
+fi
+if [ "$FAIL" != 0 ] || [ "$MISMATCH" != 0 ] || [ "$FLAKE" -ge 3 ]; then
     echo "══ 汇总：上游用例回归 与 EXPECTED 不一致 ══"
     [ "$KEEP" = 1 ] && echo "工作区保留: $WORK"
     exit 1

@@ -185,13 +185,32 @@ fi
 
 # ───────────────────────── ⑤ 生态自查 ─────────────────────────
 hdr "[5/7] 生态自查：用 devbuild 的门数下限 + CI 全带 --neg-skip"
-nd=$(grep -l 'devbuild' "$ROOT"/examples/*/verify.sh 2>/dev/null | wc -l)
-if [ "$nd" -ge 20 ]; then note "✅ 用 devbuild 的门 = $nd（≥20，与本轮实测 23 一致）"
-else bad "用 devbuild 的门只有 $nd（<20）⇒ 与「23 门 × 45s」的前提不符，请复核"; fi
+# ⚠️ M287s2 收紧：判据必须基于**真实调用**，不是「提到过」。
+#   旧判据 `grep -l 'devbuild'` 把只在 grep 参数 / 说明里出现 `devbuild.sh` 的门也算进来
+#   （实测：去注释后 **45** 门「提到」⇄ **23** 门**真调用**，虚高一倍）；后果是
+#   m283_gate_premise 被要求带 --neg-skip —— 而它**不跑** devbuild，只在 [7g] 里
+#   `grep -cF … ../../selfhost/devbuild.sh` ⇒ 全量门假红（M287s2）。
+uses_devbuild() {   # $1=verify.sh → rc 0 = **真实调用** devbuild
+    [ -n "$(grep -vE '^[[:space:]]*#' "$1" | grep -F 'devbuild.sh' \
+            | grep -vE '^[[:space:]]*(note|echo|chk|hdr|if|\[)' \
+            | grep -vE '\b(grep|find|rg)\b')" ]
+}
+nd=0; DEVGATES=""
+for f in "$ROOT"/examples/*/verify.sh; do
+    uses_devbuild "$f" && { nd=$((nd+1)); DEVGATES="$DEVGATES $f"; }
+done
+if [ "$nd" -ge 20 ]; then note "✅ **真实调用** devbuild 的门 = $nd（≥20）"
+else bad "真实调用 devbuild 的门只有 $nd（<20）⇒ 与「23 门 × 45s」的前提不符，请复核"; fi
+# 反向判据：只在 grep 参数 / 说明里提到 devbuild.sh 的门**不得**被计入（m283 的精确形状）
+if uses_devbuild "$ROOT/examples/m283_gate_premise/verify.sh"; then
+    bad "只「提到」devbuild.sh 的门被当成真调用 ⇒ 判据过宽（M287s2 的假红形状）"
+else
+    note "✅ 反向判据：m283（仅 grep 参数提及）**不**计入"
+fi
 
 # CI：这些门的调用必须带 --neg-skip（否则 CI 上会跑负控⇒改源码⇒缓存不稳定）
 bad_ci=""; nskip=0
-for f in $(grep -l 'devbuild' "$ROOT"/examples/*/verify.sh 2>/dev/null); do
+for f in $DEVGATES; do
     m=$(basename "$(dirname "$f")")
     if grep -q "$m/verify.sh" "$CI" 2>/dev/null; then
         if grep -q "$m/verify.sh --neg-skip" "$CI"; then nskip=$((nskip+1)); else bad_ci="$bad_ci $m"; fi

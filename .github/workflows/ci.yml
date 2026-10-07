@@ -504,6 +504,14 @@ jobs:
           #   三条硬判据：① 用例逐字节照搬（MANIFEST.sha256）② 引用面完整（缺模块只警告不报错 ⇒ 必须前置查）
           #   ③ 与 EXPECTED.tsv **对拍**（期望值是登记的数据，不是"跑出来是什么"；缺登记 ⇒ MISMATCH）。
           bash selfhost/run_upstream_tests.sh --json /tmp/upstream_tests.json > /tmp/v_upstream_tests.log 2>&1 || { echo "❌ 上游 registry-px 用例回归失败"; tail -40 /tmp/v_upstream_tests.log; exit 1; }
+          # M287s2 · 上游回归的「失败确认步 / FLAKE」自证（4 组 11 判据）：
+          #   `mock_test` 的桩服务器 `mk_start_server` = `spawn mk_server_loop(...)` 后**立即返回**
+          #   ⇒ 客户端靠 `req_retry`（20×20ms）兜住启动竞态；而 `max_conns=10` 会被重试产生的
+          #   **额外连接**吃掉 ⇒ 重负载下后续 `mk_request` 撞 ECONNREFUSED（全量门内 1 次红，
+          #   单独跑 2/2 全绿 = 419/0）⇒ 上游用例的**负载敏感设计**，不是产品缺陷。
+          #   本自证用**假 tools/px** 在**真实判据代码**上端到端验证：抖动 ⇒ FLAKE（响亮、不判红）／
+          #   两次都失败 ⇒ 仍 FAIL（**不被掩盖**）／`--no-confirm` 关断／正常路径不误报。
+          bash selfhost/selftest_upstream_confirm.sh > /tmp/v_upstream_confirm.log 2>&1 || { echo "❌ 上游回归「确认步」自证失败"; tail -30 /tmp/v_upstream_confirm.log; exit 1; }
           # M191（第 69 轮）· 诊断面「三族口径 + 码的单一真相」（docs/ERROR_CODES.md 为权威口径）：
           #   ① native 侧 42 处**语言层**错误补齐 R 码（`切片步长 0`⇒R1006、`此类型不支持切片`⇒R1002…），
           #      域前缀族登记为**闭集**；② `assert` 失败解释轨此前错标 R1003（越界）⇒ 两侧统一 R2001，

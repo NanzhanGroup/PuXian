@@ -277,7 +277,12 @@ j = s.index('\n', j) + 1
 io.open(p, 'w', encoding='utf-8').write(s[:k] + s[j:])
 print('NEG-A patch ok（删 %d 字节，含 #ifndef/#endif 两侧）' % (j - k))
 PYEOF
-    ( cd "$ROOT" && ./selfhost/devbuild.sh pxc >"$W/negA_build.log" 2>&1 )
+    # ⚠️ M287s2：负控必须拿到**本次打桩后的新构建** ⇒ 显式 `DEVB_REBUILD=1`。
+    #   否则 M287 多槽对「同一打桩内容」会命中（⏭）⇒ 输出里**没有** `✅ pxc`
+    #   ⇒ 门误判「重建失败」（实测 m236 rc=1；而首跑是绿的 —— 因为首跑槽还空着）。
+    #   ⚠️ 刻意**不**改成「接受 ⏭」：那会让本负控依赖「槽里的件是对的」，
+    #      而「槽里的件是对的」正是 m223 在证的不变量 ⇒ 循环依赖。
+    ( cd "$ROOT" && DEVB_REBUILD=1 ./selfhost/devbuild.sh pxc >"$W/negA_build.log" 2>&1 )
     if grep -q '^✅ pxc' "$W/negA_build.log"; then
         cp /tmp/pxcdev "$W/negA_pxc"
         PXC_BIN_OVERRIDE="$W/negA_pxc" pair c srv.px 18831 basic negA
@@ -305,7 +310,7 @@ if s.count(old) != 1:
 io.open(p, 'w', encoding='utf-8').write(s.replace(old, "    /* NEG-B: 不登记握手头原文 */", 1))
 print('NEG-B patch ok')
 PYEOF
-    ( cd "$ROOT" && ./selfhost/devbuild.sh pxc >"$W/negB_build.log" 2>&1 )
+    ( cd "$ROOT" && DEVB_REBUILD=1 ./selfhost/devbuild.sh pxc >"$W/negB_build.log" 2>&1 )
     if grep -q '^✅ pxc' "$W/negB_build.log"; then
         cp /tmp/pxcdev "$W/negB_pxc"
         PXC_BIN_OVERRIDE="$W/negB_pxc" pair c srv.px 18832 basic negB

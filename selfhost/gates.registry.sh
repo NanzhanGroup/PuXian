@@ -1044,6 +1044,23 @@ step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EX
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
 run upstream_tests bash selfhost/run_upstream_tests.sh
+# ── M287s2：上游回归的「失败确认步 / FLAKE」自证 ─────────────────────────
+#   动机（实测）：上游 `mock_test` 的桩服务器 `mk_start_server` = `spawn mk_server_loop(...)`
+#   后**立即返回**（listener 在协程里创建）⇒ 客户端靠 `req_retry`（20×20ms）兜住启动竞态；
+#   而 `max_conns=10` 会被重试产生的**额外连接**吃掉 ⇒ 重负载下后续 `mk_request` 撞
+#   ECONNREFUSED。全量门内 1 次红；单独跑 2/2 全绿（419 通过 / 0 失败）
+#   ⇒ **上游用例的负载敏感设计**，不是产品缺陷。
+#   ⇒ `run_upstream_tests.sh` 新增**确认步**（先例：M207 gcstress_sweep.sh「FAIL 先自证稳定」）：
+#     只对「期望 PASS 却 FAIL」重跑一次；重跑通过 ⇒ `FLAKE`（响亮计数，不判红）；
+#     两次都失败 ⇒ 仍是 `FAIL`（**真缺陷不被掩盖**）；≥3 次抖动 ⇒ 仍判非零。
+#   本自证用**假 tools/px** 在**真实判据代码**上端到端验证 4 组 11 判据：
+#     ① 抖动 ⇒ rc=0 + 告警行 + --json flake=1（计数守恒）
+#     ② 两次都失败 ⇒ rc≠0 + fail=1（不被掩盖）
+#     ③ `--no-confirm` ⇒ 首跑失败即 FAIL
+#     ④ 正常路径 ⇒ flake=0（不误报）
+#   ⚠️ 假件判据必须锚「第一次 **build**」—— harness 启动时会先跑一次 `px --version`
+#      取版本号；锚「第一次调用」会被它吃掉 ⇒ ①③ 假绿（本轮实测踩过）。
+run upstream_confirm_selftest bash selfhost/selftest_upstream_confirm.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
