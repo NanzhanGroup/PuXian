@@ -1,14 +1,14 @@
 # PuXian 生态总览（Ecosystem Overview）
 
 > 面向人（开发者/使用者）与 AI（agent/大模型）的 PuXian 生态入口：**有什么库、能干什么、怎么拿来用、怎么写对**。
-> 建立：M69-S1（2026-09-05）· 最近更新：M167（2026-09-21，补严格化规则 §6）。
+> 建立：M69-S1（2026-09-05）· 最近更新：**M285**（2026-10-07：示例目录数对齐 229 · registry 总量与第三方引入口径 · §4 消费路径补 registry 全景）。
 > 维护：stdlib 变更须同步本文件与机器索引（见 §5 防漂移）。
 > 配套：`docs/README.md`（**文档索引**）· `docs/PUXIAN_CHEATSHEET.md`（AI 速查包）·
 > `docs/ECOSYSTEM_GAPS.md`（写库规范与语言缺口评估）· `docs/DICT_STRICT_MIGRATION.md`（严格化迁移）。
 
 ---
 
-## 1. 标准库一览（stdlib/ · 13 库）
+## 1. 标准库一览（stdlib/ · **13 个公开库 / 27 个 `.px`**）
 
 全部为纯语言 `.px`（零 C），随发布包分发；`import std.<name>` 或 `from std.<name> import <fn>`。
 除注明外均为纯函数库（无 IO、无状态），**编译（pxc build）与解释（pxi run）双模式一致**（M68 起 native 可达性根治，本表示例均双模式实测）。
@@ -53,7 +53,10 @@ print(ya["ok"])                                         # true（ya["value"] 为
 
 其余库一行式：`wr_parse_file("get_healthz.px")` → 路由规则 dict；`lr_solar_to_lunar(2026, 9, 5)` → 农历（实测 `{"ok":true,"year":2026,"month":7,"day":24,"leap":false}`）；`pxml_parse("a = 1\nb = \"hi\"\n")["ok"]` → true；`set_px(canvas_create(4,4), 1, 1, 0xFF0000)` 后 `get_px` → 16711680；`png_encode(2, 2, [...])` → 82 字节 PNG；`html_text(html_parse("<p>hi<b>x</b></p>"))` → "hix"；`mp_encode({...}, {...})` → 带随机 boundary 的 bytes body；`smtp_send(...)` 连本地/内网 SMTP 发信。完整 API 文档：`tools/pxc doc stdlib/<name>.px`。
 
-## 3. Dogfood 资产图（examples/ · **130 个示例目录 / 120 个单文件 `.px`**）
+## 3. Dogfood 资产图（examples/ · **229 个示例目录 / 120 个单文件 `.px`**）
+
+> ⚠️ 示例目录在 M184 之后大量增长，**绝大多数是「门」**（三轨逐字节一致 + 负控各自独立判红），
+> 而非 dogfood 应用 —— 看能力导航请优先 `m58_hwmond/`、`m6x_*`、`m67_aarch64/` 这些**真工程**。
 
 PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自证）。examples/ 是可复用资产库与能力导航：
 
@@ -97,8 +100,13 @@ PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自
 1. **import std.***：`import std.collections` → 直接调函数（双模式皆可；M68 起 native 零 extern def）。
 2. **pxpkg + 官方 registry**（M45 + M69-S3 打通 fetch→import 闭环）：`PX_REGISTRY=<仓库>/registry` → `pxpkg init` + `pxpkg add semver@^0.1.0` + `pxpkg install` → 安装到 `.px_modules/<name>/<name>.px`，**`import <name>`（裸名）编译/解释双模式可用** + `px.pkg.lock` 可复现（`--locked` 防篡改/registry 离线仍复现）。官方 13 库镜像随库入库（`registry/<name>/0.1.0/<name>.px`，见 `registry/README.md`）；端到端验证 `examples/m69_registry/verify.sh`（11 断言）。远程：registry 目录随 git clone 分发，或单包 `http(s) URL#sha256`。
 3. **拷源码改**：stdlib 全纯语言，直接读源码/拷进项目改（每文件 <500 行，符合大模型友好约束）。
-4. **文档链**：本文件（总览）→ `docs/PUXIAN_CHEATSHEET.md`（速查）→ `docs/spec.md`（规范）→ `docs/MINI_SUBSET.md`（子集边界）→ `docs/PXML.md`（PXML 规范）→ `docs/ROADMAP.md`（里程碑史）。
-5. **代码内文档**：`tools/pxc doc stdlib/<name>.px` 从 `##` 注释生成该库 Markdown API 文档。
+4. **registry 全景（M282 口径）**：`registry/` = **135 个包 / 257 个版本目录** = **13 个官方包**
+   （与 `stdlib/` 同源镜像）+ **122 个第三方包**（来自 `banshanhanfu/registry-px` @ `01f6048`，**Apache-2.0**，
+   逐字节照搬 ⇒ 引入表 `registry/THIRD_PARTY.md` 由生成器维护并由门重算 sha256 防漂移）。
+   上游用例 **238 个 × 双轨**回归在 `upstream-tests/`（期望表 `EXPECTED.tsv`）。
+   ⚠️ 本仓自建包若与同名上游包冲突，以**本仓版本目录**为准（M282 起上游每包有两份 `0.1.0`/`0.2.0`）。
+5. **文档链**：本文件（总览）→ `docs/PUXIAN_CHEATSHEET.md`（速查）→ `docs/spec.md`（规范）→ `docs/MINI_SUBSET.md`（子集边界）→ `docs/PXML.md`（PXML 规范）→ `docs/ROADMAP.md`（里程碑史）。
+6. **代码内文档**：`tools/pxc doc stdlib/<name>.px` 从 `##` 注释生成该库 Markdown API 文档。
 
 ## 5. 生态索引与防漂移（机器可读）
 
