@@ -128,26 +128,49 @@ else
 fi
 
 # ───────────────────────── ③ 敏感性 ─────────────────────────
-hdr "[3/7] 敏感性：改 runtime/*.c ⇒ 指纹必变 + 必重建；还原后再变（不会误命中）"
+hdr "[3/7] 敏感性：改 runtime/*.c ⇒ 指纹必变 +（单槽层）必重建；还原后回到**干净基线产物**（多槽层：0 重建）"
 K0=$(devkey "$W/r2.log")
+# ── M287：留一份**探针之前**的干净产物 —— 还原后的判据要比「是否重建」更本质：
+#   真正要保证的是「产物**没有被探针污染**」，而不是「必须重建一次」。
+cp -a /tmp/pxcdev "$W/pxcdev.clean" 2>/dev/null || true
 printf '\n/* M221-GATE-PROBE（本门自证用，随即还原）*/\n' >> "$RC"
-timeout 900 bash "$D" pxc > "$W/s1.log" 2>&1
+# ⚠️ M287：这一段测的是**单槽指纹短路**层 ⇒ 显式关掉外层（多槽）。否则：
+#   探针的 patched key 在**上一轮**已经建过 ⇒ 多槽命中（建 0）⇒ 把「短路对 runtime 敏感」
+#   误判成缺陷（实测：未关时 建0/复用1 ⇒ 本判据红，而产物其实**正确地**对应 patched 源码）。
+DEVB_SLOTS=0 timeout 900 bash "$D" pxc > "$W/s1.log" 2>&1
 K1=$(devkey "$W/s1.log"); nb1=$(grep -c '^✅' "$W/s1.log"); nr1=$(grep -c '^⏭' "$W/s1.log")
-note "改 runtime.c：key $K0 → $K1（建 $nb1 / 复用 $nr1）"
+note "改 runtime.c（关多槽）：key $K0 → $K1（建 $nb1 / 复用 $nr1）"
 if [ "$K1" != "$K0" ] && [ "$nb1" = "1" ] && [ "$nr1" = "0" ]; then
-    note "✅ 指纹随 runtime/*.c 变化且强制重建（负控不会被缓存吃掉）"
+    note "✅ 指纹随 runtime/*.c 变化且强制重建（**单槽层**不会把负控吃掉）—— 多槽层由 m287 门覆盖"
 else
-    bad "改 runtime.c 后未重建（key $K0→$K1, 建$nb1/复用$nr1）⇒ 缓存会把负控吃掉"
+    bad "改 runtime.c 后（关多槽）未重建（key $K0→$K1, 建$nb1/复用$nr1）⇒ 指纹不跟踪 runtime"
 fi
 cp -a "$SNAP/runtime.c.snap" "$RC"          # 还原
 cmp -s "$SNAP/runtime.c.snap" "$RC" || bad "runtime.c 还原后与原文件不一致"
 timeout 900 bash "$D" pxc > "$W/s2.log" 2>&1
 K2=$(devkey "$W/s2.log"); nb2=$(grep -c '^✅' "$W/s2.log")
-note "还原 runtime.c：key $K1 → $K2（建 $nb2）"
-if [ "$K2" != "$K1" ] && [ "$nb2" = "1" ]; then
-    note "✅ 还原后指纹再次变化并重建 ⇒ 不存在「拿旧件凑当前源码」的窗口"
+note "还原 runtime.c：key $K1 → $K2（建 $nb2 / 复用 $(grep -c '^⏭' "$W/s2.log")）"
+# ── M287 语义更新（**期望值移位**，不是删掉判据）────────────────────────────
+#   单槽时代：还原后基线的产物已被探针那次覆盖 ⇒ **只剩「重建」一条路**。
+#   多槽时代：基线的干净产物在**独立槽**里 ⇒ 命中即得，**0 重建**。
+#   ⇒ 旧判据（「必须重建」）在新语义下**恰好把收益判成缺陷**。
+#   新判据抓的是**更本质的性质**：还原后拿到的产物必须**逐字节等于探针前的干净产物**，
+#   且**不为此付一次重建**（两条都要 —— 只留 cmp 则「重建出的干净产物」也能过，
+#   判据就没牙了；实测 `建$nb2` + `cmp` 双条件在撤掉多槽层时必红）。
+if [ "$K2" = "$K0" ] && [ "$nb2" = "0" ] && cmp -s /tmp/pxcdev "$W/pxcdev.clean"; then
+    note "✅ 还原后：key 回基线 · **0 重建** · 产物与探针前**逐字节一致** ⇒ 既没污染也没白付重建"
 else
-    bad "还原后未重建（key $K1→$K2, 建$nb2）⇒ 可能复用了被探针污染的产物"
+    if cmp -s /tmp/pxcdev "$W/pxcdev.clean"; then _cmp=同; else _cmp=异; fi
+    bad "还原后不是「0 重建 + 干净产物」（key $K1→$K2 · 建$nb2 · cmp $_cmp）⇒ 可能复用了被探针污染的产物 / 或多了不必要的重建"
+fi
+# ── M287 反向判据：显式关掉多槽 ⇒ 必须回到「真建」（旧口径**保留**，只是不再是唯一路径）──
+rm -f /tmp/devbuild_pxc.fp
+DEVB_SLOTS=0 timeout 900 bash "$D" pxc > "$W/s2b.log" 2>&1
+nb2b=$(grep -c '^✅' "$W/s2b.log")
+if [ "$nb2b" = "1" ]; then
+    note "✅ 反向判据：DEVB_SLOTS=0（关多槽）+ 清指纹 ⇒ 还原后**必须真建**（M221 原口径保留）"
+else
+    bad "DEVB_SLOTS=0 时还原后未真建（建$nb2b）⇒ 旧口径被破坏"
 fi
 
 # ───────────────────────── ④ --rebuild ─────────────────────────
@@ -182,7 +205,7 @@ fi
 
 # ───────────────────────── ⑥ 负控 ─────────────────────────
 if [ "$NEG_SKIP" = "0" ]; then
-hdr "[6/7] 负控 A：短路判据恒假（退回无条件构建）⇒ ② 的判据必须红"
+hdr "[6/7] 负控 A：单槽短路判据恒假（退回无条件构建）⇒ ② 的判据必须红"
 restore_all; snap_all
 python3 - "$D" <<'PY' || bad "负控 A 打桩失败"
 import sys
@@ -191,8 +214,12 @@ old = '    if [ "$FORCE_REBUILD" = 0 ] && [ -f "$out" ] && [ -f "$fp" ]'
 assert s.count(old) == 1, "锚点不唯一"
 open(p, "w", encoding="utf-8").write(s.replace(old, '    if false && [ -f "$out" ] && [ -f "$fp" ]', 1))
 PY
+# ⚠️ M287：负控**被测层 = 单槽指纹短路**；外层（多槽缓存）必须显式关闭，否则
+#   「短路被禁」也仍会被多槽接住（实测：首版未关 ⇒ 负控 A 假红、判据无牙）。
+export DEVB_SLOTS=0
 timeout 900 bash "$D" pxc > "$W/na.log" 2>&1; rcna=$?
 t0=$SECONDS; timeout 900 bash "$D" pxc > "$W/na2.log" 2>&1; ena=$((SECONDS-t0))
+unset DEVB_SLOTS
 note "负控 A 下第二次：rc=$rcna wall=${ena}s（建 $(grep -c '^✅' "$W/na2.log") / 复用 $(grep -c '^⏭' "$W/na2.log")）"
 if chk_reuse "$W/na2.log" "$ena" 1; then
     bad "负控 A 未判红（短路被禁后仍全复用 ⇒ ② 的判据无牙）"
