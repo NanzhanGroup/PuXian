@@ -1,0 +1,4 @@
+BEGIN_THREE
+nothing here
+END_THREE
+outside ANCHOR_MULTI_W

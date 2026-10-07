@@ -162,7 +162,11 @@ PYEOF
 
     # D 动态：改原生 `gen_next` 文案 ⇒ C 轨文案变、同文判据失效（只判 C 轨）
     restore_all; snapshot
-    sed -i 's|px_error("R1002: gen_next 需要生成器对象")|px_error("R1002: gen_next 需要生成器对象（负控改文）")|' runtime/runtime.c
+    # ⚠️ M286（判据 A4 · 锚点唯一性）：该文案在 runtime.c 里出现 **2 行**（:3816 核心
+    #    `px_gen_next` + :27338 native 面 `bi_gen_next`），而本负控**只声明改原生**。
+    #    裸 sed 会把核心那处也改掉（超范围）。故用范围地址限定到 `bi_gen_next` 的**定义**行
+    #    （`(.*) {$` 排除 :345 的前向声明）到函数结束 ⇒ 实测只改 1 处（原写法 2 处）。
+    sed -i '/^static LXValue bi_gen_next(.*) {$/,/^}/ s|px_error("R1002: gen_next 需要生成器对象")|px_error("R1002: gen_next 需要生成器对象（负控改文）")|' runtime/runtime.c
     run1c m9_gen_next_type
     chk "[3D] 改原生 gen_next 的类型文案 ⇒ m9 的 C 轨文案不符（判据失效）" \
         "[ \"\$(norm '$W/nc_m9_gen_next_type.c.out')\" != 'R1002|gen_next 需要生成器对象' ]"

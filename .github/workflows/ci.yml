@@ -1126,6 +1126,14 @@ jobs:
           grep -E '汇总：通过' /tmp/v_m285.log | tail -1 || true
           echo "✅ m285_gate_assertions（守卫自证 6/0 · 真仓 0 违例 355 个 .sh · 判据回放判红且指名 · 负控 3 道）PASS"
 
+      - name: m286_anchor_multi（判据 A4 · 打桩锚点唯一性 · A1 的自然强化）
+        if: always()
+        run: |
+          # ⚠️ 本门**不提供** --neg-skip：三道负控改的是 Python 守卫（≈1s，不重建 runtime）⇒ 全跑。
+          bash examples/m286_anchor_multi/verify.sh > /tmp/v_m286.log 2>&1 || { echo "❌ m286 门失败（锚点唯一性 / 范围感知 / 判据回放 / 负控）"; grep -E '^(  ❌|== )' /tmp/v_m286.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '汇总：通过' /tmp/v_m286.log | tail -1 || true
+          echo "✅ m286_anchor_multi（自证 15/0 · 真仓 0 违例 49 处 sed -i · 判据回放：范围地址放过而 OLD 仍多行 · 负控 3 道含「忽略地址 ⇒ 重新判红」）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
