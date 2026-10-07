@@ -100,7 +100,10 @@ run() {  # $1=名 $2..=命令
         else
             echo "❌ $name（rc=$rc, ${el}s）"
         fi
-        tail -12 "/tmp/gate_$name.log" | sed 's/^/     /'; FAIL=$((FAIL+1))
+        tail -12 "/tmp/gate_$name.log" | sed 's/^/     /'
+        # M286s1：**完整日志路径** —— 此前只显示尾部 ⇒ 诊断不了根因
+        #   （本轮实测：m260 的根因在 [3] 段，而尾部只有 [5] 覆盖边界 ⇒ 无从下手）。
+        echo "     （完整日志：/tmp/gate_$name.log）"; FAIL=$((FAIL+1))
         # ── M243：快速失败（迭代期 —— 写错了不必等满全程）──
         if [ "$GATE_FAIL_FAST" = 1 ]; then
             echo ""
