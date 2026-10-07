@@ -36,13 +36,16 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shellscan import GREP_CALL, in_dquote, iter_grep_pats, mask_prose, shell_dequote  # noqa: E402
+
 ROOT = os.environ.get("ORCH_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CJK = re.compile(r'[\u4e00-\u9fff]')
 RUN = re.compile(r'[\u4e00-\u9fff]+')
-# grep 的判定串：只认第一处引号参数（够用；复杂拼装的串由豁免表处理）
-GREP_RE = re.compile(r'\bgrep\b[^\n|;]*?\s(?:-e\s+)?[\'"]([^\'"\n]{4,})[\'"]')
-# 门运行调用（必须与真实现同名，改名要同步这里 —— 由 registry 守卫兜底）
+# grep 的判定串抽取见 `shellscan.iter_grep_pats`（M285 抽成共用原语：
+# 同一条规则在本仓**两个守卫**里各实现一次 ⇒ 缺陷 498 的坑两个文件各踩一遍）。
+# 本地只保留「是否处于命令位置」的辅助（配合 shellscan.mask_prose）。
 RUNNER_RE = re.compile(r'\b(?:run_gates\.sh|m116_gates\.sh|m117_gates\.sh)\b')
 RESOLVE_RE = re.compile(r'resolve-topic\s+([A-Za-z0-9_.-]+)')
 P1_RE = re.compile(r'\bp1\s+([A-Za-z0-9_.-]+)')
@@ -179,8 +182,13 @@ def check_file(path, rel):
         s = line.strip()
         if s.startswith("#") or "grep" not in line:
             continue
-        for m in GREP_RE.finditer(line):
-            pat = m.group(1)
+        # ⚠️ 定位用 mask_prose（散文里**提到**的 `grep` 不算命令 —— 实测两处假阳都在这里：
+        #    `iv_nopipeq() { # … 「大产出 | grep -q」 … }` 与 `iv_bad "… tar|grep -q …"`），
+        #    解析用**原始行**（掩码会把引号里的 sed 脚本一并抹掉）。
+        masked = mask_prose(line)
+        for pat, _pos, gstart in iter_grep_pats(line):
+            if masked[gstart:gstart + 4] != line[gstart:gstart + 4]:
+                continue
             if not (CJK.search(pat) and len(pat) >= 4):
                 continue
             ok, key = criteria_verdict(pat)
@@ -327,8 +335,10 @@ def main():
                 st = line.strip()
                 if st.startswith("#") or "grep" not in line:
                     continue
-                for mo in GREP_RE.finditer(line):
-                    pat = mo.group(1)
+                masked = mask_prose(line)
+                for pat, _pos, gstart in iter_grep_pats(line):
+                    if masked[gstart:gstart + 4] != line[gstart:gstart + 4]:
+                        continue
                     if not (CJK.search(pat) and len(pat) >= 4):
                         continue
                     okv, _key = criteria_verdict(pat)
