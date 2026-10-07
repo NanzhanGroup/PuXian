@@ -1179,3 +1179,25 @@ run m282_registry_020 bash examples/m282_registry_020/verify.sh
 #   门 = 守卫自证 10/0 + 真仓 rc=0 + 规模锚点 + 4 类反例**逐类指名** + 登记过期判据
 #      + 负控 3 道（各自独立判红）+ 覆盖边界 + 静态断言
 run m283_gate_premise bash examples/m283_gate_premise/verify.sh
+
+# M284：**编排骨架入仓 + 判据串「在场」守卫**（缺陷 490 + 495）。
+#   起点 = M283 那条**假警报**：门明明绿（汇总 0 失败 · 190 ✅ · 0 ❌），watcher 却判红 +
+#   挂 p1 ⇒ 45 分钟后升级成「无人值守失败」推给用户。真因 = 它的判据串
+#   `双路判据一致：0 红` **全仓 0 命中**（凭空捏造）—— 与 M282 缺陷 491 同族：
+#   判据贴着「我想的实现」写，不是贴着实现写。
+#   更深一层（缺陷 490）：编排脚本住 /tmp ⇒ 仓库守卫**全都扫不到**（M279–M283 四轮
+#   的失败几乎全在编排层，产品代码零实质回归；四个 bug 只能靠「跑到那一步」才发现）。
+#   交付：
+#     · `packaging/chain/gate_verdict.sh` —— **全量门裁决器（唯一权威）**：三路取数求交
+#       （A 汇总行 / B 失败行**含 ⏱ 超时** / C 时序 TSV）· 矛盾即报 INCONSISTENT ·
+#       **前提自证**（依赖的门输出词汇必须在 run_gates.sh 里找得到，否则 rc=3 拒绝裁决）
+#     · `packaging/chain/watch_chain.sh` —— 通用观察器（等门按 PID · 绿推 tag / 红挂 p1）
+#     · `packaging/chain/README.md` —— 口径 + 三纪律 + 495 的完整取证
+#     · `selfhost/check_orchestrator.py` —— 新守卫三条判据：
+#         O1 判据串在场（CJK 骨架必须在场 —— 口径经真仓校准：486 条判定串 0 误伤，
+#            而 M283 原件当场抓出；v1「字面在场」太严会把「模板实例化」误判）
+#         O2 resolve-topic 必须早于第一次跑门（缺陷 489：45 分钟阈值 < 门 90–150 分钟）
+#         O3 每挂 p1 m<N>-… 必须有 resolve-topic m<N>（否则只能等升级）
+#   门 = 守卫自证 5/0 + 真仓 0 违例（67 个 .sh / 13 个编排脚本）+ 裁决器**六档**判对
+#      + 回归（M283 同形绿日志 ⇒ GREEN）+ 负控 3 道各自独立判红 + 覆盖边界
+run m284_orchestrator bash examples/m284_orchestrator/verify.sh
