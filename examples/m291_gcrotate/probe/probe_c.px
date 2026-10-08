@@ -1,0 +1,20 @@
+# ============================================================
+# M291 门自证探针 C · **稳定输出 + 可被 --env 造差异**（见 probe_a 头注）
+# ============================================================
+def work(n):
+    var xs = []
+    var i = 0
+    while i < n:
+        xs = xs + [i * 2]
+        i = i + 1
+    var acc = 0
+    for x in xs:
+        acc = acc + x
+    return acc
+
+let acc = work(120)
+let p = env("PX_M291_PERTURB")
+if p != null:
+    print("PROBE-C acc=" + str(acc) + " PERTURB=" + p)
+else:
+    print("PROBE-C acc=" + str(acc))

@@ -1164,6 +1164,16 @@ jobs:
           grep -E '汇总：通过' /tmp/v_m288.log | tail -1 || true
           echo "✅ m288_ws_handshake_residual（静态 8 · split/combined/partial/big × 三轨 · 服务端 together/after 双侧 · 负载档 20 次首帧丢失 0）PASS"
 
+      - name: m291_gcrotate（GC 压力筛分批轮转 · 每轮自动推进一批 · N 轮覆盖全量）
+        if: always()
+        run: |
+          # ⚠️ CI 用 --no-real：CI 的 /tmp 每次全新 ⇒ 永远只跑第 1 批，**轮转在 CI 上不成立**；
+          #    真轮转在**本地连续跑**才有意义（run_gates.sh 每轮推进一批）。
+          #    --neg-skip：负控各要真跑 sweep（≈10s/道）⇒ 与其余门一致，负控在本地全量门跑。
+          bash examples/m291_gcrotate/verify.sh --neg-skip --no-real > /tmp/v_m291.log 2>&1 || { echo "❌ m291 门失败（工具自证 / 分批完备性 / 轮转机械 / 正判据）"; grep -E '^(  ❌|== )' /tmp/v_m291.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'M291-VERIFY' /tmp/v_m291.log | tail -1 || true
+          echo "✅ m291_gcrotate（工具自证 9 · 分批完备性 433 逐字节 · 轮转 1→2→3 一圈完成 · 正判据指名）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
