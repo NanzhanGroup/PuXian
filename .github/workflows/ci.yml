@@ -1150,6 +1150,14 @@ jobs:
           grep -E '汇总：通过' /tmp/v_m287.log | tail -1 || true
           echo "✅ m287_devbuild_slots（静态 8 · 冷启动 16s ⇄ 命中 0s · A→B→A 回摆命中基线槽 · 开关两档 · 剪枝）PASS"
 
+      - name: m288_ws_handshake_residual（WS 握手残余字节 · 首帧静默丢失 · 缺陷 501）
+        if: always()
+        run: |
+          # ⚠️ 负控各要一次 runtime 重编（≈15s）⇒ CI 用 --neg-skip（与其余重编门一致）。
+          bash examples/m288_ws_handshake_residual/verify.sh --neg-skip > /tmp/v_m288.log 2>&1 || { echo "❌ m288 门失败（残余交还 / 四模式 × 三轨 / 服务端两侧 / 负载档）"; grep -E '^(  ❌|== )' /tmp/v_m288.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '汇总：通过' /tmp/v_m288.log | tail -1 || true
+          echo "✅ m288_ws_handshake_residual（静态 8 · split/combined/partial/big × 三轨 · 服务端 together/after 双侧 · 负载档 20 次首帧丢失 0）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

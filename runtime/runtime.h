@@ -777,6 +777,19 @@ typedef struct PxConn {
                        //      px_sni_cb 内 clone；owned=1 时 px_conn_close 释放）
     unsigned char rbuf[16384]; // TLS 读缓冲（SSL_read 一次可多读）
     int rlen, roff;
+    // ── M288（缺陷 501）：握手「残余字节」的交还缓冲 ──
+    //   病灶：`ws_read_http_header*` 找到头结束的 `\r\n\r\n` 之后，把**同一次读入**
+    //   的其余字节整块丢弃（`buf[header_end]=0; *out_len=header_end`）。而 RFC 6455 允许
+    //   两种常见的「同段到达」：① 服务端把 101 与首帧合并发出；② 客户端在升级请求之后
+    //   立即发首帧（不等 101）。两种情形都会让**首帧**与头部落在同一次读里 ⇒ 静默丢弃
+    //   ⇒ 帧流从第一个字节就错位（实测：m236 负载档 7.5%；最小复现夹具 split/combined
+    //   对照下 **100%**：combined ⇒ ws_recv 拿不到首帧）。
+    //   修法：**不丢弃** —— 交还到 `pb`，由 `px_conn_read` 在触碰 fd/TLS **之前**优先消费
+    //   （明文与 TLS 同一条路径）。仅在真存在残余时分配 ⇒ 常规连接零额外开销/零额外内存。
+    //   ⚠️ 与 `rbuf` 的分工：`rbuf` = TLS「一次多读」的读前缓冲（`is_tls` 专用）；
+    //      `pb` = 上层协议交还的字节（两种传输都用，且**逻辑上更早**）。
+    char* pb;                // 残余字节（xmalloc；无残余 = NULL）
+    int pb_len, pb_off;      // 有效长度 / 已消费偏移
     int closed;        // 连接已关闭（px_conn_close 置 1；对象保留避免并发 use-after-free）
     int owned;         // M32：1 = ssl/conf/ctr_drbg/entropy 独立 malloc（px_conn_close 释放）；
                        //      0 = 指向外部 HttpsSession（wss 客户端，由 px_https_close_ex 释放）
@@ -806,6 +819,9 @@ void px_conn_close(PxConn* c);
 int  px_conn_acquire(PxConn* c);      // 1 = 拿到引用（可安全访问 ssl）；0 = 已关闭/已释放
 void px_conn_release(PxConn* c);      // 释放引用（归零时执行挂起的资源释放 / 对象 free）
 void px_conn_owner_free(PxConn* c);   // 仅对象创建者：close + 释放对象（有使用者在则延后）
+// M288（缺陷 501）：把「已读入但属于后续协议层」的字节交还连接 —— `px_conn_read` 优先消费。
+//   语义 = **前插**（这些字节在逻辑上早于尚未读入的任何数据）。n==0 / data==NULL 为 no-op。
+void px_conn_pushback(PxConn* c, const void* data, size_t n);
 // 当前线程正在处理的连接（px_px_send 等旧 fd 接口自动转发 TLS 写）
 extern __thread PxConn* g_cur_conn;
 // 在途请求数（px_serve/sse_serve/ws_serve 连接线程计数；优雅关闭等待归零）
