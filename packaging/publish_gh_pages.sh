@@ -45,7 +45,11 @@ export GIT_TERMINAL_PROMPT=0
 
 mark "① 探测 gh-pages 分支"
 HAS_PAGES=0
-if git ls-remote --heads "$REPO_URL" gh-pages | grep -q 'refs/heads/gh-pages'; then HAS_PAGES=1; fi
+# ⚠️ 不写 `git … | grep -q`：`pipefail` 下 grep 命中即退出 ⇒ 左侧收 SIGPIPE(141)
+#   ⇒ 管道非零 ⇒ 判据恒假（本仓 P3 禁形 · selfhost/check_gate_premise.sh 当场判红）。
+#   口径：**先取输出、再判内容**，与退出码解耦（M168/M219 记过的同一条）。
+LSREM="$(git ls-remote --heads "$REPO_URL" gh-pages 2>/dev/null || true)"
+case "$LSREM" in *refs/heads/gh-pages*) HAS_PAGES=1 ;; esac
 mark "① 探测完成：HAS_PAGES=$HAS_PAGES"
 
 rm -rf "$PAGES"; mkdir -p "$PAGES"

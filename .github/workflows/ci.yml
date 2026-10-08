@@ -226,7 +226,13 @@ jobs:
         #   M247 实测：本守卫**没被 CI 跑过** —— 于是「registry 里加了、ci.yml 忘了加」
         #   这一类（M235 缺陷 355 同形）在 CI 上无人发现。本步补上。
         run: |
-          bash selfhost/check_gate_registry.sh
+          set -o pipefail
+          # M288s1：本步曾**0s 判红且无任何输出**（读不出真因）⇒ 补诊断通道：
+          #   全程 tee 到日志；失败时用 annotate_failure.sh 打一条富注解（本仓唯一可读通道）。
+          if ! bash selfhost/check_gate_registry.sh 2>&1 | tee "$RUNNER_TEMP/registry.log"; then
+            bash packaging/annotate_failure.sh registry "$RUNNER_TEMP/registry.log"
+            exit 1
+          fi
       - name: 负控残留守卫（工作树卫生 · M254 / 缺陷 448）
         #   原 selfhost/rebake_bin.sh 的 check_neg_residue() 扫描面写死 --include='*.px' --include='*.c'
         #   ⇒ 漏掉 .h/.py/.sh/.go；而门内并行执行器 selfhost/gate_par.py（**.py**）正是
@@ -1248,6 +1254,8 @@ jobs:
             fi
             return 0
           }
+          # M288s1（2026-10-08 事故）：gh-pages 发布步抽成脚本 + 逐段计时 + 失败富注解
+          run_guard publish_gh_pages bash packaging/selftest_publish_gh_pages.sh
           run_guard rpm_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
           run_guard make_release  bash packaging/selftest_make_release.sh
           run_guard tag_guard     bash packaging/selftest_tag_guard.sh
