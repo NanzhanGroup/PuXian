@@ -187,11 +187,29 @@ fi
 # ───────────────────────── ⑤ 台账可归因 ─────────────────────────
 hdr "[5/7] 台账：key 取值 + 按件分组 + 选料来源（缺陷 325）"
 tail -2 /tmp/devbuild_stats.tsv 2>/dev/null | sed 's/^/     /'
-NF=$(awk -F'\t' '{print NF}' /tmp/devbuild_stats.tsv 2>/dev/null | sort -u | tr '\n' ' ')
-if printf '%s' "$NF" | grep -qw '5'; then
-    ok "台账含第 5 列（选料来源）；字段数集合=$NF"
+# M288s1 修正（判据**依赖了环境历史** —— 本机侥幸通过、CI 判红）：
+#   原判据 = `字段数集合里出现 5`（钉死历史列数）。而 M287 又给台账加了第 6 列（命中层
+#   slot/…）⇒ **全新台账**（CI runner / 新机器）集合 = {6} ⇒ 判红；本机因
+#   `/tmp/devbuild_stats.tsv` 残留 M287 之前的 5 列旧行 ⇒ 集合 {5,6} ⇒ **假绿**。
+#   实测列数分布：4 列 ×17（M221 原始格式）· 5 列 ×10290（M223 加选料来源）· 6 列 ×786（M287）。
+#   ⇒ 真正的不变量是「**当前写入格式**含第 5 列」，与历史行无关 ⇒ 只判**最后一行**。
+LASTNF="$(tail -1 /tmp/devbuild_stats.tsv 2>/dev/null | awk -F'\t' '{print NF}')"
+LASTNF="${LASTNF:-0}"
+ALLNF="$(awk -F'\t' '{print NF}' /tmp/devbuild_stats.tsv 2>/dev/null | sort -nu | tr '\n' ' ')"
+if [ "$LASTNF" -ge 5 ]; then
+    ok "台账**当前格式** $LASTNF 列（≥5：第 5 列=选料来源 · 含命中层）· 历史列数集合=$ALLNF"
 else
-    bad "台账无第 5 列（字段数集合：$NF）"
+    bad "台账当前格式只有 $LASTNF 列（缺第 5 列=选料来源）· 历史列数集合=$ALLNF"
+fi
+# 判据自证（环境无关）：同样两行不同列数的合成台账 ⇒ 必须分别判绿/判红
+_fresh="$W/nf_ok.tsv"; _bad="$W/nf_bad.tsv"
+printf '1\ta\tb\tc\td\te\n2\ta\tb\tc\td\te\n' > "$_fresh"
+printf '1\ta\tb\tc\td\te\n2\ta\tb\tc\n'       > "$_bad"
+_j() { local f="$1" n; n="$(tail -1 "$f" | awk -F'\t' '{print NF}')"; [ "${n:-0}" -ge 5 ] && echo ok || echo bad; }
+if [ "$(_j "$_fresh")" = "ok" ] && [ "$(_j "$_bad")" = "bad" ]; then
+    ok "判据自证：6 列 ⇒ 绿 · 4 列 ⇒ 红（环境无关）"
+else
+    bad "判据自证失败（_j fresh=$(_j "$_fresh") bad=$(_j "$_bad")）"
 fi
 SUM="$(timeout 300 bash "$D" 2>&1 | grep -A8 'devbuild 累计' || true)"
 if printf '%s' "$SUM" | grep -q '源码链 key（按件分组'; then
