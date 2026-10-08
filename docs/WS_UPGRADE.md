@@ -155,12 +155,64 @@ ws_heartbeat / ws_conn_path / ws_conn_header / ws_conn_peer`。
 - `manual` 模式的**拒绝**路径目前只有「不写 101 + `ws_close`」两种手段；专用的
   「回普通 HTTP 响应」API 待后续；
 - 语言层在回调里自行 `spawn` 读循环的用法未覆盖（本门为同步回调 + 运行时泵循环）；
-- 泵循环丢弃**未被回调消费**的文本/二进制帧（与 `ws_serve` 同语义）。
+- 泵循环丢弃**未被回调消费**的文本/二进制帧（与 `ws_serve` 同语义）；
+- **握手残余**：`http_serve` 轨走的是 M144（缺陷 124）引入的 **fd 级** `px_conn_pend_*`
+  余留机制；`px_serve` 轨的 HTTP **管道化**残留走另一条路径（不在 M288 面内）。
 
 ---
 
-## 七 相关
+## 七 握手残余字节：首帧与头部「同段到达」（M288 · 缺陷 501）
+
+### 7.1 症状
+
+**握手成功，但首帧永远收不到**（帧流从第一个字节就错位）。最小复现（与负载无关）：
+
+```
+对端把 101 与首帧一次 sendall（同段）  ⇒ ws_recv 拿不到首帧（修前）
+对端把 101 与首帧分两次 send（不同段）  ⇒ 正常
+```
+
+⚠️ 原症状是**负载敏感**的（m236 负载档 7.5%）：负载让客户端被延迟调度，
+一次 `recv` 就把「101 + 紧接的首帧」一起拿回来 —— 于是撞上同一个丢弃路径。
+
+### 7.2 根因（三个丢弃点）
+
+读头的函数找到 `\r\n\r\n` 之后，把**同一次读入**的其余字节整块丢掉
+（`buf[header_end] = 0; *out_len = header_end;`）。而 RFC 6455 允许两种同段到达：
+
+| # | 站 | 谁受害 |
+|---|---|---|
+| A | `ws_read_http_header(PxConn*)` | 客户端（明文/TLS）+ `ws_serve` 服务端 |
+| B | `ws_read_http_header_fd(int)` | 客户端明文 —— **A 的重复实现**（本轮**删除**） |
+| C | `px_pxpend` worker 的读头循环 | `px_serve` 的 WS 接管点（残余落在 `buf` 里） |
+
+### 7.3 修法：**交还**，不是丢弃
+
+新增 `PxConn.pb`（残余缓冲）+ `px_conn_pushback(c, data, n)`：
+
+- `px_conn_read` 在触碰 fd/TLS **之前**优先消费 `pb`（**明文与 TLS 同一条路径**）；
+- `ws_conn_has_buffered` 把 `pb` 也算「已就绪」—— 否则 `ws_recv` 的 poll 会被**挡住**
+  （等一个永远不会再来的可读事件）；
+- 仅在真存在残余时分配 ⇒ 常规连接零额外开销 / 零额外内存；随连接释放。
+
+**为什么 B 是删除而不是修补**：两份实现意味着「同一条语义要改两处」——
+本仓已经反复撞过这个形状（M230 缺陷 345「一条语义在三个文件里」· M253 缺陷 445
+「同规则的第三处实现」）。本轮把 4 处客户端握手点统一为**先建 `PxConn`、再握手**
+（与 TLS 分支本就同构）⇒ 只剩一份实现。
+
+### 7.4 判据（`examples/m288_ws_handshake_residual/`）
+
+对端用 **python 裸 socket**：`sendall(101 + frame)` 才能真正固定「同段/不同段」这个变量
+（`.px` 层的 `ws_send` 保证不了 —— 是否合成一段由内核决定）。
+⇒ 本门**与负载无关**，`split / combined / partial / big` 四模式 × 三轨 + 服务端两侧对照
++ 负载档 20 次 + 负控 3 道。
+
+---
+
+## 八 相关
 
 - 连接生命周期与引用计数：`docs/WS_CONN_LIFECYCLE.md`（M235）
-- 判据：`examples/m236_ws_stream/verify.sh`（35 断言 + 负控 3 道）
+- 握手残余字节：本文 §七（M288 · 缺陷 501）
+- 判据：`examples/m236_ws_stream/verify.sh`（35 断言 + 负控 3 道）·
+  `examples/m288_ws_handshake_residual/verify.sh`（残余字节 · 确定性夹具 + 负载档 + 负控 3 道）
 - 需求原文：晨曦《ws-upgrade-feature-request-chenxi.md》（2026-09-30）

@@ -1,0 +1,32 @@
+# M288 门 · 客户端探针
+#   mode 决定「对端是谁」与「首帧期望值」：
+#     basic   —— 对端 = mock_ws.py(split|combined|partial)，首帧 "A"
+#     big     —— 对端 = mock_ws.py(big)，首帧 "B"×3000
+#     load    —— 对端 = srv.px（服务端**紧接 101 就 ws_send**），首帧 "hello"
+let av = args()
+var port = 18801
+var mode = "basic"
+if len(av) > 1:
+    port = int(av[1])
+if len(av) > 2:
+    mode = av[2]
+
+var want = "A"
+if mode == "big":
+    want = "B" * 3000
+if mode == "load":
+    want = "hello"
+
+conn = ws_connect("127.0.0.1", port, "/x")
+print("CONN =", conn != null)
+if conn != null:
+    r = ws_recv(conn, 3000)
+    print("R1NULL =", r == null)
+    if r == null:
+        print("R1LEN = -1")
+        print("R1EQ = false")
+    else:
+        print("R1LEN =", len(r))
+        print("R1EQ =", r == want)
+    ws_close(conn)
+print("DONE")

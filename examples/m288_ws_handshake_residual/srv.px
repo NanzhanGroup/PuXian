@@ -1,0 +1,23 @@
+# M288 门 · 服务端探针（px_serve + ws_stream）
+#   1) 回调里**紧接 101 就 ws_send** ⇒ 负载下与 101 同段到达客户端（客户端面负载档的被测方）
+#   2) 随后 ws_recv 收「客户端**不等 101** 就发的首帧」（服务端面，RFC 6455 §4.1 允许）
+let av = args()
+var port = 19731
+if len(av) > 1:
+    port = int(av[1])
+
+def agent(conn, req):
+    print("SRV path=" + ws_conn_path(conn))
+    ws_send(conn, "hello")
+    m = ws_recv(conn, 2500)
+    print("SRVNULL =", m == null)
+    if m == null:
+        print("SRVLEN = -1")
+        print("SRVEQ = false")
+    else:
+        print("SRVLEN =", len(m))
+        print("SRVEQ =", m == "E")
+    ws_send(conn, "ack")
+
+ws_stream("/x", agent, {})
+px_serve(port, ".", 30000, {})

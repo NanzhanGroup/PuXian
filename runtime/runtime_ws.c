@@ -185,7 +185,11 @@ static PxConn* ws_get_conn(int64_t id, int* is_client) {
 
 // M27：连接对象是否有 TLS 读缓冲（ws_recv 超时 poll 前检查：缓冲有数据则无需 poll）
 static int ws_conn_has_buffered(PxConn* c) {
-    return c && c->is_tls && c->roff < c->rlen;
+    // M288（缺陷 501）：`pb`（握手残余）对**明文与 TLS 都**意味着「已有数据 ⇒ 无需 poll」。
+    //   少了这一条，残余字节会被 poll 挡住（等一个永远不会再来的可读事件）⇒ 首帧仍读不到。
+    if (!c) return 0;
+    if (c->pb && c->pb_off < c->pb_len) return 1;
+    return c->is_tls && c->roff < c->rlen;
 }
 
 // ==================== base64（握手 Accept 计算用，本地副本） ====================
@@ -319,26 +323,6 @@ static int ws_send_frame(PxConn* c, int opcode, const unsigned char* data, size_
 // ==================== 握手（RFC 6455 §4.2） ====================
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-// 读 HTTP 头直到 \r\n\r\n（上限 64KB）。返回 0 成功；buf/len 出参（malloc）。
-// 明文 fd 版本（客户端握手 ws_client_handshake 用）
-static int ws_read_http_header_fd(int fd, char** out, int* out_len) {
-    char* buf = (char*)malloc(65536);
-    int len = 0;
-    int header_end = -1;
-    while (len < 65535) {
-        ssize_t n = recv(fd, buf + len, (size_t)(65535 - len), 0);
-        if (n <= 0) break;
-        len += (int)n;
-        buf[len] = 0;
-        char* sep = strstr(buf, "\r\n\r\n");
-        if (sep) { header_end = (int)(sep - buf); break; }
-    }
-    if (header_end < 0) { free(buf); return -1; }
-    buf[header_end] = 0;
-    *out = buf;
-    *out_len = header_end;
-    return 0;
-}
 
 // PxConn 版本（服务端/客户端统一；TLS 支持）
 static int ws_read_http_header(PxConn* c, char** out, int* out_len) {
@@ -354,6 +338,14 @@ static int ws_read_http_header(PxConn* c, char** out, int* out_len) {
         if (sep) { header_end = (int)(sep - buf); break; }
     }
     if (header_end < 0) { free(buf); return -1; }
+    // M288（缺陷 501）：**交还**同一次读入里「头之后」的字节（原先直接丢弃 ⇒ 首帧丢失）
+    //   `header_end + 4` = 越过 `\r\n\r\n`；`len - (header_end + 4)` = 残余（可能含整帧/半帧）。
+    //   ⚠️ 必须在 `buf[header_end] = 0` **之后**取（那一写落在头内，不触及残余）。
+    {
+        int rest_off = header_end + 4;
+        int rest_len = len - rest_off;
+        if (rest_len > 0) px_conn_pushback(c, buf + rest_off, (size_t)rest_len);
+    }
     buf[header_end] = 0;
     *out = buf;
     *out_len = header_end;
@@ -443,35 +435,6 @@ static int ws_server_handshake(PxConn* c, char** out_path, char** out_head) {
 }
 
 // 客户端握手：发 Upgrade 请求 → 校验 101 + Accept。返回 0 成功。
-static int ws_client_handshake(int fd, const char* host, int port, const char* path) {
-    // 16 字节 key（时间 + 计数器派生）
-    static unsigned long long ws_key_seq = 0;
-    unsigned long long t = (unsigned long long)time(NULL) * 2654435761u + (ws_key_seq++);
-    unsigned char kb[16];
-    for (int i = 0; i < 16; i++) {
-        t = t * 6364136223846793005ULL + 1442695040888963407ULL;
-        kb[i] = (unsigned char)((t >> 33) & 0xFF);
-    }
-    char key[32];
-    ws_b64_encode(kb, 16, key);
-    char req[1024];
-    int rl = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n",
-        path, host, port, key);
-    if (send(fd, req, rl, MSG_NOSIGNAL) < 0) return -1;
-    char* head = NULL;
-    int hlen = 0;
-    if (ws_read_http_header_fd(fd, &head, &hlen) < 0) return -1;
-    if (strstr(head, " 101 ") == NULL) { free(head); return -1; }
-    char* got = ws_header_value(head, "Sec-WebSocket-Accept");
-    free(head);
-    if (!got) return -1;
-    char expect[64];
-    ws_accept_key(key, expect);
-    int ok = (strcmp(got, expect) == 0) ? 0 : -1;
-    free(got);
-    return ok;
-}
 
 // 客户端握手（PxConn 版本：明文/TLS 统一；M32 wss 用）
 static int ws_client_handshake_px(PxConn* c, const char* host, int port, const char* path) {
@@ -785,14 +748,17 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
         addr.sin_port = htons((uint16_t)port);
         if (px_ws_resolve_v4(host, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
         if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
-        if (ws_client_handshake(fd, host, port, path) < 0) { close(fd); return px_null(); }
+        // M288（缺陷 501）：**先建 PxConn、再做握手** —— 握手多读的字节由
+        //   `ws_read_http_header` 交还给连接的 `pb`（原先 fd 版直接丢弃 ⇒ 首帧丢失）。
+        //   与 TLS 分支同构（那边本就是「先建 cc、再握手」），并因此**删除了 fd 版重复实现**。
         PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
         px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
+        if (ws_client_handshake_px(cc, host, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
         pthread_mutex_lock(&g_ws_mu);
         int slot = ws_alloc_slot();
         if (slot < 0) {
             pthread_mutex_unlock(&g_ws_mu);
-            close(fd);
+            px_conn_owner_free(cc);   // M288：fd/对象收尾统一走 owner_free（原先只 close(fd)）
             return px_null();
         }
         int64_t conn = g_ws_next_id++;
@@ -821,16 +787,17 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     addr.sin_port = htons((uint16_t)port);
     if (px_ws_resolve_v4(host, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
-    if (ws_client_handshake(fd, host, port, path) < 0) { close(fd); return px_null(); }
+    // M288（缺陷 501）：先建 PxConn 再做握手（残余字节交还见 PxConn.pb）
+    PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
+    px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
+    if (ws_client_handshake_px(cc, host, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
     pthread_mutex_lock(&g_ws_mu);
     int slot = ws_alloc_slot();
     if (slot < 0) {
         pthread_mutex_unlock(&g_ws_mu);
-        close(fd);
+        px_conn_owner_free(cc);
         return px_null();
     }
-    PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
-    px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
     int64_t conn = g_ws_next_id++;
     g_ws_conns[slot].fd = fd;
     g_ws_conns[slot].id = conn;
@@ -906,12 +873,13 @@ LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
     addr.sin_port = htons((uint16_t)port);
     if (px_ws_resolve_v4(hbuf, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
-    if (ws_client_handshake(fd, hbuf, port, path) < 0) { close(fd); return px_null(); }
+    // M288（缺陷 501）：先建 PxConn 再做握手（残余字节交还见 PxConn.pb）
     PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
     px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
+    if (ws_client_handshake_px(cc, hbuf, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
     pthread_mutex_lock(&g_ws_mu);
     int slot = ws_alloc_slot();
-    if (slot < 0) { pthread_mutex_unlock(&g_ws_mu); close(fd); xfree(cc); return px_null(); }   // M240(d)
+    if (slot < 0) { pthread_mutex_unlock(&g_ws_mu); px_conn_owner_free(cc); return px_null(); }   // M240(d)
     int64_t conn = g_ws_next_id++;
     g_ws_conns[slot].fd = fd;
     g_ws_conns[slot].id = conn;
@@ -994,10 +962,21 @@ static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
             //   rh2 ? rh2->h_length : 0)` —— 在 `gethostbyname` 被撕裂时 `h_length` 可能是
             //   垃圾值 ⇒ 越界写；解析失败时又是 NULL 源。统一走 helper（失败即不连）。
             int ra_ok = (px_ws_resolve_v4(rh, &ra.sin_addr) == 0);
-            if (ra_ok && connect(nfd, (struct sockaddr*)&ra, sizeof(ra)) == 0 &&
-                ws_client_handshake(nfd, rh, rp, rpath) == 0) {
-                PxConn* nc = (PxConn*)xmalloc(sizeof(PxConn));
+            // M288（缺陷 501）：先建 PxConn 再做握手（残余字节交还见 PxConn.pb）。
+            //   ⚠️ `nfd` 的关闭归属随之改变：握手失败时由 `px_conn_owner_free` 关闭
+            //   （含 close(nfd)）⇒ 下方的失败出口**不得**再 close（否则双重关闭）。
+            PxConn* nc = NULL;
+            int nfd_open = 1;
+            if (ra_ok && connect(nfd, (struct sockaddr*)&ra, sizeof(ra)) == 0) {
+                nc = (PxConn*)xmalloc(sizeof(PxConn));
                 px_conn_init_client(nc, nfd);   // M240(g)：统一初始化（含 mutex）
+                if (ws_client_handshake_px(nc, rh, rp, rpath) != 0) {
+                    px_conn_owner_free(nc);   // 含 close(nfd)
+                    nc = NULL;
+                    nfd_open = 0;
+                }
+            }
+            if (nc) {
                 g_ws_conns[s2].fd = nfd;
                 g_ws_conns[s2].conn = nc;
                 g_ws_conns[s2].active = 1;
@@ -1011,7 +990,7 @@ static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
                 *cpp = nc;
                 ok = 1;
             } else {
-                close(nfd);
+                if (nfd_open) close(nfd);   // M288：握手失败时 nfd 已由 owner_free 关闭
                 pthread_mutex_unlock(&g_ws_mu);
             }
         } else {

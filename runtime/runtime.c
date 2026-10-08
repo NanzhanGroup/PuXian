@@ -24064,6 +24064,15 @@ int px_conn_init(PxConn* c, int fd) {
 // 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）
 static ssize_t px_conn_read_body(PxConn* c, void* buf, size_t n) {
     if (c->closed) return -1;
+    // M288（缺陷 501）：**先还后读** —— 上层（WS 握手）交还的残余字节在逻辑上早于
+    //   fd/TLS 里尚未读入的任何数据（明文与 TLS 走同一条路径）。
+    if (c->pb && c->pb_off < c->pb_len) {
+        size_t avail = (size_t)(c->pb_len - c->pb_off);
+        size_t take = avail < n ? avail : n;
+        memcpy(buf, c->pb + c->pb_off, take);
+        c->pb_off += (int)take;
+        return (ssize_t)take;
+    }
     if (!c->is_tls) {
         // M211（缺陷 265）：**信号打断必须重试，绝不能当成"对端关闭"**。
         //   病灶链：并发 GC 的 STW 会给各线程发 SIG_GC_STOP（`gc_stop_handler`）打断
@@ -24190,6 +24199,8 @@ static void px_conn_free_res(PxConn* c) {
         c->ssl = c->conf = c->ctr_drbg = c->entropy = NULL;
         // owned=0：TLS 状态由外部（HttpsSession）管理，px_https_close_ex 统一释放
     }
+    // M288（缺陷 501）：残余缓冲随连接释放（xmalloc ⇒ xfree 配对）
+    if (c->pb) { xfree(c->pb); c->pb = NULL; c->pb_len = 0; c->pb_off = 0; }
     if (c->fd >= 0) { close(c->fd); c->fd = -1; }
     if (c->owned) c->is_tls = 0;
 }
@@ -24309,6 +24320,21 @@ ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
     return r;
 }
 
+
+// M288（缺陷 501）：把「已读入但属于后续协议层」的字节交还连接（语义与实现见 runtime.h）。
+//   调用点唯一的当前使用者 = WS 握手读头（`ws_read_http_header`）：头与首帧同段到达时，
+//   首帧必须**留给帧解析器**，不能随头部一起被丢掉。
+void px_conn_pushback(PxConn* c, const void* data, size_t n) {
+    if (!c || !data || n == 0) return;
+    int keep = (c->pb && c->pb_len > c->pb_off) ? (c->pb_len - c->pb_off) : 0;
+    char* np = (char*)xmalloc(n + (size_t)keep);   // M240(d)：分配器配对（xmalloc/xfree）
+    memcpy(np, data, n);
+    if (keep > 0) memcpy(np + n, c->pb + c->pb_off, (size_t)keep);
+    if (c->pb) xfree(c->pb);
+    c->pb = np;
+    c->pb_len = (int)(n + (size_t)keep);
+    c->pb_off = 0;
+}
 
 // M245（缺陷 414 · 晨曦报障）：测试钩子 —— 放大「释放旧证书/私钥 → 重新 parse」之间的窗口
 //   （默认不设环境变量 = 完全无感；上限 5s 防门里写错把服务端冻死）。
@@ -26841,6 +26867,17 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                     PxConn* ws_c = px_pxpend_detach_conn(fd);
                     if (!ws_c) ws_c = conn;   // 兜底（理论不达：进到这里条目必为 active）
                     px_evc_detach(fd);        // 与 px_pxpend_close 同序（摘事件循环登记）
+                    // ═══ M288（缺陷 501）：**把请求头之后的字节交给连接** ═══
+                    //   客户端允许在升级请求之后**不等 101** 就发首帧（RFC 6455 §4.1）；
+                    //   与本函数的读头循环合读时，首帧就落在 `buf[header_end+4 .. len)`。
+                    //   修前：这段字节随 worker 栈一起消失 ⇒ 首帧静默丢失（实测夹具
+                    //   「同段发出」⇒ `ws_recv` 拿不到；「分两次发」⇒ 正常）。
+                    //   交还给连接对象（`px_conn_pushback` ⇒ `px_conn_read` 优先消费）后，
+                    //   与「首帧稍后单独到达」走**同一条**读取路径（三轨同码）。
+                    //   WS 握手是 GET 且无体 ⇒ 残余即「头之后到 len」的全部字节。
+                    if (len > header_end + 4)
+                        px_conn_pushback(ws_c, buf + (header_end + 4),
+                                         (size_t)(len - (header_end + 4)));
                     (void)px_ws_takeover_http_conn(ws_c, req, path, w_idx, w_manual);
                     px_reset_request_state();
                     px_root_pop();            // M92-S2c：请求迭代登记作用域结束
