@@ -43,7 +43,15 @@
 set -uo pipefail
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 
-ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
+# M288s1（2026-10-08 CI 实测）：**位置参数不能当 ROOT** —— CI 会传 `--neg-skip`，
+#   而 `cd "--neg-skip"` 会让 cd 去解析选项 ⇒ `cd: --: invalid option` ⇒ 门在 CI 上
+#   **0s 判红、且一个字都没输出**（真因完全读不出来）。
+#   ⇒ ROOT 走环境变量（`ROOT=`），argv[1] 仅在**不是开关**时按旧约定接受。
+ROOT="${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+case "${1:-}" in
+    ""|--*) ;;
+    *) ROOT="$1" ;;
+esac
 cd "$ROOT" || exit 1
 W="${M287_W:-/tmp/m287_gate}"
 rm -rf "$W"; mkdir -p "$W"
