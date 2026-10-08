@@ -20,8 +20,18 @@
 #   · 发送端**持续发 60 次 × 100ms**（长窗口）—— 否则 GC 压力把协程饿死时，
 #     接收端会因**真的没有包**而超时（那是 timeout，不是 EINTR）。
 # ⚠️ stdout 必须**确定性**（门对两档逐字节对拍）⇒ 只打结果行，不打诊断。
+#
+# ⚠️ M288b（第 167 轮）：**判据从「长度」升级为「内容」**。
+#   修前判据是「累积读到 5 字节」，而「长度」**不专属**于 EINTR —— 端口上有陌生数据
+#   （外人写进那条连接 / 出站连接占用同一端口）同样让长度 ≠ 5 ⇒ 环境一干扰就假红，
+#   而**真缺陷的判据强度没变**（EINTR 未重试 ⇒ read 返回 -1 ⇒ 照样判红）。
+#   现场（CI run 37729408552 · step[36]）：`T1=6` —— 与正常的 5 字节只差一个字节，
+#   只看长度会把它读成「差不多」，实际是**别人的数据**。
+#   ⇒ 现在比对 `bytes_to_hex` 的**逐字节内容**；不匹配即 `T1=FOREIGN:<hex>`，
+#     由门**单独分类**为「环境干扰」（与「产品回归」措辞严格区分）。
+#   ⚠️ 实测（本机）：`read()` 在**超时/对端关闭**时返回**空 bytes**（len 0），
+#     只有**系统调用失败**才返回 int `-1` ⇒ `bytes_to_hex` 永远不会收到 null。
 # ============================================================
-
 PORT = 18420
 UPORT = 18421
 # M275：端口可由环境变量覆盖 —— **门内**连续跑多次时的残留监听会让下一次 tcp_listen 失败
@@ -45,17 +55,30 @@ let _m256d = env("M256_PROBE_D")
 if _m256d != null:
     if _m256d != "":
         D = _m256d
-
+# M288b：**期望内容的十六进制** —— 判据的唯一事实源（探针与门共用一个值）。
+let HELLO_HEX = "48454c4c4f"
+let PING_HEX = "50494e47"
+# M288b：**环境干扰模拟开关**（负控用）。设成非空 ⇒ srv 发**不同内容**的同长（5 字节）数据，
+#   以**确定性**地构造「陌生内容」这一形态（与「端口被占」互相独立 —— 后者靠外部占端口构造）。
+#   ⚠️ 刻意发**同长度不同内容**（WORLD ≠ HELLO）：这样「长度判据」会放过、只有「内容判据」抓得住
+#     —— 负控因此能证明**新判据有牙**，而不是在证一条本来就会红的路径。
+var SEND_ALT = 0
+let _alt = env("M256_PROBE_EXTRA")
+if _alt != null:
+    if _alt != "":
+        SEND_ALT = 1
 # TCP 服务端：accept 一次 → 等 1500ms → 发 5 字节 → 关
 def srv():
     let l = tcp_listen(PORT)
     let c = tcp_accept(l)
     sleep(1500)
-    tcp_send(c, "HELLO")
+    if SEND_ALT == 1:
+        tcp_send(c, "WORLD")
+    else:
+        tcp_send(c, "HELLO")
     sleep(300)
     tcp_close(c)
     tcp_close(l)
-
 # UDP 发送端：1000ms 后开始，每 100ms 发一次（**共 60s 窗口**）
 #   ⚠️ M276 实测：原来只有 6s ⇒ 当 T1 段偏慢时，U2 还没开始跑发送端就停了
 #      ⇒ U2 等满 20s 超时 ⇒ U2=-1（**假红**，不是缺陷）。窗口拉长到 60s 后不再发生。
@@ -68,7 +91,6 @@ def usrv():
         sleep(100)
         i += 1
     udp_close(s)
-
 # GC 压力：持续分配（每次分配都触发 full GC）
 def press(n):
     var i = 0
@@ -78,7 +100,6 @@ def press(n):
         acc += len(s)
         i += 1
     return acc
-
 mkdir(D)
 # ⚠️ M284s1（缺陷 497）：UDP 接收端必须**先 bind，再 spawn 发送端**。
 #   修前 `udp_open(UPORT)` 排在 `spawn usrv()` 与两个 `press` **之后** —— 压力档下主协程
@@ -91,7 +112,6 @@ spawn srv()
 spawn usrv()
 spawn press(120000)
 spawn press(120000)
-
 # ── 用例 T1：TCP read(fd, 64)（fd 带 SO_RCVTIMEO = 3000ms）──
 var fd = -1
 var k = 0
@@ -109,11 +129,10 @@ else:
     tcp_opt(fd, {"read_timeout_ms": 20000})
     # ⚠️ M276 实测：TCP 是**字节流** —— 服务端一次 send(5) 并不保证客户端一次 read 就能拿全
     #   （实测 T1=4 假红）。⇒ 累积到 5 字节为止。
-    #   缺陷 456 的可观测面**不变**：read 被 STW 打断后**不重试** ⇒ 返回 -1 ⇒ n 保持 -1 ⇒ 判红。
+    #   缺陷 456 的可观测面**不变**：read 被 STW 打断后**不重试** ⇒ 返回 -1 ⇒ T1=-1 ⇒ 判红。
     # ⚠️ `read()` 返回 **bytes**，而 `+` **不支持 bytes 拼接**（实测 `R1002 无法相加: bytes + bytes`）
-    #   ⇒ 只累加**长度**，不拼内容。
-    var got = 0
-    var n = -1
+    #   ⇒ M288b 累加 `bytes_to_hex(d)`（**字符串**），长度与**内容**一次拿到。
+    var hx = ""
     var failed = 0
     var rounds = 0
     while rounds < 8:
@@ -121,34 +140,56 @@ else:
         if d == -1:
             failed = 1
             break
-        got = got + len(d)
-        if got >= 5:
+        hx = hx + bytes_to_hex(d)
+        if len(hx) >= 10:
             break
         rounds += 1
+    # M288b：拿到 5 字节后**再确认有没有多余字节** —— 陌生数据常以「同段到达」出现
+    #   （CI 那次的 `T1=6` 就是 5+1）。只看长度会把 6 读成「≥5 就算对」。
+    #   ⚠️ 超时/对端关闭都返回**空 bytes**（len 0 ⇒ hex ""），只有失败才返回 int -1
+    #     ⇒ `bytes_to_hex` 不会收到 null；这一步**永远不会**把干净环境误报成 FOREIGN。
     if failed == 0:
-        n = got
-    print("T1=" + str(n))
+        tcp_opt(fd, {"read_timeout_ms": 150})
+        let extra = read(fd, 64)
+        if extra != -1:
+            hx = hx + bytes_to_hex(extra)
+    if failed == 1:
+        print("T1=-1")
+    elif hx == HELLO_HEX:
+        print("T1=5")
+    else:
+        print("T1=FOREIGN:" + hx)
     tcp_close(fd)
-
 # ── 用例 U2：UDP udp_recv（先排空，使这一发**必然阻塞**）──
 #   ⚠️ M276 实测的**第二种环境干扰**：该端口上可能落到**别的进程**发来的数据报
-#      （实测收到过 23 字节的陌生包 ⇒ U2=23 假红）。⇒ 接收端**只认尺寸匹配的那一发**，
-#      其余丢掉继续等。
+#      （实测收到过 23 字节的陌生包 ⇒ U2=23 假红）。⇒ 接收端**只认内容匹配的那一发**，
+#      其余记下（首个）继续等。
+#      M288b：判据同 T1 —— 从「尺寸 4」升级为「内容 = PING（十六进制 50494e47）」；
+#      收不到 PING 但收到过陌生数据报 ⇒ `U2=FOREIGN:<hex>`（环境干扰，**不是**静默丢包）。
 #      缺陷 456 的可观测面**不变**：一旦 udp_recv 被 STW 打断后返回 **null** ⇒ m 保持 -1 ⇒ 判红。
 tcp_opt(u, {"read_timeout_ms": 1})
 while udp_recv(u, 64) != null:
     0
 tcp_opt(u, {"read_timeout_ms": 20000})
 var m = -1
+var foreign = ""
 var guard = 0
 while guard < 64:
     let r = udp_recv(u, 64)
     if r == null:
         break
-    if len(r["data"]) == 4:
+    let h = bytes_to_hex(r["data"])
+    if h == PING_HEX:
         m = 4
         break
+    if foreign == "":
+        foreign = h
     guard += 1
-print("U2=" + str(m))
+if m == 4:
+    print("U2=4")
+elif foreign != "":
+    print("U2=FOREIGN:" + foreign)
+else:
+    print("U2=-1")
 udp_close(u)
 print("M256-PROBE-DONE")
