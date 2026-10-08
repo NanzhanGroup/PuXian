@@ -1072,6 +1072,9 @@ run m119 bash examples/m119_multiline_expr/verify.sh
 run m120 bash examples/m120_dict_strict/verify.sh
 run m122 bash examples/m122_builtin_args/verify.sh
 run pkg_guard_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
+# M288s1（2026-10-08 事故）：gh-pages 发布步抽成脚本 + **逐段计时** + 失败富注解。
+#   由来：该步内联时失败只报 `exit code 1`，而 job 日志非管理员不可读 ⇒ 读不出真因。
+run pkg_publish_gh_pages bash packaging/selftest_publish_gh_pages.sh
 run pkg_make_release bash packaging/selftest_make_release.sh
 run pkg_tag_guard bash packaging/selftest_tag_guard.sh
 # M248（用户令 2026-10-03「tag 不要使用 s1 这样的标签，影响镜像同步」）：
