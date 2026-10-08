@@ -81,18 +81,18 @@ cksame "A2b 建议名不得退回旧形态 -m 后缀" "v0.2.0-m900"
 cksame "A3 未被非里程碑 tag v0.2.0-m114s2 污染" "m114s2"
 
 echo "── B 有 tag 必绿（且正文里的 M901 不带偏判据）──"
-git -C "$REPO" tag v0.2.0-m900 "$C1"
+git -C "$REPO" tag v0.2.900 "$C1"
 g --ref "$C1"; ck "B1 tag 存在且可达 ⇒ rc=0" 0
-ckhas "B1 回显命中的 tag" "v0.2.0-m900"
+ckhas "B1 回显命中的 tag" "v0.2.900"
 cksame "B2 正文里的未来里程碑 M901 未参与判据" "M901"
 
-echo "── C 前导零里程碑号同样认（-m0900 = m900）──"
-git -C "$REPO" tag -d v0.2.0-m900 >/dev/null
-git -C "$REPO" tag v0.2.0-m0900 "$C1"
-g --ref "$C1"; ck "C1 v0.2.0-m0900 视为 m900 ⇒ rc=0" 0
+echo "── C 前导零里程碑号同样认（v0.2.0900 = m900）──"
+git -C "$REPO" tag -d v0.2.900 >/dev/null
+git -C "$REPO" tag v0.2.0900 "$C1"
+g --ref "$C1"; ck "C1 v0.2.0900（前导零）视为 m900 ⇒ rc=0" 0
 
 echo "── D grace 窗口（刚推上来、tag 还没打）──"
-git -C "$REPO" tag -d v0.2.0-m0900 >/dev/null
+git -C "$REPO" tag -d v0.2.0900 >/dev/null
 g --ref "$C1" --grace-min 999999; ck "D1 提交很新 + grace ⇒ 跳过、rc=0" 0
 ckhas "D1 明示跳过" "跳过检查"
 
@@ -104,7 +104,7 @@ EOF
 git -C "$REPO" commit -aqm "feat: M902 假里程碑乙"
 git -C "$REPO" checkout -q -b side
 git -C "$REPO" commit -qm "side: 旁支提交" --allow-empty
-git -C "$REPO" tag v0.2.0-m902
+git -C "$REPO" tag v0.2.902
 git -C "$REPO" checkout -q main
 g --ref HEAD; ck "E1 tag 在旁支 ⇒ rc=1" 1
 ckhas "E1 明示不可达" "可达链"
@@ -114,8 +114,8 @@ g --allow --ref HEAD; ck "F1 TAG_GUARD_ALLOW_MISSING 放行 ⇒ rc=0" 0
 ckhas "F1 理由进日志" "自测放行理由"
 
 echo "── G 就地补 tag ⇒ 转绿；中间里程碑缺 tag 只提示 ──"
-git -C "$REPO" tag -d v0.2.0-m902 >/dev/null
-git -C "$REPO" tag v0.2.0-m902 HEAD
+git -C "$REPO" tag -d v0.2.902 >/dev/null
+git -C "$REPO" tag v0.2.902 HEAD
 g --ref HEAD; ck "G1 main 上补 tag ⇒ rc=0" 0
 ckhas "G1 中间里程碑缺 tag 只提示" "ℹ️ 名册里以下里程碑无 tag"
 
@@ -150,12 +150,12 @@ git -C "$REPO" add -A
 git -C "$REPO" commit -qm "feat: M910（3 小时前的夹具）"
 unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
 OLD=$(git -C "$REPO" rev-parse HEAD)
-git -C "$REPO" tag v0.2.0-m910 "$OLD"
+git -C "$REPO" tag v0.2.910 "$OLD"
 g --ref "$OLD" --grace-min 45
 ck "I1 老提交 + tag 可达 ⇒ rc=0" 0
 ckhas "I1 打印年龄行" "距今年龄"
 cksame "I1 未走跳过分支" "跳过检查"
-git -C "$REPO" tag -d v0.2.0-m910 >/dev/null
+git -C "$REPO" tag -d v0.2.910 >/dev/null
 g --ref "$OLD" --grace-min 45
 ck "I2 老提交 + 缺 tag ⇒ rc=1" 1
 ckhas "I2 判红时也打年龄行（红能读出真因）" "距今年龄"
@@ -175,7 +175,7 @@ g --ref HEAD; ck "J1 未登记的违规 tag ⇒ rc=3" 3
 ckhas "J1 指出「未登记」" "未登记"
 ckhas "J1 列出违规 tag 名" "v0.2.0-m903s1"
 
-git -C "$REPO" tag v0.2.0-m910 HEAD
+git -C "$REPO" tag v0.2.910 HEAD
 { printf 'v0.2.0-m114s2\t2026-10-01\t夹具\n'; printf 'v0.2.0-m903s1\t2026-10-01\t夹具\n'; } > "$TMP/ex2.txt"
 SELFTEST_GUARD_EXEMPT="$TMP/ex2.txt" g --ref HEAD; ck "J2 登记豁免后 ⇒ rc=0" 0
 ckhas "J2 明示已登记豁免数" "已登记豁免"
@@ -210,11 +210,11 @@ git clone -q -b main "$R2" "$L3"   # -b main：bare 库的 HEAD 默认是 master
 #    就变成「已经补过了」的假绿（M213/M214 立过的纪律：每道负控各自独立、干净起点）。
 git clone -q -b main "$R2" "$L4"
 # **再**打 tag 并推到远端（= 紧随 main 推出去的 tag）
-git -C "$L2" tag v0.2.0-m950
-git -C "$L2" push -q origin v0.2.0-m950
+git -C "$L2" tag v0.2.950
+git -C "$L2" push -q origin v0.2.950
 # 夹具形状自证：快照里没有、远端里有 —— 否则本段什么都没证明
-if [ -z "$(git -C "$L3" tag -l v0.2.0-m950)" ] && [ -z "$(git -C "$L4" tag -l v0.2.0-m950)" ] \
-   && [ -n "$(git -C "$R2" tag -l v0.2.0-m950)" ]; then
+if [ -z "$(git -C "$L3" tag -l v0.2.950)" ] && [ -z "$(git -C "$L4" tag -l v0.2.950)" ] \
+   && [ -n "$(git -C "$R2" tag -l v0.2.950)" ]; then
     echo "  ✅ K0 夹具形状成立（两份快照都缺 tag、远端已有）"; pass=$((pass+1))
 else
     echo "  ❌ K0 夹具形状不成立（快照/远端的 tag 状态与预期不符）"; fail=$((fail+1))
@@ -227,6 +227,27 @@ ckhas "K1 明示是 push 竞态" "push 竞态"
 out=$(TAG_GUARD_EXEMPT="$EXF_EMPTY" TAG_GUARD_NO_FETCH=1 bash "$GUARD" --repo "$L4" --ref HEAD 2>&1); RC=$?
 ck "K2 负控：禁补取 ⇒ rc=1（证明红确实来自《快照缺 tag》）" 1
 ckhas "K2 仍如实报缺 tag" "缺发布 tag"
+
+echo "── L ③b 最高里程碑必须存在**合规形态**的 tag（M288 事故）──"
+#   ⚠️ 本段**刻意**用历史形态 v0.2.0-m900 作夹具：③b 就是为「新打 tag 误用旧形态」立的。
+#     其余各段（B/C/E/G/I/J/K）已一并改用合规形态 —— 它们要测的是别的性质，
+#     夹具不该因形态问题而改变本意（「改判据 ⇒ 期望值移位」的标准动作）。
+#   夹具：给 M900 打**旧形态** tag（合规形态不存在）⇒ 必须 rc=3
+git -C "$REPO" tag v0.2.0-m900 "$C1"
+# 夹具形状自证：合规形态确实不存在、旧形态确实存在（否则本段什么都没证明）
+if [ -z "$(git -C "$REPO" tag -l v0.2.900)" ] && [ -n "$(git -C "$REPO" tag -l v0.2.0-m900)" ]; then
+    echo "  ✅ L0 夹具形状成立（只有旧形态 v0.2.0-m900）"; pass=$((pass+1))
+else
+    echo "  ❌ L0 夹具形状不成立"; fail=$((fail+1))
+fi
+g --ref "$C1"; ck "L1 最高里程碑只有旧形态 tag ⇒ rc=3" 3
+ckhas "L1 指名「旧形态」" "旧形态"
+ckhas "L1 给出整改命令（make_tag.sh --milestone 900）" "make_tag.sh --milestone 900"
+cksame "L1 不再报「缺发布 tag」（形态问题不是缺失问题）" "缺发布 tag"
+# 负控：补上合规形态 ⇒ 必须 rc=0（证明那道红确由「缺合规形态」引起）
+git -C "$REPO" tag v0.2.900 "$C1"
+g --ref "$C1"; ck "L2 负控：补上合规 v0.2.900 ⇒ rc=0（红确由缺合规形态引起）" 0
+git -C "$REPO" tag -d v0.2.900 >/dev/null 2>&1 || true
 
 echo
 if [ "$fail" -eq 0 ]; then
