@@ -39,7 +39,12 @@ set -uo pipefail
 
 REF="HEAD"
 GRACE_MIN=0
-TAG_GLOB='v*-m*'
+# M288s1（2026-10-08 实测）：这里原为 'v*-m*'（**只匹配历史形态**）—— 而**补取远端后的刷新**
+#   用的是它（见下方「push 竞态兜底」），且初始加载用的是 'v*'。
+#   ⇒ 对新形态 tag（`v0.2.288`）**补取后反而看不见** ⇒ push 竞态兜底对新形态**整条失效**
+#     ⇒ 判「缺发布 tag」= **假红**（本轮自测段 K 的夹具改用合规形态后当场照出）。
+#   （同族形状：一条语义两处实现，只改了初始加载那一处 —— M230/M253 记过。）
+TAG_GLOB='v*'
 QUIET=0
 REPO_DIR="${TAG_GUARD_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 
@@ -205,6 +210,26 @@ fi
 if [ -n "$TAG" ]; then
     TAG_COMMIT=$(git rev-list -n1 "$TAG" 2>/dev/null)
     if [ -n "$TAG_COMMIT" ] && git merge-base --is-ancestor "$TAG_COMMIT" "$COMMIT" 2>/dev/null; then
+        # ── ③b「最高里程碑必须是**合规形态**」（M288 事故 · 2026-10-08）──
+        #   事故：我手打 `git tag v0.2.0-m288`（旧形态）并 push —— ③ **放行**了它
+        #     （旧形态在 TAG_LEGACY_RE 里，为的是不把 160+ 历史 tag 全塞进豁免表）；
+        #     于是 `build_rpm.sh` 取 VER=`0.2.0`（**不是** `0.2.288`）⇒ rpm 名
+        #     `puxian-0.2.0-1.m288.*` ⇒ 被 gh-pages 的**发布单调性守卫**（qg-issue 41）
+        #     按「0.2.0 < 镜像现役 0.2.286」判「版本回退」拦下 ⇒ publish job failure。
+        #   ⇒ 代价确实被下游挡住了，但**上游没有判据**：新形态的「新」由谁保证？
+        #   判据（精确、且对历史无害）：**最高里程碑**（= 本轮要发的那个）必须存在
+        #     **至少一个合规形态**的 tag —— 旧形态的合法性只对**旧**里程碑成立（历史冻结）。
+        COMPLIANT_TOP="$(printf '%s\n' "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | awk -F. -v n="$TOP" '($3+0)==(n+0) {print}' | head -1 || true)"
+        if [ -z "$COMPLIANT_TOP" ]; then
+            echo "❌ 发布 tag 守卫未通过：最高里程碑 M$TOP 的 tag 是**旧形态**（$TAG）" >&2
+            echo "   规则: 新形态 v<次段>.<里程碑>（例 v0.2.$TOP）；旧形态 v<major>.<minor>.<patch>-m<里程碑>" >&2
+            echo "        为**历史冻结**（守卫接受既有、但**不允许新建**）—— 它会污染 rpm 的版本序号。" >&2
+            echo "   后果（2026-10-08 实测）: build_rpm.sh 取 VER=0.2.0 ⇒ rpm 名 puxian-0.2.0-1.m$TOP.*" >&2
+            echo "        ⇒ gh-pages 的发布单调性守卫按「版本回退」拦下（镜像不更新、publish job 红）。" >&2
+            echo "   整改: packaging/make_tag.sh --milestone $TOP --at $SHORT --push" >&2
+            exit 3
+        fi
         say "✅ 发布 tag 守卫通过：最高里程碑 M$TOP ← $TAG（$(git rev-parse --short "$TAG_COMMIT")）"
         # 旁证：提交主题里出现过更高里程碑（只提示，不判红）
         SUBJ_TOP=$(git log --format=%s "$COMMIT" 2>/dev/null | grep -oE '\bM[0-9]{1,4}\b' | sed 's/^M//' | sort -n | tail -1)
