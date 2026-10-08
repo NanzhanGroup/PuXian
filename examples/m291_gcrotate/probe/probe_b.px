@@ -1,0 +1,19 @@
+# ============================================================
+# M291 门自证探针 B · **稳定输出 + 可被 --env 造差异**（见 probe_a 头注）
+# 与 A/C 的区别只在规模（n）：三个探针让「批」有可分辨的内容。
+# ============================================================
+def work(n):
+    var acc = 0
+    var i = 0
+    while i < n:
+        var d = {"i": i, "s": "v" + str(i)}
+        acc = acc + len(d["s"])
+        i = i + 1
+    return acc
+
+let acc = work(400)
+let p = env("PX_M291_PERTURB")
+if p != null:
+    print("PROBE-B acc=" + str(acc) + " PERTURB=" + p)
+else:
+    print("PROBE-B acc=" + str(acc))

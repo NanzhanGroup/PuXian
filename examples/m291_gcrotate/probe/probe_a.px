@@ -1,0 +1,24 @@
+# ============================================================
+# M291 门自证探针 A · **稳定输出 + 可被 --env 造差异**
+# ------------------------------------------------------------
+# 判据（与 probe_b / probe_c 同）：
+#   · 正常档（环境无 PX_M291_PERTURB）：`PROBE-A acc=<N>`
+#   · `--env PX_M291_PERTURB=1` ⇒ 压力档多打 ` PERTURB=1`
+#     ⇒ **故意造出 stdout 差异**，用来正判「驱动器真的在看 sweep 的判定」（门第 ④ 层）。
+# 为什么放在**子目录** `probe/`：sweep 的默认候选 PAT 是 `examples/*/*.px`（**不递归**）
+#   ⇒ 本门自己的探针**不进入真轮转的候选集**，不干扰对仓内既有语料的覆盖统计。
+# ============================================================
+def work(n):
+    var acc = 0
+    var i = 0
+    while i < n:
+        acc = acc + len("v" + str(i))
+        i = i + 1
+    return acc
+
+let acc = work(300)
+let p = env("PX_M291_PERTURB")
+if p != null:
+    print("PROBE-A acc=" + str(acc) + " PERTURB=" + p)
+else:
+    print("PROBE-A acc=" + str(acc))
