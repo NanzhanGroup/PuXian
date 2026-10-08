@@ -782,48 +782,16 @@ jobs:
         env:
           TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          PAGES=/tmp/ghpages
-          REPO_URL="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          rm -rf "$PAGES" && mkdir -p "$PAGES"
-          # gh-pages 分支不存在则首次 orphan 创建
-          if git ls-remote --heads "$REPO_URL" gh-pages | grep -q 'refs/heads/gh-pages'; then
-            git clone -q --depth 1 --branch gh-pages "$REPO_URL" "$PAGES"
-          else
-            cd "$PAGES" && git init -q -b gh-pages && git remote add origin "$REPO_URL"
+          set -o pipefail
+          # M288s1：本步**必须自带诊断** —— 本仓 job 日志对非管理员不可读（API 403），
+          #   **注解是唯一对外通道**；而内联时失败只报一句 `exit code 1`，读不出真因
+          #   （2026-10-08 实测：该步 3s 就红，而成功时 20s ⇒ 卡点在很前面，但看不见是哪一条）。
+          #   ⇒ 主体抽成 packaging/publish_gh_pages.sh（含 **逐段计时** ⏱），失败打一条富注解。
+          #   （顺带：凭证改走 credential.helper，**不把 token 放进 URL**。）
+          if ! bash "$GITHUB_WORKSPACE/packaging/publish_gh_pages.sh" 2>&1 | tee "$RUNNER_TEMP/ghpages.log"; then
+            bash "$GITHUB_WORKSPACE/packaging/annotate_failure.sh" ghpages "$RUNNER_TEMP/ghpages.log"
+            exit 1
           fi
-          git -C "$PAGES" config user.email "actions@github.com"
-          git -C "$PAGES" config user.name "GitHub Actions"
-          # ---- Issue 41：发布单调性守卫（拒绝「旧覆盖新」，不再静默）----
-          #   gh-pages 现役 rpm 版本 vs 待发布新仓库版本；待发布**更旧** ⇒ 本步失败，
-          #   下面的 rsync --delete **不会执行** ⇒ gh-pages 的 rpm/ 保持不变。
-          #   人工覆盖：显式设 RPM_ALLOW_REGRESSION=<理由>（会记入流水线日志）。
-          mkdir -p "$PAGES/rpm"
-          bash "$GITHUB_WORKSPACE/packaging/rpm_monotonic_guard.sh" "$PAGES/rpm" /tmp/pxrepo
-          # 同步仓库树（--delete 保证只含当前版本，旧版 rpm 由 GitHub Release 资产留存）
-          rsync -a --delete /tmp/pxrepo/ "$PAGES/rpm/"
-          # ---- 站点根文件由仓库同步（防漂移：2026-09-16 发现 gh-pages 的 install-rpm.sh
-          #      停在 M73 期、只支持 el9，与仓库 packaging/install-rpm.sh diff 79 行）----
-          for f in install-rpm.sh pages/index.html; do
-            [ -f "$GITHUB_WORKSPACE/packaging/$f" ] || { echo "❌ 缺少 packaging/$f"; exit 1; }
-          done
-          install -m 0755 "$GITHUB_WORKSPACE/packaging/install-rpm.sh" "$PAGES/install-rpm.sh"
-          install -m 0644 "$GITHUB_WORKSPACE/packaging/pages/index.html" "$PAGES/index.html"
-          echo "✅ 站点根文件已同步（install-rpm.sh / index.html）"
-          cd "$PAGES"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "ℹ️ rpm 仓库无变更（同版本重复发布）"
-          else
-            git commit -q -m "rpm: 发布 PuXian ${GITHUB_REF_NAME}（el7/el9 + openEuler 签名仓库）"
-            if git rev-parse --verify -q origin/gh-pages >/dev/null; then
-              git push -q origin gh-pages
-            else
-              git push -q -u origin gh-pages
-            fi
-            echo "✅ 已推送到 gh-pages/rpm/（${GITHUB_REF_NAME}）"
-          fi
-          echo "🌐 仓库地址: 国内 https://soft.xiusoft.cn/puxian/rpm/  ｜ 上游 https://nanzhanggroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/（含 el7 / el9 / openeuler/<ver>）"
 
       - name: 密钥未配置提示（占位，保持 job 绿）
         if: steps.gpgkey.outputs.ok != 'true'
