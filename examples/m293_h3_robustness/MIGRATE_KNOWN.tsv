@@ -1,0 +1,27 @@
+# M293 门 · H3「托管 listener」形态**登记表**（双向核对用）
+#
+# 格式：id <TAB> mode <TAB> expect <TAB> reason <TAB> date <TAB> basis
+#   id     用例标识（与 verify.sh 中的调用点一一对应）
+#   mode   客户端形态（post = 连接迁移后再发一次）
+#   expect 期望观测（OK | FAIL）—— **实测必须与它一致**
+#   reason **必须说明为什么是这样**
+#
+# ⚠️ 纪律（沿 M226 `UNPAIRED.tsv` / M227 `RCODE.tsv` 的「双向表」）：
+#   ① 表里有、实测不符 ⇒ 判红（`expect=FAIL` 却成功 ⇒ **登记过期**，逼着更新文档；
+#      `expect=OK` 却失败 ⇒ 产品回归）
+#   ② 真缺陷**不许**被记成 OK；未修但已定性的**要如实写 FAIL**并给出机理
+#   ③ 表刻意保持最小：**1 条**
+#
+# ── 登记项（1 条）────────────────────────────────────────────────
+# 机理（服务端 strace 决定性取证，M293 侦察）：
+#   迁移后服务端 `remote_sa` 在**旧源 / 新源之间来回抖** ——
+#     sendto → 旧源端口 · recvfrom ← 新源端口 · sendto → 又回旧源 · sendto → 新源
+#   正是 `bi_quic_migrate` 注释里写的「**迟到的旧源包会把服务器 remote_sa 回切到已关闭的旧地址**」，
+#   那里只用「切换前泵 300ms」缓解；在托管 listener（单 fd + DCID 路由）下**不足**。
+#   对照：`examples/m54_s3_migrate_verify.sh` 的**裸 QUIC**（demo accept 路径）迁移 **PASS**
+#     ⇒ 不是「迁移本身不支持」，而是托管 listener 路径的归属判定问题。
+#   定性：**非默认路径**（生产未用 H3；HTTP3_STANCE 明写实验性）
+#     ⇒ 本轮**登记 + 文档写明**，不做高风险修复（改 QUIC 路径归属需交 ngtcp2 的路径状态）。
+#
+# id	mode	expect	reason	date	basis
+h3_migrate_managed	post	FAIL	托管 listener 下 remote_sa 被迟到旧源包回切 ⇒ 迁移后请求无响应（strace 取证）	2026-10-09	M293
