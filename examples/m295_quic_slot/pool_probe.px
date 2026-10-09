@@ -1,0 +1,19 @@
+# ============================================================
+# examples/m295_quic_slot/pool_probe.px
+# ------------------------------------------------------------
+# M295 门：`quic_pool_stats()` 的连接池可见性契约。
+#   修前「槽位耗尽」在服务端**完全不可观测**（第 65 条连接的 Initial 被静默丢弃、
+#   日志无痕，客户端只看到 connect-fail）⇒ 本入口是那条缺口的补位。
+# 输出：`POOL k=v k=v …`（门按此断言键与取值）
+# ============================================================
+extern def quic_pool_stats() -> dict
+
+var s = quic_pool_stats()
+var ks = ["listeners_max", "listeners_used", "conns_max", "conns_used", "conns_peak",
+          "alloc_ok", "alloc_fail", "full_first_ms", "peer_closed_cnt",
+          "cidtab_max", "cidtab_used", "cid_drop", "h3_idle_ms"]
+var line = "POOL"
+for k in ks:
+    line = line + " " + k + "=" + str(s[k])
+print(line)
+print("POOL-KEYS " + str(len(ks)) + " GOT " + str(len(s)))
