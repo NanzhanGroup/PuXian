@@ -1,0 +1,61 @@
+# ============================================================
+# examples/m295_quic_slot/slot_cli.px
+# ------------------------------------------------------------
+# M295 门 · 客户端：建连 → 请求 `/q295/<tag>` → （可选）关闭。
+#
+# 契约行（**判据只认这些行**）：
+#   TAG <t> OK             —— 完全正确
+#   TAG <t> TIMEOUT        —— 本连接无响应（**缺陷 508 的用户可见面**）
+#   TAG <t> connect-fail   —— 建连失败（槽位满 / 服务未就绪）
+#   TAG <t> CROSSTALK …    —— 串味（缺陷 505/507 面，本门只作回归观察）
+#   TAG <t> bad-status <s> / setup-fail / open-fail
+#
+# `M295_CLOSE=0` ⇒ **不调 quic_close**（模拟「进程被杀」：对端收不到 CONNECTION_CLOSE）。
+#   默认（未设或其它值）= 优雅关闭 —— 这正是验证 M295 的 `quic_close` 修复所需的对照。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_close(conn: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_client_open_stream(conn: int) -> int
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict
+
+var h3p = 23101
+var v = env("M295_HTTP_PORT")
+if v != null:
+    h3p = int(v) + 1
+
+var tag = "0"
+var tv = env("M295_TAG")
+if tv != null:
+    tag = tv
+var want = "q295-ok-" + tag
+
+var c = quic_connect("127.0.0.1", h3p, "h3")
+if c <= 0:
+    print("TAG " + tag + " connect-fail")
+    exit(2)
+if h3_conn_setup(c, 4096) == false:
+    print("TAG " + tag + " setup-fail")
+    exit(2)
+var s = h3_client_open_stream(c)
+if s <= 0:
+    print("TAG " + tag + " open-fail")
+    exit(2)
+h3_client_send_request_stream(c, s, "GET", "https", "localhost", "/q295/" + tag, [], "")
+var r = h3_client_read_response_stream(c, s, 8000)
+if r == null:
+    print("TAG " + tag + " TIMEOUT")
+    exit(3)
+if r["status"] != "200":
+    print("TAG " + tag + " bad-status " + str(r["status"]))
+    exit(4)
+if r["body"] != want:
+    print("TAG " + tag + " CROSSTALK body=[" + str(r["body"]) + "]")
+    exit(5)
+print("TAG " + tag + " OK")
+var cl = env("M295_CLOSE")
+if cl == null or cl != "0":
+    quic_close(c)

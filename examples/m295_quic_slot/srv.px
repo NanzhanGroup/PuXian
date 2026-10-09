@@ -1,0 +1,30 @@
+# ============================================================
+# examples/m295_quic_slot/srv.px
+# ------------------------------------------------------------
+# M295 门：QUIC 连接槽位耗尽（缺陷 508）—— 服务端
+#
+# 形态 = `px_serve(port, docroot, timeout, {"http3": {"port": h3p}})`：单 fd 收包路由
+#   + 自动 accept + 每连接一条处理线程（晨曦生产在用的形态）。
+#
+# ⚠️ 就绪判据（沿用 M293 的 F1 结论）：本服务端**不写 ready 文件**、不打印任何会被
+#   当成就绪信号的 app 行 —— 就绪只能靠运行时**绑定成功之后**打印的那一行。
+#   理由：app 的 print 在 px_serve 之前，绑定失败也照样打印 ⇒ 会把「起不来」误报成「起来了」。
+#
+# 路由命名空间 `/q295/`（与 m293 的 `/probe/`、m294 的 `/q294/` 区分 ⇒ 门间隔离，M264）。
+# ============================================================
+var hp = 23100
+var h3p = 23101
+var v = env("M295_HTTP_PORT")
+if v != null:
+    hp = int(v)
+    h3p = hp + 1
+
+def api_q295(req, params):
+    var t = str(params["tag"])
+    return {"status": 200, "body": "q295-ok-" + t,
+            "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/q295/:tag", api_q295)
+
+print("SRV starting http=" + str(hp) + " h3=" + str(h3p))
+px_serve(hp, "/tmp", 10000, {"http3": {"port": h3p}})
