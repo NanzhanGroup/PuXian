@@ -332,27 +332,38 @@ fi
 #   ⚠️ **牙还在**：若产品真的回归（udp_recv 被 STW 打断后静默丢包），U2 会**每次**都 -1
 #      ⇒ 连续 3 次异常 ⇒ 仍然 rc=2 判红；`gone` 永不出现 ⇒ rc=1 判红。
 neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=另一键应保持的值
-    local gone="$1" gone_expect="$2" keep="$3" keep_expect="$4" tag hits=0 i=0 v k bk=0
-    while [ "$i" -lt 6 ]; do
+    # ⚠️⚠️ M294 补（缺陷 509）：**预算必须按「可判轮次」算，而且要够大** ——
+    #   原写法 `while [ i -lt 6 ]` 把**不可判**的轮次也算进预算，而**复现本身是概率性的**。
+    #   实测（本机 · 压力档 · NC-B 形态 20 轮）：`U2=-1`（复现）**9/15 ≈ 60%**，
+    #   `U2=4`（未复现）5/15，装置不可判 1/15）⇒ 6 轮预算在 60% 下单轮失败率 0.4%、
+    #   看似够，但**两个负控 + [6C] 各一次**叠加、再算上「不可判」吃掉的轮次，
+    #   实测全量门里 ~20% 的轮次会红一次（2026-10-09 实测两次）。
+    #   ⇒ 改成两条独立预算：**可判轮次 ≤ 12**（60% 下漏判 0.4^12 ≈ 0.002%）·
+    #     总迭代 ≤ 24（防不可判轮次无限吃时间）。判定不了时把原因打出来。
+    local gone="$1" gone_expect="$2" keep="$3" keep_expect="$4" tag hits=0 i=0 v k bk=0 usable=0
+    local MAXIT=24 MAXUSABLE=12 MAXKEEPBAD=4
+    while [ "$i" -lt "$MAXIT" ] && [ "$usable" -lt "$MAXUSABLE" ]; do
         i=$((i + 1)); tag="n_${i}"
         run_once "$tag" PX_GC_STRESS=1 PX_GC_INLINE=1 >/dev/null
         if ! grep -q 'M256-PROBE-DONE' "$W/out_$tag.txt"; then
             N267=$((N267 + 1))
-            echo "  ℹ️ [$tag] 探针未跑完（疑似缺陷 267 家族）⇒ 本次**不可判**，重试"
+            echo "  ℹ️ [$tag] 探针未跑完（疑似缺陷 267 家族）⇒ 本次**不可判**，重试（已用 $i 次 · 可判 $usable 次）"
             continue
         fi
         k="$(get_val "$tag" "$keep")"
         if [ "$k" != "$keep_expect" ]; then
             bk=$((bk + 1))
-            echo "  ℹ️ [$tag] $keep=$k（期望 $keep_expect）—— 第 $bk 次"
-            [ "$bk" -ge 3 ] && return 2
+            echo "  ℹ️ [$tag] $keep=$k（期望 $keep_expect）—— 本次**不可判**（第 $bk 次）"
+            [ "$bk" -ge "$MAXKEEPBAD" ] && return 2
             continue
         fi
+        usable=$((usable + 1))
         v="$(get_val "$tag" "$gone")"
         [ -n "$v" ] && [ "$v" != "$gone_expect" ] && hits=$((hits + 1))
         [ "$hits" -ge 1 ] && return 0
     done
     [ "$hits" -ge 1 ] && return 0
+    echo "  ℹ️ 判据用尽预算：总迭代 $i 次 · **可判** $usable 次 · 命中 $hits（gone=$gone）"
     return 1
 }
 
@@ -365,8 +376,13 @@ else
                  '    ssize_t n = read(fd, buf, (size_t)maxlen);' \
        && rebuild "$W/build_na.log"; then
         neg_any T1 5 U2 4; rc=$?
-        if [ $rc -eq 0 ]; then ok "[6A] 3 次内 T1 被判红，且 U2 始终绿（独立）"
-        else bad "[6A] 未按预期判红（rc=$rc：1=故障未出现 2=波及 U2 3=补丁/重建失败）"; fi
+        if [ $rc -eq 0 ]; then ok "[6A] 预算内 T1 被判红，且 U2 始终绿（独立）"
+        else bad "[6A] 未按预期判红（rc=$rc：1=故障未出现 2=波及 U2 3=补丁/重建失败）"
+             echo "       ── 诊断（M294 补 · 让「故障未出现」读得出真因）──"
+             echo "         补丁后产物 sha256 = $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)… · rt_key = $( (cd "$ROOT" && ./tools/px rtkey 2>/dev/null) | tail -1)"
+             echo "         ⚠️ 若产物的 sha 与**未打补丁**时相同 ⇒ 补丁没进产物（走错了 runtime 缓存）"
+             echo "         重建日志尾："; tail -4 "$W/build_na.log" 2>/dev/null | sed 's/^/         | /'
+        fi
     else
         bad "[6A] 补丁或重建失败"
     fi
@@ -377,8 +393,12 @@ else
                  '    int n = (int)recvfrom(fd, buf, (size_t)maxlen, 0, (struct sockaddr*)&src, &slen);' \
        && rebuild "$W/build_nb.log"; then
         neg_any U2 4 T1 5; rc=$?
-        if [ $rc -eq 0 ]; then ok "[6B] 3 次内 U2 被判红，且 T1 始终绿（独立）"
-        else bad "[6B] 未按预期判红（rc=$rc）"; fi
+        if [ $rc -eq 0 ]; then ok "[6B] 预算内 U2 被判红，且 T1 始终绿（独立）"
+        else bad "[6B] 未按预期判红（rc=$rc：1=故障未出现 2=波及 T1）"
+             echo "       ── 诊断（M294 补）──"
+             echo "         补丁后产物 sha256 = $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)… · rt_key = $( (cd "$ROOT" && ./tools/px rtkey 2>/dev/null) | tail -1)"
+             echo "         重建日志尾："; tail -4 "$W/build_nb.log" 2>/dev/null | sed 's/^/         | /'
+        fi
     else
         bad "[6B] 补丁或重建失败"
     fi
@@ -392,21 +412,46 @@ else
     #   ⇒ 原来只跑 1 次就断言「故障复现」，实测 4 次里会红 1 次。改为**有界重试**（最多 6 次）。
     # ⚠️ 这里是**顶层**（不在函数里）—— 用 `local` 会 `can only be used in a function`
     #   + `set -u` 下紧接 `_i: unbound variable`（M276 实测踩到）。顶层一律用普通变量。
-    _i=0; _rep=0
-    while [ "$_i" -lt 6 ]; do
+    # ⚠️⚠️ M294 补（缺陷 509）：**「故障复现」不等于「本次可判」** ——
+    #   原判据只看 `T1 != 5` 就 break，于是「装置坏掉的那一轮」（探针未跑完 / U2 也被
+    #   环境干扰 / T1 是 FOREIGN: 或 CONNFAIL）会被当成「故障复现」进入 `judge_track`；
+    #   而 `M256_EXPECT_T1=-1` **只覆盖 `"$e_t1"` 那一个分支** —— FOREIGN/CONNFAIL/未跑完
+    #   三条**照样判红** ⇒ **[6C] 会偶发假红**（实测：2026-10-09 全量门里红了一次，
+    #   而同代码 standalone 连跑 3 次全绿 ⇒ 是**装置侧的概率性**，不是判据无牙）。
+    #   ⇒ 判据（本循环的 break 条件）= **本次**同时满足：
+    #       ① 探针跑到结尾（`M256-PROBE-DONE`）  ② T1 是缺陷指纹（非 5 / 非 FOREIGN / 非 CONNFAIL）
+    #       ③ U2 不受本补丁影响（== 4）
+    #     否则**重试**并记下原因；6 次都不成立 ⇒ 判红且把**最后一次的原因**打出来
+    #     （「判定不了」必须响亮 —— 与 M283 P4 / M288b 同口径）。
+    _i=0; _rep=0; _ncwhy="（未开始）"; _ncusable=0
+    # ⚠️ 预算口径同 `neg_any`（缺陷 509）：**可判轮次 ≤ 12** · 总迭代 ≤ 24
+    while [ "$_i" -lt 24 ] && [ "$_ncusable" -lt 12 ]; do
         _i=$((_i + 1))
         run_track nc PX_GC_STRESS=1 PX_GC_INLINE=1 >/dev/null || true
-        if [ "$(get_val nc T1)" != "5" ]; then _rep=1; break; fi
-        echo "  ℹ️ [nc] 第 $_i 次未复现（T1=5）—— STW 未恰好打断 read，重试"
+        _nt1="$(get_val nc T1)"; _nu2="$(get_val nc U2)"
+        case "$_nt1" in
+            FOREIGN:*|CONNFAIL) _ncwhy="T1=$_nt1（环境干扰/连不上 ⇒ 本次**装置不可判**）" ;;
+            "5")                _ncwhy="T1=5（STW 未恰好打断 read）" ;;
+            *)  if [ "$_nu2" != "4" ]; then
+                    _ncwhy="U2=$_nu2（本补丁只动 bi_read，U2 必须不受影响）"
+                elif ! grep -q '^M256-PROBE-DONE$' "$W/out_nc.txt"; then
+                    _ncwhy="探针未跑完（缺陷 267 家族）"
+                else
+                    _rep=1
+                    _ncusable=$((_ncusable + 1))
+                fi ;;
+        esac
+        [ "$_rep" = 1 ] && break
+        echo "  ℹ️ [nc] 第 $_i 次**不可判**（$_ncwhy）⇒ 重试（可判 $_ncusable 次）"
     done
     if [ "$_rep" = 1 ]; then
         if M256_EXPECT_T1=-1 judge_track nc >/dev/null 2>&1; then
             ok "[6C] 同故障在自伤判据下不再判红 ⇒ 红来自比对本身"
         else
-            bad "[6C] 自伤判据下仍判红 ⇒ 红的来源不明"
+            bad "[6C] 自伤判据下仍判红 ⇒ 红的来源不明（本次 T1=$_nt1 · U2=$_nu2）"
         fi
     else
-        bad "[6C] 故障 6 次均未复现（STW 未打断 read）—— 判据无法自证"
+        bad "[6C] 故障在预算内均**不可判**（总迭代 $_i 次 · 可判 $_ncusable 次 · 最后一次：$_ncwhy）—— 判据无法自证（装置侧问题，非产品回归）"
     fi
     restore_all
     # ⚠️⚠️ M288b **实测出来的一个潜在缺陷（本门自己的）**：`restore_all` 只还原**源码**，
