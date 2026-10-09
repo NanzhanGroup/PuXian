@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 392,
+ "count": 393,
  "names": [
   "Err",
   "Ok",
@@ -253,6 +253,7 @@
   "quic_open_stream",
   "quic_open_uni_stream",
   "quic_poll",
+  "quic_pool_stats",
   "quic_recv",
   "quic_recv_stream",
   "quic_send",
