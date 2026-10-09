@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #define QD_MAX_SESS 64
 #define QD_ENT_MAX 4096        // 动态表最大条目槽位（环形，绝对索引单调）
@@ -133,7 +134,9 @@ static int qd_static_name(const char* n, int nl) {
 typedef struct { char* name; int nlen; char* val; int vlen; } qd_entry;
 
 typedef struct {
-    int used;
+    /* M294（缺陷 507 修复）：占用位**已移出本结构**（见 g_qds_used）。
+     * 别再往这里加 `int used;` —— 它的存在曾让 `memset(s, 0, sizeof(*s))` 把刚占上的
+     * 位置又清回 0，于是并发连接在窗口里**二次认领**同一个会话槽。 */
     int64_t max_cap;          // 解码端允许的最大容量（SETTINGS）
     int64_t enc_cap;          // 当前动态表容量（encoder 本地 + decoder 镜像用同值）
     // encoder 侧动态表（环形数组，绝对索引单调）
@@ -151,7 +154,13 @@ typedef struct {
 } qd_sess;
 
 static qd_sess g_qds[QD_MAX_SESS];
-static qd_sess* qd_get(int64_t id) { return (id > 0 && id <= QD_MAX_SESS && g_qds[id - 1].used) ? &g_qds[id - 1] : NULL; }
+/* M294（缺陷 507）：**占用位与数据分离**。
+ * 为什么必须分离见 bi_qs_open 的说明；一句话：`memset(s)` 不得触碰占用位，
+ * 否则「占用」这个动作就不是原子的（它由两步组成，中间有可被并发观察到的空档）。 */
+static char    g_qds_used[QD_MAX_SESS];
+static qd_sess* qd_get(int64_t id) {
+    return (id > 0 && id <= QD_MAX_SESS && g_qds_used[id - 1]) ? &g_qds[id - 1] : NULL;
+}
 
 static int qd_entry_size(const qd_entry* e) { return e->nlen + e->vlen + 32; }
 static int qd_entry_size2(const char* n, int nl, const char* v, int vl) { return nl + vl + 32; }
@@ -253,10 +262,16 @@ static LXValue bi_qs_open(LXValue* args, int nargs, void* ctx) {
     if (cap < 0) cap = 0;
     if (cap > QD_CAP_MAX) cap = QD_CAP_MAX;
     for (int i = 0; i < QD_MAX_SESS; i++) {
-        if (!g_qds[i].used) {
+        /* M294（缺陷 507）：原写法 `if (!g_qds[i].used) { memset(...); s->used = 1; }`
+         * 在**无锁**下有两条缝：① 「读 → 置位」之间是窗口；② `memset` 又把 `used` 清回 0
+         * ⇒ 窗口更宽。实测：**六条并发连接同时拿到 qd=13**，共享同一张 QPACK 动态表，
+         * 各自解出**别人的路径** ⇒ 串味 / 同一路径被服务多次 / 超时（缺陷 505 的全部症状）。
+         * 修法：占用位独立成数组（`memset` 碰不到它），**原子交换是唯一仲裁者**。
+         * 返回非 0 = 槽已被别人占（**正常**，看下一个）；返回 0 = 我拿到，且此后没有任何
+         * 路径能把它变回 0 ⇒ 不存在「二次认领」。 */
+        if (__atomic_exchange_n(&g_qds_used[i], 1, __ATOMIC_SEQ_CST) == 0) {
             qd_sess* s = &g_qds[i];
-            memset(s, 0, sizeof(*s));
-            s->used = 1;
+            memset(s, 0, sizeof(*s));      /* 只清数据，不触碰占用位 */
             s->max_cap = cap;
             s->enc_cap = cap;      // 会话创建即允许该容量（SETTINGS 已收）
             return px_int(i + 1);
@@ -273,6 +288,9 @@ static LXValue bi_qs_close(LXValue* args, int nargs, void* ctx) {
     qd_tab_free(s->de, &s->de_head, &s->de_len);
     free(s->eout);
     memset(s, 0, sizeof(*s));
+    /* M294（缺陷 507）：占用位显式释放（它不在结构体里，memset 清不到它）。
+     * 顺序刻意是「先清数据、后放占用位」—— 反之会让别的线程拿到一个尚未清空的会话。 */
+    __atomic_store_n(&g_qds_used[args[0].as.i - 1], 0, __ATOMIC_SEQ_CST);
     return px_bool(true);
 }
 
