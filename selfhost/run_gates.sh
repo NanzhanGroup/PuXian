@@ -34,6 +34,14 @@ FAIL=0
 SKIPPED=0
 REG="${GATE_REGISTRY:-selfhost/gates.registry.sh}"
 
+# ── M293（缺陷 506）：末行裁决（rc=0 **不足以**证明门绿）─────────────────
+#   本仓有一批门结尾是「打印 `MNNN-VERIFY-OK` 但**无条件 `exit 0`**」，而本运行器的失败计数
+#   **只看 rc** ⇒ 这类门的**门内 ❌ 被静默吞掉**（实测：m293 内部「失败 1 项 · 通过 37 项」，
+#   运行器却报 ✅）。CI 侧本来就有这条判据（`packaging/ci_diagnose.py` 的末行裁决）⇒
+#   只有**本地**是盲区。判据取**同一份规则**（失败优先），见 selfhost/gate_verdict.sh。
+#   误报率实测（M293）：对刚跑完的 200 份 /tmp/gate_*.log 施加该判据 ⇒ 判红 1 份且为**真阳性**。
+. "$(dirname "$0")/gate_verdict.sh"
+
 # ── M243：参数解析（**必须在 PID 锁之前** —— `--list` 不执行任何门，
 #    既不需要锁、也不该被脏树检查挡住）────────────────────────────
 GATE_ONLY="${GATE_ONLY:-}"
@@ -90,8 +98,10 @@ run() {  # $1=名 $2..=命令
     local tmo="${!tmo_var:-$GATE_TIMEOUT_DEFAULT}"
     if timeout -k 20 "$tmo" "$@" > "/tmp/gate_$name.log" 2>&1; then
         local el=$((SECONDS-t0))
-        printf '%s\tOK\t%d\t-\n' "$name" "$el" >> "$GATE_TSV"
-        echo "✅ $name（${el}s）"
+        if _gate_adjudicate_ok_rc "$name" "$el"; then
+            printf '%s\tOK\t%d\t-\n' "$name" "$el" >> "$GATE_TSV"
+            echo "✅ $name（${el}s）"
+        fi
     else
         local rc=$?; local el=$((SECONDS-t0))
         printf '%s\tFAIL\t%d\t%d\n' "$name" "$el" "$rc" >> "$GATE_TSV"
@@ -104,14 +114,36 @@ run() {  # $1=名 $2..=命令
         # M286s1：**完整日志路径** —— 此前只显示尾部 ⇒ 诊断不了根因
         #   （本轮实测：m260 的根因在 [3] 段，而尾部只有 [5] 覆盖边界 ⇒ 无从下手）。
         echo "     （完整日志：/tmp/gate_$name.log）"; FAIL=$((FAIL+1))
-        # ── M243：快速失败（迭代期 —— 写错了不必等满全程）──
-        if [ "$GATE_FAIL_FAST" = 1 ]; then
-            echo ""
-            echo "⛔ --fail-fast：首败即停（已过 $((SECONDS-GATE_ALL0))s · **其余门未跑**）"
-            gate_summary
-            exit 1
-        fi
+        _maybe_fail_fast
     fi
+}
+
+# ── M243：快速失败（迭代期 —— 写错了不必等满全程）──
+_maybe_fail_fast() {
+    if [ "$GATE_FAIL_FAST" = 1 ]; then
+        echo ""
+        echo "⛔ --fail-fast：首败即停（已过 $((SECONDS-GATE_ALL0))s · **其余门未跑**）"
+        gate_summary
+        exit 1
+    fi
+    return 0
+}
+
+# ── M293（缺陷 506）：rc=0 后的**末行裁决** ──
+#   返回 0 = 末行不判红（照常记 OK）；返回 1 = 已按失败记账（调用方不再记 OK）
+_gate_adjudicate_ok_rc() {   # $1=门名 $2=耗时
+    local name="$1" el="$2" ll="" vrc=0
+    gate_verdict_lastline < "/tmp/gate_$name.log"; vrc=$?
+    [ "$vrc" = 1 ] || return 0
+    ll="$(grep -a -v '^[[:space:]]*$' "/tmp/gate_$name.log" | tail -1 | cut -c1-100)"
+    printf '%s\tFAIL\t%d\tverdict\n' "$name" "$el" >> "$GATE_TSV"
+    echo "❌ $name（rc=0 但**末行判红** · ${el}s）"
+    echo "     末行：$ll"
+    echo "     ⇒ 门自身没把 FAIL 反映到退出码（缺陷 506 家族：结尾无条件 exit 0）"
+    echo "     （完整日志：/tmp/gate_$name.log）"
+    FAIL=$((FAIL+1))
+    _maybe_fail_fast
+    return 1
 }
 
 # ── 汇总（M243 抽成函数：`--fail-fast` 提前退出时也要打）──
