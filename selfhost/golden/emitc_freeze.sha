@@ -274,6 +274,8 @@ examples/m293_h3_robustness/cli_migrate.px src=fdc71dad9d7b9043 rc=0 out=804c5ab
 examples/m293_h3_robustness/cli_multi.px src=a4e4013fe322c37a rc=0 out=4b3b8f43c94853b315655579db6740b0 err=e3b0c44298fc1c14
 examples/m293_h3_robustness/cli_tag.px src=faccc9e2d88ef94d rc=0 out=f6b1db4b464675e7fe11d8cf5375bf7b err=e3b0c44298fc1c14
 examples/m293_h3_robustness/srv.px src=9ed7e6345b51d66c rc=0 out=0a3a4798a694eef67f396ed7bde96ead err=e3b0c44298fc1c14
+examples/m294_h3_qpack_share/cli_tag.px src=07ad0b3cc7947c7a rc=0 out=b33d971d92582c6e9bf98f1aa5ac5a82 err=e3b0c44298fc1c14
+examples/m294_h3_qpack_share/srv.px src=fa12421440777786 rc=0 out=5edaed36d2a5264bd41fc8a159a2b699 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
