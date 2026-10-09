@@ -1,0 +1,36 @@
+# ============================================================
+# M293 门：HTTP/3 健壮性（**托管 listener · 生产形态**）—— 服务端
+# ------------------------------------------------------------
+# 路径 = `px_serve(port, docroot, timeout, {"http3": {"port": h3p}})`：
+#   单 fd 收包路由 + 自动 accept + 每连接处理线程（Mahesvara 同路径）。
+#   这是晨曦生产在用的形态（**不是**裸 `quic_listen` + `quic_accept` 的 demo 路径）。
+#
+# ⚠️ F1（M293 侦察发现，本门据此改形）：
+#   原形态（m225）是「先 `write_file(ready)` 再 `px_serve`」⇒ **绑定失败也会留下 ready 文件**
+#   （「起不来」伪装成「起来了」）。本轮实测：同端口起第二个实例 ⇒
+#     `t2` 只有 app 自己的 `print` 行 + `绑定端口 … 失败：Address already in use`，
+#     **没有任何 `listening` 行**；而 `t1`（绑定成功）有。
+#   ⇒ 就绪的真判据 = **运行时在绑定成功之后打印的 `listening` 行**（+ 进程存活）。
+#   本服务端因此**不再写 ready 文件**，也不打印任何被当作就绪信号的 app 行。
+# ============================================================
+var hp = 19693
+var h3p = 19694
+var v = env("M293_HTTP_PORT")
+if v != null:
+    hp = int(v)
+    h3p = hp + 1
+
+def api_m293(req, params):
+    return {"status": 200, "body": "m293-ok", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/m293", api_m293)
+
+# 并发干扰测量用（M293 §[8b]）：按路径参数回显 ⇒ 可检出「请求被解成**别的连接**的路径」。
+def api_probe(req, params):
+    var t = str(params["tag"])
+    return {"status": 200, "body": "m293-ok-" + t, "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/probe/:tag", api_probe)
+
+print("SRV starting http=" + str(hp) + " h3=" + str(h3p))
+px_serve(hp, "/tmp", 10000, {"http3": {"port": h3p}})

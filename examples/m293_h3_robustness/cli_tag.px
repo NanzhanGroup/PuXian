@@ -1,0 +1,52 @@
+# ============================================================
+# M293 门 · [8b] 并发干扰测量客户端
+#   请求 `/probe/<tag>`，校验响应体**恰好是本 tag 的**。
+#   契约行：
+#     TAG <t> OK              —— 完全正确
+#     TAG <t> CROSSTALK body=[…]  —— 拿到了**别的 tag 的响应体**（串味）
+#     TAG <t> TIMEOUT         —— 本连接无响应
+#     TAG <t> bad-status <s>  —— 状态非 200（服务端把路径解成了空/不匹配 ⇒ 404）
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_close(conn: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_client_open_stream(conn: int) -> int
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict
+
+var h3p = 19694
+var v = env("M293_HTTP_PORT")
+if v != null:
+    h3p = int(v) + 1
+var tag = "0"
+var tv = env("M293_TAG")
+if tv != null:
+    tag = tv
+var want = "m293-ok-" + tag
+
+var c = quic_connect("127.0.0.1", h3p, "h3")
+if c <= 0:
+    print("TAG " + tag + " connect-fail")
+    exit(2)
+if h3_conn_setup(c, 4096) == false:
+    print("TAG " + tag + " setup-fail")
+    exit(2)
+var s = h3_client_open_stream(c)
+if s <= 0:
+    print("TAG " + tag + " open-fail")
+    exit(2)
+h3_client_send_request_stream(c, s, "GET", "https", "localhost", "/probe/" + tag, [], "")
+var r = h3_client_read_response_stream(c, s, 8000)
+if r == null:
+    print("TAG " + tag + " TIMEOUT")
+    exit(3)
+if r["status"] != "200":
+    print("TAG " + tag + " bad-status " + str(r["status"]))
+    exit(4)
+if r["body"] != want:
+    print("TAG " + tag + " CROSSTALK body=[" + str(r["body"]) + "]")
+    exit(5)
+print("TAG " + tag + " OK")
+quic_close(c)

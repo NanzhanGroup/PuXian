@@ -1174,6 +1174,16 @@ jobs:
           grep -E 'M291-VERIFY' /tmp/v_m291.log | tail -1 || true
           echo "✅ m291_gcrotate（工具自证 9 · 分批完备性 433 逐字节 · 轮转 1→2→3 一圈完成 · 正判据指名）PASS"
 
+      - name: m293_h3_robustness（HTTP/3 托管 listener 健壮性 · 晨曦阻塞级 QA 常设化）
+        if: always()
+        run: |
+          # 负控各要一次服务端重编（≈10s×3）⇒ CI 用 --neg-skip（与其余重编门一致）。
+          # 本门不 patch 仓库源码（负控只改派生的服务端副本）⇒ 与门级互斥锁纪律天然相容。
+          bash examples/m293_h3_robustness/verify.sh --neg-skip > /tmp/v_m293.log 2>&1 || { echo "❌ m293 门失败（就绪判据 / 会话 A–E / 资源收敛 / 并发测量 / 迁移登记双向核对）"; grep -E '^(  ❌|     )' /tmp/v_m293.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '并发 .* 连接' /tmp/v_m293.log | tail -1 || true
+          grep -E '失败 .* 项' /tmp/v_m293.log | tail -1 || true
+          echo "✅ m293_h3_robustness（静态 10 · 非优雅断开 串行8+并发12 · 交错10+突发4 · 空闲20s 重连 · 0-RTT 3/3 · fd 恒定 · 无忙自旋 · 迁移登记双向核对）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

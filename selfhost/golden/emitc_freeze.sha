@@ -267,6 +267,13 @@ examples/m280_resource_baseline/srv.px src=3cad4d48956c743e rc=0 out=d0fb7b5914d
 examples/m282_registry_020/ftp020_probe.px src=f3958cf2eebc8a80 rc=0 out=908fac537e032acaa4970f10a4e39a02 err=c6cb53106f864451
 examples/m288_ws_handshake_residual/cli.px src=cf68f8e66f8f4fd2 rc=0 out=cadf5dc7d471c3cd188432218d59e137 err=e3b0c44298fc1c14
 examples/m288_ws_handshake_residual/srv.px src=d87377641205c7a3 rc=0 out=c4c8fb6e19bcc9b79ca95b915be5a6f1 err=e3b0c44298fc1c14
+examples/m293_h3_robustness/cli_0rtt.px src=f3d5b808047c7057 rc=0 out=7c9ef07db95bdd7604157b8a9cefa75c err=e3b0c44298fc1c14
+examples/m293_h3_robustness/cli_abrupt.px src=13d7ba1930ad13c7 rc=0 out=28d38848f38fc3d8ba86ca993dba99d4 err=e3b0c44298fc1c14
+examples/m293_h3_robustness/cli_grace.px src=9de14e75d2107442 rc=0 out=431e894655cee9e5d02386662bf874b0 err=e3b0c44298fc1c14
+examples/m293_h3_robustness/cli_migrate.px src=fdc71dad9d7b9043 rc=0 out=804c5aba050704af49b0d42bd2f06308 err=e3b0c44298fc1c14
+examples/m293_h3_robustness/cli_multi.px src=a4e4013fe322c37a rc=0 out=4b3b8f43c94853b315655579db6740b0 err=e3b0c44298fc1c14
+examples/m293_h3_robustness/cli_tag.px src=faccc9e2d88ef94d rc=0 out=f6b1db4b464675e7fe11d8cf5375bf7b err=e3b0c44298fc1c14
+examples/m293_h3_robustness/srv.px src=9ed7e6345b51d66c rc=0 out=0a3a4798a694eef67f396ed7bde96ead err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
