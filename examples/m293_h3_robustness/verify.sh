@@ -300,13 +300,21 @@ NANOM=$((XTN + TON + OTH))
 n_cross=$(num "$(grep -cE 'GET +404' "$SRV_LOG" 2>/dev/null)")
 echo "     并发 $NTAG 连接：正确 $OKN · 串味 $XTN · 无响应 $TON · 其他 $OTH"
 echo "     服务端侧证据：空路径/错路径 404 计数 = $n_cross（请求被解成空或错路径的直接痕迹）"
-[ "$OKN" -ge 8 ] && ok "并发下正确响应 ≥8/$NTAG（下限判据 · 防「服务被拖垮」）" || bad "并发下正确响应仅 $OKN/$NTAG —— 疑似服务端崩塌（晨曦「listener 被拖死」的形态）"
+NCONC=$((OKN + NANOM))
+chk "并发测量：$NTAG 个客户端**都有结论**（无「未跑完」）" "$NCONC" "$NTAG"
+# ⚠️ 这里**刻意不设「正确数 ≥N」的下限** —— 实测 505 的强度波动很大：
+#   本机轻载 12/12（0 例异常）；而**全量门环境**下实测 7/12（串味 1 · 无响应 3 · 其他 1，
+#   服务端 404 计数 4）。任何下限都会**偶发判红**（「会偶发判红的门等于没有门」，M274 缺陷 480）。
+#   ⇒ 真正的崩塌判据放在下面两条（**确定性**）：串行不受污染 + 服务存活。
 if [ "$NANOM" -gt 0 ]; then
   echo "     ℹ️ 本轮观测到 $NANOM 例异常 ⇒ 与登记一致（HTTP3_STANCE §三.4「并发连接互相干扰」）"
   echo "        复现：bash examples/m293_h3_robustness/verify.sh（本层；或按 §三.4 的手工循环）"
 else
   echo "     ℹ️ 本轮 0 例异常 —— 若持续为 0，请复核该登记是否已过期并更新文档"
 fi
+SOK=0
+for i in 1 2 3; do grace_run && SOK=$((SOK + 1)); done
+chk "并发测量后**串行**请求不受污染（3/3）—— 这才是「listener 被拖垮」的判据" "$SOK" "3"
 if kill -0 "$SRV_PID" 2>/dev/null; then ok "并发测量后服务仍存活"; else bad "并发测量后服务已死"; fi
 
 echo
@@ -415,5 +423,11 @@ echo "    硬判据是**下限**（≥8/12 正确）与「服务仍存活」，�
 echo "  · 负控只改**派生的服务端副本**（不改仓库源码）⇒ 本门与「门在跑时禁止改源码」纪律相容。"
 echo
 echo "===== 失败 $FAIL 项 · 通过 $PASS 项 ====="
-[ "$FAIL" -eq 0 ] && echo "M293-VERIFY-OK"
-exit 0
+# ⚠️ **退出码必须反映 FAIL** —— 全量门运行器（selfhost/run_gates.sh）的失败计数**只看 rc**：
+#   若这里无条件 `exit 0`，门内 ❌ 会被**静默吞掉**（本地全量门仍报「失败 0 项」）。
+#   ⭐ M293 实测：本轮**首次**跑全量门时，本门内部 `失败 1 项` 而运行器报 ✅ —— 已收口为缺陷 506。
+if [ "$FAIL" -eq 0 ]; then
+  echo "M293-VERIFY-OK"
+  exit 0
+fi
+exit 1

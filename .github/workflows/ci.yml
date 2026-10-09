@@ -1174,6 +1174,16 @@ jobs:
           grep -E 'M291-VERIFY' /tmp/v_m291.log | tail -1 || true
           echo "✅ m291_gcrotate（工具自证 9 · 分批完备性 433 逐字节 · 轮转 1→2→3 一圈完成 · 正判据指名）PASS"
 
+      - name: gate_verdict_selftest（门末行裁决自证 · M293 缺陷 506）
+        if: always()
+        run: |
+          # rc=0 不足以证明门绿：本仓有一批门「打印 VERIFY-OK 但无条件 exit 0」，
+          #   而运行器只按 rc 计数 ⇒ 门内 ❌ 会被静默吞掉（本地全量门报「失败 0 项」）。
+          #   判据与 packaging/ci_diagnose.py **同一份**（失败优先）。
+          bash selfhost/gate_verdict.sh --self-test > /tmp/v_gate_verdict.log 2>&1 || { echo "❌ 门末行裁决自证失败"; tail -8 /tmp/v_gate_verdict.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '失败 ' /tmp/v_gate_verdict.log | tail -1 || true
+          echo "✅ gate_verdict_selftest（13 断言 · 失败优先 · 空行跳过 · 无标记⇒无法判定）PASS"
+
       - name: m293_h3_robustness（HTTP/3 托管 listener 健壮性 · 晨曦阻塞级 QA 常设化）
         if: always()
         run: |
