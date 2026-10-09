@@ -1,0 +1,58 @@
+# ============================================================
+# examples/m294_h3_qpack_share/cli_tag.px
+# ------------------------------------------------------------
+# M294 门 · 并发客户端：请求 `/q294/<tag>`，校验响应体**恰好是本 tag 的**。
+#
+# 契约行（**判据只认这些行** —— 环境噪声（栈/加载器/诊断）不算判据）：
+#   TAG <t> OK                    —— 完全正确
+#   TAG <t> CROSSTALK body=[…]    —— 拿到了**别的 tag 的响应体**（串味 = 缺陷 505 的用户可见面）
+#   TAG <t> TIMEOUT               —— 本连接无响应
+#   TAG <t> bad-status <s>        —— 状态非 200（服务端把路径解成空/不匹配）
+#   TAG <t> connect-fail|setup-fail|open-fail
+#
+# ⚠️ 退出码语义：0=OK · 2=握手/建流失败 · 3=无响应 · 4=状态异常 · 5=串味
+#   —— 门**不依赖 rc 判 OK**（并发下 rc 会先到），只读末行契约；rc 供人工排查。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_close(conn: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_client_open_stream(conn: int) -> int
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict
+
+var h3p = 21101
+var v = env("M294_HTTP_PORT")
+if v != null:
+    h3p = int(v) + 1
+var tag = "0"
+var tv = env("M294_TAG")
+if tv != null:
+    tag = tv
+var want = "q294-ok-" + tag
+
+var c = quic_connect("127.0.0.1", h3p, "h3")
+if c <= 0:
+    print("TAG " + tag + " connect-fail")
+    exit(2)
+if h3_conn_setup(c, 4096) == false:
+    print("TAG " + tag + " setup-fail")
+    exit(2)
+var s = h3_client_open_stream(c)
+if s <= 0:
+    print("TAG " + tag + " open-fail")
+    exit(2)
+h3_client_send_request_stream(c, s, "GET", "https", "localhost", "/q294/" + tag, [], "")
+var r = h3_client_read_response_stream(c, s, 8000)
+if r == null:
+    print("TAG " + tag + " TIMEOUT")
+    exit(3)
+if r["status"] != "200":
+    print("TAG " + tag + " bad-status " + str(r["status"]))
+    exit(4)
+if r["body"] != want:
+    print("TAG " + tag + " CROSSTALK body=[" + str(r["body"]) + "]")
+    exit(5)
+print("TAG " + tag + " OK")
+quic_close(c)

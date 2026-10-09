@@ -1194,6 +1194,17 @@ jobs:
           grep -E '失败 .* 项' /tmp/v_m293.log | tail -1 || true
           echo "✅ m293_h3_robustness（静态 10 · 非优雅断开 串行8+并发12 · 交错10+突发4 · 空闲20s 重连 · 0-RTT 3/3 · fd 恒定 · 无忙自旋 · 迁移登记双向核对）PASS"
 
+      - name: m294_h3_qpack_share（HTTP/3 并发连接 共享 QPACK 会话 · 缺陷 507 常设化）
+        if: always()
+        run: |
+          # 负控 A 要**重建 runtime**（暖缓存 ≈15s / 冷缓存数分钟）⇒ CI 用 --neg-skip（与其余重编门一致）。
+          # 本门会就地改 runtime 源码 ⇒ source gate_lock.sh（M276）+ trap 还原。
+          bash examples/m294_h3_qpack_share/verify.sh --neg-skip > /tmp/v_m294.log 2>&1 || { echo "❌ m294 门失败（静态结构/顺序 · 顺序对照 · 并发主力 · 并发后污染 · 槽位预算登记）"; grep -E '^(  ❌|     )' /tmp/v_m294.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '\[C1\]' /tmp/v_m294.log | tail -1 || true
+          grep -E '首次失败' /tmp/v_m294.log | tail -1 || true
+          grep -E '失败 .* 项' /tmp/v_m294.log | tail -1 || true
+          echo "✅ m294_h3_qpack_share（静态 10 · 顺序对照 12/12 · 并发 3×16=48 全部拿到自己的响应体 · 重复服务路径 0 · 空路径404 0 · 槽位预算 64/65 登记）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
