@@ -23,7 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define H3_MAX_CONN 64
+// M295（缺陷 508）·第三面：曾硬编码 64 ⇒ 第 65 条连接拿不到 H3 会话表槽 ⇒ 静默无响应。
+#define H3_MAX_CONN PX_QUIC_CONN_MAX
 #define H3_FRAME_HEADERS 0x01
 #define H3_FRAME_DATA    0x00
 #define H3_FRAME_SETTINGS 0x04   // M51：控制流 SETTINGS 帧（RFC 9114 §7.2.8）
@@ -150,6 +151,20 @@ typedef struct {
     int64_t owner_epoch;   // M225：本会话所属连接代次（槽位复用身份判据）
 } h3conn_state;
 static h3conn_state g_h3st[H3_MAX_CONN];
+// M295（缺陷 508）·第三面：H3 会话槽耗尽时**修前完全静默**（`h3_conn_setup_c` 返回 0 →
+//   `h3_srv_pipe_cb` 直接 return ⇒ 连接被立刻关闭、请求无响应 ⇒ 客户端见 TIMEOUT）。
+static int64_t g_h3_setup_fail = 0;
+// M199 纪律：「错误信息必须指到真因」—— 所以每次失败都带上**具体原因**，而不是笼统的"失败"。
+static void h3_setup_fail_note(const char* why) {
+    g_h3_setup_fail++;
+    if (g_h3_setup_fail == 1 || (g_h3_setup_fail % 1000) == 0) {
+        fprintf(stderr,
+                "[h3] H3 会话建立失败（原因：%s）：连接被立刻关闭（客户端表现为 TIMEOUT）—— "
+                "累计 %lld 次。H3_MAX_CONN=%d，上限见 runtime/runtime.h 的 PX_QUIC_CONN_MAX。\n",
+                why ? why : "未知", (long long)g_h3_setup_fail, H3_MAX_CONN);
+    }
+}
+
 static h3conn_state* h3_st(int64_t conn) {
     return (conn > 0 && conn <= H3_MAX_CONN) ? &g_h3st[conn - 1] : NULL;
 }
@@ -879,7 +894,7 @@ static LXValue h3_make_request_fields(const char* method, const char* scheme,
 // M53-S3：C 侧实现（托管 H3 server 连接回调复用，不经语言层）。
 static bool h3_conn_setup_c(int64_t conn, int64_t cap) {
     h3conn_state* st = h3_st(conn);
-    if (!st) return false;
+    if (!st) { h3_setup_fail_note("conn 号超出 H3 会话表（> H3_MAX_CONN）"); return false; }
     // M225（缺陷 327）：幂等判据必须带「连接身份」—— 只看 conn 号会把**上一个连接的**
     // QPACK 会话误当成本连接的（槽位复用后 conn 号相同）⇒ 响应编码上下文与对端不一致。
     int64_t ep = px_quic_raw_conn_epoch(conn);
@@ -888,13 +903,13 @@ static bool h3_conn_setup_c(int64_t conn, int64_t cap) {
         px_h3_recycle_conn(conn);                            // 身份不符：丢弃陈旧会话（防御层）
     }
     int64_t ctrl = px_quic_raw_open_uni_stream(conn); // 首条 uni = 控制流（RFC 9114 §6.2.1）
-    if (ctrl < 0) return false;
+    if (ctrl < 0) { h3_setup_fail_note("开控制流失败"); return false; }
     int64_t enc = px_quic_raw_open_uni_stream(conn);
-    if (enc < 0) return false;
+    if (enc < 0) { h3_setup_fail_note("开 QPACK 编码器流失败"); return false; }
     int64_t dec = px_quic_raw_open_uni_stream(conn);
-    if (dec < 0) return false;
+    if (dec < 0) { h3_setup_fail_note("开 QPACK 解码器流失败"); return false; }
     int64_t qd = px_qd_open(cap < 0 ? 0 : cap);
-    if (qd <= 0) return false;
+    if (qd <= 0) { h3_setup_fail_note("QPACK 动态表会话耗尽（QD_MAX_SESS 满）"); return false; }
     uint8_t buf[512];
     buf[0] = H3_UT_CONTROL;
     int n = h3_build_settings_frame(buf + 1, (int)(cap < 0 ? 0 : cap), 100);

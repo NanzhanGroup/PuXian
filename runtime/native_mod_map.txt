@@ -89,6 +89,7 @@ quic_migrate=quic
 quic_open_stream=quic
 quic_open_uni_stream=quic
 quic_poll=quic
+quic_pool_stats=quic
 quic_recv=quic
 quic_recv_stream=quic
 quic_send=quic
