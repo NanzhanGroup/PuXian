@@ -40,7 +40,19 @@
 #include <openssl/objects.h>
 #include "locktrack.h"   // M127（qg-issue 84）：回卷锁审计 —— 必须放在**最后一个 include**
 
-#define QUIC_MAX 64
+// M295（缺陷 508）：拆两个上限 —— 原来 listener 与 connection **共用** QUIC_MAX=64，
+//   而真实面是「连接槽位耗尽」：第 65 条连接的 Initial 被**静默丢弃**（客户端只见
+//   connect-fail，服务端日志一行都没有），且槽位要等连接线程空闲退出才回收（实测
+//   默认约 10s）⇒ 64 并发在真实负载下太小。
+//   listener 槽保持 64（每槽 ~12KB，行为零变更）；连接槽提到 256（每槽 ~1.4KB ⇒ ~360KB）。
+#define QUIC_MAX_LISTENERS 64
+#define QUIC_CONN_MAX      PX_QUIC_CONN_MAX   // M295：单一真相见 runtime.h
+// M295（缺陷 508）·第二面：**cid 路由表**容量。
+//   修前是硬编码 256，而每连接至少 2 条 cid（本端 SCID + 客户端 Initial DCID）+ ngtcp2 的
+//   CID 轮换 ⇒ 实测**64 条连接就把 256 条 cid 用满**，满了以后 `quic_cid_add` **静默丢弃**
+//   ⇒ 新连接的短头包路由不到 ⇒ 客户端只看到 TIMEOUT（conn 槽位却只用掉 64/256）。
+//   容量按连接上限成比例（×8 留轮换余量）。
+#define QUIC_CIDTAB_MAX    (QUIC_CONN_MAX * 8)
 #define QUIC_PKT_BUF 65536
 #define QUIC_SCIDLEN 8
 
@@ -60,7 +72,7 @@ typedef struct {
     struct sockaddr_in local;
     SSL_CTX*       ssl_ctx;       // 服务器 TLS 上下文（含自签证书）
     // M53：h3 server 托管
-    quic_cid_entry cidtab[256];   // 本端签发 cid → conn（收包路由用）
+    quic_cid_entry cidtab[QUIC_CIDTAB_MAX];   // 本端签发 cid → conn（收包路由用）
     int            cidtab_n;
     pthread_t      router_thr;    // 收包路由线程
     int            router_started;
@@ -121,11 +133,21 @@ static ngtcp2_conn* quic_get_conn_from_ref(ngtcp2_crypto_conn_ref* ref) {
     return qc ? qc->conn : NULL;
 }
 
-static quic_listener g_qlis[QUIC_MAX];
-static quic_conn     g_qconns[QUIC_MAX];
+static quic_listener g_qlis[QUIC_MAX_LISTENERS];
+static quic_conn     g_qconns[QUIC_CONN_MAX];
 static int           g_quic_init = 0;
 // M225：连接代次（每次槽位分配 +1；同一 conn 号在不同代次代表不同连接）
 static int64_t       g_quic_epoch = 0;
+// M295（缺陷 508）：连接池可见性 —— 修改前「槽位耗尽」在服务端**完全静默**
+//   （第 65 条连接被丢弃、日志无痕、客户端只见 connect-fail）。
+//   现在每次失败都记账；**首次**（以及每满 1000 次）打一行 stderr 报告；
+//   语言侧可用 `quic_pool_stats()` 随时查询（运维自检/监控）。
+static int64_t       g_quic_alloc_ok   = 0;   // 累计成功分配
+static int64_t       g_quic_alloc_fail = 0;   // 累计失败（= 满）
+static int64_t       g_quic_live_peak  = 0;   // 并发占用峰值
+static int64_t       g_quic_full_first = 0;   // 首次失败的时刻（monotonic ms，0=从未）
+static int64_t       g_quic_peer_closed = 0;  // 对端正常关闭（收到 CONNECTION_CLOSE）计数
+static int64_t       g_quic_cid_drop = 0;     // cid 路由表满导致的丢弃次数（M295，修前静默）
 // M225：连接回收钩子（runtime_h3.c 注册；槽位释放前清理该 conn 的 h3 会话状态）
 static px_quic_conn_recycle_cb g_quic_recycle = NULL;
 
@@ -136,6 +158,22 @@ static uint64_t quic_now(void) {
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
     return (uint64_t)tp.tv_sec * NGTCP2_SECONDS + (uint64_t)tp.tv_nsec;
+}
+
+// M295（缺陷 508）：槽位分配失败时的统一记账 + **限流**报告（首次 + 每 1000 次）。
+//   修前这条路径**完全静默**：服务端丢弃 Initial、日志无痕，客户端只看到 connect-fail
+//   ⇒「服务端永久不再接受新连接」而无人知晓（M294 的 [6b] 只能靠人工探测才发现）。
+// ⚠️ 刻意不做「每次打印」—— M293 的教训：刷屏会挤掉真信号（ERR_DRAINING 曾经刷满日志）。
+static void quic_alloc_fail_note(void) {
+    g_quic_alloc_fail++;
+    if (g_quic_full_first == 0) g_quic_full_first = (int64_t)(quic_now() / NGTCP2_MILLISECONDS);
+    if (g_quic_alloc_fail == 1 || (g_quic_alloc_fail % 1000) == 0) {
+        fprintf(stderr,
+                "[quic] 连接槽位已满（QUIC_CONN_MAX=%d）：新连接被拒绝 —— "
+                "累计失败 %lld 次（首次失败于 %lld ms）。"
+                "可用 quic_pool_stats() 查询占用；上限见 runtime/runtime_quic.c 的 QUIC_CONN_MAX。\n",
+                QUIC_CONN_MAX, (long long)g_quic_alloc_fail, (long long)g_quic_full_first);
+    }
 }
 
 // ---------- callbacks ----------
@@ -157,11 +195,21 @@ static void quic_cid_add(quic_listener* ql, const uint8_t* cid, size_t len, int6
             return;
         }
     }
-    if (ql->cidtab_n < 256) {
+    if (ql->cidtab_n < QUIC_CIDTAB_MAX) {
         memcpy(ql->cidtab[ql->cidtab_n].cid, cid, len);
         ql->cidtab[ql->cidtab_n].cidlen = len;
         ql->cidtab[ql->cidtab_n].conn = conn;
         ql->cidtab_n++;
+    } else {
+        // M295（缺陷 508）·第二面：**修前这里是静默丢弃** —— 新连接的短头包将路由不到，
+        //   客户端只看到 TIMEOUT（与「服务端没起来」不可区分），而 conn 槽位可能才用了一半。
+        g_quic_cid_drop++;
+        if (g_quic_cid_drop == 1 || (g_quic_cid_drop % 1000) == 0) {
+            fprintf(stderr,
+                    "[quic] cid 路由表已满（QUIC_CIDTAB_MAX=%d, listener=%lld）：新 cid 无法登记 —— "
+                    "该连接的后续短头包会被丢弃（客户端表现为 TIMEOUT）。累计 %lld 次。\n",
+                    QUIC_CIDTAB_MAX, (long long)(ql - g_qlis + 1), (long long)g_quic_cid_drop);
+        }
     }
     pthread_mutex_unlock(&g_quic_srv_mu);
 }
@@ -190,7 +238,7 @@ static int quic_get_new_cid_cb(ngtcp2_conn* conn, ngtcp2_cid* cid,
     if (RAND_bytes(token, NGTCP2_STATELESS_RESET_TOKENLEN) != 1)
         return NGTCP2_ERR_CALLBACK_FAILURE;
     // M53：新 cid 登记进归属 listener 路由表（服务端收包路由需要）
-    if (qc && qc->owner_listener > 0 && qc->owner_listener <= QUIC_MAX) {
+    if (qc && qc->owner_listener > 0 && qc->owner_listener <= QUIC_MAX_LISTENERS) {
         quic_listener* ql = &g_qlis[qc->owner_listener - 1];
         if (ql->used) quic_cid_add(ql, cid->data, cidlen, qc - g_qconns + 1);
     }
@@ -490,11 +538,18 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t w
         int rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)plen,
                                       quic_now());
         if (rv != 0) {
-            fprintf(stderr, "[quic] read_pkt rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
             if (rv == NGTCP2_ERR_DRAINING || rv == NGTCP2_ERR_DROP_CONN) {
+                // M295（缺陷 508）：这是**对端正常关闭**（CONNECTION_CLOSE 到达）—— 协议流程，
+                //   不是错误。修前之所以不打它是「碰巧」：客户端从来不发 CONNECTION_CLOSE
+                //   （见 bi_quic_close 的 M295 注释）。本轮的 quic_close 修复激活了这条路径，
+                //   若继续打印，**每关一条连接就刷一行**（实测 300 次建连环 ⇒ 300 行）。
+                //   M293 的教训：刷屏会挤掉真信号 ⇒ 改为**计数**（quic_pool_stats().peer_closed_cnt），
+                //   真错误（其它 rv）仍然打印。
+                g_quic_peer_closed++;
                 qc->peer_closed = 1;
                 return data_mode ? 0 : -1;
             }
+            fprintf(stderr, "[quic] read_pkt rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
             return -2;
         }
     }
@@ -734,23 +789,14 @@ static int quic_srv_new_conn(quic_listener* ql, const uint8_t* pkt, size_t rl,
 // 默认连接回调：QUIC 流 echo（S1 多连接路由验证用）
 static void quic_srv_echo_cb(int64_t conn, void* ud);
 
-// 连接处理线程：泵握手 → 连接回调（HTTP/3 或 echo）→ 清理槽位
-static void* quic_srv_conn_thr(void* arg) {
-    int64_t cid = (int64_t)(intptr_t)arg;
-    quic_conn* qc = quic_get_conn(cid);
-    if (!qc) return NULL;
-    // M53-S3：注册并发 GC（连接回调构造普贤对象：请求 dict / 响应字段 / handler 调用）。
-    // 必须在本线程触碰任何普贤对象之前注册；leave 在清理完成、不再持有对象后调用。
-    px_gc_thread_enter();
+// M295（缺陷 508）：槽位清理 —— 从连接线程退出路径里**抽出**，供两处共用：
+//   ① 连接线程正常退出；② `pthread_create` **失败**时立即释放（修前那条路径**漏了释放**，
+//      会永久泄漏一个 conn 槽 + 它的 cid 路由项 ⇒ 表被"僵尸槽"占满）。
+// ⚠️ 调用者必须**已持有** g_quic_srv_mu（与 router 的 cid 路由 / 队列 pop 互斥）。
+// ⚠️ 语义与原内联版本逐行一致（含 cidtab 移除与 M225 的 h3 会话回收钩子）。
+static void quic_srv_conn_cleanup_locked(quic_conn* qc, int64_t cid) {
     int lid = qc->owner_listener;
-    quic_listener* ql = (lid > 0 && lid <= QUIC_MAX) ? &g_qlis[lid - 1] : NULL;
-    int pr = quic_pump(qc, 10000, 0, -1);   // 泵到握手完成（最多 10s）
-    if (pr == 0 && qc->handshake_done && ql && ql->used) {
-        if (ql->conn_cb) ql->conn_cb(cid, ql->conn_ud);
-        else quic_srv_echo_cb(cid, NULL);
-    }
-    // 清理本连接（持 srv_mu 与 router/其他线程互斥）
-    pthread_mutex_lock(&g_quic_srv_mu);
+    quic_listener* ql = (lid > 0 && lid <= QUIC_MAX_LISTENERS) ? &g_qlis[lid - 1] : NULL;
     if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
     if (qc->conn) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; }
     quic_stream_free_all(qc);
@@ -778,6 +824,26 @@ static void* quic_srv_conn_thr(void* arg) {
     // 否则新连接拿到同一 conn 号时会继承上一个连接的 QPACK 上下文。
     if (g_quic_recycle) g_quic_recycle(cid);
     memset(qc, 0, sizeof(*qc));   // used=0 → 槽位可复用
+}
+
+// 连接处理线程：泵握手 → 连接回调（HTTP/3 或 echo）→ 清理槽位
+static void* quic_srv_conn_thr(void* arg) {
+    int64_t cid = (int64_t)(intptr_t)arg;
+    quic_conn* qc = quic_get_conn(cid);
+    if (!qc) return NULL;
+    // M53-S3：注册并发 GC（连接回调构造普贤对象：请求 dict / 响应字段 / handler 调用）。
+    // 必须在本线程触碰任何普贤对象之前注册；leave 在清理完成、不再持有对象后调用。
+    px_gc_thread_enter();
+    int lid = qc->owner_listener;
+    quic_listener* ql = (lid > 0 && lid <= QUIC_MAX_LISTENERS) ? &g_qlis[lid - 1] : NULL;
+    int pr = quic_pump(qc, 10000, 0, -1);   // 泵到握手完成（最多 10s）
+    if (pr == 0 && qc->handshake_done && ql && ql->used) {
+        if (ql->conn_cb) ql->conn_cb(cid, ql->conn_ud);
+        else quic_srv_echo_cb(cid, NULL);
+    }
+    // 清理本连接（持 srv_mu 与 router/其他线程互斥）
+    pthread_mutex_lock(&g_quic_srv_mu);
+    quic_srv_conn_cleanup_locked(qc, cid);
     pthread_mutex_unlock(&g_quic_srv_mu);
     px_gc_thread_leave();
     return NULL;
@@ -786,16 +852,33 @@ static void* quic_srv_conn_thr(void* arg) {
 static void quic_srv_start_conn_thr(int64_t cid) {
     quic_conn* qc = quic_get_conn(cid);
     if (!qc) return;
+    int thr_create_failed = 0;
     pthread_mutex_lock(&g_quic_srv_mu);
     if (!qc->thr_started) {
         qc->thr_started = 1;
         pthread_t t;
         if (pthread_create(&t, NULL, quic_srv_conn_thr, (void*)(intptr_t)cid) == 0)
             qc->thr = t;
-        else
+        else {
             qc->thr_started = 0;
+            thr_create_failed = 1;   // M295（缺陷 508）：见下
+        }
     }
     pthread_mutex_unlock(&g_quic_srv_mu);
+    // M295（缺陷 508）：**修前这里只是把 thr_started 置回 0 就返回** ——
+    //   而槽位（与 cid 路由项）的释放**只发生在连接线程退出路径**里 ⇒ 没有线程 ⇒ **永久泄漏**。
+    //   线程创建失败（资源上限 / 内存压力）下，64 个槽会被"僵尸"逐个占满，且**全程静默**。
+    //   ⇒ 必须在此**同步释放**（锁外调用，避免与 cleanup 内的加锁互死）。
+    if (thr_create_failed) {
+        quic_conn* q2 = quic_get_conn(cid);
+        if (q2) {
+            pthread_mutex_lock(&g_quic_srv_mu);
+            quic_srv_conn_cleanup_locked(q2, cid);
+            pthread_mutex_unlock(&g_quic_srv_mu);
+        }
+        fprintf(stderr, "[quic] pthread_create 失败：连接槽 %lld 已立即释放（不泄漏）\n",
+                (long long)cid);
+    }
 }
 
 // 收包路由线程：poll fd → recvfrom → 按 DCID 路由 / 新 Initial 自动建连接
@@ -852,7 +935,7 @@ static void quic_srv_close_listener(int64_t lid) {
         pthread_join(ql->router_thr, NULL);
         ql->router_started = 0;
     }
-    for (int i = 0; i < QUIC_MAX; i++) {
+    for (int i = 0; i < QUIC_CONN_MAX; i++) {
         if (g_qconns[i].used && g_qconns[i].owner_listener == lid) {
             quic_conn* qc = &g_qconns[i];
             pthread_mutex_lock(&g_quic_srv_mu);
@@ -1073,14 +1156,14 @@ static void quic_srv_echo_cb(int64_t conn, void* ud) {
 
 // ---------- 服务端：quic_listen ----------
 static int64_t quic_alloc_listener(quic_listener* ql) {
-    for (int i = 0; i < QUIC_MAX; i++) {
+    for (int i = 0; i < QUIC_MAX_LISTENERS; i++) {
         if (!g_qlis[i].used) { g_qlis[i].used = 1; *ql = g_qlis[i]; return i + 1; }
     }
     return -1;
 }
 
 static quic_listener* quic_get_listener(int64_t id) {
-    if (id <= 0 || id > QUIC_MAX) return NULL;
+    if (id <= 0 || id > QUIC_MAX_LISTENERS) return NULL;
     quic_listener* ql = &g_qlis[id - 1];
     return ql->used ? ql : NULL;
 }
@@ -1111,7 +1194,7 @@ static LXValue bi_quic_listen(LXValue* args, int nargs, void* ctx) {
     SSL_CTX* sctx = quic_make_server_ctx();
     if (!sctx) { close(fd); return px_int(-1); }
     int64_t id = -1;
-    for (int i = 0; i < QUIC_MAX; i++) {
+    for (int i = 0; i < QUIC_MAX_LISTENERS; i++) {
         if (!g_qlis[i].used) {
             g_qlis[i].used = 1;
             g_qlis[i].fd = fd;
@@ -1129,21 +1212,27 @@ static LXValue bi_quic_listen(LXValue* args, int nargs, void* ctx) {
 static int64_t quic_alloc_conn(quic_conn* qc) {
     // M225：与「连接回收钩子」互斥 —— 否则"清理 h3 会话"可能落在新连接已占槽之后
     pthread_mutex_lock(&g_quic_srv_mu);
-    for (int i = 0; i < QUIC_MAX; i++) {
+    for (int i = 0; i < QUIC_CONN_MAX; i++) {
         if (!g_qconns[i].used) {
             g_qconns[i].used = 1;
             g_qconns[i].epoch = ++g_quic_epoch;   // M225：新代次（不复用）
+            int64_t live = 0;
+            for (int k = 0; k < QUIC_CONN_MAX; k++) if (g_qconns[k].used) live++;
+            if (live > g_quic_live_peak) g_quic_live_peak = live;
+            g_quic_alloc_ok++;
             *qc = g_qconns[i];
             pthread_mutex_unlock(&g_quic_srv_mu);
             return i + 1;
         }
     }
     pthread_mutex_unlock(&g_quic_srv_mu);
+    // M295（缺陷 508）：**修前此处静默返回 -1** —— 服务端丢弃 Initial 无任何痕迹。
+    quic_alloc_fail_note();
     return -1;
 }
 
 static quic_conn* quic_get_conn(int64_t id) {
-    if (id <= 0 || id > QUIC_MAX) return NULL;
+    if (id <= 0 || id > QUIC_CONN_MAX) return NULL;
     quic_conn* qc = &g_qconns[id - 1];
     return qc->used ? qc : NULL;
 }
@@ -1899,7 +1988,7 @@ static LXValue bi_quic_extend_max_streams(LXValue* args, int nargs, void* ctx) {
     quic_listener* ql = quic_get_listener(lid);
     if (!ql || add <= 0) return px_bool(false);
     int done = 0;
-    for (int i = 0; i < QUIC_MAX; i++) {
+    for (int i = 0; i < QUIC_CONN_MAX; i++) {
         quic_conn* qc = &g_qconns[i];
         // 匹配本 listener 的连接：托管 conn（owner_listener）或 demo accept conn
         // （与 listener 共享 fd —— qc->fd == ql->fd）
@@ -2111,11 +2200,78 @@ static LXValue bi_quic_recv_stream(LXValue* args, int nargs, void* ctx) {
 }
 
 // ---------- quic_close ----------
+// quic_pool_stats() -> dict —— M295（缺陷 508）：**连接池可见性**。
+//   修前「槽位耗尽」在服务端**完全不可观测**：第 65 条连接的 Initial 被静默丢弃、
+//   日志无痕，客户端只看到 connect-fail（与「服务端没起来」不可区分）。
+//   本入口让语言层 / 监控**随时自检**：
+//     conns_used 逼近 conns_max ⇒ 即将开始拒绝新连接；
+//     alloc_fail > 0          ⇒ 已经发生过拒绝（full_first_ms = 首次发生时刻）。
+static LXValue bi_quic_pool_stats(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("R1002: quic_pool_stats 不接受参数，实际给了 %d 个", nargs);
+    int64_t lused = 0, cused = 0;
+    pthread_mutex_lock(&g_quic_srv_mu);
+    for (int i = 0; i < QUIC_MAX_LISTENERS; i++) if (g_qlis[i].used) lused++;
+    for (int i = 0; i < QUIC_CONN_MAX; i++) if (g_qconns[i].used) cused++;
+    int64_t aok = g_quic_alloc_ok, afail = g_quic_alloc_fail;
+    int64_t peak = g_quic_live_peak, ffirst = g_quic_full_first;
+    int64_t pclosed = g_quic_peer_closed;
+    int64_t ciddrop = g_quic_cid_drop, cidused = 0;
+    for (int i = 0; i < QUIC_MAX_LISTENERS; i++) if (g_qlis[i].used) cidused += g_qlis[i].cidtab_n;
+    pthread_mutex_unlock(&g_quic_srv_mu);
+    const char* e = getenv("PX_H3_IDLE_MS");   // 与 runtime_h3.c 的 h3_idle_ms() 同口径
+    int idle = (!e || !*e) ? 8000 : atoi(e);
+    if (idle < 50) idle = 50;
+    if (idle > 60000) idle = 60000;
+    LXValue d = px_dict();
+    px_root_push_keep(d);   // M206：容器创建后**立刻**登记（下面 px_int/px_str 可能触发 GC）
+    px_dict_set(d, "listeners_max", px_int(QUIC_MAX_LISTENERS));
+    px_dict_set(d, "listeners_used", px_int(lused));
+    px_dict_set(d, "conns_max", px_int(QUIC_CONN_MAX));
+    px_dict_set(d, "conns_used", px_int(cused));
+    px_dict_set(d, "conns_peak", px_int(peak));
+    px_dict_set(d, "alloc_ok", px_int(aok));
+    px_dict_set(d, "alloc_fail", px_int(afail));
+    px_dict_set(d, "full_first_ms", px_int(ffirst));
+    px_dict_set(d, "peer_closed_cnt", px_int(pclosed));   // M295：对端正常关闭次数（不再刷日志）
+    px_dict_set(d, "cidtab_max", px_int(QUIC_CIDTAB_MAX)); // M295·第二面：单 listener cid 容量
+    px_dict_set(d, "cidtab_used", px_int(cidused));        // 活跃 listener 的 cid 条目合计
+    px_dict_set(d, "cid_drop", px_int(ciddrop));           // cid 表满导致的丢弃次数（修前静默）
+    px_dict_set(d, "h3_idle_ms", px_int(idle));
+    px_root_pop();
+    return d;
+}
+
 static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: quic_close 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc) return px_bool(false);
+    // M295（缺陷 508）：**修前**这里直接 ngtcp2_conn_del + close(fd)，**不发 CONNECTION_CLOSE**
+    //   ⇒ 对端无从得知本端已关闭，只能等自己的空闲超时才回收槽位（服务端托管形态实测约 10s）；
+    //   更糟的是「优雅关闭」与「进程被杀」在对端看来**完全一样** —— M295 实测：用 quic_close 的
+    //   grace 档与不关闭的 abrupt 档，失败区间（第 64 起）与恢复点**逐项相同**。
+    //   ⇒ 先写一个终止包再释放，让对端立刻进入 draining（服务端的 h3 连接循环随即退出）。
+    // ⚠️ 只对客户端形态（owner_listener <= 0）发：服务端托管 conn 由连接线程拥有，
+    //    语言层调用 quic_close 本就是跨线程操作 —— 不在此处扩展语义。
+    if (qc->conn && qc->owner_listener <= 0) {
+        uint8_t cc_out[QUIC_PKT_BUF];
+        // ⚠️ M295 现场教训（必读）：`CCERR` 形参是 **`ngtcp2_ccerr*`（结构体指针）**，不是错误码整数。
+        //   第一版写成 `(uint64_t)NGTCP2_NO_ERROR`（= 0）⇒ C 的隐式转换把它变成 **NULL 指针**，
+        //   编译**不报错**（无 -Werror），运行到这一步直接 **SIGSEGV 在 ngtcp2 内部**
+        //   （gdb 栈：`ngtcp2_conn_write_connection_close_versioned ← bi_quic_close`）。
+        //   抓它的唯一办法是**让这条路径真的被执行**（本轮的装置 C「优雅关闭」档一次就抓到了；
+        //   只跑「不关闭客户端」的验证会把它放过去）。
+        ngtcp2_ccerr ccerr;
+        ngtcp2_ccerr_set_transport_error(&ccerr, (uint64_t)NGTCP2_NO_ERROR, NULL, 0);
+        ngtcp2_ssize cc_n = ngtcp2_conn_write_connection_close(
+            qc->conn, &qc->path, NULL, cc_out, sizeof(cc_out),
+            &ccerr, quic_now());
+        if (cc_n > 0) {
+            (void)sendto(qc->fd, cc_out, (size_t)cc_n, 0,
+                         (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+        }
+    }
     if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
     if (qc->ssl_ctx) { SSL_CTX_free(qc->ssl_ctx); qc->ssl_ctx = NULL; }
     if (qc->conn) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; }
@@ -2294,6 +2450,7 @@ void px_register_quic(void) {
     px_set_global("quic_recv", px_native("quic_recv", bi_quic_recv));
     px_set_global("quic_recv_stream", px_native("quic_recv_stream", bi_quic_recv_stream));
     px_set_global("quic_poll", px_native("quic_poll", bi_quic_poll));
+    px_set_global("quic_pool_stats", px_native("quic_pool_stats", bi_quic_pool_stats));
     px_set_global("quic_close", px_native("quic_close", bi_quic_close));
     px_set_global("quic_close_listener", px_native("quic_close_listener", bi_quic_close_listener));
     px_set_global("quic_h3_listen", px_native("quic_h3_listen", bi_quic_h3_listen));
@@ -2320,6 +2477,7 @@ void px_register_quic(void) {
     px_ffi_register("quic_recv", bi_quic_recv);
     px_ffi_register("quic_recv_stream", bi_quic_recv_stream);
     px_ffi_register("quic_poll", bi_quic_poll);
+    px_ffi_register("quic_pool_stats", bi_quic_pool_stats);
     px_ffi_register("quic_close", bi_quic_close);
     px_ffi_register("quic_close_listener", bi_quic_close_listener);
     px_ffi_register("quic_h3_listen", bi_quic_h3_listen);

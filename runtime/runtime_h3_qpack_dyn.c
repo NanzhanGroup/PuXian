@@ -29,7 +29,8 @@
 #include <string.h>
 #include <stdatomic.h>
 
-#define QD_MAX_SESS 64
+// M295（缺陷 508）·第三面：曾硬编码 64 ⇒ 第 65 条连接拿不到 QPACK 动态表会话。
+#define QD_MAX_SESS PX_QUIC_CONN_MAX
 #define QD_ENT_MAX 4096        // 动态表最大条目槽位（环形，绝对索引单调）
 #define QD_CAP_MAX 262144      // 动态表最大容量字节上限（SETTINGS 可设 0..此值）
 #define QD_BUF_MAX (1 << 20)   // 单字段段/指令缓冲上限 1MB
@@ -153,13 +154,22 @@ typedef struct {
     uint64_t dec_ric;         // M52：最近一次成功解码字段段的 Required Insert Count（>0 需发 Section Ack）
 } qd_sess;
 
-static qd_sess g_qds[QD_MAX_SESS];
+/* M295（缺陷 508）·第三面之二：**改按需分配**。
+ * 原来 `g_qds[QD_MAX_SESS]` 是静态数组，而单个 `qd_sess` 含 `en[4096]` + `de[4096]`
+ * 两张环形表（各 98KB）⇒ 单会话 ~256KB。把上限从 64 提到 256 会连带把 BSS 从 16MB
+ * 推到 **64MB**（实测 `nm -S --size-sort`：g_qds = 67,135,488 B，占全进程 BSS 的 88%）。
+ * ⇒ 改成**指针数组**：首次用到该槽才 `calloc`，关闭时 `free` —— 内存按**当前并发**而非上限。
+ * ⚠️ 与 M294 的「占用位与数据分离」协奏关系不变：占用位仍是 `g_qds_used`（独立、原子）。
+ */
+static qd_sess* g_qds[QD_MAX_SESS];
 /* M294（缺陷 507）：**占用位与数据分离**。
  * 为什么必须分离见 bi_qs_open 的说明；一句话：`memset(s)` 不得触碰占用位，
  * 否则「占用」这个动作就不是原子的（它由两步组成，中间有可被并发观察到的空档）。 */
 static char    g_qds_used[QD_MAX_SESS];
 static qd_sess* qd_get(int64_t id) {
-    return (id > 0 && id <= QD_MAX_SESS && g_qds_used[id - 1]) ? &g_qds[id - 1] : NULL;
+    if (!(id > 0 && id <= QD_MAX_SESS)) return NULL;
+    if (!g_qds_used[id - 1]) return NULL;      // 占用位（M294：唯一仲裁者）
+    return g_qds[id - 1];                      // 可能为 NULL（占位成功但 calloc 失败）
 }
 
 static int qd_entry_size(const qd_entry* e) { return e->nlen + e->vlen + 32; }
@@ -270,7 +280,18 @@ static LXValue bi_qs_open(LXValue* args, int nargs, void* ctx) {
          * 返回非 0 = 槽已被别人占（**正常**，看下一个）；返回 0 = 我拿到，且此后没有任何
          * 路径能把它变回 0 ⇒ 不存在「二次认领」。 */
         if (__atomic_exchange_n(&g_qds_used[i], 1, __ATOMIC_SEQ_CST) == 0) {
-            qd_sess* s = &g_qds[i];
+            qd_sess* s = g_qds[i];
+            if (!s) {                      /* M295：首次用到该槽 ⇒ 按需分配 */
+                s = (qd_sess*)calloc(1, sizeof(*s));
+                if (!s) {
+                    /* 分配失败：**必须**把刚占上的位放回（否则槽被永久占住且 qd_get 返回 NULL） */
+                    fprintf(stderr, "[h3] QPACK 会话分配失败（%zu 字节/会话，槽 %d）\n",
+                            sizeof(qd_sess), i + 1);
+                    __atomic_store_n(&g_qds_used[i], 0, __ATOMIC_SEQ_CST);
+                    return px_int(-1);
+                }
+                g_qds[i] = s;
+            }
             memset(s, 0, sizeof(*s));      /* 只清数据，不触碰占用位 */
             s->max_cap = cap;
             s->enc_cap = cap;      // 会话创建即允许该容量（SETTINGS 已收）
@@ -288,8 +309,12 @@ static LXValue bi_qs_close(LXValue* args, int nargs, void* ctx) {
     qd_tab_free(s->de, &s->de_head, &s->de_len);
     free(s->eout);
     memset(s, 0, sizeof(*s));
+    /* M295：按需分配 ⇒ 归还内存（内存占用跟随**当前并发**，不跟随上限） */
+    g_qds[args[0].as.i - 1] = NULL;
+    free(s);
     /* M294（缺陷 507）：占用位显式释放（它不在结构体里，memset 清不到它）。
-     * 顺序刻意是「先清数据、后放占用位」—— 反之会让别的线程拿到一个尚未清空的会话。 */
+     * 顺序刻意是「先清数据、后放占用位」—— 反之会让别的线程拿到一个尚未清空的会话。
+     * M295 补充：`free` 也必须**先于**放位 —— 放位后别的线程可能立刻 calloc 新会话。 */
     __atomic_store_n(&g_qds_used[args[0].as.i - 1], 0, __ATOMIC_SEQ_CST);
     return px_bool(true);
 }

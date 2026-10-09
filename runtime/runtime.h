@@ -224,6 +224,15 @@ int64_t px_quic_raw_first_stream(int64_t conn);              // 最小活跃 sid
 bool    px_quic_raw_close(int64_t conn);
 bool    px_quic_raw_close_listener(int64_t listener);
 // M53：HTTP/3 server 多连接托管（runtime_quic.c）——单 fd 收包路由 + 自动 accept
+// M295（缺陷 508）·第三面：**「连接上限」曾经分散在三处、各自硬编码 64** ——
+//   `runtime_quic.c` 的 QUIC_CONN_MAX（连接槽）、`runtime_h3.c` 的 H3_MAX_CONN（H3 会话表）、
+//   `runtime_h3_qpack_dyn.c` 的 QD_MAX_SESS（QPACK 动态表会话）。只抬一道闸门没用：
+//   实测把 QUIC_CONN_MAX 抬到 256 后，abrupt 档**仍然第 64 次 TIMEOUT**（短头包路由到了、
+//   请求却无响应 ⇒ 客户端见 TIMEOUT 而非 connect-fail）。
+//   ⇒ 收敛为**单一真相**：三处都引用本宏（M185「两处写同一规则 = 结构性分叉隐患」）。
+//   内存代价：三个表都按此维度静态分配（BSS，不触碰不占页）—— 实测见 CHANGELOG 的量化。
+#define PX_QUIC_CONN_MAX 256
+
 typedef void (*px_quic_conn_cb)(int64_t conn, void* ud);     // 每连接处理回调（握手后）
 void    px_quic_raw_h3_set_conn_cb(px_quic_conn_cb cb, void* ud);
 int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key); // → listener id | -1
