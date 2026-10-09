@@ -1,0 +1,34 @@
+# ============================================================
+# examples/m294_h3_qpack_share/srv.px
+# ------------------------------------------------------------
+# M294 门：HTTP/3 托管 listener —— 「并发连接共享 QPACK 会话」（缺陷 507）的常设化夹具
+#
+# 形态 = `px_serve(port, docroot, timeout, {"http3": {"port": h3p}})`：
+#   单 fd 收包路由 + 自动 accept + **每连接一条处理线程** —— 正是缺陷 507 的并发面，
+#   也正是晨曦生产（Mahesvara WS 统一入口）在用的形态。
+#
+# ⚠️ 就绪判据（沿用 M293 的 F1 结论）：本服务端**不写 ready 文件**、不打印任何会被
+#   当成就绪信号的 app 行 —— 就绪只能靠运行时**绑定成功之后**打印的那一行
+#   （`普贤应用服务器` / `HTTP/3 listening`）。理由：app 的 print 在 px_serve 之前，
+#   绑定失败也照样打印 ⇒ 用它会**把「起不来」误报成「起来了」**。
+#
+# 路由命名空间刻意用 `/q294/`（与 m293_h3_robustness 的 `/probe/` 区分）⇒ 两个门的
+# 服务端日志/路径互不混淆（门间隔离 · M264 的口径）。
+# ============================================================
+var hp = 21100
+var h3p = 21101
+var v = env("M294_HTTP_PORT")
+if v != null:
+    hp = int(v)
+    h3p = hp + 1
+
+# 回显路径参数 ⇒ 判定「本连接是否拿到了**自己的** tag」的唯一依据。
+def api_q294(req, params):
+    var t = str(params["tag"])
+    return {"status": 200, "body": "q294-ok-" + t,
+            "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/q294/:tag", api_q294)
+
+print("SRV starting http=" + str(hp) + " h3=" + str(h3p))
+px_serve(hp, "/tmp", 10000, {"http3": {"port": h3p}})
