@@ -1407,3 +1407,18 @@ run m295_quic_slot bash examples/m295_quic_slot/verify.sh
 #   负控 A/B（忠实撤回 511 / 512 + 重建 dev 件 ⇒ 各自必须判红）+ C（判据自伤 ⇒ 红消失）⇒ CI 用 --neg-skip。
 # ═══════════════════════════════════════════════════════════════════════════
 run m296_quic_accept_reuse bash examples/m296_quic_accept_reuse/verify.sh
+
+# ═══════════════════════════════════════════════════════════════════════════
+# m297_quic_path_switch —— **QUIC 连接迁移的路径切换**（缺陷 504 的路径层）常设化（M297）
+#   来历：M293 把「托管 listener 下迁移后请求无响应」登记为**现象**（缺陷 504），
+#         M297 钉到根因：收包路径**无条件改写** `qc->remote_sa`（谁最后到谁说了算）
+#         ⇒ 队列里旧源的迟到包把发送地址切回一个**已关闭**的 socket。
+#   修法：① 发送目标只由 ngtcp2 的**输出 path** 决定（RFC 9000 §9.3：验证成功才切地址）；
+#         ② 收包时把「包的真实来源」交给 ngtcp2 —— remote 用真实来源、local 用 ngtcp2 当前
+#            路径的本地地址（客户端 migrate 后 qc->local_sa 已变而 ngtcp2 存副本）；
+#         ③ 注册 path_validation / begin_path_validation ⇒ 路径切换**可观测**。
+#   本门钉：验证 **BEGIN + END res=0（新源）** + 客户端回过 PATH_RESPONSE（[5] 层）；
+#          **已知边界**（缺陷 513：端到端响应仍读不到）用 KNOWN.tsv **双向核对**，不把红当绿。
+#   负控 A/B（撤回「真实来源」/「local 口径」⇒ 验证不触发 / 不完成）+ C（判据自伤）⇒ CI 用 --neg-skip。
+# ═══════════════════════════════════════════════════════════════════════════
+run m297_quic_path_switch bash examples/m297_quic_path_switch/verify.sh

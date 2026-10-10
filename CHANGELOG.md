@@ -1,3 +1,93 @@
+## M297（2026-10-10）— 缺陷 **504**（QUIC 连接迁移）**路径层收口** · 新登记 **513** · 第 171 轮
+
+> 一句话：M293 把「托管 listener 下迁移后请求无响应」登记为**现象**（并写明「本轮不修」），
+> 本轮把它**钉到根因**并修好**路径层** —— 而端到端「迁移后拿到响应」**仍然失败**，
+> 已如实登记为**缺陷 513**（h3 客户端读响应环节）。**本轮的诚实结论是「修了一半」**，
+> 但这一半有完整证据链、有门、有负控、有可观测性。
+
+### 一 根因（一行）：**发送地址被收包路径无条件覆盖**
+
+```c
+/* 修前 · runtime/runtime_quic.c 的 quic_pump（收包处） */
+// 更新 remote（服务端 accept 后可能变化，通常一致；迁移时跟随对端新源）
+if (from.ss_family == AF_INET) {
+    memcpy(&qc->remote_sa, &from, sizeof(from));      /* ← 谁最后到，谁说了算 */
+    qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
+    qc->path.remote.addrlen = sizeof(from);
+}
+...
+sendto(qc->fd, out, n, 0, (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));  /* 5 处发送点同款 */
+```
+
+⇒ 队列里**旧源的迟到包**能把发送地址切回一个**已关闭**的 socket
+（M293 的 strace 现场：`send→新源` 与 `send→旧源` **交替**）。
+`bi_quic_migrate` 注释里那句「切换前泵 300ms 冲刷」在托管 listener（单 fd + DCID 路由 + 队列）下**不足**。
+
+### 二 修法（三个口径）
+
+| # | 改动 | 依据 |
+|---|---|---|
+| ① | **发送目标只由 ngtcp2 的「输出 path」决定**（新 `quic_send_to_path`，5 处发送点全改） | RFC 9000 §9.3：ngtcp2 自己维护当前路径，**验证成功才切到新地址**；我们照它说的发即可 |
+| ② | **收包时把「真实来源」交给 ngtcp2**：`remote` = 这个包的真实来源；`local` = `ngtcp2_conn_get_path()` 的本地地址 | `remote` 变才能发现「对端换源」；`local` 若用 `qc->local_sa`，客户端 migrate 后与 ngtcp2 的**副本**不一致 ⇒ 连 `PATH_CHALLENGE` 都不回应 |
+| ③ | 注册 **`path_validation` / `begin_path_validation`** 回调 + `quic_pool_stats()` 暴露 `path_migrated` / `path_missing` / `send_err` | 修前「换源」**完全不可观测**（只能靠 strace） |
+
+> ⚠️ ② 的依据是**实测**而非推理：
+> `[quic] migrate: qc->local_sa=127.0.0.1:50156  ngtcp2 current=(127.0.0.1:59047 -> 127.0.0.1:27121)`
+> ⇒ ngtcp2 存的是**地址副本**，`quic_migrate` 只改了我们的字段。
+
+### 三 实测（修前 → 修后）
+
+| 观测 | 修前 | 修后 |
+|---|---|---|
+| 服务端 `path-validation BEGIN` | **无** | 有（附 new/fallback） |
+| 服务端 `path-validation END res=0` | **无** | **有**（新源） |
+| 服务端发包去向（verbose） | 旧源/新源**交替** | **全部新源** |
+| 客户端回 `PATH_RESPONSE` | 0 | **≥1** |
+| 端到端「迁移后拿到响应」 | 失败 | **仍失败** ⇒ 缺陷 **513**（见 §五） |
+
+### 四 门 `examples/m297_quic_path_switch/`（26 通过 / 0 失败 · 全量档）
+
+* **[1] 静态 9 条**：发送统一入口在位 · 5 处发送点全走它 · **裸 `sendto` 归零** ·
+  收包取 `ngtcp2_conn_get_path`（≥2 处）· **「无条件覆盖 remote_sa」已移除** ·
+  `path_validation` / `begin_path_validation` 各注册 4 处 · `pool_stats` 暴露 `path_migrated` · 规模锚点。
+* **[2]–[5] 动态**：构建 → **强就绪**（运行时绑定成功后才打印的行 + 端口反查 pid）→ 迁移 →
+  **验证 BEGIN + END res=0 + 新源 ≠ 回退源 + 客户端回过 `PATH_RESPONSE`**。
+* **[6] 已知边界双向核对**：`KNOWN.tsv` 登记「端到端仍 FAIL」——
+  实测失败 ⇒ 绿；**哪天成功 ⇒ 判「登记过期」逼更新文档**（不把红当绿记下来）。
+* **[7] 负控 3 道（各自独立判红）**：**A** 收包不传真实来源 ⇒ **验证不触发**；
+  **B** `local` 退回 `qc->local_sa` ⇒ **验证不完成**；**C** 判据自伤；
+  收尾**源码逐字节还原**。
+* ⚠️ 判据自身踩到一个坑并已就地登记：`grep -c "sendto(qc->fd"` 会命中 **`px_io_sendto(qc->fd`**
+  ⇒ 假阳性；改成 `(^|[^_a-zA-Z])sendto\(qc->fd`（**判据要精确到「裸调用」**）。
+
+### 五 新登记 · 缺陷 **513**（未修）：迁移后 h3 **客户端**读不到响应
+
+路径层修好后，端到端仍 `post timeout`。现场证据（客户端 verbose）：
+
+```
+frm rx 27 1RTT STREAM(0xa) id=0xc fin=0 offset=0  len=17      ← 响应 HEADERS
+frm rx 28 1RTT STREAM(0xf) id=0xc fin=1 offset=17 len=0       ← 响应 DATA + FIN（**完整**）
+... 客户端仍报 M293-MIG post timeout
+```
+
+且 `quic_read_stream_bytes` **未走**「无数据」分支（诊断计数为 0）⇒ 数据已交到 h3 层
+⇒ 病灶在 **h3 帧解析/读取流程**（实测反复出现 `rd_stream sid=7 len=0` ×12 ⇒ 疑似与
+**QPACK 编码流的等待**有关）。**根因未定位到行**，如实登记，不冒充已修。
+
+### 六 文档
+
+* `docs/QUIC_CONN_LIFECYCLE.md` **新增 §6「路径归属」**：两条硬口径（发送取输出 path /
+  收包 remote 用真实来源、local 用 ngtcp2 当前）、实测证据、可观测点、正确写法、覆盖边界。
+* `docs/HTTP3_STANCE.md`：§二 **504 行重写**（路径层已修 · 端到端未通）+ **新增 513 行**；
+  §三 第 1 条与 §一 结论表同步。
+
+### 七 覆盖边界（如实）
+
+* 门只覆盖 **IPv4 回环**下的**托管 listener** 形态；裸 `quic_listen` + `quic_accept` 由 `m54_s3` 覆盖。
+* 真实 **NAT rebinding**（对端地址真变而本地 fd 不变）不在面内 —— 本轮修的是「客户端主动换 fd」这条路。
+* 连接迁移 × 0-RTT 组合未覆盖。
+* **缺陷 513 的根因未定位到行** ⇒ 下一轮主项。
+
 ## M296（2026-10-10）— 缺陷 **511 + 512**：「一条 listener 只能接一条连接」的**两个独立病灶**
 
 > 一句话：晨曦报的是「临时服务端 `quic_close(conn)` 之后 **listener 端口不再监听**」，

@@ -93,3 +93,62 @@ quic_close_listener(lst)                 # 由它负责关 UDP socket
   · `m295_quic_slot`（连接槽位耗尽）。
 * **未覆盖**（如实）：噪声包洪泛下的 accept 时延 · 托管路径的端到端观测 ·
   `quic_migrate` 的同族 fd 处理（缺陷 504 待修）。
+
+---
+
+## §6 路径归属：**发送目标只由 ngtcp2 决定**（M297 建立 · 缺陷 504 的路径层）
+
+> 缺陷 504 的根因不是「迁移不支持」，而是**我们把「对端在哪」这件事自己记了一份**，
+> 且那份记录会被**收包路径无条件覆盖**。
+
+### §6.1 两条硬口径（改任何 QUIC 发送/收包代码前先读）
+
+| 方向 | 口径 | 依据 |
+|---|---|---|
+| **发送** | 目标地址取 `ngtcp2_conn_write_*` 的**输出 `path`**（`quic_send_to_path`），**不是** `qc->remote_sa` | ngtcp2 自己按 RFC 9000 §9.3 维护当前路径：**路径验证成功才切到新地址**；我们照它说的发即可 |
+| **收包** | 交给 `ngtcp2_conn_read_pkt` 的 path：**`remote` 用这个包的真实来源**、**`local` 用 `ngtcp2_conn_get_path()` 的本地地址** | `remote` 变了才能让 ngtcp2 发现「对端换源」；`local` 若用 `qc->local_sa`，客户端 `quic_migrate` 换地址后会与 ngtcp2 的副本**不一致** ⇒ 它连对端的 `PATH_CHALLENGE` 都不回应 |
+
+### §6.2 为什么 `local` 不能用手里的 `qc->local_sa`（实测证据）
+
+```
+[quic] migrate: qc->local_sa=127.0.0.1:50156    ngtcp2 current=(127.0.0.1:59047 -> 127.0.0.1:27121)
+```
+
+⇒ ngtcp2 存的是**地址副本**。`quic_migrate` 只改了我们的字段，ngtcp2 仍认为 local 是旧地址；
+此时若把「真实来源（新 local）」当 path 喂进去 ⇒ 路径不匹配 ⇒ 客户端**不回应** `PATH_CHALLENGE`
+⇒ 服务端路径验证**永不完成** ⇒ 当前路径不切换 ⇒ 回包发往**已关闭**的旧 socket（= 504 的现象）。
+
+### §6.3 路径切换是可观测的（M297 新增）
+
+| 观测点 | 内容 |
+|---|---|
+| `path-validation BEGIN flags=… new=<新源> fallback=<旧源>` | 开始验证（`PX_QUIC_VERBOSE=1`）|
+| `path-validation END res=0 remote=<新源>（累计成功 N）` | **验证成功**（= 真的换过源）|
+| `quic_pool_stats().path_migrated` | 验证成功次数（语言层可查）|
+| `quic_pool_stats().path_missing` / `send_err` | 写包时 ngtcp2 未给路径（兜底已发）/ `px_io_sendto` 失败次数 |
+
+### §6.4 正确写法（服务端/客户端通用）
+
+```c
+/* 收包：真实来源 + ngtcp2 认为的本地地址 */
+const ngtcp2_path* cur = ngtcp2_conn_get_path(qc->conn);
+ngtcp2_path_storage sps;
+ngtcp2_path_storage_init(&sps, cur->local.addr, cur->local.addrlen,
+                         (const ngtcp2_sockaddr*)&from, from_len, NULL);
+ngtcp2_conn_read_pkt(conn, &sps.path, NULL, pkt, len, now);
+
+/* 发送：照 ngtcp2 给的路径发 */
+ngtcp2_path_storage ps; ngtcp2_path_storage_zero(&ps);
+ngtcp2_ssize n = ngtcp2_conn_write_pkt(conn, &ps.path, NULL, out, sizeof(out), now);
+if (n > 0) px_io_sendto(qc->fd, out, (size_t)n, 0, ps.path.remote.addr, ps.path.remote.addrlen);
+```
+
+### §6.5 门与覆盖边界
+
+* 门：`examples/m297_quic_path_switch/`（静态 9 · 强就绪 · 验证 BEGIN+END res=0 · 新源 ≠ 回退源 ·
+  客户端回 `PATH_RESPONSE` · 负控 A/B/C · 已知边界双向核对）。
+* **已知边界（缺陷 513 · 未修）**：路径层修好后**端到端仍读不到响应** ——
+  客户端**已收到完整** `HEADERS` + `DATA` + `FIN`（`rx STREAM id=0xc len=17` / `id=0xc fin=1 offset=17`）
+  却仍报 timeout ⇒ 病灶在 **h3 客户端读响应**环节（疑似与 QPACK 编码流等待有关），**根因未定位到行**。
+  登记在门目录的 `KNOWN.tsv`（双向核对：端到端通了会判「登记过期」逼更新本文件）。
+* **未覆盖**：IPv6 路径 · 真实 NAT rebinding · 连接迁移与 0-RTT 的组合 · 多路径（MP-QUIC 非本仓范围）。
