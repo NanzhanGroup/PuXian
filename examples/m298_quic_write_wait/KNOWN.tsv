@@ -1,0 +1,6 @@
+# M298 门 · 已知边界登记表（**双向核对**：实测与登记不符即判红）
+# 格式：id <TAB> expect <TAB> reason <TAB> date <TAB> basis
+#   expect=OK   ⇒ 实测必须成功；若哪天失败 ⇒ **产品回归** ⇒ 判红
+#   expect=FAIL ⇒ 实测必须失败；若哪天成功 ⇒ **登记过期** ⇒ 判红并指名更新文档
+# 纪律（沿 m226 UNPAIRED.tsv / m227 RCODE.tsv / m293 MIGRATE_KNOWN.tsv / m297 KNOWN.tsv）：真缺陷不许记成 OK。
+m298_e2e_migrate	OK	迁移后同一连接必须拿到响应（M297 登记缺陷 513 的端到端症状）：修前 0/6（服务端把响应静默丢掉），M298 修缺陷 514 后 6/6。若回到 FAIL ⇒ 缺陷 514 回归	2026-10-10	M298

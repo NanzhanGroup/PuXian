@@ -1,0 +1,75 @@
+# ============================================================
+# M293 门：H3 客户端 —— **连接迁移**（走托管 listener）
+#   这是 `docs/HTTP3_STANCE.md` §三.1 登记的「与缺陷 327 同族、尚未覆门」的第二条路径。
+# 契约行：M293-MIG MIGRATE-OK …   /   M293-MIG post timeout（= 登记在案的行为）
+#
+# ⚠️ 本形态**当前实测失败**（7/7）⇒ 由 `MIGRATE_KNOWN.tsv` **登记**，门做**双向核对**：
+#     · 复现 ⇒ 必须**如登记那样失败**
+#     · 若哪天修好了（拿到 MIGRATE-OK）⇒ **登记过期** ⇒ 判红并指名「更新文档」
+#   —— 与 M226 `UNPAIRED.tsv` / M227 `RCODE.tsv` 同款：**双向表不许把红当绿记下来**。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_migrate(conn: int, local_ip: str, local_port: int) -> bool
+extern def quic_conn_local(conn: int) -> str
+extern def quic_conn_path(conn: int) -> str
+extern def quic_conn_handshake_done(conn: int) -> bool
+extern def quic_close(conn: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_client_open_stream(conn: int) -> int
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict
+
+var h3p = 19694
+var v = env("M293_HTTP_PORT")
+if v != null:
+    h3p = int(v) + 1
+
+def h3_get(c, tag) -> dict:
+    var s = h3_client_open_stream(c)
+    if s <= 0:
+        print("M293-MIG " + tag + " open-fail")
+        exit(20)
+    h3_client_send_request_stream(c, s, "GET", "https", "localhost", "/m293", [], "")
+    var r = h3_client_read_response_stream(c, s, 8000)
+    if r == null:
+        print("M293-MIG " + tag + " timeout")
+        exit(21)
+    if r["status"] != "200" or r["body"] != "m293-ok":
+        print("M293-MIG " + tag + " bad " + str(r["status"]) + " [" + str(r["body"]) + "]")
+        exit(22)
+    return r
+
+var c = quic_connect("127.0.0.1", h3p, "h3")
+if c <= 0:
+    print("M293-MIG connect-fail")
+    exit(2)
+if h3_conn_setup(c, 4096) == false:
+    print("M293-MIG setup-fail")
+    exit(2)
+
+# ① 迁移前基准（这一步必须成功 —— 否则失败就不能归因到「迁移」）
+h3_get(c, "pre")
+var local0 = quic_conn_local(c)
+var peer0 = quic_conn_path(c)
+
+# ② 迁移（换源端口）
+if quic_migrate(c, "127.0.0.1", 0) == false:
+    print("M293-MIG migrate-fail")
+    exit(3)
+var local1 = quic_conn_local(c)
+if local1 == local0:
+    print("M293-MIG local-unchanged")
+    exit(4)
+if quic_conn_path(c) != peer0:
+    print("M293-MIG peer-changed " + peer0 + " -> " + quic_conn_path(c))
+    exit(5)
+
+# ③ 迁移后：同一连接、同一 h3 会话，再发一次（**当前在托管 listener 上必失败**）
+h3_get(c, "post")
+if quic_conn_handshake_done(c) == false:
+    print("M293-MIG handshake-lost")
+    exit(6)
+print("M293-MIG MIGRATE-OK local " + local0 + " -> " + local1)
+quic_close(c)

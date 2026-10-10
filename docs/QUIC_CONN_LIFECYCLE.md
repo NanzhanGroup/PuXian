@@ -147,8 +147,45 @@ if (n > 0) px_io_sendto(qc->fd, out, (size_t)n, 0, ps.path.remote.addr, ps.path.
 
 * 门：`examples/m297_quic_path_switch/`（静态 9 · 强就绪 · 验证 BEGIN+END res=0 · 新源 ≠ 回退源 ·
   客户端回 `PATH_RESPONSE` · 负控 A/B/C · 已知边界双向核对）。
-* **已知边界（缺陷 513 · 未修）**：路径层修好后**端到端仍读不到响应** ——
-  客户端**已收到完整** `HEADERS` + `DATA` + `FIN`（`rx STREAM id=0xc len=17` / `id=0xc fin=1 offset=17`）
-  却仍报 timeout ⇒ 病灶在 **h3 客户端读响应**环节（疑似与 QPACK 编码流等待有关），**根因未定位到行**。
-  登记在门目录的 `KNOWN.tsv`（双向核对：端到端通了会判「登记过期」逼更新本文件）。
-* **未覆盖**：IPv6 路径 · 真实 NAT rebinding · 连接迁移与 0-RTT 的组合 · 多路径（MP-QUIC 非本仓范围）。
+* **端到端（M298 已修 · 缺陷 514）**：路径层修好后端到端**曾经仍读不到响应**（当时登记为缺陷 513）。
+  M298 把它钉到**服务端发送链**：`quic_write_stream_bytes()` 的写循环**无进展时不等待、也不推进本连接**
+  ⇒ 16 次空转在微秒内跑完，且把「0 字节」当成功 ⇒ **响应被静默丢掉**（客户端等 8 秒超时只是结果）。
+  修法与口径见 **§6.6**；门的登记表由 FAIL 改为 OK（双向核对：变好也判红逼更新）。
+### §6.6 写流数据的口径（M298 · 缺陷 514）
+
+**口径：写流数据必须「等到真的写进去」或「响亮失败」，绝不允许静默丢弃。**
+
+```c
+/* 反例（修前）：16 次空转不含任何等待（微秒内跑完）+ 返回 0 被当作成功 */
+while (woff < len && spins < 16) { … if (ndone == 0 && n == 0) { quic_pump(qc, 1000, 0, -1); … } }
+
+/* 正例（修后）：deadline 上界 + 无进展时**推进本连接** + 一字节未写入即响亮 */
+int64_t deadline = now + QUIC_WRITE_STALL_MS * NGTCP2_MILLISECONDS;   /* 200ms */
+while (woff < len && now < deadline) {
+    n = ngtcp2_conn_writev_stream(…);
+    if (n > 0) send;
+    else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) return total > 0 ? total : -1;
+    if (ndone > 0) { woff += ndone; total += ndone; }
+    if (ndone <= 0 && n <= 0) {                       /* 无进展 */
+        t0 = now;
+        pr = quic_pump(qc, QUIC_WRITE_PUMP_MS, 1, sid);   /* 收包 → 喂 ngtcp2 */
+        if (pr == -2) break;
+        if (now - t0 < 1ms) usleep(1000);                 /* 防忙等 */
+    }
+}
+if (total == 0) return -1;                            /* 不再假装成功 */
+```
+
+* **为什么必须推进**：ngtcp2 在「新路径尚未验证完成」的窗口里**不接受应用数据**
+  （头文件原话：returns 0 if … packet is congestion limited），而完成验证所需的 `PATH_RESPONSE`
+  正躺在收包队列里 —— **不 pump 就永远验证不完**，越等越死（自锁）。
+* **不是拥塞窗口**：实测写被拒那一刻 `cwnd_left=12402`（cwnd 14028 / 在途 1626）⇒ 要按「路径未就绪」理解。
+* ⚠️ **一个被否证的"修法"**：按 ngtcp2 文档补 `ngtcp2_conn_update_pkt_tx_time`（文档说 must be called）
+  **反而更糟** —— 连迁移**之前**的请求都超时（pacing 把所有包都挡住）⇒ 已撤销。
+  它的价值是反证「pacing 通道是活的」。M298 门的 [1] 层**静态守着**，防止被后人当修复重新引入。
+
+* **门**：`examples/m298_quic_write_wait/`（静态 8 · 强就绪 · 3 轮全成功 · **产品自带输出**的产品侧证据 ·
+  登记表双向核对 · 负控 A/B/C 各自独立判红 · 源逐字节还原）。
+* **未覆盖**：IPv6 路径 · 真实 NAT rebinding · 长 RTT 下 `QUIC_WRITE_STALL_MS=200` **未标定** ·
+  拥塞窗口耗尽/流控阻塞触发下的同一段代码**未单独覆门** · 「H3 层是否把失败如实暴露给应用」（`px_serve`
+  的响应管道仍忽略 `h3_send_fields` 的返回值）。
