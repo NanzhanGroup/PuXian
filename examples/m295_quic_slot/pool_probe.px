@@ -9,9 +9,11 @@
 extern def quic_pool_stats() -> dict
 
 var s = quic_pool_stats()
+# M297：新增 3 个**路径可观测**键（缺陷 504 的观测面）
 var ks = ["listeners_max", "listeners_used", "conns_max", "conns_used", "conns_peak",
           "alloc_ok", "alloc_fail", "full_first_ms", "peer_closed_cnt",
-          "cidtab_max", "cidtab_used", "cid_drop", "h3_idle_ms"]
+          "cidtab_max", "cidtab_used", "cid_drop", "h3_idle_ms",
+          "path_migrated", "path_missing", "send_err"]
 var line = "POOL"
 for k in ks:
     line = line + " " + k + "=" + str(s[k])

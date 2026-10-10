@@ -177,7 +177,14 @@ chk "conns_max == 256" "$(pl conns_max)" "256"
 chk "conns_used == 0（池空）" "$(pl conns_used)" "0"
 chk "cidtab_max == 2048" "$(pl cidtab_max)" "2048"
 chk "alloc_fail == 0（尚未满过）" "$(pl alloc_fail)" "0"
-chk "13 键齐全" "$(M295_HTTP_PORT="$PORT" timeout -k 5 15 "$BD/pool_probe" 2>&1 | grep '^POOL-KEYS' | head -1)" "POOL-KEYS 13 GOT 13"
+#   ⚠️ 计数只做**下限**（M197 纪律）：M297 给 quic_pool_stats 加了 3 个路径可观测键
+#      （path_migrated / path_missing / send_err）⇒ 「恰好 13」这种硬等式会随每次扩键假红。
+POOLK="$(M295_HTTP_PORT="$PORT" timeout -k 5 15 "$BD/pool_probe" 2>&1 | grep '^POOL-KEYS' | head -1)"
+PKDECL="$(echo "$POOLK" | sed -n 's/^POOL-KEYS \([0-9]*\) GOT.*/\1/p')"
+PKGOT="$(echo "$POOLK" | sed -n 's/.* GOT \([0-9]*\)$/\1/p')"
+chk "stats 键数 ≥13（下限 · 不用硬等式）" "$([ "${PKGOT:-0}" -ge 13 ] && echo yes || echo no)" "yes"
+chk "键数自洽（声明 == 实际）" "${PKDECL:-0}" "${PKGOT:-0}"
+chk "含 M297 路径可观测键（3/3）" "$(echo "$POOL" | grep -oE 'path_migrated=|path_missing=|send_err=' | wc -l)" "3"
 
 echo
 echo "[4] 动态契约：参数校验（精确 arity）"
