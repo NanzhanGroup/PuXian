@@ -1235,6 +1235,12 @@ jobs:
           grep -E 'path-validation|跨源|PATH_RESPONSE' /tmp/v_m297.log | tail -4 || true
           grep -E '失败 .* 项' /tmp/v_m297.log | tail -1 || true
           echo "✅ m297_quic_path_switch（静态 9 · 强就绪 · 验证 BEGIN+END res=0 · 新源与回退源不同 · 客户端回 PATH_RESPONSE · 已知边界双向核对）PASS"
+      - name: m298_quic_write_wait（写流数据「等到真写进去」或「响亮失败」· 缺陷 514 · M298）
+        run: |
+          bash examples/m298_quic_write_wait/verify.sh --neg-skip > /tmp/v_m298.log 2>&1 || { echo "❌ m298 门失败（写循环 deadline · 无进展须推进连接 · 响亮失败 · 端到端 MIGRATE-OK · 产品侧证据 · 登记表双向核对）"; grep -E '^(  ❌|     )' /tmp/v_m298.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'MIGRATE-OK|bidi 流|access' /tmp/v_m298.log | tail -4 || true
+          grep -E '失败 .* 项' /tmp/v_m298.log | tail -1 || true
+          echo "✅ m298_quic_write_wait（静态 8 · 强就绪 · 3 轮全 MIGRATE-OK · 产品自带输出的产品侧证据 · 登记表双向核对 · 4 道负控含判据自伤）PASS"
 
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()

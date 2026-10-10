@@ -55,6 +55,11 @@
 //   容量按连接上限成比例（×8 留轮换余量）。
 #define QUIC_CIDTAB_MAX    (QUIC_CONN_MAX * 8)
 #define QUIC_PKT_BUF 65536
+// M298（缺陷 514）：写流数据「无进展」时的等待预算与推进步长。
+//   修前是「最多重试 16 次、每次都不等」（16 次空转在微秒内跑完 = 等于没重试），
+//   且返回 `total=0` 被调用方当成「成功但 0 字节」⇒ **静默丢数据**。
+#define QUIC_WRITE_STALL_MS 200   // 无进展时最多等这么久（期间必须持续推进本连接）
+#define QUIC_WRITE_PUMP_MS   20   // 每次推进（收包 → 喂 ngtcp2）的等待上限
 #define QUIC_SCIDLEN 8
 
 // ---------- 数据结构 ----------
@@ -2229,7 +2234,21 @@ static int64_t quic_write_stream_bytes(quic_conn* qc, int64_t sid,
     size_t woff = 0;
     int64_t total = 0;
     int spins = 0;
-    while (woff < len && spins < 16) {
+    // M298（缺陷 514）：**等到真的写进去**，或者**响亮失败**。
+    //   · 循环上界由「重试 16 次」改为「deadline 之前」——修前那 16 次不含任何等待，
+    //     微秒内就跑完，等价于「只试了一次」。
+    //   · 无进展（ndone<=0 且 n<=0）时**必须推进本连接**：收包 → 喂 ngtcp2。
+    //     这不是「等窗口」，而是让状态往前走 —— 实测（托管 listener + 连接迁移）：
+    //       ngtcp2 在「新路径尚未验证完成」的窗口里会**拒绝接受应用数据**
+    //       （ngtcp2.h:5346「returns 0 if … packet is congestion limited」；实测 cwnd 尚余
+    //        **12 KB** 仍返回 0 ⇒ 不是拥塞窗口，而是路径未就绪）。
+    //       此时 PATH_RESPONSE 正躺在收包队列里，**不 pump 就永远验证不完** ⇒ 越等越死。
+    //     修前实测（缺陷 513 的端到端症状 —— 该缺陷由 M297 登记、其真因由本轮定位到行）：
+    //       响应头 17 B + QPACK 编码器指令 15 B 全部被丢，客户端 `post timeout`（迁移后请求永远拿不到响应）。
+    //   · 一字节都没写进去 ⇒ 返回 -1（**不再假装成功**）：调用方 `h3_send_fields` 的
+    //     `sent >= 0` 判据由此变成真的；部分写入仍返回已写字节数（FIN 判据 `w == len` 自会拦住）。
+    int64_t deadline = quic_now() + (uint64_t)QUIC_WRITE_STALL_MS * NGTCP2_MILLISECONDS;
+    while (woff < len && quic_now() < deadline) {
         uint8_t out[QUIC_PKT_BUF];
         ngtcp2_vec v = { (uint8_t*)data + woff, len - woff };
         ngtcp2_ssize ndone = 0;
@@ -2242,15 +2261,24 @@ static int64_t quic_write_stream_bytes(quic_conn* qc, int64_t sid,
         if (n > 0) {
             quic_send_to_path(qc, out, (size_t)n, &ps.path);
         } else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) {
-            return -1;
+            return total > 0 ? total : -1;      // 真错误：已写的照实返回，没写的响亮
         }
         if (ndone > 0) { woff += (size_t)ndone; total += (int64_t)ndone; }
-        if (ndone == 0 && n == 0) {
-            // 流控阻塞：泵一次等 ACK 释放窗口
-            int pr = quic_pump(qc, 1000, 0, -1);
-            if (pr != 0) break;
+        if (ndone <= 0 && n <= 0) {
+            // 无进展 ⇒ 推进一次（收包 + 喂 ngtcp2；want_sid=sid 让 pump 能立刻判「本流有数据」）
+            int64_t t0 = quic_now();
+            int pr = quic_pump(qc, QUIC_WRITE_PUMP_MS, 1, sid);
+            if (pr == -2) break;                // 真错误（对端关闭/协议错误）
+            // quic_pump 命中「本流已有数据/已 FIN」时会立即返回 ⇒ 防忙等
+            if (quic_now() - t0 < (uint64_t)NGTCP2_MILLISECONDS) usleep(1000);
         }
         spins++;
+    }
+    if (total == 0) {
+        if (quic_verbose_on())
+            fprintf(stderr, "[quic] write_stream 放弃：sid=%lld len=%zu 一字节未写入（重试 %d 次 / %dms）\n",
+                    (long long)sid, len, spins, QUIC_WRITE_STALL_MS);
+        return -1;
     }
     return total;
 }

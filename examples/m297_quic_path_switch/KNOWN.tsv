@@ -1,5 +1,9 @@
 # M297 门 · 已知边界登记表（**双向核对**：实测与登记不符即判红）
 # 格式：id <TAB> expect <TAB> reason <TAB> date <TAB> basis
+#   expect=OK   ⇒ 实测必须成功；若哪天失败 ⇒ **产品回归** ⇒ 判红
 #   expect=FAIL ⇒ 实测必须失败；若哪天成功 ⇒ **登记过期** ⇒ 判红并指名更新文档
 # 纪律（沿 m226 UNPAIRED.tsv / m227 RCODE.tsv / m293 MIGRATE_KNOWN.tsv）：真缺陷不许记成 OK。
-m297_e2e_response	FAIL	迁移后**端到端响应仍读不到**：客户端已收到完整响应（rx STREAM id=0xc len=17 + id=0xc fin=1 offset=17）却仍报 timeout ⇒ 缺陷 513（h3 客户端读响应环节；根因尚未定位到行）。路径层已修（见本门 [5]）	2026-10-10	M297
+#   ⚠️ 本条 2026-10-10 由 FAIL 改为 OK —— **这正是本表"双向核对"设计要的效果**：
+#      M298 修好缺陷 514 后，端到端成功 ⇒ 原登记（FAIL）过期 ⇒ 判红并指名更新本文件与
+#      docs/HTTP3_STANCE.md（缺陷 513 已修）。现在 expect=OK 守的是反方向：一旦回归就判红。
+m297_e2e_response	OK	迁移后端到端**能拿到响应**：M297 时失败（缺陷 513，根因当时未定位到行），M298 钉到真因 = 缺陷 514（服务端 `quic_write_stream_bytes` 无等待的 16 次空转 + 把 0 字节当成功 ⇒ 静默丢响应）并修好，实测 6/6 成功	2026-10-10	M297/M298
