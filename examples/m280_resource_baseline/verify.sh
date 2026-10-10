@@ -38,8 +38,8 @@ echo "[1] 静态：BASELINE.tsv 形态"
 if [ ! -f "$BL" ]; then bad "[1] 缺 BASELINE.tsv"; else
   n=$(grep -vcE '^\s*(#|$)' "$BL" || true)
   nn=$(grep -vE '^\s*(#|$)' "$BL" | awk -F'\t' 'NF>=3 && $2 ~ /^[0-9]+$/ && length($3)>3' | wc -l)
-  chk "[1a] 基线条目数" "$n" "5"
-  chk "[1b] 全部「数字阈值 + 非空理由」" "$nn" "5"
+  chk "[1a] 基线条目数" "$n" "6"
+  chk "[1b] 全部「数字阈值 + 非空理由」" "$nn" "6"
   case "$(head -2 "$BL")" in *M280*) ok "[1c] 表头含来历锚点";; *) bad "[1c] 表头缺来历";; esac
   case "$(cat "$BL")" in *收敛*) ok "[1d] 含方法论锚点（收敛判据）";; *) bad "[1d] 缺收敛判据说明";; esac
 fi
@@ -47,7 +47,10 @@ lim(){ grep -E "^$1\b" "$BL" | awk -F'\t' '{print $2}'; }
 
 # ── [2][3] 动态：6 轮采样 + 收敛判据 ───────────────────────
 SVC="$W/srv"; CLG="$W/cli_grace"; CLA="$W/cli_abrupt"
-if [ ! -x "$SVC" ] || [ ! -x "$CLG" ] || [ ! -x "$CLA" ]; then
+# M296：**语料更新也要触发重建** —— 修前只判「产物存在」⇒ 改了 srv.px/cli_*.px 后
+#   门仍跑**旧产物**（等于「我改了门语料，但门测的还是老东西」）。
+if [ ! -x "$SVC" ] || [ ! -x "$CLG" ] || [ ! -x "$CLA" ] \
+   || [ "$HERE/srv.px" -nt "$SVC" ] || [ "$HERE/cli_grace.px" -nt "$CLG" ] || [ "$HERE/cli_abrupt.px" -nt "$CLA" ]; then
   echo "[2] 构建三个产物（首次 ≈60s）"
   mkdir -p "$W"
   cp -f "$HERE"/*.px "$W"/ 2>/dev/null
@@ -83,41 +86,77 @@ else
     tick(){ awk '{print $14+$15}' "/proc/$(_pid "${1:-}")/stat" 2>/dev/null || echo 0; }
 
     R0=$(rss); T0=$(thr); F0=$(fdn)
-    declare -a CR CH CF
+    declare -a CR CH CF RQ
+    ROUNDS="${M280_ROUNDS:-9}"
+    # M283（判据的「第 0 维：前提」）：每轮**记录成功请求数** ——
+    #   若某轮请求大量失败，RSS 曲线本就**不可比**（测的不是同一件事），门必须**响亮**说出来，
+    #   而不是把「请求没跑起来」当成「内存泄漏」。
     round(){  # $1=序号
-      local t0 t1 i
+      local t0 t1 i ok=0
       t0=$(tick)
       for i in $(seq 1 10); do
-        M280_HTTP_PORT="$PORT" timeout 20 "$CLA" >/dev/null 2>&1
-        M280_HTTP_PORT="$PORT" timeout 20 "$CLG" >/dev/null 2>&1
+        M280_HTTP_PORT="$PORT" timeout 20 "$CLA" >/dev/null 2>&1 && ok=$((ok+1))
+        M280_HTTP_PORT="$PORT" timeout 20 "$CLG" >/dev/null 2>&1 && ok=$((ok+1))
       done
       sleep 3
       t1=$(tick)
-      CR[$1]=$((t1-t0)); CH[$1]=$(rss); CF[$1]=$(fdn)
-      echo "     轮$1: cpu+${CR[$1]} rss=${CH[$1]} thr=$(thr) fd=${CF[$1]}"
+      CR[$1]=$((t1-t0)); CH[$1]=$(rss); CF[$1]=$(fdn); RQ[$1]=$ok
+      echo "     轮$1: cpu+${CR[$1]} rss=${CH[$1]} thr=$(thr) fd=${CF[$1]} ok=$ok/20"
     }
-    echo "[2] 6 轮采样（每轮 220 次请求 + 3s 静置）"
+    echo "[2] $ROUNDS 轮采样（每轮 220 次请求 + 3s 静置）"
     CH[0]=$R0; CF[0]=$F0
-    for r in 1 2 3 4 5 6; do round "$r"; done
+    for r in $(seq 1 "$ROUNDS"); do round "$r"; done
 
-    d1=$(( CH[1]-CH[0] )); d6=$(( CH[6]-CH[5] ))
+    # ── v3（M296）：**均值**代替单点 —— 单点方差极大（CI 两次实测末轮增量 11968 ⇄ 2272，5×）
+    inc(){ echo $(( CH[$1] - CH[$(( $1 - 1 ))] )); }
+    avg3(){ echo $(( ($1 + $2 + $3) / 3 )); }
+    d1=$(inc 1)
+    f_avg=$(avg3 "$(inc 1)" "$(inc 2)" "$(inc 3)")
+    l_avg=$(avg3 "$(inc $((ROUNDS-2)))" "$(inc $((ROUNDS-1)))" "$(inc $ROUNDS)")
+    peak=0; for r in $(seq 0 "$ROUNDS"); do [ "${CH[$r]}" -gt "$peak" ] && peak=${CH[$r]}; done
     T3=$(thr); F6=$(fdn)
     L_CPU=$(lim cpu_tick_per_round); L_FIRST=$(lim rss_first_round_kb)
     L_RATIO=$(lim rss_converge_ratio); L_THR=$(lim thread_after_warmup); L_FD=$(lim fd_grow_total)
+    L_PEAK=$(lim rss_peak_max_kb)
 
-    echo "[3] 判据（收敛性，不是绝对增量）"
-    cmax=0; for r in 1 2 3 4 5 6; do [ "${CR[$r]}" -gt "$cmax" ] && cmax=${CR[$r]}; done
+    echo "[3] 判据（收敛性 = 后段均值 vs 前段均值；不是单点绝对增量）"
+    cmax=0; for r in $(seq 1 "$ROUNDS"); do [ "${CR[$r]}" -gt "$cmax" ] && cmax=${CR[$r]}; done
     le "[3a] CPU 每轮峰值 tick" "$cmax" "$L_CPU"
+    # [3b] 只抓「一上来就失控」——绝对增量跨分配器不可比（见 BASELINE.tsv 头注的 CI/本机对照）
     le "[3b] 首轮 RSS 预热增量(KB)" "$d1" "$L_FIRST"
-    lim6=$(( d1 * L_RATIO / 100 ))
-    if [ "$d6" -le "$lim6" ]; then ok "[3c] RSS 收敛（末轮 +$d6 ≤ 首轮 $d1 的 ${L_RATIO}% = $lim6）"
-    else bad "[3c] RSS 未收敛（末轮 +$d6 > $lim6）—— 疑似泄漏"; fi
+    lim6=$(( f_avg * L_RATIO / 100 ))
+    if [ "$l_avg" -le "$lim6" ]; then
+      ok "[3c] RSS 收敛（后 3 轮均值 +$l_avg ≤ 前 3 轮均值 $f_avg 的 ${L_RATIO}% = $lim6）"
+    else
+      bad "[3c] RSS 未收敛（后 3 轮均值 +$l_avg > $lim6 = 前 3 轮均值 $f_avg 的 ${L_RATIO}%）—— 疑似泄漏"
+    fi
+    le "[3f] RSS 峰值(KB)" "$peak" "$L_PEAK"
     dthr=$(( $(thr) - T3 ))
     if [ "$dthr" -le "$L_THR" ]; then ok "[3d] 预热后线程增量（$dthr ≤ $L_THR）"
     else bad "[3d] 预热后线程仍增长（+$dthr）—— 疑似线程泄漏"; fi
     dfd=$(( F6 - F0 ))
     if [ "$dfd" -le "$L_FD" ]; then ok "[3e] fd 总增量（$dfd ≤ $L_FD）"
     else bad "[3e] fd 泄漏（+$dfd）"; fi
+
+    # [3g] **可回收**（正向证据）：静置后 RSS 应当回落 —— 证明「活着的对象确实被回收了」。
+    #   ⚠️ 分配器不归还内存时「不回落」是**合法**的（BASELINE.tsv 头注已登记）⇒ 这是**登记项**，
+    #   不单独判红；它与 [3c] 一起构成「不是泄漏」的证据。
+    sleep 15
+    idle=$(rss)
+    if [ "$idle" -lt "$peak" ]; then
+      ok "[3g] 可回收（静置 15s：峰值 $peak → $idle，回落 $(( peak - idle ))KB）"
+    else
+      echo "     ℹ️ [3g] 静置 15s 未回落（峰值 $peak → $idle）—— 分配器保留属正常；以 [3c] 的收敛性为准"
+    fi
+
+    # [3h] **前提自证**（M283）：曲线只有在「请求真的跑起来」时才有意义。
+    weak=0
+    for r in $(seq 1 "$ROUNDS"); do [ "${RQ[$r]}" -lt 16 ] && weak=$((weak+1)); done
+    if [ "$weak" = "0" ]; then
+      ok "[3h] 前提自证：每轮成功请求 ≥16/20（$(for r in 1 2 3; do printf '%s ' "${RQ[$r]}"; done)…）"
+    else
+      bad "[3h] 有 $weak 轮成功请求 <16/20 —— **RSS 曲线不可比**（测的不是同一件事）：$(for r in $(seq 1 "$ROUNDS"); do printf '%s ' "${RQ[$r]}"; done)"
+    fi
 
     echo "[4] 负控：注入忙自旋 ⇒ CPU 判据必须判红"
     if [ "$NEG_SKIP" = "1" ]; then echo "     （--neg-skip：CI 档跳过）"

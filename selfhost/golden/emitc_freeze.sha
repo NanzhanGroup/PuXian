@@ -263,7 +263,7 @@ examples/m263_resp_crosstalk/srv.px src=eed7029e6a24afa8 rc=0 out=b8c1129223f013
 examples/m279_std_surface/drv.px src=8cc5da3073fc9fa7 rc=0 out=be8dd506acce471ed80dcfb8bca2287e err=e3b0c44298fc1c14
 examples/m280_resource_baseline/cli_abrupt.px src=ca91ee373c5d6abc rc=0 out=86f717a105a38980071313acd5be241a err=e3b0c44298fc1c14
 examples/m280_resource_baseline/cli_grace.px src=29da2b1d15592012 rc=0 out=05c93fadc44e3c560d8415e9bd29558a err=e3b0c44298fc1c14
-examples/m280_resource_baseline/srv.px src=3cad4d48956c743e rc=0 out=d0fb7b5914d12443b0c9c607e9d8b762 err=e3b0c44298fc1c14
+examples/m280_resource_baseline/srv.px src=9d7ab8ec17fb38e1 rc=0 out=6ecec23792e9def828e8e3858d237a38 err=e3b0c44298fc1c14
 examples/m282_registry_020/ftp020_probe.px src=f3958cf2eebc8a80 rc=0 out=908fac537e032acaa4970f10a4e39a02 err=c6cb53106f864451
 examples/m288_ws_handshake_residual/cli.px src=cf68f8e66f8f4fd2 rc=0 out=cadf5dc7d471c3cd188432218d59e137 err=e3b0c44298fc1c14
 examples/m288_ws_handshake_residual/srv.px src=d87377641205c7a3 rc=0 out=c4c8fb6e19bcc9b79ca95b915be5a6f1 err=e3b0c44298fc1c14

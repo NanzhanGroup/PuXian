@@ -23,7 +23,18 @@ def spin_loop():
 def api_m280(req, params):
     return {"status": 200, "body": "m280-ok", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
 
+## ⚠️ M296（前提缺陷）：本门的两个客户端（`cli_grace.px` / `cli_abrupt.px`，自 M225 门复制）
+##   请求的是 **/m225** 并期望 body == "m225-ok"；而本门此前**只注册了 /m280**
+##   ⇒ 自 M280 起的每一次采样，**全部请求都是 404**。
+##   404 也是负载（所以 CPU/RSS 曲线一直「看起来正常」），但**测的不是同一件事**
+##   —— 真实业务路径的对象创建/回收量级完全不同。
+##   抓到它的是 M296 新增的 **[3h] 前提自证**（逐轮统计成功请求数，<16/20 即响亮判红）。
+##   教训同 M283：**判据自己的前提没有被验证过，只是被假定过。**
+def api_m225(req, params):
+    return {"status": 200, "body": "m225-ok", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
 route("GET", "/m280", api_m280)
+route("GET", "/m225", api_m225)
 write_file(ready, "ready")
 print("SRV ready http=" + str(hp) + " h3=" + str(h3p))
 
