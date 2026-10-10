@@ -1101,7 +1101,10 @@ jobs:
           # M280：资源面判据 —— H3 托管 listener 的 CPU / RSS / 线程 / fd
           #   静态（BASELINE.tsv 形态）+ 动态 6 轮采样（**收敛判据**，不是绝对增量）
           # 门（CI 档：负控跳过 —— 负控要改源码 + 重编，成本高）
-          NEG_SKIP=1 bash examples/m280_resource_baseline/verify.sh > /tmp/v_m280.log 2>&1 || { echo "❌ m280 门失败（资源面：BASELINE 形态 / 6 轮收敛判据 / 忙自旋负控）"; grep -E '^  ❌' /tmp/v_m280.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          # ⚠️ M295s1 补：本门 2026-10-10 在 CI 判红（[3c] RSS 未收敛），而**注解里读不到任何轮次曲线**
+          #   ⇒ 违反本仓纪律「门红了却读不到原因 = 没有门」。失败时**连轮表一起打**（含 thr/fd），
+          #   这样 CI 的 RSS / 线程曲线可直接从注解读出，不必再靠猜。判据本身**不动**。
+          NEG_SKIP=1 bash examples/m280_resource_baseline/verify.sh > /tmp/v_m280.log 2>&1 || { echo "❌ m280 门失败（资源面：BASELINE 形态 / 6 轮收敛判据 / 忙自旋负控）"; grep -E '^(  ❌|     轮)' /tmp/v_m280.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m280_resource_baseline（收敛判据 · CPU/RSS/线程/fd 四项 · 负控忙自旋判红）PASS"
 
       - name: m282_registry_020（上游 0.2.0 全量再引入 + 凭据泄漏守卫）
