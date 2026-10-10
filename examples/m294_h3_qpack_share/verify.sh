@@ -337,8 +337,9 @@ BASE_FD="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
 [ "$BASE_FD" -ge 6 ] && ok "[S2] listener fd 数 $BASE_FD（≥6 · 未塌缩）" || bad "[S2] listener fd 数异常（$BASE_FD）"
 
 echo
-echo "【6b】槽位预算（**缺陷 508** 的登记 —— 也是本门规模取值的依据）"
-echo "      为什么量它：508 会**掩盖** 507（槽位满了以后客户端只见 connect-fail，看不到串味/重复路径）"
+echo "【6b】槽位预算（**缺陷 508 已修**的登记 —— 也是本门规模取值的依据）"
+echo "      为什么量它：508 曾**掩盖** 507（槽位满了以后客户端只见 connect-fail，看不到串味/重复路径）"
+echo "      M295 前：上限 64 ⇒ 90 次串行必在第 65 次左右触顶（本层曾据此判红）· M295 后：256 ⇒ 应全部成功"
 srv_stop
 if srv_start slot; then
   NSUC=0; FF=""; T0=$(date +%s)
@@ -348,20 +349,15 @@ if srv_start slot; then
   done
   EL=$(( $(date +%s) - T0 ))
   echo "       串行建连/关闭：连续成功 $NSUC 次 · 首次失败 $FF（耗时 ${EL}s）"
-  if [ -n "$FF" ]; then
-    ok "存在连接上限（缺陷 508 未修）—— 第 $FF 次起失败"
-    if [ "$NSUC" -ge 40 ] && [ "$NSUC" -le 80 ]; then
-      ok "上限量级符合 QUIC_MAX=64（实测连续成功 $NSUC 次）"
-    else
-      bad "上限量级异常（连续成功 $NSUC 次，期望 40..80）"
-    fi
-    sleep 12
-    M294_HTTP_PORT="$PORT" M294_TAG="slotback" timeout -k 5 8 "$BD/cli_tag" >"$W/slot2.out" 2>&1 || true
-    chk "等 12s（> 空闲超时）后**自愈**（槽位被回收）" "$(tail -1 "$W/slot2.out")" "TAG slotback OK"
-  elif [ "$EL" -lt 8 ]; then
-    bad "90 次串行未观测到上限（耗时 ${EL}s < 空闲超时）⇒ 要么缺陷 508 已修、要么本层失效 ⇒ 请更新 [6b] 与 docs/HTTP3_STANCE.md"
+  # M295s1：缺陷 508 已修 ⇒ 上限从 64 提到 256（PX_QUIC_CONN_MAX）。
+  #   本层的判据随之**反向**：90 次串行**不得**触及上限（触顶 = 上限被降回 / 本层前提变了）。
+  #   上限的**精确值**由 examples/m295_quic_slot 的 [6] 段看守（串行 264 ⇒ 首次失败 @256）；
+  #   本门只保证自己的规模远小于上限、不污染读数。
+  if [ -z "$FF" ]; then
+    ok "90 次串行**未触及上限**（与 PX_QUIC_CONN_MAX=256 一致 ⇒ 缺陷 508 已修）"
+    echo "       ℹ️ 上限的精确值由 examples/m295_quic_slot 的 [6] 段看守；本门只保证规模不越界"
   else
-    echo "       ℹ️ 未观测到上限，但测量窗口 ${EL}s 已超过空闲超时 ⇒ **判定不了**（槽位在窗口内被回收）→ 不计红"
+    bad "第 $FF 次触顶（连续成功 $NSUC）⇒ 上限已不再 ≥ 90 ⇒ 请更新 [6b] 与 docs/HTTP3_STANCE.md"
   fi
 else
   bad "[6b] 服务未就绪"
@@ -476,8 +472,9 @@ echo "    裸 quic_listen + quic_accept 的 demo 路径不在面内（两路径�
 echo "  · 判据**只用产品自带输出**（服务端 [px-access] 日志 + 客户端契约行）；"
 echo "    刻意不用当时的插桩计数器（shared / recycle_shared / open_dup）—— 它们不在产品里。"
 echo "  · 规模（前戏 4 + 3 轮 × 16）由 [6b] 量出的**槽位预算**决定，不是随手取的："
-echo "    冷 listener 上异常率为 0（假阴性）⇒ 必须有前戏；而 508 的上限 ~64 条/实例 ⇒ 规模不能更大。"
-echo "  · 不覆盖：QUIC 连接槽位耗尽本身（**缺陷 508** —— [6b] 只**测量并登记**，本轮未修）；"
+echo "    冷 listener 上异常率为 0（假阴性）⇒ 必须有前戏；而 508 的上限（M295 前 64 / 现 256）决定规模上限（本门取 16 并发 × 3 轮 + 前戏 4 = 52 ≪ 256）。"
+echo "  · 不覆盖：QUIC 连接槽位耗尽本身（**缺陷 508** —— M295 已修，[6b] 只**登记**「90 次不触顶」；
+    上限精确值与「满了要可观测」由 examples/m295_quic_slot 看守）；"
 echo "    连接迁移（**缺陷 504**，由 examples/m293_h3_robustness 的 MIGRATE_KNOWN.tsv 登记）；"
 echo "    0-RTT 接受率统计；多节点/集群形态；QUIC 层内部状态（只看客户端契约与访问日志）。"
 echo "  · 负控 A 需**重建 runtime**（暖缓存 ≈15s / 冷缓存数分钟）⇒ CI 走 --neg-skip，完整档留本地全量门。"
