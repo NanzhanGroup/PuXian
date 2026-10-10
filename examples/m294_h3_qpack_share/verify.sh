@@ -475,7 +475,8 @@ echo "  · 规模（前戏 4 + 3 轮 × 16）由 [6b] 量出的**槽位预算**�
 echo "    冷 listener 上异常率为 0（假阴性）⇒ 必须有前戏；而 508 的上限（M295 前 64 / 现 256）决定规模上限（本门取 16 并发 × 3 轮 + 前戏 4 = 52 ≪ 256）。"
 echo "  · 不覆盖：QUIC 连接槽位耗尽本身（**缺陷 508** —— M295 已修，[6b] 只**登记**「90 次不触顶」；
     上限精确值与「满了要可观测」由 examples/m295_quic_slot 看守）；"
-echo "    连接迁移（**缺陷 504**，由 examples/m293_h3_robustness 的 MIGRATE_KNOWN.tsv 登记）；"
+echo "    连接迁移（**缺陷 504** —— M297+M298 已修；由 examples/m293_h3_robustness 的"
+echo "      MIGRATE_KNOWN.tsv 以 expect=OK 守**回归**）；"
 echo "    0-RTT 接受率统计；多节点/集群形态；QUIC 层内部状态（只看客户端契约与访问日志）。"
 echo "  · 负控 A 需**重建 runtime**（暖缓存 ≈15s / 冷缓存数分钟）⇒ CI 走 --neg-skip，完整档留本地全量门。"
 echo "  · 负控 A 的撤回是**逐字节忠实**的（negctl.py --selftest 的 S3 用 sha256 证明）；"

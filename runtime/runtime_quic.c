@@ -2270,7 +2270,7 @@ static int64_t quic_write_stream_bytes(quic_conn* qc, int64_t sid,
             int pr = quic_pump(qc, QUIC_WRITE_PUMP_MS, 1, sid);
             if (pr == -2) break;                // 真错误（对端关闭/协议错误）
             // quic_pump 命中「本流已有数据/已 FIN」时会立即返回 ⇒ 防忙等
-            if (quic_now() - t0 < (uint64_t)NGTCP2_MILLISECONDS) usleep(1000);
+            if (quic_now() - t0 < (uint64_t)NGTCP2_MILLISECONDS) usleep(1000);   /* PX_IO_EINTR_OK: 轮询节流 —— 被打断 = 提前返回，早一点进下一轮重试（循环条件与 STALL deadline 都会复检），不是失败 */
         }
         spins++;
     }
