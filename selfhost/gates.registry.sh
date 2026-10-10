@@ -1393,3 +1393,17 @@ run m294_h3_qpack_share bash examples/m294_h3_qpack_share/verify.sh
 #   负控 4 道（上限改回 64 / CCERR 退回整数防 SIGSEGV 回退 / 还原保真 / 判据自伤）⇒ CI 用 --neg-skip。
 # ═══════════════════════════════════════════════════════════════════════════
 run m295_quic_slot bash examples/m295_quic_slot/verify.sh
+
+# ═══════════════════════════════════════════════════════════════════════════
+# m296_quic_accept_reuse —— **一条 listener 连续接手多条连接**（缺陷 511 / 512）常设化（M296）
+#   来历：晨曦 10-10 报「quic_close(conn) 之后 listener 端口不再监听」。
+#     · 511：`bi_quic_close` 无条件 `close(qc->fd)`，而 `quic_listen` + `quic_accept` 形态下
+#            `qc->fd == ql->fd`（连接与 listener **共享**同一个 UDP socket）⇒ 关连接就关掉 listener。
+#     · 512：`bi_quic_accept` 收到的**第一个包**若是前一条连接的残包（PMTUD probe / ACK /
+#            CONNECTION_CLOSE）或噪声，修前 `return -1` **整次判死** ⇒ 同 socket 里已排队的新
+#            Initial 永远读不到 ⇒ 一条 listener 实际只能接一条连接（抓包实证）。
+#   本门钉两件事：**fd 归属**（只有独占 fd 才关）· **首包无效就丢弃继续等**（不许把 accept 判死）。
+#   判据：进程外 `ss -lun`（close#1 后端口仍在）+ 程序内契约（accept#2 > 0 且数据正确）。
+#   负控 A/B（忠实撤回 511 / 512 + 重建 dev 件 ⇒ 各自必须判红）+ C（判据自伤 ⇒ 红消失）⇒ CI 用 --neg-skip。
+# ═══════════════════════════════════════════════════════════════════════════
+run m296_quic_accept_reuse bash examples/m296_quic_accept_reuse/verify.sh

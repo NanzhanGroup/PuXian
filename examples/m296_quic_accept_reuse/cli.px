@@ -1,0 +1,27 @@
+# M296 门 · 语料（客户端）：端口与标签由环境变量给（同一份二进制跑 A / B 两条连接）
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+
+var ps = env("M296_PORT")
+var port = 19931
+if ps != null:
+    port = int(ps)
+var ns = env("M296_TAG")
+var tag = "A"
+if ns != null:
+    tag = ns
+
+var c = quic_connect("127.0.0.1", port, "puxian")
+if c <= 0:
+    print("M296-CLI-" + tag + "-CONNECTFAIL")
+else:
+    print("M296-CLI-" + tag + "-CONNECTED")
+    quic_send(c, "ping-" + tag)
+    var r = quic_recv(c, 2048)
+    print("M296-CLI-" + tag + "-ECHO [" + r + "]")
+    quic_close(c)
+print("M296-CLI-" + tag + "-DONE")

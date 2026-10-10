@@ -1,3 +1,120 @@
+## M296（2026-10-10）— 缺陷 **511 + 512**：「一条 listener 只能接一条连接」的**两个独立病灶**
+
+> 一句话：晨曦报的是「临时服务端 `quic_close(conn)` 之后 **listener 端口不再监听**」，
+> 但按本仓「**先量后改**」复现时照出了一个**更根本**的病灶 ——
+> **`quic_listen` + `quic_accept`（手写服务端，最普通的写法）实际只能接一条连接**：
+> · **511**：`bi_quic_close` **无条件** `close(qc->fd)`，而 accept 形态下 `qc->fd == ql->fd`
+>   （连接与 listener **共享**同一个 UDP socket，见 `quic_srv_new_conn` / `bi_quic_accept`）
+>   ⇒ 关一条连接就把 listener 的 socket 关掉（端口不再监听；顺带把既有示例
+>   `quic_close(c); quic_close_listener(lst)` 变成 **double close**）。
+> · **512**：`bi_quic_accept` 收到的**第一个包**若不是本连接的有效 Initial
+>   （前一条连接的 **PMTUD probe** / ACK / **CONNECTION_CLOSE** 残包、扫描流量、损坏包），
+>   修前是 `return px_int(-1)` —— **整次 accept 直接判死**，而同一条 socket 缓冲区里
+>   **早已排队的新客户端 Initial 永远读不到**。
+
+### 一 定位（抓包把「说不清的现象」变成两条可核的证据）
+
+复现装置（`/tmp/m296/`）：`srv.px` = `listen → accept#1 → 处理 → close#1 → sleep 2s → accept#2`；
+`cli.px` = 参数化的单连接客户端（A / B 两条）。
+
+| 观测 | 修前 | 说明 |
+|---|---|---|
+| `close#1` 之后 `ss -lun` | **看不到该端口** | 缺陷 511 的直接指纹 |
+| `accept#2` | **`-1`** | 第二条连接接不进来 |
+| 第二条客户端 | `CONNECTFAIL` | 端到端可见面 |
+
+再往下追 512（`tcpdump -i lo udp port 19935`，逐包长度）：
+
+```
+17.241851  A(39482) > srv(19935)  UDP length **1406**   ← A 的 PMTUD probe，**残留在 listener 缓冲区**
+18.499804  B(45327) > srv(19935)  UDP length 1200       ← B 的 Initial **已经到达**
+服务端 accept#2 却只留下一行：`[quic] accept first read_pkt rv=-232 (ERR_DROP_CONN)`
+```
+
+⇒ **两个病灶互相独立**：把 512 单独修好（能丢弃残包继续等），511 造成的「端口消失」仍在；
+反过来把 511 修好，512 仍会让 `accept#2` 失败。**各自的负控都能单独判红**（见 §四）。
+
+### 二 修法
+
+**缺陷 511 · fd 归属判据**（`runtime/runtime_quic.c`）
+
+```c
+static int quic_fd_shared_with_listener(int fd) {   /* 该 fd 是否被某个活跃 listener 持有 */
+    if (fd < 0) return 0;
+    for (int i = 0; i < QUIC_MAX_LISTENERS; i++)
+        if (g_qlis[i].used && g_qlis[i].fd == fd) return 1;
+    return 0;
+}
+...
+if (!quic_fd_shared_with_listener(qc->fd)) close(qc->fd);   /* 只有**独占** fd 才关 */
+```
+
+* 顺带消除既有示例的 **double close**（`close(c)` 不再关 listener 的 fd，由 `quic_close_listener` 负责）。
+* **另加一道守卫**：托管连接（`owner_listener > 0`，由连接线程拥有）被语言层 `quic_close` 时
+  **响亮拒绝**（stderr 一行 + 返回 `false`）—— 结构上消除「`memset(qc, 0, …)` 抹掉连接线程
+  正在用的 `pthread_cond_t` / 队列指针」这类跨线程破坏面。**实测该形态在现版本不可达**
+  （`px_serve` 内部持有该 id），故这是**防御性**修复，如实登记。
+
+**缺陷 512 · 首包无效就丢弃、继续等**
+
+```c
+rv = ngtcp2_conn_read_pkt(...);
+if (rv != 0) {
+    quic_accept_drop_note("first read_pkt", rv, rl);   /* 限流报告：不许静默 */
+    SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0;
+    continue;                                          /* ← 修前是 return px_int(-1) */
+}
+```
+
+* 两个失败点（`first read_pkt` / `handshake pump`）都改成**丢弃 + 继续**；deadline 保护**不变**。
+* 丢弃**不许静默**（同 M295 的 `quic_alloc_fail_note` 口径）：首次 + 每 1000 次打印一次，
+  并带「为什么丢」（stage / rv / len）。
+* 新增诊断开关 **`PX_QUIC_VERBOSE=1`**：把 ngtcp2 内部日志打到 stderr。
+  本轮正是靠它把 `DROP_CONN` 从「一个错误码」变成「`pkt read packet 1406 left 0` 之后就没了」
+  ⇒ 才能意识到「包的长度与内容对不上新连接」（同款做法先例：`PX_SERVE_DIAG`）。
+
+### 三 门 `examples/m296_quic_accept_reuse/`（`M296-VERIFY-OK` · **21 通过 / 0 失败**）
+
+| 层 | 内容 |
+|---|---|
+| **[1] 静态** | fd 归属判据函数在位 · **`bi_quic_close` 函数体内**逆向（无无条件 `close(qc->fd)`）+ 正向（判据式 close 在位）· 托管连接守卫 · 丢弃计数/两个丢弃点 · **修前形态（`accept first read_pkt rv=` 紧跟 `return`）已消除** · 去注释器自证 · 规模锚点 |
+| **[2][3]** | 两产物构建 · 服务端**强就绪**（端口真在监听，M280 教训：ready 字样 ≠ 绑定成功） |
+| **[4] 动态主判据** | `close#1` 之后 **`ss -lun` 仍看得到端口**（511）· **`accept#2 > 0`**（512）· `RECV2 = ping-B` · 第二条客户端拿到回显 · 服务端正常收尾 |
+| **[5] 负控** | **A** 忠实撤回 511 ⇒ **端口消失**（判据有牙）· **B** 忠实撤回 512 ⇒ **accept#2 失败** · **C** 判据自伤（取 A 的实测读数 + `M296_FORCE_PASS=1`）⇒ **红必须消失** |
+| **[6]** | 覆盖边界（如实：不含托管路径的端到端 / 不含并发多连接 / 不含噪声洪泛下的时延 / 不含 `quic_migrate`） |
+
+⚠️ 两处**工程纪律**（都被首跑抓回）：
+* **静态判据必须限定作用域**：全局 grep `close(qc->fd);` 会假红 —— `quic_migrate` 里也有一处
+  （那是**切 fd**，客户端独占 socket，本就该关；它另有 `owner_listener > 0` 守卫挡住服务端形态）
+  ⇒ 判据改成「只扫 `bi_quic_close` 的函数体」（同 M222 缺陷 321 的读数口径）。
+* **`tools/px build <F>` 的产物落在 `dirname(F)/build/基名`** ⇒ 直接对仓库里的 `.px` 构建会往
+  `examples/<门>/build/` 写（**污染工作树**）⇒ 门内一律**先复制到工作区**再构建（M293 教训）。
+
+### 四 验收（本条）
+
+* 门：**21 通过 / 0 失败**（`--neg-skip` 档 **20/0**）· 负控 A/B/C **各自独立判红/变绿**。
+* 入 库 件 重 烘：**12/12**（含 511/512）· `rebake_bin.sh --check-all` **14/14 一致**。
+* 发射冻结门：**466 → 468 件**（类别 A = 本门 2 件新语料 · **类别 B 为空**）· `--check` 逐字节一致。
+* 注册：`selfhost/gates.registry.sh` + `.github/workflows/ci.yml`（CI 用 `--neg-skip`）；
+  `check_gate_registry.sh` **9/0 通过**。
+* 同族回归：`m180_h2_h3_stance` / `m225_h3_conn_reuse` / `m293_h3_robustness` /
+  `m294_h3_qpack_share` / `m295_quic_slot` 全绿（见 §五）；本机全量门见提交后的记录。
+
+### 五 影响面与兼容性
+
+* **用户可见面**：`quic_listen` + `quic_accept` 写服务端的程序**从「只能接一条连接」变成能正常循环接**
+  —— 这是**能力恢复**，不是行为变更（原来那条路径根本没有可用的语义）。
+* `quic_close(conn)` 对**客户端**连接语义不变（fd 独占 ⇒ 照旧关）。
+* 既有示例 `quic_close(c); quic_close_listener(lst)` **更正确了**（此前是 double close）。
+* 托管路径（`px_serve` / `quic_h3_listen`）：`bi_quic_close` 对托管连接**新增响亮拒绝**
+  （现版本不可达）；fd 共享判据对托管连接同样生效（关闭时不再误关 listener）。
+
+### 六 覆盖边界（如实）
+
+* 未做：**噪声包洪泛下的 accept 时延**（每丢一个包会短暂分配一个 conn 槽再释放；deadline 保护不变）。
+* 未做：**托管路径的端到端观测**（只加了守卫，未构造用例 —— 因为语言层拿不到托管 conn id）。
+* 未做：`quic_migrate` 的同族 fd 处理（**缺陷 504** 待修，仍在本轮范围外）。
+
 ## M295（2026-10-09）— 缺陷 **508 全收口**：QUIC 连接槽位耗尽 —— 从「静默拒连」到「有界可观测」
 
 > 一句话：晨曦压测里那个「突然一片 connect-fail / TIMEOUT」的真因不是网络，而是

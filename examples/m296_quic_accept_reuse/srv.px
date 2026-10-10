@@ -1,0 +1,54 @@
+# M296 门 · 语料（服务端）：listener 的**可重用性**
+#   形态 = 「一条 listener 连续接手多条连接」，这是**最普通的服务端写法**
+#   （`quic_listen` → 循环 `quic_accept`），却长期跑不通：
+#     · 缺陷 511：`quic_close(conn)` 无条件 `close(qc->fd)`，而 accept 形态下
+#       `qc->fd == ql->fd`（与 listener 共享同一个 UDP socket）⇒ 关一条连接就把 listener 关掉。
+#     · 缺陷 512：`bi_quic_accept` 收到的第一个包若**不是本连接的有效 Initial**
+#       （前一条连接的 PMTUD probe / ACK / CONNECTION_CLOSE 残包、噪声）
+#       就**整体失败返回 -1**，而不是丢弃它继续等 ⇒ 下一条连接接不进来。
+#   判据：`ACCEPT2 > 0` 且 `RECV2` 收到第二条客户端的数据。
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+
+var port_s = env("M296_PORT")
+var port = 19931
+if port_s != null:
+    port = int(port_s)
+
+var lst = quic_listen(port)
+if lst <= 0:
+    print("M296-FAIL listen")
+    exit(1)
+print("M296-PORT " + str(port))
+
+# ── 第一条连接：正常处理后**关掉它**（这正是缺陷 511 的触发点）──────
+var c1 = quic_accept(lst, 12000)
+if c1 <= 0:
+    print("M296-FAIL accept1")
+    exit(1)
+print("M296-ACCEPT1 " + str(c1))
+var d1 = quic_recv(c1, 2048)
+print("M296-RECV1 [" + d1 + "]")
+quic_send(c1, "echo1:" + d1)
+print("M296-CLOSE1 " + str(quic_close(c1)))
+
+# 留一个窗口给编排侧做**进程外**判据（端口是否仍在监听）
+sleep(2000)
+print("M296-READY2")
+
+# ── 第二条连接：listener 应当照常工作 ──────────────────────────────
+var c2 = quic_accept(lst, 12000)
+print("M296-ACCEPT2 " + str(c2))
+if c2 > 0:
+    var d2 = quic_recv(c2, 2048)
+    print("M296-RECV2 [" + d2 + "]")
+    quic_send(c2, "echo2:" + d2)
+    quic_close(c2)
+quic_close_listener(lst)
+print("M296-DONE")

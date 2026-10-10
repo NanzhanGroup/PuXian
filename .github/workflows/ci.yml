@@ -1218,6 +1218,15 @@ jobs:
           grep -E '失败 .* 项' /tmp/v_m295.log | tail -1 || true
           echo "✅ m295_quic_slot（静态 15 · 强就绪 · quic_pool_stats 13 键 · arity E3004 · 优雅关闭 264/264 · 静默退出首次失败∈[256,259] · 限流报告）PASS"
 
+      - name: m296_quic_accept_reuse（一条 listener 连续接手多条连接 · 缺陷 511/512 常设化）
+        if: always()
+        run: |
+          # 负控 A/B 需**重建 dev 件**（撤回运行时源码）⇒ CI 走 --neg-skip（与其余门同口径）。
+          bash examples/m296_quic_accept_reuse/verify.sh --neg-skip > /tmp/v_m296.log 2>&1 || { echo "❌ m296 门失败（fd 归属判据 / 首包丢弃继续等 / close#1 后端口仍在 / accept#2 数据正确）"; grep -E '^(  ❌|     )' /tmp/v_m296.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '\[4a\]|\[4b\]|\[4c\]' /tmp/v_m296.log | tail -3 || true
+          grep -E '失败 .* 项' /tmp/v_m296.log | tail -1 || true
+          echo "✅ m296_quic_accept_reuse（静态 11 · 强就绪 · close#1 后端口仍在监听 · accept#2 成功 · RECV2=ping-B · 回显正确）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
