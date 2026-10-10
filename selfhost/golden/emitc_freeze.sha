@@ -280,6 +280,8 @@ examples/m295_quic_slot/pool_bad.px src=e1a35b340bd95e2e rc=1 out=e3b0c44298fc1c
 examples/m295_quic_slot/pool_probe.px src=33d445b5018c7866 rc=0 out=b47b2a40c9bcc56275069a9048001f4a err=e3b0c44298fc1c14
 examples/m295_quic_slot/slot_cli.px src=f70b5a50726ea2a3 rc=0 out=dce134516dac45226b76e6803b2ca832 err=e3b0c44298fc1c14
 examples/m295_quic_slot/srv.px src=fdf64f0854d15f64 rc=0 out=9f8cafe382da619fd254a210f6e3fa2e err=e3b0c44298fc1c14
+examples/m296_quic_accept_reuse/cli.px src=7592d4085a1e2cb3 rc=0 out=b9d5d319b647d1d2bf2489ea4f43b26c err=e3b0c44298fc1c14
+examples/m296_quic_accept_reuse/srv.px src=285450c54fefd7f6 rc=0 out=07452f546fca60af4aa1d586496e9288 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

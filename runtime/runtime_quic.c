@@ -17,6 +17,7 @@
 #include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -354,8 +355,15 @@ static int quic_recv_stream_data_cb(ngtcp2_conn* conn, uint32_t flags,
     return 0;
 }
 
+// M296 诊断（临时）：PX_QUIC_VERBOSE=1 时把 ngtcp2 内部日志打到 stderr。
+//   用途：DROP_CONN 这类「ngtcp2 只给一个错误码、不说为什么」的现场（本轮 511 定位用）。
 static void quic_log_cb(void* user_data, const char* fmt, ...) {
-    (void)user_data; (void)fmt;  // 静默
+    (void)user_data;
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("PX_QUIC_VERBOSE"); on = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    if (!on) return;
+    va_list ap; va_start(ap, fmt); vfprintf(stderr, fmt, ap); va_end(ap);
+    fputc('\n', stderr);
 }
 
 // ALPN 选择回调：选客户端提供的第一个协议（对齐 ngtcp2 官方 ossl 例子）
@@ -1237,6 +1245,24 @@ static quic_conn* quic_get_conn(int64_t id) {
     return qc->used ? qc : NULL;
 }
 
+// M296（缺陷 512）：listener socket 上**不属于新连接**的包（前一条连接的 PMTUD probe /
+//   ACK / CONNECTION_CLOSE、扫描流量、损坏包）必须**丢弃后继续等**，而不是让 accept 整体失败。
+//   修前：accept#2 收到 A 的 PMTUD probe（1406B，抓包实证）⇒ read_pkt 返回 DROP_CONN ⇒
+//   `return px_int(-1)` ⇒ 早已躺在同一 socket 缓冲区里的 B 的 Initial（1200B）**永远读不到**
+//   ⇒ 一条 listener 实际只能接一条连接。
+//   计数器 + 限流报告：这种丢弃**不许静默**（同 M295 的 quic_alloc_fail_note 口径）。
+static uint64_t g_quic_accept_drop = 0;
+static void quic_accept_drop_note(const char* stage, int rv, ssize_t rl) {
+    g_quic_accept_drop++;
+    static int verbose = -1;
+    if (verbose < 0) { const char* e = getenv("PX_QUIC_VERBOSE"); verbose = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    if (verbose || g_quic_accept_drop == 1 || (g_quic_accept_drop % 1000) == 0) {
+        fprintf(stderr, "[quic] accept: 丢弃无效包（%s rv=%d len=%zd）—— 累计 %llu 次；"
+                        "继续等待下一个包\n",
+                stage, rv, rl, (unsigned long long)g_quic_accept_drop);
+    }
+}
+
 static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_INT)
@@ -1343,14 +1369,20 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         ngtcp2_conn_handle_expiry(qc->conn, quic_now());
         rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)rl, quic_now());
         if (rv != 0) {
-            fprintf(stderr, "[quic] accept first read_pkt rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
-            SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
+            // M296（缺陷 512）：这个包不是本连接的有效 Initial ⇒ **丢弃它、继续等下一个**
+            //   （修前是 return -1 ⇒ 一个残包就把整次 accept 打掉）。
+            quic_accept_drop_note("first read_pkt", rv, rl);
+            SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0;
+            continue;
         }
         // 泵到握手完成
         int pr2 = quic_pump(qc, timeout_ms, 0, -1);
         if (pr2 != 0) {
-            fprintf(stderr, "[quic] accept pump rv=%d\n", pr2);
-            SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
+            // M296（缺陷 512）：握手泵不起来（对端没再发、或包不可用）⇒ 同样丢弃并继续等，
+            //   而不是把整次 accept 判死。
+            quic_accept_drop_note("handshake pump", pr2, rl);
+            SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0;
+            continue;
         }
         return px_int(cid);
     }
@@ -2242,11 +2274,33 @@ static LXValue bi_quic_pool_stats(LXValue* args, int nargs, void* ctx) {
     return d;
 }
 
+// M296（缺陷 511）：fd 是否被某个**活跃 listener** 持有（= 连接与 listener 共享 UDP socket）。
+//   这种 fd **不能**在连接关闭时 close —— 关掉的是 listener 的 socket（端口随即不再监听）。
+//   共享形态出现在两处：quic_srv_new_conn（px_serve 托管）与 bi_quic_accept（手写服务端：
+//   quic_listen + quic_accept，qc->fd = ql->fd）。
+static int quic_fd_shared_with_listener(int fd) {
+    if (fd < 0) return 0;
+    for (int i = 0; i < QUIC_MAX_LISTENERS; i++)
+        if (g_qlis[i].used && g_qlis[i].fd == fd) return 1;
+    return 0;
+}
+
 static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: quic_close 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc) return px_bool(false);
+    // M296（缺陷 511）·第二面：**托管连接**（quic_listen + 路由线程形态，owner_listener > 0）
+    //   由连接处理线程拥有（qc->thr 正在读写 qc 的队列与条件变量）；语言层对它 close 会
+    //   `memset(qc, 0, …)` ⇒ 清掉线程正在用的 pthread_cond_t / 队列指针 = 跨线程内存破坏。
+    //   实测这类 conn id **不会**交到语言层（px_serve 内部持有），故本守卫在当前版本**不可达**
+    //   —— 它的价值是「结构上消除」未来某条路径把它暴露出去时的破坏面（宁可响亮拒绝）。
+    if (qc->owner_listener > 0) {
+        fprintf(stderr, "[quic] quic_close: 连接 %lld 由 listener %d 托管（连接线程拥有），"
+                        "语言层不得关闭；请用 quic_close_listener\n",
+                (long long)args[0].as.i, qc->owner_listener);
+        return px_bool(false);
+    }
     // M295（缺陷 508）：**修前**这里直接 ngtcp2_conn_del + close(fd)，**不发 CONNECTION_CLOSE**
     //   ⇒ 对端无从得知本端已关闭，只能等自己的空闲超时才回收槽位（服务端托管形态实测约 10s）；
     //   更糟的是「优雅关闭」与「进程被杀」在对端看来**完全一样** —— M295 实测：用 quic_close 的
@@ -2282,7 +2336,14 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
     if (qc->ssl_ctx) { SSL_CTX_free(qc->ssl_ctx); qc->ssl_ctx = NULL; }
     if (qc->conn) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; }
     quic_stream_free_all(qc);
-    close(qc->fd);
+    // M296（缺陷 511）：**fd 归属**判据 —— 只有独占 fd 才能关。
+    //   `quic_listen` + `quic_accept` 形态下 qc->fd == ql->fd（与 listener **共享**同一个
+    //   UDP socket，见 quic_srv_new_conn / bi_quic_accept）。修前这里无条件 close ⇒
+    //   关一条连接就把 listener 的 socket 一起关掉：端口不再监听、后续 accept 全部失败
+    //   （实测：close#1 之后 `ss -lun` 看不到该端口、accept#2 = -1、第二条客户端 CONNECTFAIL）。
+    //   判据 = 「该 fd 是否被某个活跃 listener 持有」；持有 ⇒ 跳过（由 quic_close_listener 负责）。
+    //   顺带消除既有示例 `quic_close(c); quic_close_listener(lst)` 的 **double close**。
+    if (!quic_fd_shared_with_listener(qc->fd)) close(qc->fd);
     // M225：客户端侧（h3_client_*）同样按 conn 号持有 h3 会话状态 —— 一并回收
     if (g_quic_recycle) g_quic_recycle(args[0].as.i);
     memset(qc, 0, sizeof(*qc));
