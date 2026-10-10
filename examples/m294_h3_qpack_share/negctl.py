@@ -15,7 +15,11 @@
 #   ③ `g_qds_used` 独立数组 + 说明注释 → 删除
 #   ④ `bi_qs_open` 的原子交换 → 还原为 `if (!g_qds[i].used) { memset; s->used = 1; }`
 #   ⑤ `bi_qs_close` 的原子释放 → 删除
-#   （另：`#include <stdatomic.h>` 一并撤回 ⇒ 撤回后与修复前的文件**逐字节相同**）
+#   （另：`#include <stdatomic.h>` 一并撤回）
+#   ⚠️ M295s1：M295 又改了同一文件（`g_qds` 静态数组 → 指针数组 + 按需分配）
+#   ⇒ ① 三处锚点按**当前文本**同步；② 撤回形态**适配指针布局**（`g_qds[i]->used`）；
+#      ③ 「逐字节回到修复前」已不可能 ⇒ S3 改为「撤回不是空操作」判据，
+#         忠实性由 S2 的结构判据承担。
 #
 # 用法：
 #   negctl.py --revert <file>            撤回（rc=1 = 锚点不唯一/找不到 ⇒ 不许静默放行）
@@ -23,12 +27,13 @@
 #   negctl.py --selftest <file>          自证 6 条
 # ============================================================
 import hashlib
+import re
 import sys
 
 # 修复前的文件指纹（`git show 1e62beb:runtime/runtime_h3_qpack_dyn.c | sha256sum`）
 PRE_FIX_SHA = "38abb9d807df4592937d15234a5a12c5b30c280ad01d94c37e826be445081a59"
-# 修复后的文件指纹（本门建立时的状态）—— 用来判断「文件是否已演进」
-POST_FIX_SHA = "1f6aefd1cd152e37753e5e288f1bab51e93908ecafb0de5fec87a56286cd5b5b"
+# 修复后的文件指纹 —— **M295s1 更新为含按需分配的形态**（当前文件）。
+POST_FIX_SHA = "4cde1b1d20724ceb2b554693acd801db1b3ffcd738212d65b9dccc39484d5063"
 
 P_S2 = "    int used;\n"
 P_S1 = """    /* M294（缺陷 507 修复）：占用位**已移出本结构**（见 g_qds_used）。
@@ -36,49 +41,83 @@ P_S1 = """    /* M294（缺陷 507 修复）：占用位**已移出本结构**�
      * 位置又清回 0，于是并发连接在窗口里**二次认领**同一个会话槽。 */
 """
 
-P_S4 = """        /* M294（缺陷 507）：原写法 `if (!g_qds[i].used) { memset(...); s->used = 1; }`
-         * 在**无锁**下有两条缝：① 「读 → 置位」之间是窗口；② `memset` 又把 `used` 清回 0
-         * ⇒ 窗口更宽。实测：**六条并发连接同时拿到 qd=13**，共享同一张 QPACK 动态表，
-         * 各自解出**别人的路径** ⇒ 串味 / 同一路径被服务多次 / 超时（缺陷 505 的全部症状）。
-         * 修法：占用位独立成数组（`memset` 碰不到它），**原子交换是唯一仲裁者**。
-         * 返回非 0 = 槽已被别人占（**正常**，看下一个）；返回 0 = 我拿到，且此后没有任何
-         * 路径能把它变回 0 ⇒ 不存在「二次认领」。 */
-        if (__atomic_exchange_n(&g_qds_used[i], 1, __ATOMIC_SEQ_CST) == 0) {
-            qd_sess* s = &g_qds[i];
-            memset(s, 0, sizeof(*s));      /* 只清数据，不触碰占用位 */
-            s->max_cap = cap;
-"""
-P_S4R = """        if (!g_qds[i].used) {
-            qd_sess* s = &g_qds[i];
-            memset(s, 0, sizeof(*s));
-            s->used = 1;
-            s->max_cap = cap;
-"""
-
-# (旧文本, 新文本, 说明)
-EDITS = [
-    (P_S1, P_S2, "qd_sess 结构体：警示注释 → int used 字段"),
-    ("""/* M294（缺陷 507）：**占用位与数据分离**。
+# ⚠️ M295s1：锚点是**当前**源码文本（M295 在 g_qds_used 之前插入了指针数组与说明）。
+P_QDGET = """/* M294（缺陷 507）：**占用位与数据分离**。
  * 为什么必须分离见 bi_qs_open 的说明；一句话：`memset(s)` 不得触碰占用位，
  * 否则「占用」这个动作就不是原子的（它由两步组成，中间有可被并发观察到的空档）。 */
 static char    g_qds_used[QD_MAX_SESS];
 static qd_sess* qd_get(int64_t id) {
-    return (id > 0 && id <= QD_MAX_SESS && g_qds_used[id - 1]) ? &g_qds[id - 1] : NULL;
+    if (!(id > 0 && id <= QD_MAX_SESS)) return NULL;
+    if (!g_qds_used[id - 1]) return NULL;      // 占用位（M294：唯一仲裁者）
+    return g_qds[id - 1];                      // 可能为 NULL（占位成功但 calloc 失败）
 }
-""",
-     "static qd_sess* qd_get(int64_t id) { return (id > 0 && id <= QD_MAX_SESS && g_qds[id - 1].used) ? &g_qds[id - 1] : NULL; }\n",
-     "qd_get：独立占用位 → 结构体字段"),
-    (P_S4, P_S4R, "bi_qs_open：原子交换 → 读—清—置位"),
-    ("""    memset(s, 0, sizeof(*s));
+"""
+P_QDGET_R = """static qd_sess* qd_get(int64_t id) {
+    return (id > 0 && id <= QD_MAX_SESS && g_qds[id - 1] && g_qds[id - 1]->used) ? g_qds[id - 1] : NULL;
+}
+"""
+
+P_OPEN = """        if (__atomic_exchange_n(&g_qds_used[i], 1, __ATOMIC_SEQ_CST) == 0) {
+            qd_sess* s = g_qds[i];
+            if (!s) {                      /* M295：首次用到该槽 ⇒ 按需分配 */
+                s = (qd_sess*)calloc(1, sizeof(*s));
+                if (!s) {
+                    /* 分配失败：**必须**把刚占上的位放回（否则槽被永久占住且 qd_get 返回 NULL） */
+                    fprintf(stderr, "[h3] QPACK 会话分配失败（%zu 字节/会话，槽 %d）\\n",
+                            sizeof(qd_sess), i + 1);
+                    __atomic_store_n(&g_qds_used[i], 0, __ATOMIC_SEQ_CST);
+                    return px_int(-1);
+                }
+                g_qds[i] = s;
+            }
+            memset(s, 0, sizeof(*s));      /* 只清数据，不触碰占用位 */
+            s->max_cap = cap;
+            s->enc_cap = cap;      // 会话创建即允许该容量（SETTINGS 已收）
+            return px_int(i + 1);
+        }
+"""
+P_OPEN_R = """        if (!(g_qds[i] && g_qds[i]->used)) {   /* ← 无锁读（窗口开始） */
+            qd_sess* s = g_qds[i];
+            if (!s) { s = (qd_sess*)calloc(1, sizeof(*s)); if (!s) return px_int(-1); g_qds[i] = s; }
+            memset(s, 0, sizeof(*s));          /* ← 清 0 后再置位：两步之间就是缺陷 507 的窗口 */
+            s->used = 1;
+            s->max_cap = cap;
+            s->enc_cap = cap;
+            return px_int(i + 1);
+        }
+"""
+
+P_CLOSE = """    memset(s, 0, sizeof(*s));
+    /* M295：按需分配 ⇒ 归还内存（内存占用跟随**当前并发**，不跟随上限） */
+    g_qds[args[0].as.i - 1] = NULL;
+    free(s);
     /* M294（缺陷 507）：占用位显式释放（它不在结构体里，memset 清不到它）。
-     * 顺序刻意是「先清数据、后放占用位」—— 反之会让别的线程拿到一个尚未清空的会话。 */
+     * 顺序刻意是「先清数据、后放占用位」—— 反之会让别的线程拿到一个尚未清空的会话。
+     * M295 补充：`free` 也必须**先于**放位 —— 放位后别的线程可能立刻 calloc 新会话。 */
     __atomic_store_n(&g_qds_used[args[0].as.i - 1], 0, __ATOMIC_SEQ_CST);
     return px_bool(true);
-""",
-     "    memset(s, 0, sizeof(*s));\n    return px_bool(true);\n",
-     "bi_qs_close：原子释放 → 删除（memset 即释放）"),
+"""
+P_CLOSE_R = """    memset(s, 0, sizeof(*s));
+    /* 撤回档（M295s1）：**不**归还内存 —— 避免 UAF 掩盖 507 的竞态形状。
+     * 占用位已回到结构体里 ⇒ 上面那句 memset 就是释放动作。 */
+    return px_bool(true);
+"""
+
+# (修复后文本, 撤回文本, 说明)
+EDITS = [
+    (P_S1, P_S2, "qd_sess 结构体：警示注释 → int used 字段"),
+    (P_QDGET, P_QDGET_R, "qd_get：独立占用位 → 结构体字段"),
+    (P_OPEN, P_OPEN_R, "bi_qs_open：原子交换 → 读—清—置位"),
+    (P_CLOSE, P_CLOSE_R, "bi_qs_close：原子释放 → 删除（memset 即释放）"),
     ("#include <string.h>\n#include <stdatomic.h>\n", "#include <string.h>\n", "撤回 stdatomic 头（修复后才引入）"),
 ]
+
+
+def cstrip(t):
+    """去掉 C 风格注释（判据要贴着**代码**写 —— 注释里的提及不是「还在用」）。"""
+    t = re.sub(r"/\*.*?\*/", "", t, flags=re.S)
+    t = re.sub(r"//[^\n]*", "", t)
+    return t
 
 
 def sha_of(path):
@@ -130,23 +169,30 @@ def main():
                 okall = False
                 break
             t = t.replace(old, new, 1)
-        if okall and t.count("g_qds_used") == 0 and t.count("int used;") == 1 and t.count("g_qds[id - 1].used") == 1:
-            print("  ✅ S2 撤回后结构：g_qds_used=0 · int used;=1 · g_qds[id - 1].used=1")
+        tc = cstrip(t)
+        def _c(x):
+            return tc.count(x)
+        if (okall and _c("g_qds_used") == 0 and _c("int used;") == 1
+                and _c("g_qds[id - 1]->used") == 1 and _c("__atomic_exchange_n") == 0):
+            print("  ✅ S2 撤回后结构（**代码行**）：g_qds_used=0 · int used;=1 · g_qds[id-1]->used=1 · 无原子交换")
         else:
-            print("  ❌ S2 撤回后结构不符（g_qds_used=%d · int used;=%d · qds[i].used=%d）"
-                  % (t.count("g_qds_used"), t.count("int used;"), t.count("g_qds[id - 1].used")))
+            print("  ❌ S2 撤回后结构不符（代码行：g_qds_used=%d · int used;=%d · ->used=%d · 原子交换=%d）"
+                  % (_c("g_qds_used"), _c("int used;"),
+                     _c("g_qds[id - 1]->used"), _c("__atomic_exchange_n")))
             rc = 1
         # S3：撤回后与修复前**逐字节相同**（仅当当前文件仍是修复后原样时；否则记 ℹ️ 不判红）
         cur = sha_of(path)
         tsha = hashlib.sha256(t.encode("utf-8")).hexdigest()
-        if cur == POST_FIX_SHA:
-            if tsha == PRE_FIX_SHA:
-                print("  ✅ S3 撤回后 sha256 == 修复前（%s…）⇒ 撤回**忠实**" % PRE_FIX_SHA[:16])
-            else:
-                print("  ❌ S3 撤回后 sha256 与修复前不符（%s… ≠ %s…）" % (tsha[:16], PRE_FIX_SHA[:16]))
-                rc = 1
-        else:
+        # ⚠️ M295s1：逐字节回到「修复前」已**不可能** —— M295 又改了同一文件的数据布局
+        #   （`g_qds` 静态数组 → 指针数组 + 按需分配）⇒ 本项改为「撤回**不是空操作**」判据，
+        #   忠实性由 S2 的**结构**判据承担（g_qds_used=0 · int used;=1 · 无原子交换）。
+        if cur != POST_FIX_SHA:
             print("  ℹ️ S3 跳过（文件已演进：当前 %s… ≠ 记录 %s…）—— 只做结构判据" % (cur[:16], POST_FIX_SHA[:16]))
+        elif tsha != cur:
+            print("  ✅ S3 撤回**不是空操作**（撤回后 %s… ≠ 修复后 %s…）" % (tsha[:16], cur[:16]))
+        else:
+            print("  ❌ S3 撤回后与修复后逐字节相同 ⇒ 撤回是空操作")
+            rc = 1
         # S4：判据自伤 —— 锚点被改坏时 **必须** rc≠0（不许静默放行）
         import tempfile
         import os

@@ -2268,8 +2268,14 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
             qc->conn, &qc->path, NULL, cc_out, sizeof(cc_out),
             &ccerr, quic_now());
         if (cc_n > 0) {
-            (void)sendto(qc->fd, cc_out, (size_t)cc_n, 0,
-                         (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+            // M295s1（缺陷 510）：必须走 px_io_sendto —— 裸 sendto 不重试 EINTR，
+            //   而并发 GC 的 STW 信号（SIG_GC_STOP）会打断阻塞中的系统调用，
+            //   且「设了 SO_*TIMEO 的 socket 系统调用」在 signal(7) 的「永不重启」清单里
+            //   ⇒ 终止包会被静默丢掉 ⇒ 服务端又回到「分不清优雅关闭 vs 进程被杀」，
+            //   即本修复的目的在并发下失效。同族：M211 缺陷 265 / M152 缺陷 146 / M256 缺陷 456。
+            //   （抓到它的是 eintr_guard 与 m256_eintr —— M295 自己的门结构上看不见这里。）
+            (void)px_io_sendto(qc->fd, cc_out, (size_t)cc_n, 0,
+                               (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
         }
     }
     if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
