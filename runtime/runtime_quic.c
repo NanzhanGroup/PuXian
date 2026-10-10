@@ -149,6 +149,17 @@ static int64_t       g_quic_live_peak  = 0;   // 并发占用峰值
 static int64_t       g_quic_full_first = 0;   // 首次失败的时刻（monotonic ms，0=从未）
 static int64_t       g_quic_peer_closed = 0;  // 对端正常关闭（收到 CONNECTION_CLOSE）计数
 static int64_t       g_quic_cid_drop = 0;     // cid 路由表满导致的丢弃次数（M295，修前静默）
+// M297（缺陷 504）：**路径切换**可观测性。
+//   修前「对端换源」这件事**完全不可观测**，而且发送地址被收包路径**无条件覆盖**
+//   （= 谁最后到谁说了算）：队列里任何一个旧源的迟到包都能把发送地址切回一个**已关闭**的
+//   socket —— 托管 listener 下表现为「回包发往死地址、客户端只见超时」
+//   （M293/M297 现场 strace：send→新源 与 send→旧源 **交替**）。现在把它变成三个计数：
+//     path_migrated 路径验证**成功**次数（= 真的换过源并被 ngtcp2 确认，RFC 9000 §9.3）
+//     path_missing  写包时 ngtcp2 未给出路径（理论不可达 ⇒ 已兜底发送并**响亮记账**）
+//     send_err      px_io_sendto 失败次数（EINTR 已在内部重试；只有其它错误才计）
+static int64_t       g_quic_path_migrated = 0;
+static int64_t       g_quic_path_missing  = 0;
+static int64_t       g_quic_send_err      = 0;
 // M225：连接回收钩子（runtime_h3.c 注册；槽位释放前清理该 conn 的 h3 会话状态）
 static px_quic_conn_recycle_cb g_quic_recycle = NULL;
 
@@ -366,6 +377,81 @@ static void quic_log_cb(void* user_data, const char* fmt, ...) {
     fputc('\n', stderr);
 }
 
+// M297（缺陷 504）：诊断开关读取（与 quic_log_cb 同口径；放全局便于两个回调共用）
+static int quic_verbose_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("PX_QUIC_VERBOSE");
+        on = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    return on;
+}
+
+// M297 诊断：单 addr -> "ip:port"
+static void quic_dbg_addr1(const ngtcp2_addr* a, char* out, size_t n) {
+    out[0] = 0;
+    if (!a || !a->addr) { snprintf(out, n, "?"); return; }
+    char ip[INET6_ADDRSTRLEN];
+    int port = 0;
+    if (a->addr->sa_family == AF_INET) {
+        const struct sockaddr_in* s4 = (const struct sockaddr_in*)a->addr;
+        if (inet_ntop(AF_INET, &s4->sin_addr, ip, sizeof(ip))) port = ntohs(s4->sin_port);
+        else { snprintf(out, n, "?"); return; }
+    } else if (a->addr->sa_family == AF_INET6) {
+        const struct sockaddr_in6* s6 = (const struct sockaddr_in6*)a->addr;
+        if (inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof(ip))) port = ntohs(s6->sin6_port);
+        else { snprintf(out, n, "?"); return; }
+    } else { snprintf(out, n, "?"); return; }
+    snprintf(out, n, "%s:%d", ip, port);
+}
+
+// M297（缺陷 504）：**路径验证开始**回调 —— 修前这条链路**完全不可观测**
+//   （「对端换源」只能靠 strace 看 sendto 目标交替）。PX_QUIC_VERBOSE=1 时打印。
+static int quic_begin_path_validation_cb(ngtcp2_conn* conn, uint32_t flags,
+                                         const ngtcp2_path* path, const ngtcp2_path* fallback_path,
+                                         void* user_data) {
+    (void)conn; (void)fallback_path; (void)user_data;
+    if (quic_verbose_on()) {
+        char np[128] = "?", fp[128] = "?";
+        if (path) quic_dbg_addr1(&path->remote, np, sizeof(np));
+        if (fallback_path) quic_dbg_addr1(&fallback_path->remote, fp, sizeof(fp));
+        fprintf(stderr, "[quic] path-validation BEGIN flags=%u new=%s fallback=%s\n",
+                (unsigned)flags, np, fp);
+    }
+    return 0;
+}
+
+// M297（缺陷 504）：**路径验证结果**回调。
+//   RFC 9000 §9.3：只有在「从新地址收到**非探测包**」并完成路径验证之后，才把该地址
+//   作为当前路径；探测包（PATH_CHALLENGE / PATH_RESPONSE / NEW_CONNECTION_ID / PADDING）
+//   **不**触发迁移。ngtcp2 自己维护当前路径（`ngtcp2_conn_write_*` 的输出 path 会跟随它），
+//   本回调只**同步我们自己的元信息**（`quic_conn_path` / `quic_conn_local` 读的就是这两个
+//   字段），并记账以便观测。修前这里是「无条件跟随来源地址」—— 那正是缺陷 504 的根因。
+//   ⚠️ 只在 SUCCESS 时更新（与 ngtcp2 官方 server 示例 `update_path` 同口径）；
+//      FAILURE/ABORTED 时当前路径仍是原路径，无需动作（fallback_path 由 ngtcp2 自己用）。
+static int quic_path_validation_cb(ngtcp2_conn* conn, uint32_t flags,
+                                   const ngtcp2_path* path, const ngtcp2_path* fallback_path,
+                                   ngtcp2_path_validation_result res, void* user_data) {
+    (void)conn; (void)flags; (void)fallback_path;
+    quic_conn* qc = (quic_conn*)user_data;
+    if (!qc) return 0;
+    if (res == NGTCP2_PATH_VALIDATION_RESULT_SUCCESS && path &&
+        path->remote.addr && path->remote.addrlen > 0 &&
+        (size_t)path->remote.addrlen <= sizeof(qc->remote_sa)) {
+        memcpy(&qc->remote_sa, path->remote.addr, (size_t)path->remote.addrlen);
+        qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
+        qc->path.remote.addrlen = (socklen_t)path->remote.addrlen;
+        g_quic_path_migrated++;
+    }
+    if (quic_verbose_on()) {
+        char np[128] = "?";
+        if (path) quic_dbg_addr1(&path->remote, np, sizeof(np));
+        fprintf(stderr, "[quic] path-validation END res=%d remote=%s（累计成功 %lld）\n",
+                (int)res, np, (long long)g_quic_path_migrated);
+    }
+    return 0;
+}
+
 // ALPN 选择回调：选客户端提供的第一个协议（对齐 ngtcp2 官方 ossl 例子）
 static int quic_alpn_select_cb(SSL* ssl, const unsigned char** out,
                                unsigned char* outlen, const unsigned char* in,
@@ -459,6 +545,40 @@ static SSL_CTX* quic_make_client_ctx(void) {
     return ctx;
 }
 
+// M297（缺陷 504）：sockaddr_storage → 实际长度（收包路径需要给 ngtcp2 一个准确的 addrlen）
+static socklen_t quic_sa_len(const struct sockaddr_storage* sa) {
+    if (sa->ss_family == AF_INET6) return (socklen_t)sizeof(struct sockaddr_in6);
+    if (sa->ss_family == AF_INET)  return (socklen_t)sizeof(struct sockaddr_in);
+    return 0;
+}
+
+// M297（缺陷 504）：把 ngtcp2 写出的包**按它给出的路径**发出。
+//   修前：5 处发送点一律 `sendto(..., &qc->remote_sa)`，而 remote_sa 被**收包路径无条件覆盖**
+//   ⇒ 谁最后到谁说了算（旧源迟到包 ⇒ 回包发往已关闭的 socket）。托管 listener 下必现。
+//   修后：发送目标只由 ngtcp2 的**输出 path** 决定 —— 它按 RFC 9000 §9.3 维护当前路径
+//   （路径验证成功才切到新地址），我们不再自己记「对端在哪」。
+//   ⚠️ 顺带收口 M295s1（缺陷 510）同族：一律走 px_io_sendto（裸 sendto 不重试 EINTR，
+//      并发 GC 的 STW 信号会打断阻塞中的系统调用 ⇒ 静默丢包）。
+//   ⚠️ 兜底：ngtcp2 未填 path（理论不可达）时退回已知地址并**记账**（不许静默）。
+static void quic_send_to_path(quic_conn* qc, const uint8_t* buf, size_t len,
+                              const ngtcp2_path* op) {
+    const struct sockaddr* dst;
+    socklen_t dlen;
+    if (op && op->remote.addr && op->remote.addrlen > 0) {
+        dst = (const struct sockaddr*)op->remote.addr;
+        dlen = (socklen_t)op->remote.addrlen;
+    } else {
+        g_quic_path_missing++;
+        dst = (const struct sockaddr*)&qc->remote_sa;
+        dlen = (socklen_t)sizeof(qc->remote_sa);
+        if (g_quic_path_missing == 1 || (g_quic_path_missing % 1000) == 0) {
+            fprintf(stderr, "[quic] write 未给出路径（累计 %lld 次）—— 已退回已知对端地址\n",
+                    (long long)g_quic_path_missing);
+        }
+    }
+    if (px_io_sendto(qc->fd, buf, len, 0, dst, dlen) < 0) g_quic_send_err++;
+}
+
 // ---------- 事件泵：收包→喂 conn→发包，直到 handshake 或数据就绪或超时 ----------
 // mode: 0=握手模式（直到 handshake_done）; 1=数据模式（直到 rlen>0 或对端关闭）
 // 返回: 0 成功 / -1 超时 / -2 错误
@@ -489,11 +609,13 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t w
         }
         // 发送待发数据（握手/ACK/流控帧）
         uint8_t out[QUIC_PKT_BUF];
-        ngtcp2_ssize n = ngtcp2_conn_write_pkt(qc->conn, &qc->path, NULL,
+        // M297（缺陷 504）：path 用**局部输出缓冲**接收 —— 发送目标由 ngtcp2 决定
+        ngtcp2_path_storage ps;
+        ngtcp2_path_storage_zero(&ps);
+        ngtcp2_ssize n = ngtcp2_conn_write_pkt(qc->conn, &ps.path, NULL,
                                                out, sizeof(out), quic_now());
         if (n > 0) {
-            sendto(qc->fd, out, (size_t)n, 0,
-                   (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+            quic_send_to_path(qc, out, (size_t)n, &ps.path);
         } else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) {
             fprintf(stderr, "[quic] pump write_pkt rv=%zd (%s)\n", n, ngtcp2_strerror((int)n));
             return -2;
@@ -534,16 +656,42 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t w
             got_pkt = 1;
         }
         if (!got_pkt) continue;
-        // 更新 remote（服务端 accept 后可能变化，通常一致；迁移时跟随对端新源）
-        if (from.ss_family == AF_INET) {
-            memcpy(&qc->remote_sa, &from, sizeof(from));
-            qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
-            qc->path.remote.addrlen = sizeof(from);
+        // M297（缺陷 504）：把「这个包**实际来自**的路径」交给 ngtcp2 —— 路径的比较与验证
+        //   由它按 RFC 9000 §9.3 处理（非探测包才可能触发迁移；验证成功由
+        //   quic_path_validation_cb 通知我们）。**不再**无条件改写 qc->path / qc->remote_sa：
+        //   修前那样做等于「谁最后到、谁说了算」—— 队列里旧源的迟到包会把发送地址切回
+        //   一个已关闭的 socket（托管 listener 下回包发往死地址、客户端只见超时）。
+        socklen_t flen = quic_sa_len(&from);
+        // M297（缺陷 504）：这条包该配到哪条路径上？
+        //   · **local 用 ngtcp2 自己认为的当前本地地址**（current path.local），**不是**
+        //     qc->local_sa —— ngtcp2 里存的是**地址副本**，不跟随我们的字段。
+        //     客户端 quic_migrate 换了本地地址后，qc->local_sa 已是新地址而 ngtcp2 的
+        //     current path 仍是旧地址；若我们把新地址当 path 喂进去，路径就对不上
+        //     ⇒ 连对端发来的 PATH_CHALLENGE 都不回应 ⇒ 服务端路径验证永不完成
+        //     ⇒ 当前路径不切换 ⇒ 回包继续发往旧（已关闭的）socket ⇒ 迁移后请求超时。
+        //     （实测留证 /tmp/m297/diag3run.log：`migrate: qc->local_sa=…:50156
+        //      ngtcp2 current=(…:59047 -> …)`）
+        //   · **remote 用这个包的真实来源** —— 只有这样才能发现「对端换源」
+        //     （RFC 9000 §9.3；服务端靠它触发路径验证，验证成功由回调通知我们切地址）。
+        const ngtcp2_path* cur = ngtcp2_conn_get_path(qc->conn);
+        const ngtcp2_sockaddr* lsa_p = (cur && cur->local.addr)
+                                       ? (const ngtcp2_sockaddr*)cur->local.addr
+                                       : (const ngtcp2_sockaddr*)&qc->local_sa;
+        ngtcp2_socklen lsa_len = (cur && cur->local.addr)
+                                 ? cur->local.addrlen : quic_sa_len(&qc->local_sa);
+        ngtcp2_path_storage sps;
+        if (flen > 0) {
+            ngtcp2_path_storage_init(&sps, lsa_p, lsa_len, (const ngtcp2_sockaddr*)&from,
+                                     (ngtcp2_socklen)flen, NULL);
+        } else {
+            ngtcp2_path_storage_init(&sps, lsa_p, lsa_len,
+                                     (const ngtcp2_sockaddr*)&qc->remote_sa,
+                                     quic_sa_len(&qc->remote_sa), NULL);
         }
         // 过期定时器
         ngtcp2_conn_handle_expiry(qc->conn, quic_now());
         // 喂包
-        int rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)plen,
+        int rv = ngtcp2_conn_read_pkt(qc->conn, &sps.path, NULL, pkt, (size_t)plen,
                                       quic_now());
         if (rv != 0) {
             if (rv == NGTCP2_ERR_DRAINING || rv == NGTCP2_ERR_DROP_CONN) {
@@ -760,6 +908,8 @@ static int quic_srv_new_conn(quic_listener* ql, const uint8_t* pkt, size_t rl,
     cb.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
     cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
     cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    cb.path_validation = quic_path_validation_cb;   // M297（缺陷 504）
+    cb.begin_path_validation = quic_begin_path_validation_cb; // M297 诊断
 
     int rv = ngtcp2_conn_server_new(&qc->conn, &cdcid, &scid, &qc->path,
                                     vc.version, &cb, &settings, &params, NULL, qc);
@@ -1348,6 +1498,8 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         cb.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
         cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
         cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+        cb.path_validation = quic_path_validation_cb;   // M297（缺陷 504）
+        cb.begin_path_validation = quic_begin_path_validation_cb; // M297 诊断
 
         rv = ngtcp2_conn_server_new(&qc->conn, &cdcid, &scid, &qc->path,
                                     vc.version, &cb, &settings, &params, NULL, qc);
@@ -1365,9 +1517,20 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         SSL_set_app_data(ssl, &qc->conn_ref);
         SSL_set_accept_state(ssl);
         SSL_set_quic_early_data_enabled(ssl, 1);   // M54-S2：接受 0-RTT early data（官方 quictls 顺序：accept_state 后启用）
-        // 喂第一个包
+        // 喂第一个包（M297（缺陷 504）：用**实际来源**构造路径 —— 与 quic_pump 同口径）
         ngtcp2_conn_handle_expiry(qc->conn, quic_now());
-        rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)rl, quic_now());
+        ngtcp2_path_storage sps0;
+        {   // M297（缺陷 504）：与 quic_pump 同口径 —— local 取 ngtcp2 当前路径，remote 取真实来源
+            const ngtcp2_path* cur0 = ngtcp2_conn_get_path(qc->conn);
+            const ngtcp2_sockaddr* l0 = (cur0 && cur0->local.addr)
+                                        ? (const ngtcp2_sockaddr*)cur0->local.addr
+                                        : (const ngtcp2_sockaddr*)&qc->local_sa;
+            ngtcp2_socklen l0len = (cur0 && cur0->local.addr)
+                                   ? cur0->local.addrlen : quic_sa_len(&qc->local_sa);
+            ngtcp2_path_storage_init(&sps0, l0, l0len, (const ngtcp2_sockaddr*)&from,
+                                     (ngtcp2_socklen)quic_sa_len(&from), NULL);
+        }
+        rv = ngtcp2_conn_read_pkt(qc->conn, &sps0.path, NULL, pkt, (size_t)rl, quic_now());
         if (rv != 0) {
             // M296（缺陷 512）：这个包不是本连接的有效 Initial ⇒ **丢弃它、继续等下一个**
             //   （修前是 return -1 ⇒ 一个残包就把整次 accept 打掉）。
@@ -1466,6 +1629,8 @@ static LXValue quic_conn_connect_impl(LXValue* args, int nargs, const char* sess
     cb.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
     cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
     cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    cb.path_validation = quic_path_validation_cb;   // M297（缺陷 504）
+    cb.begin_path_validation = quic_begin_path_validation_cb; // M297 诊断
 
     int rv = ngtcp2_conn_client_new(&qc->conn, &dcid, &scid, &qc->path,
                                     NGTCP2_PROTO_VER_V1, &cb, &settings, &params,
@@ -1713,6 +1878,8 @@ static LXValue quic_conn_connect_0rtt_impl(LXValue* args, int nargs) {
     cb.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
     cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
     cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    cb.path_validation = quic_path_validation_cb;   // M297（缺陷 504）
+    cb.begin_path_validation = quic_begin_path_validation_cb; // M297 诊断
     int rv = ngtcp2_conn_client_new(&qc->conn, &dcid, &scid, &qc->path,
                                     NGTCP2_PROTO_VER_V1, &cb, &settings, &params,
                                     NULL, qc);
@@ -1775,11 +1942,12 @@ static LXValue quic_conn_connect_0rtt_impl(LXValue* args, int nargs) {
     if (early_ok) {
         // 首次 write_pkt：触发 client_initial_cb → ClientHello（early_data 扩展）+ 装 0-RTT key
         uint8_t out[QUIC_PKT_BUF];
-        ngtcp2_ssize n = ngtcp2_conn_write_pkt(qc->conn, &qc->path, NULL,
+        ngtcp2_path_storage ps;                 // M297（缺陷 504）：发送目标由 ngtcp2 给出
+        ngtcp2_path_storage_zero(&ps);
+        ngtcp2_ssize n = ngtcp2_conn_write_pkt(qc->conn, &ps.path, NULL,
                                                out, sizeof(out), quic_now());
         if (n > 0) {
-            sendto(qc->fd, out, (size_t)n, 0,
-                   (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+            quic_send_to_path(qc, out, (size_t)n, &ps.path);
         } else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) {
             fprintf(stderr, "[quic] 0rtt: first write_pkt rv=%zd (%s)\n", n, ngtcp2_strerror((int)n));
             SSL_free(ssl); SSL_CTX_free(cctx); close(fd);
@@ -1946,6 +2114,15 @@ static LXValue bi_quic_migrate(LXValue* args, int nargs, void* ctx) {
     qc->path.local.addrlen = ll;
     close(qc->fd);
     qc->fd = nfd;
+    if (quic_verbose_on()) {
+        const ngtcp2_path* cp = ngtcp2_conn_get_path(qc->conn);
+        char cl[128], cr[128], ql[128];
+        if (cp) { quic_dbg_addr1(&cp->local, cl, sizeof(cl)); quic_dbg_addr1(&cp->remote, cr, sizeof(cr)); }
+        else { snprintf(cl, sizeof(cl), "(null)"); snprintf(cr, sizeof(cr), "(null)"); }
+        { ngtcp2_addr la; la.addr = (struct sockaddr*)&qc->local_sa; la.addrlen = quic_sa_len(&qc->local_sa);
+          quic_dbg_addr1(&la, ql, sizeof(ql)); }
+        fprintf(stderr, "[quic] migrate: qc->local_sa=%s ngtcp2 current=(%s -> %s)\n", ql, cl, cr);
+    }
     return px_bool(true);
 }
 
@@ -2056,13 +2233,14 @@ static int64_t quic_write_stream_bytes(quic_conn* qc, int64_t sid,
         uint8_t out[QUIC_PKT_BUF];
         ngtcp2_vec v = { (uint8_t*)data + woff, len - woff };
         ngtcp2_ssize ndone = 0;
-        ngtcp2_ssize n = ngtcp2_conn_writev_stream(qc->conn, &qc->path, NULL,
+        ngtcp2_path_storage ps;                 // M297（缺陷 504）：发送目标由 ngtcp2 给出
+        ngtcp2_path_storage_zero(&ps);
+        ngtcp2_ssize n = ngtcp2_conn_writev_stream(qc->conn, &ps.path, NULL,
                                                    out, sizeof(out), &ndone,
                                                    NGTCP2_WRITE_STREAM_FLAG_NONE,
                                                    sid, &v, 1, quic_now());
         if (n > 0) {
-            sendto(qc->fd, out, (size_t)n, 0,
-                   (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+            quic_send_to_path(qc, out, (size_t)n, &ps.path);
         } else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) {
             return -1;
         }
@@ -2091,7 +2269,18 @@ static int64_t quic_read_stream_bytes(quic_conn* qc, int64_t sid,
             if (remain <= 0) return 0;
             int ms = (int)((remain + NGTCP2_MILLISECONDS - 1) / NGTCP2_MILLISECONDS);
             int pr = quic_pump(qc, ms, 1, sid);
-            if (pr != 0) return 0;
+            // M297（缺陷 504）：**别把「分段超时」当成「整体超时」**。
+            //   quic_pump 内部把等待切成 ≤500ms 一段（`if (ms > 500) ms = 500;`），
+            //   一段等不到就返回 -1 ⇒ 修前这里直接 return 0 意味着：无论调用方给
+            //   timeout_ms 多少，实际等待上限都只有 ~500ms（超时参数不生效）。
+            //   迁移场景下这尤其致命：对端换源后响应要走新路径重传，
+            //   需要的时间 > 500ms ⇒ 调用方被「提前判超时」。
+            //   ⇒ 只有**到 deadline** 才算超时；-2（真错误）仍然立即返回。
+            if (pr == -2) return 0;
+            if (pr != 0) {
+                if (quic_now() >= deadline) return 0;
+                continue;
+            }
             if (s->len > 0 || s->fin || qc->peer_closed) break;
         }
     }
@@ -2249,6 +2438,7 @@ static LXValue bi_quic_pool_stats(LXValue* args, int nargs, void* ctx) {
     int64_t peak = g_quic_live_peak, ffirst = g_quic_full_first;
     int64_t pclosed = g_quic_peer_closed;
     int64_t ciddrop = g_quic_cid_drop, cidused = 0;
+    int64_t pmig = g_quic_path_migrated, pmiss = g_quic_path_missing, serr = g_quic_send_err;
     for (int i = 0; i < QUIC_MAX_LISTENERS; i++) if (g_qlis[i].used) cidused += g_qlis[i].cidtab_n;
     pthread_mutex_unlock(&g_quic_srv_mu);
     const char* e = getenv("PX_H3_IDLE_MS");   // 与 runtime_h3.c 的 h3_idle_ms() 同口径
@@ -2269,6 +2459,10 @@ static LXValue bi_quic_pool_stats(LXValue* args, int nargs, void* ctx) {
     px_dict_set(d, "cidtab_max", px_int(QUIC_CIDTAB_MAX)); // M295·第二面：单 listener cid 容量
     px_dict_set(d, "cidtab_used", px_int(cidused));        // 活跃 listener 的 cid 条目合计
     px_dict_set(d, "cid_drop", px_int(ciddrop));           // cid 表满导致的丢弃次数（修前静默）
+    // M297（缺陷 504）：路径切换可观测性（修前「换源」完全不可观测，只能靠 strace）
+    px_dict_set(d, "path_migrated", px_int(pmig));         // 路径验证成功次数（= 真的换过源）
+    px_dict_set(d, "path_missing", px_int(pmiss));         // 写包时 ngtcp2 未给路径（兜底已发）
+    px_dict_set(d, "send_err", px_int(serr));              // px_io_sendto 失败次数（非 EINTR）
     px_dict_set(d, "h3_idle_ms", px_int(idle));
     px_root_pop();
     return d;
@@ -2318,8 +2512,10 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
         //   只跑「不关闭客户端」的验证会把它放过去）。
         ngtcp2_ccerr ccerr;
         ngtcp2_ccerr_set_transport_error(&ccerr, (uint64_t)NGTCP2_NO_ERROR, NULL, 0);
+        ngtcp2_path_storage ps;                 // M297（缺陷 504）：终止包同样按 ngtcp2 的路径发
+        ngtcp2_path_storage_zero(&ps);
         ngtcp2_ssize cc_n = ngtcp2_conn_write_connection_close(
-            qc->conn, &qc->path, NULL, cc_out, sizeof(cc_out),
+            qc->conn, &ps.path, NULL, cc_out, sizeof(cc_out),
             &ccerr, quic_now());
         if (cc_n > 0) {
             // M295s1（缺陷 510）：必须走 px_io_sendto —— 裸 sendto 不重试 EINTR，
@@ -2328,8 +2524,7 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
             //   ⇒ 终止包会被静默丢掉 ⇒ 服务端又回到「分不清优雅关闭 vs 进程被杀」，
             //   即本修复的目的在并发下失效。同族：M211 缺陷 265 / M152 缺陷 146 / M256 缺陷 456。
             //   （抓到它的是 eintr_guard 与 m256_eintr —— M295 自己的门结构上看不见这里。）
-            (void)px_io_sendto(qc->fd, cc_out, (size_t)cc_n, 0,
-                               (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+            quic_send_to_path(qc, cc_out, (size_t)cc_n, &ps.path);
         }
     }
     if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
@@ -2423,13 +2618,14 @@ int64_t px_quic_raw_send_on(int64_t conn, int64_t sid, const uint8_t* data, int 
         uint8_t out[QUIC_PKT_BUF];
         ngtcp2_ssize ndone = 0;
         ngtcp2_vec v0 = { NULL, 0 };
-        ngtcp2_ssize n = ngtcp2_conn_writev_stream(qc->conn, &qc->path, NULL, out,
+        ngtcp2_path_storage ps;                 // M297（缺陷 504）：发送目标由 ngtcp2 给出
+        ngtcp2_path_storage_zero(&ps);
+        ngtcp2_ssize n = ngtcp2_conn_writev_stream(qc->conn, &ps.path, NULL, out,
                                                    sizeof(out), &ndone,
                                                    NGTCP2_WRITE_STREAM_FLAG_FIN,
                                                    sid, &v0, 0, quic_now());
         if (n > 0) {
-            sendto(qc->fd, out, (size_t)n, 0,
-                   (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+            quic_send_to_path(qc, out, (size_t)n, &ps.path);
         }
     }
     return w;

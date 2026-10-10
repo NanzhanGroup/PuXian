@@ -1,0 +1,5 @@
+# M297 门 · 已知边界登记表（**双向核对**：实测与登记不符即判红）
+# 格式：id <TAB> expect <TAB> reason <TAB> date <TAB> basis
+#   expect=FAIL ⇒ 实测必须失败；若哪天成功 ⇒ **登记过期** ⇒ 判红并指名更新文档
+# 纪律（沿 m226 UNPAIRED.tsv / m227 RCODE.tsv / m293 MIGRATE_KNOWN.tsv）：真缺陷不许记成 OK。
+m297_e2e_response	FAIL	迁移后**端到端响应仍读不到**：客户端已收到完整响应（rx STREAM id=0xc len=17 + id=0xc fin=1 offset=17）却仍报 timeout ⇒ 缺陷 513（h3 客户端读响应环节；根因尚未定位到行）。路径层已修（见本门 [5]）	2026-10-10	M297

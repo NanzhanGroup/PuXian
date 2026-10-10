@@ -1227,6 +1227,15 @@ jobs:
           grep -E '失败 .* 项' /tmp/v_m296.log | tail -1 || true
           echo "✅ m296_quic_accept_reuse（静态 11 · 强就绪 · close#1 后端口仍在监听 · accept#2 成功 · RECV2=ping-B · 回显正确）PASS"
 
+      - name: m297_quic_path_switch（连接迁移的路径切换 · 缺陷 504 路径层 · M297）
+        if: always()
+        run: |
+          # 负控 A/B 需**重建运行时**（撤回源码）⇒ CI 走 --neg-skip（与其余门同口径）。
+          bash examples/m297_quic_path_switch/verify.sh --neg-skip > /tmp/v_m297.log 2>&1 || { echo "❌ m297 门失败（路径验证 BEGIN/END · 新源 != 回退源 · 客户端回 PATH_RESPONSE · 静态结构）"; grep -E '^(  ❌|     )' /tmp/v_m297.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'path-validation|跨源|PATH_RESPONSE' /tmp/v_m297.log | tail -4 || true
+          grep -E '失败 .* 项' /tmp/v_m297.log | tail -1 || true
+          echo "✅ m297_quic_path_switch（静态 9 · 强就绪 · 验证 BEGIN+END res=0 · 新源与回退源不同 · 客户端回 PATH_RESPONSE · 已知边界双向核对）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
