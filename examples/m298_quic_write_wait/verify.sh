@@ -90,7 +90,9 @@ nDL=$(grep -c "quic_now() < deadline" "$SRC_RT"); chk "循环上界为 deadline�
 grep -q "^#define QUIC_WRITE_STALL_MS 200" "$SRC_RT" && ok "等待预算常量 QUIC_WRITE_STALL_MS=200 在位" || bad "缺 QUIC_WRITE_STALL_MS"
 nPump=$(grep -c "quic_pump(qc, QUIC_WRITE_PUMP_MS, 1, sid);" "$SRC_RT"); chk "无进展 ⇒ 推进本连接（命中恰 1 处）" "$nPump" "1"
 nLoud=$(grep -c "if (total == 0) {" "$SRC_RT"); chk "一字节未写入 ⇒ 响亮分支在位" "$([ "$nLoud" -ge 1 ] && echo yes || echo no)" "yes"
-nBusy=$(grep -c "if (quic_now() - t0 < (uint64_t)NGTCP2_MILLISECONDS) usleep(1000);" "$SRC_RT"); chk "防忙等（pump 立即返回时让出 1ms）" "$nBusy" "1"
+# M298s1：本行判据由「完整行」改为「前缀」—— 该行现在带 PX_IO_EINTR_OK 豁免注释
+#        （check_eintr.py 的 A 段要求：裸 usleep 必须显式豁免或重试）。
+nBusy=$(grep -cF "if (quic_now() - t0 < (uint64_t)NGTCP2_MILLISECONDS) usleep(1000)" "$SRC_RT"); chk "防忙等（pump 立即返回时让出 1ms）" "$nBusy" "1"
 nE1=$(grep -c "ngtcp2_conn_update_pkt_tx_time" "$SRC_RT"); chk "被否证的 E1 方案未混入产品源码" "$nE1" "0"
 RTL=$(wc -l < "$SRC_RT"); chk "规模锚点（runtime_quic.c ≥2500 行）" "$([ "$RTL" -ge 2500 ] && echo yes || echo no)" "yes"
 
