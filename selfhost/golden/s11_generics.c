@@ -6,6 +6,8 @@
 static LXValue fn_first(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("first");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "first", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "first", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_2_val = px_null();
     int px_err_2_proped = 0;
@@ -19,6 +21,8 @@ px_err_2:
 static LXValue fn_swap2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("swap2");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "swap2", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "swap2", 2, nargs);
     LXValue _v3 = (nargs > 0) ? args[0] : px_null();
     LXValue _v4 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_5_val = px_null();
@@ -33,6 +37,8 @@ px_err_5:
 static LXValue fn_max2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("max2");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "max2", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "max2", 2, nargs);
     LXValue _v6 = (nargs > 0) ? args[0] : px_null();
     LXValue _v7 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_8_val = px_null();

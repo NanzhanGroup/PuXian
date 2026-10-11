@@ -6,6 +6,8 @@
 static LXValue fn_env_new(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_new");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_new", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_new", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2 = px_uninit();
     LXValue _v3 = px_uninit();
@@ -29,6 +31,8 @@ px_err_4:
 static LXValue fn_env_define(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_define");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_define", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_define", 3, nargs);
     LXValue _v5 = (nargs > 0) ? args[0] : px_null();
     LXValue _v6 = (nargs > 1) ? args[1] : px_null();
     LXValue _v7 = (nargs > 2) ? args[2] : px_null();
@@ -55,6 +59,8 @@ px_err_10:
 static LXValue fn_env_mark_unbound(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_mark_unbound");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_mark_unbound", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_mark_unbound", 2, nargs);
     LXValue _v11 = (nargs > 0) ? args[0] : px_null();
     LXValue _v12 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_13_val = px_null();
@@ -69,6 +75,8 @@ px_err_13:
 static LXValue fn_env_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_get");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_get", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_get", 2, nargs);
     LXValue _v14 = (nargs > 0) ? args[0] : px_null();
     LXValue _v15 = (nargs > 1) ? args[1] : px_null();
     LXValue _v16 = px_uninit();
@@ -104,6 +112,8 @@ px_err_18:
 static LXValue fn_env_set(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_set");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_set", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_set", 3, nargs);
     LXValue _v19 = (nargs > 0) ? args[0] : px_null();
     LXValue _v20 = (nargs > 1) ? args[1] : px_null();
     LXValue _v21 = (nargs > 2) ? args[2] : px_null();
@@ -144,6 +154,8 @@ px_err_24:
 static LXValue fn_env_has_local(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_has_local");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_has_local", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_has_local", 2, nargs);
     LXValue _v25 = (nargs > 0) ? args[0] : px_null();
     LXValue _v26 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_27_val = px_null();
@@ -158,6 +170,8 @@ px_err_27:
 static LXValue fn_env_has(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_has");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_has", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_has", 2, nargs);
     LXValue _v29 = (nargs > 0) ? args[0] : px_null();
     LXValue _v30 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_31_val = px_null();
@@ -172,6 +186,8 @@ px_err_31:
 static LXValue fn_env_items(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_items");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_items", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_items", 1, nargs);
     LXValue _v32 = (nargs > 0) ? args[0] : px_null();
     LXValue _v33 = px_uninit();
     LXValue _v34 = px_uninit();
@@ -201,6 +217,8 @@ px_err_36:
 static LXValue fn_env_clear(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("env_clear");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "env_clear", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "env_clear", 1, nargs);
     LXValue _v39 = (nargs > 0) ? args[0] : px_null();
     LXValue _v40 = px_uninit();
     LXValue px_err_41_val = px_null();
@@ -219,6 +237,8 @@ px_err_41:
 static LXValue fn_check(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check", 2, nargs);
     LXValue _v42 = (nargs > 0) ? args[0] : px_null();
     LXValue _v43 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_44_val = px_null();

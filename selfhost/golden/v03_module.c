@@ -6,6 +6,8 @@
 static LXValue fn_module_search_paths(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("module_search_paths");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "module_search_paths", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "module_search_paths", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2 = px_uninit();
     LXValue _v3 = px_uninit();
@@ -43,6 +45,8 @@ px_err_6:
 static LXValue fn_module_candidates(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("module_candidates");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "module_candidates", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "module_candidates", 3, nargs);
     LXValue _v9 = (nargs > 0) ? args[0] : px_null();
     LXValue _v10 = (nargs > 1) ? args[1] : px_null();
     LXValue _v11 = (nargs > 2) ? args[2] : px_null();
@@ -106,6 +110,8 @@ px_err_16:
 static LXValue fn_module_find(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("module_find");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "module_find", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "module_find", 3, nargs);
     LXValue _v23 = (nargs > 0) ? args[0] : px_null();
     LXValue _v24 = (nargs > 1) ? args[1] : px_null();
     LXValue _v25 = (nargs > 2) ? args[2] : px_null();
@@ -137,6 +143,8 @@ px_err_28:
 static LXValue fn_loader_new(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("loader_new");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "loader_new", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "loader_new", 2, nargs);
     LXValue _v31 = (nargs > 0) ? args[0] : px_null();
     LXValue _v32 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_33_val = px_null();
@@ -151,6 +159,8 @@ px_err_33:
 static LXValue fn_loader_mark_loaded(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("loader_mark_loaded");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "loader_mark_loaded", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "loader_mark_loaded", 3, nargs);
     LXValue _v34 = (nargs > 0) ? args[0] : px_null();
     LXValue _v35 = (nargs > 1) ? args[1] : px_null();
     LXValue _v36 = (nargs > 2) ? args[2] : px_null();
@@ -174,6 +184,8 @@ px_err_38:
 static LXValue fn_loader_is_loaded(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("loader_is_loaded");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "loader_is_loaded", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "loader_is_loaded", 2, nargs);
     LXValue _v39 = (nargs > 0) ? args[0] : px_null();
     LXValue _v40 = (nargs > 1) ? args[1] : px_null();
     LXValue _v41 = px_uninit();
@@ -196,6 +208,8 @@ px_err_42:
 static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("loader_load");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "loader_load", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "loader_load", 3, nargs);
     LXValue _v43 = (nargs > 0) ? args[0] : px_null();
     LXValue _v44 = (nargs > 1) ? args[1] : px_null();
     LXValue _v45 = (nargs > 2) ? args[2] : px_null();
@@ -269,6 +283,8 @@ px_err_50:
 static LXValue fn_check(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check", 2, nargs);
     LXValue _v53 = (nargs > 0) ? args[0] : px_null();
     LXValue _v54 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_55_val = px_null();

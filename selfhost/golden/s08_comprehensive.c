@@ -4,6 +4,8 @@
 
 static LXValue fn_closure_1(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "<closure1>", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "<closure1>", 2, nargs);
     LXValue _v117 = (nargs > 0) ? args[0] : px_null();
     LXValue _v118 = (nargs > 1) ? args[1] : px_null();
     LXValue px_cerr_1_val = px_null();
@@ -15,6 +17,8 @@ px_cerr_1:
 }
 static LXValue fn_closure_2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "<closure2>", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "<closure2>", 1, nargs);
     LXValue _v119 = (nargs > 0) ? args[0] : px_null();
     LXValue px_cerr_2_val = px_null();
     int px_cerr_2_proped = 0;
@@ -37,6 +41,7 @@ px_cerr_3:
 static LXValue fn_Point_area(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("area");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "area", 0, nargs);
     LXValue px_err_1_val = px_null();
     int px_err_1_proped = 0;
     px_srcline(20);
@@ -49,6 +54,8 @@ px_err_1:
 static LXValue fn_each(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("each");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "each", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "each", 2, nargs);
     LXValue _v2 = (nargs > 0) ? args[0] : px_null();
     LXValue _v3 = (nargs > 1) ? args[1] : px_null();
     LXValue _v4 = px_uninit();
@@ -71,6 +78,8 @@ px_err_5:
 static LXValue fn_unique(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("unique");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "unique", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "unique", 1, nargs);
     LXValue _v8 = (nargs > 0) ? args[0] : px_null();
     LXValue _v9 = px_uninit();
     LXValue _v10 = px_uninit();
@@ -100,6 +109,8 @@ px_err_11:
 static LXValue fn_flatten(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("flatten");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "flatten", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "flatten", 1, nargs);
     LXValue _v14 = (nargs > 0) ? args[0] : px_null();
     LXValue _v15 = px_uninit();
     LXValue _v16 = px_uninit();
@@ -141,6 +152,8 @@ px_err_18:
 static LXValue fn_zip_lists(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("zip_lists");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "zip_lists", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "zip_lists", 2, nargs);
     LXValue _v23 = (nargs > 0) ? args[0] : px_null();
     LXValue _v24 = (nargs > 1) ? args[1] : px_null();
     LXValue _v25 = px_uninit();
@@ -171,6 +184,8 @@ px_err_28:
 static LXValue fn_chunk(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("chunk");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "chunk", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "chunk", 2, nargs);
     LXValue _v31 = (nargs > 0) ? args[0] : px_null();
     LXValue _v32 = (nargs > 1) ? args[1] : px_null();
     LXValue _v33 = px_uninit();
@@ -232,6 +247,8 @@ px_err_39:
 static LXValue fn_group_by(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("group_by");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "group_by", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "group_by", 2, nargs);
     LXValue _v40 = (nargs > 0) ? args[0] : px_null();
     LXValue _v41 = (nargs > 1) ? args[1] : px_null();
     LXValue _v42 = px_uninit();
@@ -274,6 +291,8 @@ px_err_46:
 static LXValue fn_sort_by(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("sort_by");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "sort_by", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "sort_by", 2, nargs);
     LXValue _v49 = (nargs > 0) ? args[0] : px_null();
     LXValue _v50 = (nargs > 1) ? args[1] : px_null();
     LXValue _v51 = px_uninit();
@@ -316,6 +335,8 @@ px_err_55:
 static LXValue fn_greet(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("greet");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "greet", 1, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "greet", 2, nargs);
     LXValue _v60 = (nargs > 0) ? args[0] : px_null();
     LXValue _v61 = (nargs > 1) ? args[1] : px_int(2LL);
     LXValue _v62 = px_uninit();
@@ -343,6 +364,8 @@ px_err_64:
 static LXValue fn_process(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("process");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "process", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "process", 1, nargs);
     LXValue _v65 = (nargs > 0) ? args[0] : px_null();
     LXValue _v66 = px_uninit();
     LXValue _v67 = px_uninit();
@@ -383,6 +406,8 @@ px_err_75:
 static LXValue fn_use_ops(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("use_ops");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "use_ops", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "use_ops", 2, nargs);
     LXValue _v93 = (nargs > 0) ? args[0] : px_null();
     LXValue _v94 = (nargs > 1) ? args[1] : px_null();
     LXValue _v95 = px_uninit();
@@ -415,6 +440,8 @@ px_err_101:
 static LXValue fn_double(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("double");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "double", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "double", 1, nargs);
     LXValue _v106 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_107_val = px_null();
     int px_err_107_proped = 0;
@@ -428,6 +455,7 @@ px_err_107:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "main", 0, nargs);
     LXValue _v108 = px_uninit();
     LXValue _v109 = px_uninit();
     LXValue _v110 = px_uninit();

@@ -6,6 +6,7 @@
 static LXValue fn_counter_inc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("counter_inc");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "counter_inc", 0, nargs);
     LXValue px_err_1_val = px_null();
     int px_err_1_proped = 0;
     px_srcline(13);
@@ -18,6 +19,7 @@ px_err_1:
 static LXValue fn_counter_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("counter_get");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "counter_get", 0, nargs);
     LXValue px_err_2_val = px_null();
     int px_err_2_proped = 0;
     px_srcline(16);
@@ -30,6 +32,8 @@ px_err_2:
 static LXValue fn_label_set(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("label_set");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "label_set", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "label_set", 1, nargs);
     LXValue _v3 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_4_val = px_null();
     int px_err_4_proped = 0;
@@ -43,6 +47,7 @@ px_err_4:
 static LXValue fn_label_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("label_get");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "label_get", 0, nargs);
     LXValue px_err_5_val = px_null();
     int px_err_5_proped = 0;
     px_srcline(22);
@@ -55,6 +60,7 @@ px_err_5:
 static LXValue fn_limit_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("limit_get");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "limit_get", 0, nargs);
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
     px_srcline(25);
@@ -67,6 +73,8 @@ px_err_6:
 static LXValue fn_check(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check", 2, nargs);
     LXValue _v7 = (nargs > 0) ? args[0] : px_null();
     LXValue _v8 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_9_val = px_null();

@@ -777,7 +777,10 @@ def cg_gen_func_named(f, cname):
             seen_def = true
         ri += 1
     let fname_c = cg_escape_str(rust_unescape(f[1]))
-    s += "    if (nargs < " + str(req_n) + ") px_error(\"R1005: 调用 %s 参数不足: 需 %d 给 %d\", \"" + fname_c + "\", " + str(req_n) + ", nargs);\n"
+    # M301（补）：`required == 0` 时下界检查**恒不成立** ⇒ 不发射（省掉每处零参函数里的死代码，
+    #   也让 C 轨产物对既有 golden 的差异收敛到「只多一行上界检查」）。
+    if req_n > 0:
+        s += "    if (nargs < " + str(req_n) + ") px_error(\"R1005: 调用 %s 参数不足: 需 %d 给 %d\", \"" + fname_c + "\", " + str(req_n) + ", nargs);\n"
     s += "    if (nargs > " + str(len(params)) + ") px_error(\"R1005: 调用 %s 参数过多: 最多 %d 给 %d\", \"" + fname_c + "\", " + str(len(params)) + ", nargs);\n"
     # 预扫描：函数体内需提升到函数顶的局部变量（Assign 目标 + VarDecl + For 循环变量，
     # Python 语义局部变量；顶层全局名除外）——M62-L5 块作用域对齐（解释器不新建块作用域）

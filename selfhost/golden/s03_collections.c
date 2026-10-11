@@ -6,6 +6,7 @@
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "main", 0, nargs);
     LXValue _v1 = px_uninit();
     LXValue _v2 = px_uninit();
     LXValue px_err_3_val = px_null();

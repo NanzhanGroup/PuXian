@@ -6,6 +6,8 @@
 static LXValue fn_maybe(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("maybe");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "maybe", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "maybe", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_2_val = px_null();
     int px_err_2_proped = 0;
