@@ -1,0 +1,33 @@
+# m267_perf/src/onnx_mm1024.px —— ONNX MatMul 1024x1024x1024 性能负载（M303 / S1）
+# ---------------------------------------------------------------
+# ⭐ **崩塌探针**（本负载的存在理由）：
+#   实测本机 512³ = 1.12 GFLOPS，而 1024³ = 0.313 GFLOPS ⇒ **慢 3.58×**。
+#   机理：内层访问 B 的步长 = N 个元素；N=1024 时步长 **4096 字节 = 恰好一个页**
+#   ⇒ 每次访问都 TLB miss（"跨页"）。这与算力无关 ⇒ 加核/换芯都不解决（M303 §四）。
+#
+#   同族证据（跨机器、同形状）：
+#     观音（AMD A8-7600） 1.12 → 0.085 GFLOPS（**13×**）
+#     本机（AMD EPYC 7K62）1.12 → 0.313 GFLOPS（**3.58×**）
+#   ⇒ 幅度随机器变，**形状一致** ⇒ 是可复现的真现象，不是某台机器的怪癖。
+#
+# 为什么内部只跑 1 次：
+#   单次就 **6.87 s**（够长，不需要叠加）。叠 5 次会把门拖到 35 s 而毫无收益。
+#   外层 time_run 取 2 轮最小值。
+#
+# 输出： OK <输出字节数>  —— 1024*1024*4 = 4194304（正确性锚点，同 mm512）
+#
+# usage: onnx_mm1024 <model.onnx>
+let a = args()
+if len(a) < 2:
+    print("用法: onnx_mm1024 <model.onnx>\n")
+    exit(2)
+let m = onnx_model_open(a[1])
+if type(m) == "result":
+    print("OPEN-ERR " + str(m) + "\n")
+    exit(3)
+let res = onnx_run(m["id"], {})
+if type(res) == "result":
+    print("RUN-ERR " + str(res) + "\n")
+    exit(4)
+print("OK " + str(res["outputs"]["C"]["nbytes"]) + "\n")
+onnx_model_close(m["id"])
