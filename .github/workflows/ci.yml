@@ -1241,6 +1241,11 @@ jobs:
           grep -E 'MIGRATE-OK|bidi 流|access' /tmp/v_m298.log | tail -4 || true
           grep -E '失败 .* 项' /tmp/v_m298.log | tail -1 || true
           echo "✅ m298_quic_write_wait（静态 8 · 强就绪 · 3 轮全 MIGRATE-OK · 产品自带输出的产品侧证据 · 登记表双向核对 · 4 道负控含判据自伤）PASS"
+      - name: m299_wake_channel（无人值守链「自唤醒」通道 · 缺陷 515/516 · M299）
+        run: |
+          bash examples/m299_wake_channel/verify.sh > /tmp/v_m299.log 2>&1 || { echo "❌ m299 门失败（观察器三分支唤醒 · esc 改道不再推用户 · dy-wake 去重与三重限流 · 负控 A/B）"; grep -E '^(  ❌|     )' /tmp/v_m299.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '汇总：通过|⏭' /tmp/v_m299.log | tail -3 || true
+          echo "✅ m299_wake_channel（静态 11 · 观察器四分支 • RED/INCONSISTENT/PREMISE 必唤醒 · GREEN 必不唤醒 · dy-wake 三重限流 · 负控 A/B）PASS"
 
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
