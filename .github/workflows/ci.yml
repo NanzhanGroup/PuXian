@@ -1257,6 +1257,10 @@ jobs:
           bash examples/m301_argcount/verify.sh --neg-skip > /tmp/v_m301.log 2>&1 || { echo "❌ m301 门失败（静态判据 4 · 21 例三轨对拍 · strict/legal 分层）"; grep -E '^(  ❌|     |        )' /tmp/v_m301.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '汇总：通过|统计：strict|分叉' /tmp/v_m301.log | tail -4 || true
           echo "✅ m301_argcount（21 例 × 三轨 · 分叉 0 · 缺陷 518 收口）PASS"
+      - name: m302_stdlib_surface3（stdlib 第三批 semver+html · 缺陷 520-526 · M302）
+        run: |
+          bash examples/m302_stdlib_surface3/verify.sh --neg-skip > /tmp/v_m302.log 2>&1 || { echo "❌ m302 门失败（静态 7 处修复在位 · 647 例三轨对拍 · 独立真值 ref.py · 契约表双向 · 非法侧响亮指名）"; grep -E '^(  ❌|     |        )' /tmp/v_m302.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m302_stdlib_surface3（semver+html 35 导出 × 647 例 × 三轨 × 2 遍 = 3882 次执行 · 缺陷 520-526）PASS"
 
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()

@@ -1,0 +1,1950 @@
+import std.semver
+import std.html
+
+def main():
+    var a = args()
+    var c = a[1]
+    var hit = 0
+    if c == "C0":
+        hit = 1
+        print(sv_cmp("1.0.0-alpha", "1.0.0-alpha.1"))
+    if c == "Cr0":
+        hit = 1
+        print(sv_cmp("1.0.0-alpha.1", "1.0.0-alpha"))
+    if c == "C1":
+        hit = 1
+        print(sv_cmp("1.0.0-alpha.1", "1.0.0-alpha.beta"))
+    if c == "Cr1":
+        hit = 1
+        print(sv_cmp("1.0.0-alpha.beta", "1.0.0-alpha.1"))
+    if c == "C2":
+        hit = 1
+        print(sv_cmp("1.0.0-alpha.beta", "1.0.0-beta"))
+    if c == "Cr2":
+        hit = 1
+        print(sv_cmp("1.0.0-beta", "1.0.0-alpha.beta"))
+    if c == "C3":
+        hit = 1
+        print(sv_cmp("1.0.0-beta", "1.0.0-beta.2"))
+    if c == "Cr3":
+        hit = 1
+        print(sv_cmp("1.0.0-beta.2", "1.0.0-beta"))
+    if c == "C4":
+        hit = 1
+        print(sv_cmp("1.0.0-beta.2", "1.0.0-beta.11"))
+    if c == "Cr4":
+        hit = 1
+        print(sv_cmp("1.0.0-beta.11", "1.0.0-beta.2"))
+    if c == "C5":
+        hit = 1
+        print(sv_cmp("1.0.0-beta.11", "1.0.0-rc.1"))
+    if c == "Cr5":
+        hit = 1
+        print(sv_cmp("1.0.0-rc.1", "1.0.0-beta.11"))
+    if c == "C6":
+        hit = 1
+        print(sv_cmp("1.0.0-rc.1", "1.0.0"))
+    if c == "Cr6":
+        hit = 1
+        print(sv_cmp("1.0.0", "1.0.0-rc.1"))
+    if c == "C7":
+        hit = 1
+        print(sv_cmp("1.0.0", "2.0.0"))
+    if c == "Cr7":
+        hit = 1
+        print(sv_cmp("2.0.0", "1.0.0"))
+    if c == "Cx_1_0_0_1_0_0pb":
+        hit = 1
+        print(sv_cmp("1.0.0", "1.0.0+b"))
+    if c == "Cx_1_0_0pa_1_0_0pb":
+        hit = 1
+        print(sv_cmp("1.0.0+a", "1.0.0+b"))
+    if c == "Cx_1_0_0m1_1_0_0malpha":
+        hit = 1
+        print(sv_cmp("1.0.0-1", "1.0.0-alpha"))
+    if c == "Cx_1_0_0malpha_1_1_0_0malpha_1_1":
+        hit = 1
+        print(sv_cmp("1.0.0-alpha.1", "1.0.0-alpha.1.1"))
+    if c == "Cx_0_9_9_1_0_0":
+        hit = 1
+        print(sv_cmp("0.9.9", "1.0.0"))
+    if c == "Cx_1_2_3_1_2_3":
+        hit = 1
+        print(sv_cmp("1.2.3", "1.2.3"))
+    if c == "P0":
+        hit = 1
+        print(sv_parse("1.2.3-alpha.1+build5")["major"])
+    if c == "P1":
+        hit = 1
+        print(sv_parse("1.2.3-alpha.1+build5")["pre"])
+    if c == "P2":
+        hit = 1
+        print(sv_parse("1.2.3-alpha.1+build5")["build"])
+    if c == "P3":
+        hit = 1
+        print(sv_parse("10.20.30")["minor"])
+    if c == "P4":
+        hit = 1
+        print(sv_parse("0.0.0")["patch"])
+    if c == "P5":
+        hit = 1
+        print(sv_parse("1.0.0-rc.1")["pre"])
+    if c == "P6":
+        hit = 1
+        print(sv_parse("1.0.0")["pre"])
+    if c == "P7":
+        hit = 1
+        print(sv_parse("1.0.0")["build"])
+    if c == "Pb0":
+        hit = 1
+        print(str(sv_parse("1.2")))
+    if c == "Pb1":
+        hit = 1
+        print(str(sv_parse("01.2.3")))
+    if c == "Pb2":
+        hit = 1
+        print(str(sv_parse("1.2.3-01")))
+    if c == "Pb3":
+        hit = 1
+        print(str(sv_parse("1.2.3.4")))
+    if c == "Pb4":
+        hit = 1
+        print(str(sv_parse("v1.2.3")))
+    if c == "Pb5":
+        hit = 1
+        print(str(sv_parse("1..2")))
+    if c == "Pb6":
+        hit = 1
+        print(str(sv_parse("1.2.3-")))
+    if c == "Pb7":
+        hit = 1
+        print(str(sv_parse("1.2.3+")))
+    if c == "Pb8":
+        hit = 1
+        print(str(sv_parse("")))
+    if c == "Pb9":
+        hit = 1
+        print(str(sv_parse("abc")))
+    if c == "S0_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^1.2.3"))
+    if c == "S0_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^1.2.3"))
+    if c == "S0_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^1.2.3"))
+    if c == "S0_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^1.2.3"))
+    if c == "S0_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^1.2.3"))
+    if c == "S0_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^1.2.3"))
+    if c == "S0_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^1.2.3"))
+    if c == "S0_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^1.2.3"))
+    if c == "S0_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^1.2.3"))
+    if c == "S0_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^1.2.3"))
+    if c == "S0_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^1.2.3"))
+    if c == "S0_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^1.2.3"))
+    if c == "S0_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^1.2.3"))
+    if c == "S0_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^1.2.3"))
+    if c == "S1_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^0.2.3"))
+    if c == "S1_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^0.2.3"))
+    if c == "S1_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^0.2.3"))
+    if c == "S1_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^0.2.3"))
+    if c == "S1_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^0.2.3"))
+    if c == "S1_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^0.2.3"))
+    if c == "S1_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^0.2.3"))
+    if c == "S1_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^0.2.3"))
+    if c == "S1_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^0.2.3"))
+    if c == "S1_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^0.2.3"))
+    if c == "S1_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^0.2.3"))
+    if c == "S1_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^0.2.3"))
+    if c == "S1_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^0.2.3"))
+    if c == "S1_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^0.2.3"))
+    if c == "S2_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^0.0.3"))
+    if c == "S2_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^0.0.3"))
+    if c == "S2_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^0.0.3"))
+    if c == "S2_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^0.0.3"))
+    if c == "S2_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^0.0.3"))
+    if c == "S2_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^0.0.3"))
+    if c == "S2_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^0.0.3"))
+    if c == "S2_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^0.0.3"))
+    if c == "S2_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^0.0.3"))
+    if c == "S2_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^0.0.3"))
+    if c == "S2_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^0.0.3"))
+    if c == "S2_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^0.0.3"))
+    if c == "S2_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^0.0.3"))
+    if c == "S2_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^0.0.3"))
+    if c == "S3_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^0"))
+    if c == "S3_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^0"))
+    if c == "S3_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^0"))
+    if c == "S3_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^0"))
+    if c == "S3_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^0"))
+    if c == "S3_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^0"))
+    if c == "S3_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^0"))
+    if c == "S3_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^0"))
+    if c == "S3_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^0"))
+    if c == "S3_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^0"))
+    if c == "S3_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^0"))
+    if c == "S3_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^0"))
+    if c == "S3_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^0"))
+    if c == "S3_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^0"))
+    if c == "S4_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^0.0"))
+    if c == "S4_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^0.0"))
+    if c == "S4_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^0.0"))
+    if c == "S4_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^0.0"))
+    if c == "S4_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^0.0"))
+    if c == "S4_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^0.0"))
+    if c == "S4_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^0.0"))
+    if c == "S4_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^0.0"))
+    if c == "S4_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^0.0"))
+    if c == "S4_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^0.0"))
+    if c == "S4_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^0.0"))
+    if c == "S4_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^0.0"))
+    if c == "S4_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^0.0"))
+    if c == "S4_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^0.0"))
+    if c == "S5_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^0.x"))
+    if c == "S5_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^0.x"))
+    if c == "S5_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^0.x"))
+    if c == "S5_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^0.x"))
+    if c == "S5_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^0.x"))
+    if c == "S5_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^0.x"))
+    if c == "S5_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^0.x"))
+    if c == "S5_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^0.x"))
+    if c == "S5_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^0.x"))
+    if c == "S5_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^0.x"))
+    if c == "S5_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^0.x"))
+    if c == "S5_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^0.x"))
+    if c == "S5_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^0.x"))
+    if c == "S5_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^0.x"))
+    if c == "S6_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^1.x"))
+    if c == "S6_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^1.x"))
+    if c == "S6_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^1.x"))
+    if c == "S6_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^1.x"))
+    if c == "S6_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^1.x"))
+    if c == "S6_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^1.x"))
+    if c == "S6_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^1.x"))
+    if c == "S6_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^1.x"))
+    if c == "S6_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^1.x"))
+    if c == "S6_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^1.x"))
+    if c == "S6_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^1.x"))
+    if c == "S6_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^1.x"))
+    if c == "S6_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^1.x"))
+    if c == "S6_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^1.x"))
+    if c == "S7_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "^1"))
+    if c == "S7_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "^1"))
+    if c == "S7_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "^1"))
+    if c == "S7_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "^1"))
+    if c == "S7_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "^1"))
+    if c == "S7_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "^1"))
+    if c == "S7_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "^1"))
+    if c == "S7_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "^1"))
+    if c == "S7_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "^1"))
+    if c == "S7_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "^1"))
+    if c == "S7_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "^1"))
+    if c == "S7_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "^1"))
+    if c == "S7_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "^1"))
+    if c == "S7_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "^1"))
+    if c == "S8_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "~1.2.3"))
+    if c == "S8_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "~1.2.3"))
+    if c == "S8_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "~1.2.3"))
+    if c == "S8_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "~1.2.3"))
+    if c == "S8_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "~1.2.3"))
+    if c == "S8_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "~1.2.3"))
+    if c == "S8_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "~1.2.3"))
+    if c == "S8_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "~1.2.3"))
+    if c == "S8_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "~1.2.3"))
+    if c == "S8_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "~1.2.3"))
+    if c == "S8_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "~1.2.3"))
+    if c == "S8_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "~1.2.3"))
+    if c == "S8_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "~1.2.3"))
+    if c == "S8_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "~1.2.3"))
+    if c == "S9_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "~1.2"))
+    if c == "S9_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "~1.2"))
+    if c == "S9_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "~1.2"))
+    if c == "S9_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "~1.2"))
+    if c == "S9_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "~1.2"))
+    if c == "S9_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "~1.2"))
+    if c == "S9_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "~1.2"))
+    if c == "S9_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "~1.2"))
+    if c == "S9_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "~1.2"))
+    if c == "S9_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "~1.2"))
+    if c == "S9_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "~1.2"))
+    if c == "S9_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "~1.2"))
+    if c == "S9_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "~1.2"))
+    if c == "S9_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "~1.2"))
+    if c == "S10_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "~1"))
+    if c == "S10_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "~1"))
+    if c == "S10_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "~1"))
+    if c == "S10_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "~1"))
+    if c == "S10_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "~1"))
+    if c == "S10_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "~1"))
+    if c == "S10_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "~1"))
+    if c == "S10_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "~1"))
+    if c == "S10_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "~1"))
+    if c == "S10_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "~1"))
+    if c == "S10_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "~1"))
+    if c == "S10_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "~1"))
+    if c == "S10_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "~1"))
+    if c == "S10_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "~1"))
+    if c == "S11_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "~0.0"))
+    if c == "S11_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "~0.0"))
+    if c == "S11_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "~0.0"))
+    if c == "S11_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "~0.0"))
+    if c == "S11_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "~0.0"))
+    if c == "S11_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "~0.0"))
+    if c == "S11_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "~0.0"))
+    if c == "S11_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "~0.0"))
+    if c == "S11_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "~0.0"))
+    if c == "S11_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "~0.0"))
+    if c == "S11_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "~0.0"))
+    if c == "S11_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "~0.0"))
+    if c == "S11_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "~0.0"))
+    if c == "S11_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "~0.0"))
+    if c == "S12_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "1.2.x"))
+    if c == "S12_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "1.2.x"))
+    if c == "S12_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "1.2.x"))
+    if c == "S12_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "1.2.x"))
+    if c == "S12_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "1.2.x"))
+    if c == "S12_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "1.2.x"))
+    if c == "S12_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "1.2.x"))
+    if c == "S12_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "1.2.x"))
+    if c == "S12_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "1.2.x"))
+    if c == "S12_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "1.2.x"))
+    if c == "S12_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "1.2.x"))
+    if c == "S12_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "1.2.x"))
+    if c == "S12_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "1.2.x"))
+    if c == "S12_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "1.2.x"))
+    if c == "S13_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "1.x"))
+    if c == "S13_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "1.x"))
+    if c == "S13_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "1.x"))
+    if c == "S13_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "1.x"))
+    if c == "S13_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "1.x"))
+    if c == "S13_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "1.x"))
+    if c == "S13_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "1.x"))
+    if c == "S13_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "1.x"))
+    if c == "S13_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "1.x"))
+    if c == "S13_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "1.x"))
+    if c == "S13_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "1.x"))
+    if c == "S13_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "1.x"))
+    if c == "S13_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "1.x"))
+    if c == "S13_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "1.x"))
+    if c == "S14_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "1"))
+    if c == "S14_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "1"))
+    if c == "S14_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "1"))
+    if c == "S14_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "1"))
+    if c == "S14_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "1"))
+    if c == "S14_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "1"))
+    if c == "S14_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "1"))
+    if c == "S14_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "1"))
+    if c == "S14_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "1"))
+    if c == "S14_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "1"))
+    if c == "S14_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "1"))
+    if c == "S14_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "1"))
+    if c == "S14_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "1"))
+    if c == "S14_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "1"))
+    if c == "S15_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "*"))
+    if c == "S15_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "*"))
+    if c == "S15_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "*"))
+    if c == "S15_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "*"))
+    if c == "S15_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "*"))
+    if c == "S15_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "*"))
+    if c == "S15_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "*"))
+    if c == "S15_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "*"))
+    if c == "S15_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "*"))
+    if c == "S15_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "*"))
+    if c == "S15_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "*"))
+    if c == "S15_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "*"))
+    if c == "S15_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "*"))
+    if c == "S15_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "*"))
+    if c == "S16_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", ""))
+    if c == "S16_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", ""))
+    if c == "S16_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", ""))
+    if c == "S16_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", ""))
+    if c == "S16_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", ""))
+    if c == "S16_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", ""))
+    if c == "S16_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", ""))
+    if c == "S16_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", ""))
+    if c == "S16_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", ""))
+    if c == "S16_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", ""))
+    if c == "S16_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", ""))
+    if c == "S16_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", ""))
+    if c == "S16_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", ""))
+    if c == "S16_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", ""))
+    if c == "S17_0":
+        hit = 1
+        print(sv_satisfies("0.0.0", "1.2.3"))
+    if c == "S17_1":
+        hit = 1
+        print(sv_satisfies("0.0.3", "1.2.3"))
+    if c == "S17_2":
+        hit = 1
+        print(sv_satisfies("0.0.4", "1.2.3"))
+    if c == "S17_3":
+        hit = 1
+        print(sv_satisfies("0.1.0", "1.2.3"))
+    if c == "S17_4":
+        hit = 1
+        print(sv_satisfies("0.2.3", "1.2.3"))
+    if c == "S17_5":
+        hit = 1
+        print(sv_satisfies("0.2.5", "1.2.3"))
+    if c == "S17_6":
+        hit = 1
+        print(sv_satisfies("0.3.0", "1.2.3"))
+    if c == "S17_7":
+        hit = 1
+        print(sv_satisfies("1.0.0", "1.2.3"))
+    if c == "S17_8":
+        hit = 1
+        print(sv_satisfies("1.2.3", "1.2.3"))
+    if c == "S17_9":
+        hit = 1
+        print(sv_satisfies("1.2.9", "1.2.3"))
+    if c == "S17_10":
+        hit = 1
+        print(sv_satisfies("1.3.0", "1.2.3"))
+    if c == "S17_11":
+        hit = 1
+        print(sv_satisfies("1.9.9", "1.2.3"))
+    if c == "S17_12":
+        hit = 1
+        print(sv_satisfies("2.0.0", "1.2.3"))
+    if c == "S17_13":
+        hit = 1
+        print(sv_satisfies("1.0.0-alpha", "1.2.3"))
+    if c == "B0":
+        hit = 1
+        print(str(sv_best(["1.2.0", "1.2.5", "2.0.0"], "^1.2.0")))
+    if c == "B1":
+        hit = 1
+        print(str(sv_best(["1.2.0", "1.2.5", "2.0.0"], "^2.0.0")))
+    if c == "B2":
+        hit = 1
+        print(str(sv_best(["1.0.0", "0.9.0"], "^1.0.0")))
+    if c == "B3":
+        hit = 1
+        print(str(sv_best(["3.0.0"], "^1.0.0")))
+    if c == "B4":
+        hit = 1
+        print(str(sv_best(["1.2.0", "1.2.9", "1.3.0"], "~1.2")))
+    if c == "B5":
+        hit = 1
+        print(str(sv_best(["0.0.1", "0.0.2"], "^0.0.1")))
+    if c == "B6":
+        hit = 1
+        print(str(sv_best(["1.0.0", "1.0.0-alpha"], "^1.0.0")))
+    if c == "B7":
+        hit = 1
+        print(str(sv_best(["2.0.0", "1.0.0"], "*")))
+    if c == "E0":
+        hit = 1
+        print(html_escape(""))
+    if c == "E1":
+        hit = 1
+        print(html_escape("abc"))
+    if c == "E2":
+        hit = 1
+        print(html_escape("<a>"))
+    if c == "E3":
+        hit = 1
+        print(html_escape("&"))
+    if c == "E4":
+        hit = 1
+        print(html_escape("\""))
+    if c == "E5":
+        hit = 1
+        print(html_escape("'"))
+    if c == "E6":
+        hit = 1
+        print(html_escape("a&b"))
+    if c == "E7":
+        hit = 1
+        print(html_escape("<p class='x'>"))
+    if c == "E8":
+        hit = 1
+        print(html_escape("中文"))
+    if c == "E9":
+        hit = 1
+        print(html_escape("&&"))
+    if c == "E10":
+        hit = 1
+        print(html_escape("><"))
+    if c == "E11":
+        hit = 1
+        print(html_escape("it's"))
+    if c == "E12":
+        hit = 1
+        print(html_escape("<script>alert(1)</script>"))
+    if c == "E13":
+        hit = 1
+        print(html_escape("a&amp;b"))
+    if c == "E14":
+        hit = 1
+        print(html_escape(" "))
+    if c == "D0":
+        hit = 1
+        print(hx_decode(""))
+    if c == "D1":
+        hit = 1
+        print(hx_decode("abc"))
+    if c == "D2":
+        hit = 1
+        print(hx_decode("&amp;"))
+    if c == "D3":
+        hit = 1
+        print(hx_decode("&lt;"))
+    if c == "D4":
+        hit = 1
+        print(hx_decode("&gt;"))
+    if c == "D5":
+        hit = 1
+        print(hx_decode("&quot;"))
+    if c == "D6":
+        hit = 1
+        print(hx_decode("&apos;"))
+    if c == "D7":
+        hit = 1
+        print(hx_decode("&nbsp;"))
+    if c == "D8":
+        hit = 1
+        print(hx_decode("&copy;"))
+    if c == "D9":
+        hit = 1
+        print(hx_decode("&#65;"))
+    if c == "D10":
+        hit = 1
+        print(hx_decode("&AMP;"))
+    if c == "D11":
+        hit = 1
+        print(hx_decode("a&amp;b"))
+    if c == "D12":
+        hit = 1
+        print(hx_decode("&amp"))
+    if c == "D13":
+        hit = 1
+        print(hx_decode("&nosuch;"))
+    if c == "D14":
+        hit = 1
+        print(hx_decode("&"))
+    if c == "D15":
+        hit = 1
+        print(hx_decode("&&amp;"))
+    if c == "D16":
+        hit = 1
+        print(hx_decode("&amp;&amp;"))
+    if c == "D17":
+        hit = 1
+        print(hx_decode("x&nbsp;y"))
+    if c == "D18":
+        hit = 1
+        print(hx_decode("&#x41;"))
+    if c == "D19":
+        hit = 1
+        print(hx_decode("&amp;;"))
+    if c == "G0t":
+        hit = 1
+        print(html_text(html_parse("<div id=\"x\">a<b>b</b></div>")))
+    if c == "G0g":
+        hit = 1
+        print(html_tag(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0]))
+    if c == "G0q":
+        hit = 1
+        print(str(len(html_query(html_parse("<div id=\"x\">a<b>b</b></div>"), "div"))))
+    if c == "G0a":
+        hit = 1
+        print(html_attr(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0], "id"))
+    if c == "G0k":
+        hit = 1
+        print(str(len(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0]["children"])))
+    if c == "G0c":
+        hit = 1
+        print(html_tag(html_children(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0])[0]))
+    if c == "G1t":
+        hit = 1
+        print(html_text(html_parse("<p>x</p><!--c-->")))
+    if c == "G1g":
+        hit = 1
+        print(html_tag(html_parse("<p>x</p><!--c-->")["children"][0]))
+    if c == "G1q":
+        hit = 1
+        print(str(len(html_query(html_parse("<p>x</p><!--c-->"), "p"))))
+    if c == "G1a":
+        hit = 1
+        print(html_attr(html_parse("<p>x</p><!--c-->")["children"][0], "class"))
+    if c == "G1k":
+        hit = 1
+        print(str(len(html_parse("<p>x</p><!--c-->")["children"][0]["children"])))
+    if c == "G1c":
+        hit = 1
+        print(html_tag(html_children(html_parse("<p>x</p><!--c-->")["children"][0])[0]))
+    if c == "G2t":
+        hit = 1
+        print(html_text(html_parse("<div><script>1<2</script>y</div>")))
+    if c == "G2g":
+        hit = 1
+        print(html_tag(html_parse("<div><script>1<2</script>y</div>")["children"][0]))
+    if c == "G2q":
+        hit = 1
+        print(str(len(html_query(html_parse("<div><script>1<2</script>y</div>"), "div"))))
+    if c == "G2a":
+        hit = 1
+        print(html_attr(html_parse("<div><script>1<2</script>y</div>")["children"][0], "class"))
+    if c == "G2k":
+        hit = 1
+        print(str(len(html_parse("<div><script>1<2</script>y</div>")["children"][0]["children"])))
+    if c == "G2c":
+        hit = 1
+        print(html_tag(html_children(html_parse("<div><script>1<2</script>y</div>")["children"][0])[0]))
+    if c == "G3t":
+        hit = 1
+        print(html_text(html_parse("<span class=\"k\">v</span>")))
+    if c == "G3g":
+        hit = 1
+        print(html_tag(html_parse("<span class=\"k\">v</span>")["children"][0]))
+    if c == "G3q":
+        hit = 1
+        print(str(len(html_query(html_parse("<span class=\"k\">v</span>"), "span"))))
+    if c == "G3a":
+        hit = 1
+        print(html_attr(html_parse("<span class=\"k\">v</span>")["children"][0], "class"))
+    if c == "G3k":
+        hit = 1
+        print(str(len(html_parse("<span class=\"k\">v</span>")["children"][0]["children"])))
+    if c == "G3c":
+        hit = 1
+        print(html_tag(html_children(html_parse("<span class=\"k\">v</span>")["children"][0])[0]))
+    if c == "G4t":
+        hit = 1
+        print(html_text(html_parse("<ul><li>1</li><li>2</li></ul>")))
+    if c == "G4g":
+        hit = 1
+        print(html_tag(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0]))
+    if c == "G4q":
+        hit = 1
+        print(str(len(html_query(html_parse("<ul><li>1</li><li>2</li></ul>"), "ul"))))
+    if c == "G4a":
+        hit = 1
+        print(html_attr(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0], "class"))
+    if c == "G4k":
+        hit = 1
+        print(str(len(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0]["children"])))
+    if c == "G4c":
+        hit = 1
+        print(html_tag(html_children(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0])[0]))
+    if c == "Gq_multi":
+        hit = 1
+        print(str(len(html_query(html_parse("<p>1</p><p>2</p>"), "p"))))
+    if c == "Gq_cls":
+        hit = 1
+        print(str(len(html_query(html_parse("<p class='a'>1</p><p>2</p>"), "p.a"))))
+    if c == "Gent":
+        hit = 1
+        print(str(len(hx_entities())))
+    if c == "Gvoid":
+        hit = 1
+        print(str(len(hx_void_tags())))
+    if c == "Graw":
+        hit = 1
+        print(str(len(hx_raw_tags())))
+    if c == "Groot":
+        hit = 1
+        print(html_tag(html_parse("<p>x</p>")))
+    if c == "Gempty":
+        hit = 1
+        print(html_text(html_parse("")))
+    if c == "Gtext_node":
+        hit = 1
+        print(html_text(html_parse("<p>a</p>")["children"][0]["children"][0]))
+    if c == "N0":
+        hit = 1
+        print(sv_cmp("abc", "1.2.3"))
+    if c == "N0b":
+        hit = 1
+        print(sv_satisfies("abc", "^1.0.0"))
+    if c == "N1":
+        hit = 1
+        print(sv_cmp("1.2", "1.2.3"))
+    if c == "N1b":
+        hit = 1
+        print(sv_satisfies("1.2", "^1.0.0"))
+    if c == "N2":
+        hit = 1
+        print(sv_cmp("1.2.3.4", "1.2.3"))
+    if c == "N2b":
+        hit = 1
+        print(sv_satisfies("1.2.3.4", "^1.0.0"))
+    if c == "N3":
+        hit = 1
+        print(sv_cmp("01.2.3", "1.2.3"))
+    if c == "N3b":
+        hit = 1
+        print(sv_satisfies("01.2.3", "^1.0.0"))
+    if c == "N4":
+        hit = 1
+        print(sv_cmp("v1.2.3", "1.2.3"))
+    if c == "N4b":
+        hit = 1
+        print(sv_satisfies("v1.2.3", "^1.0.0"))
+    if c == "N5":
+        hit = 1
+        print(sv_cmp("1..2", "1.2.3"))
+    if c == "N5b":
+        hit = 1
+        print(sv_satisfies("1..2", "^1.0.0"))
+    if c == "N6":
+        hit = 1
+        print(sv_cmp("1.2.3-", "1.2.3"))
+    if c == "N6b":
+        hit = 1
+        print(sv_satisfies("1.2.3-", "^1.0.0"))
+    if c == "N7":
+        hit = 1
+        print(sv_cmp("1.2.3+", "1.2.3"))
+    if c == "N7b":
+        hit = 1
+        print(sv_satisfies("1.2.3+", "^1.0.0"))
+    if c == "N8":
+        hit = 1
+        print(sv_cmp("-1.2.3", "1.2.3"))
+    if c == "N8b":
+        hit = 1
+        print(sv_satisfies("-1.2.3", "^1.0.0"))
+    if c == "N9":
+        hit = 1
+        print(sv_cmp("1.2.x", "1.2.3"))
+    if c == "N9b":
+        hit = 1
+        print(sv_satisfies("1.2.x", "^1.0.0"))
+    if c == "N10":
+        hit = 1
+        print(sv_cmp("", "1.2.3"))
+    if c == "N10b":
+        hit = 1
+        print(sv_satisfies("", "^1.0.0"))
+    if c == "N11":
+        hit = 1
+        print(sv_cmp("a.b.c", "1.2.3"))
+    if c == "N11b":
+        hit = 1
+        print(sv_satisfies("a.b.c", "^1.0.0"))
+    if c == "N12":
+        hit = 1
+        print(sv_cmp("1.2.3-01", "1.2.3"))
+    if c == "N12b":
+        hit = 1
+        print(sv_satisfies("1.2.3-01", "^1.0.0"))
+    if c == "N13":
+        hit = 1
+        print(sv_cmp("+1.2.3", "1.2.3"))
+    if c == "N13b":
+        hit = 1
+        print(sv_satisfies("+1.2.3", "^1.0.0"))
+    if c == "N14":
+        hit = 1
+        print(sv_cmp("1.2.3-alpha..1", "1.2.3"))
+    if c == "N14b":
+        hit = 1
+        print(sv_satisfies("1.2.3-alpha..1", "^1.0.0"))
+    if c == "Nr0":
+        hit = 1
+        print(sv_satisfies("1.5.0", "abc"))
+    if c == "Nr1":
+        hit = 1
+        print(sv_satisfies("1.5.0", "^"))
+    if c == "Nr2":
+        hit = 1
+        print(sv_satisfies("1.5.0", "~"))
+    if c == "Nr3":
+        hit = 1
+        print(sv_satisfies("1.5.0", "^^1.2.3"))
+    if c == "Nr4":
+        hit = 1
+        print(sv_satisfies("1.5.0", "1.2.3.4"))
+    if c == "Nr5":
+        hit = 1
+        print(sv_satisfies("1.5.0", "01.2.3"))
+    if c == "Nr6":
+        hit = 1
+        print(sv_satisfies("1.5.0", "*x"))
+    if c == "Nr7":
+        hit = 1
+        print(sv_satisfies("1.5.0", "v1.2.3"))
+    if c == "Zsv_parse_b0q0":
+        hit = 1
+        print(sv_parse(null))
+    if c == "Zsv_parse_b0q1":
+        hit = 1
+        print(sv_parse(true))
+    if c == "Zsv_parse_b0q2":
+        hit = 1
+        print(sv_parse(7))
+    if c == "Zsv_parse_b0q3":
+        hit = 1
+        print(sv_parse("s"))
+    if c == "Zsv_parse_b0q4":
+        hit = 1
+        print(sv_parse(([])))
+    if c == "Asv_parse_less":
+        hit = 1
+        print(sv_parse())
+    if c == "Asv_parse_more":
+        hit = 1
+        print(sv_parse(null, null))
+    if c == "Zsv_cmp_b0q0":
+        hit = 1
+        print(sv_cmp(null, "2.0.0"))
+    if c == "Zsv_cmp_b0q1":
+        hit = 1
+        print(sv_cmp(true, "2.0.0"))
+    if c == "Zsv_cmp_b0q2":
+        hit = 1
+        print(sv_cmp(7, "2.0.0"))
+    if c == "Zsv_cmp_b0q3":
+        hit = 1
+        print(sv_cmp("s", "2.0.0"))
+    if c == "Zsv_cmp_b0q4":
+        hit = 1
+        print(sv_cmp(([]), "2.0.0"))
+    if c == "Zsv_cmp_b1q0":
+        hit = 1
+        print(sv_cmp("1.2.3", null))
+    if c == "Zsv_cmp_b1q1":
+        hit = 1
+        print(sv_cmp("1.2.3", true))
+    if c == "Zsv_cmp_b1q2":
+        hit = 1
+        print(sv_cmp("1.2.3", 7))
+    if c == "Zsv_cmp_b1q3":
+        hit = 1
+        print(sv_cmp("1.2.3", "s"))
+    if c == "Zsv_cmp_b1q4":
+        hit = 1
+        print(sv_cmp("1.2.3", ([])))
+    if c == "Asv_cmp_less":
+        hit = 1
+        print(sv_cmp(null))
+    if c == "Asv_cmp_more":
+        hit = 1
+        print(sv_cmp(null, null, null))
+    if c == "Zsv_range_parse_b0q0":
+        hit = 1
+        print(sv_range_parse(null))
+    if c == "Zsv_range_parse_b0q1":
+        hit = 1
+        print(sv_range_parse(true))
+    if c == "Zsv_range_parse_b0q2":
+        hit = 1
+        print(sv_range_parse(7))
+    if c == "Zsv_range_parse_b0q3":
+        hit = 1
+        print(sv_range_parse("s"))
+    if c == "Zsv_range_parse_b0q4":
+        hit = 1
+        print(sv_range_parse(([])))
+    if c == "Asv_range_parse_less":
+        hit = 1
+        print(sv_range_parse())
+    if c == "Asv_range_parse_more":
+        hit = 1
+        print(sv_range_parse(null, null))
+    if c == "Zsv_satisfies_b0q0":
+        hit = 1
+        print(sv_satisfies(null, "^1.2.0"))
+    if c == "Zsv_satisfies_b0q1":
+        hit = 1
+        print(sv_satisfies(true, "^1.2.0"))
+    if c == "Zsv_satisfies_b0q2":
+        hit = 1
+        print(sv_satisfies(7, "^1.2.0"))
+    if c == "Zsv_satisfies_b0q3":
+        hit = 1
+        print(sv_satisfies("s", "^1.2.0"))
+    if c == "Zsv_satisfies_b0q4":
+        hit = 1
+        print(sv_satisfies(([]), "^1.2.0"))
+    if c == "Zsv_satisfies_b1q0":
+        hit = 1
+        print(sv_satisfies("1.2.5", null))
+    if c == "Zsv_satisfies_b1q1":
+        hit = 1
+        print(sv_satisfies("1.2.5", true))
+    if c == "Zsv_satisfies_b1q2":
+        hit = 1
+        print(sv_satisfies("1.2.5", 7))
+    if c == "Zsv_satisfies_b1q3":
+        hit = 1
+        print(sv_satisfies("1.2.5", "s"))
+    if c == "Zsv_satisfies_b1q4":
+        hit = 1
+        print(sv_satisfies("1.2.5", ([])))
+    if c == "Asv_satisfies_less":
+        hit = 1
+        print(sv_satisfies(null))
+    if c == "Asv_satisfies_more":
+        hit = 1
+        print(sv_satisfies(null, null, null))
+    if c == "Zsv_best_b0q0":
+        hit = 1
+        print(sv_best(null, "^1.2.0"))
+    if c == "Zsv_best_b0q1":
+        hit = 1
+        print(sv_best(true, "^1.2.0"))
+    if c == "Zsv_best_b0q2":
+        hit = 1
+        print(sv_best(7, "^1.2.0"))
+    if c == "Zsv_best_b0q3":
+        hit = 1
+        print(sv_best("s", "^1.2.0"))
+    if c == "Zsv_best_b0q4":
+        hit = 1
+        print(sv_best(([]), "^1.2.0"))
+    if c == "Zsv_best_b1q0":
+        hit = 1
+        print(sv_best(["1.2.0", "1.2.5"], null))
+    if c == "Zsv_best_b1q1":
+        hit = 1
+        print(sv_best(["1.2.0", "1.2.5"], true))
+    if c == "Zsv_best_b1q2":
+        hit = 1
+        print(sv_best(["1.2.0", "1.2.5"], 7))
+    if c == "Zsv_best_b1q3":
+        hit = 1
+        print(sv_best(["1.2.0", "1.2.5"], "s"))
+    if c == "Zsv_best_b1q4":
+        hit = 1
+        print(sv_best(["1.2.0", "1.2.5"], ([])))
+    if c == "Asv_best_less":
+        hit = 1
+        print(sv_best(null))
+    if c == "Asv_best_more":
+        hit = 1
+        print(sv_best(null, null, null))
+    if c == "Zsv_is_digit_b0q0":
+        hit = 1
+        print(sv_is_digit(null))
+    if c == "Zsv_is_digit_b0q1":
+        hit = 1
+        print(sv_is_digit(true))
+    if c == "Zsv_is_digit_b0q2":
+        hit = 1
+        print(sv_is_digit(7))
+    if c == "Zsv_is_digit_b0q3":
+        hit = 1
+        print(sv_is_digit("s"))
+    if c == "Zsv_is_digit_b0q4":
+        hit = 1
+        print(sv_is_digit(([])))
+    if c == "Asv_is_digit_less":
+        hit = 1
+        print(sv_is_digit())
+    if c == "Asv_is_digit_more":
+        hit = 1
+        print(sv_is_digit(null, null))
+    if c == "Zsv_is_alnum_b0q0":
+        hit = 1
+        print(sv_is_alnum(null))
+    if c == "Zsv_is_alnum_b0q1":
+        hit = 1
+        print(sv_is_alnum(true))
+    if c == "Zsv_is_alnum_b0q2":
+        hit = 1
+        print(sv_is_alnum(7))
+    if c == "Zsv_is_alnum_b0q3":
+        hit = 1
+        print(sv_is_alnum("s"))
+    if c == "Zsv_is_alnum_b0q4":
+        hit = 1
+        print(sv_is_alnum(([])))
+    if c == "Asv_is_alnum_less":
+        hit = 1
+        print(sv_is_alnum())
+    if c == "Asv_is_alnum_more":
+        hit = 1
+        print(sv_is_alnum(null, null))
+    if c == "Zsv_is_all_digits_b0q0":
+        hit = 1
+        print(sv_is_all_digits(null))
+    if c == "Zsv_is_all_digits_b0q1":
+        hit = 1
+        print(sv_is_all_digits(true))
+    if c == "Zsv_is_all_digits_b0q2":
+        hit = 1
+        print(sv_is_all_digits(7))
+    if c == "Zsv_is_all_digits_b0q3":
+        hit = 1
+        print(sv_is_all_digits("s"))
+    if c == "Zsv_is_all_digits_b0q4":
+        hit = 1
+        print(sv_is_all_digits(([])))
+    if c == "Asv_is_all_digits_less":
+        hit = 1
+        print(sv_is_all_digits())
+    if c == "Asv_is_all_digits_more":
+        hit = 1
+        print(sv_is_all_digits(null, null))
+    if c == "Zsv_index_of_b0q0":
+        hit = 1
+        print(sv_index_of(null, "b"))
+    if c == "Zsv_index_of_b0q1":
+        hit = 1
+        print(sv_index_of(true, "b"))
+    if c == "Zsv_index_of_b0q2":
+        hit = 1
+        print(sv_index_of(7, "b"))
+    if c == "Zsv_index_of_b0q3":
+        hit = 1
+        print(sv_index_of("s", "b"))
+    if c == "Zsv_index_of_b0q4":
+        hit = 1
+        print(sv_index_of(([]), "b"))
+    if c == "Zsv_index_of_b1q0":
+        hit = 1
+        print(sv_index_of("abc", null))
+    if c == "Zsv_index_of_b1q1":
+        hit = 1
+        print(sv_index_of("abc", true))
+    if c == "Zsv_index_of_b1q2":
+        hit = 1
+        print(sv_index_of("abc", 7))
+    if c == "Zsv_index_of_b1q3":
+        hit = 1
+        print(sv_index_of("abc", "s"))
+    if c == "Zsv_index_of_b1q4":
+        hit = 1
+        print(sv_index_of("abc", ([])))
+    if c == "Asv_index_of_less":
+        hit = 1
+        print(sv_index_of(null))
+    if c == "Asv_index_of_more":
+        hit = 1
+        print(sv_index_of(null, null, null))
+    if c == "Zhtml_escape_b0q0":
+        hit = 1
+        print(html_escape(null))
+    if c == "Zhtml_escape_b0q1":
+        hit = 1
+        print(html_escape(true))
+    if c == "Zhtml_escape_b0q2":
+        hit = 1
+        print(html_escape(7))
+    if c == "Zhtml_escape_b0q3":
+        hit = 1
+        print(html_escape("s"))
+    if c == "Zhtml_escape_b0q4":
+        hit = 1
+        print(html_escape(([])))
+    if c == "Ahtml_escape_less":
+        hit = 1
+        print(html_escape())
+    if c == "Ahtml_escape_more":
+        hit = 1
+        print(html_escape(null, null))
+    if c == "Zhx_decode_b0q0":
+        hit = 1
+        print(hx_decode(null))
+    if c == "Zhx_decode_b0q1":
+        hit = 1
+        print(hx_decode(true))
+    if c == "Zhx_decode_b0q2":
+        hit = 1
+        print(hx_decode(7))
+    if c == "Zhx_decode_b0q3":
+        hit = 1
+        print(hx_decode("s"))
+    if c == "Zhx_decode_b0q4":
+        hit = 1
+        print(hx_decode(([])))
+    if c == "Ahx_decode_less":
+        hit = 1
+        print(hx_decode())
+    if c == "Ahx_decode_more":
+        hit = 1
+        print(hx_decode(null, null))
+    if c == "Zhtml_parse_b0q0":
+        hit = 1
+        print(html_parse(null))
+    if c == "Zhtml_parse_b0q1":
+        hit = 1
+        print(html_parse(true))
+    if c == "Zhtml_parse_b0q2":
+        hit = 1
+        print(html_parse(7))
+    if c == "Zhtml_parse_b0q3":
+        hit = 1
+        print(html_parse("s"))
+    if c == "Zhtml_parse_b0q4":
+        hit = 1
+        print(html_parse(([])))
+    if c == "Ahtml_parse_less":
+        hit = 1
+        print(html_parse())
+    if c == "Ahtml_parse_more":
+        hit = 1
+        print(html_parse(null, null))
+    if c == "Zhtml_text_b0q0":
+        hit = 1
+        print(html_text(null))
+    if c == "Zhtml_text_b0q1":
+        hit = 1
+        print(html_text(true))
+    if c == "Zhtml_text_b0q2":
+        hit = 1
+        print(html_text(7))
+    if c == "Zhtml_text_b0q3":
+        hit = 1
+        print(html_text("s"))
+    if c == "Zhtml_text_b0q4":
+        hit = 1
+        print(html_text(([])))
+    if c == "Ahtml_text_less":
+        hit = 1
+        print(html_text())
+    if c == "Ahtml_text_more":
+        hit = 1
+        print(html_text(null, null))
+    if c == "Zhtml_children_b0q0":
+        hit = 1
+        print(html_children(null))
+    if c == "Zhtml_children_b0q1":
+        hit = 1
+        print(html_children(true))
+    if c == "Zhtml_children_b0q2":
+        hit = 1
+        print(html_children(7))
+    if c == "Zhtml_children_b0q3":
+        hit = 1
+        print(html_children("s"))
+    if c == "Zhtml_children_b0q4":
+        hit = 1
+        print(html_children(([])))
+    if c == "Ahtml_children_less":
+        hit = 1
+        print(html_children())
+    if c == "Ahtml_children_more":
+        hit = 1
+        print(html_children(null, null))
+    if c == "Zhtml_attr_b0q0":
+        hit = 1
+        print(html_attr(null, "class"))
+    if c == "Zhtml_attr_b0q1":
+        hit = 1
+        print(html_attr(true, "class"))
+    if c == "Zhtml_attr_b0q2":
+        hit = 1
+        print(html_attr(7, "class"))
+    if c == "Zhtml_attr_b0q3":
+        hit = 1
+        print(html_attr("s", "class"))
+    if c == "Zhtml_attr_b0q4":
+        hit = 1
+        print(html_attr(([]), "class"))
+    if c == "Zhtml_attr_b1q0":
+        hit = 1
+        print(html_attr(html_parse("<p>x</p>"), null))
+    if c == "Zhtml_attr_b1q1":
+        hit = 1
+        print(html_attr(html_parse("<p>x</p>"), true))
+    if c == "Zhtml_attr_b1q2":
+        hit = 1
+        print(html_attr(html_parse("<p>x</p>"), 7))
+    if c == "Zhtml_attr_b1q3":
+        hit = 1
+        print(html_attr(html_parse("<p>x</p>"), "s"))
+    if c == "Zhtml_attr_b1q4":
+        hit = 1
+        print(html_attr(html_parse("<p>x</p>"), ([])))
+    if c == "Ahtml_attr_less":
+        hit = 1
+        print(html_attr(null))
+    if c == "Ahtml_attr_more":
+        hit = 1
+        print(html_attr(null, null, null))
+    if c == "Zhtml_tag_b0q0":
+        hit = 1
+        print(html_tag(null))
+    if c == "Zhtml_tag_b0q1":
+        hit = 1
+        print(html_tag(true))
+    if c == "Zhtml_tag_b0q2":
+        hit = 1
+        print(html_tag(7))
+    if c == "Zhtml_tag_b0q3":
+        hit = 1
+        print(html_tag("s"))
+    if c == "Zhtml_tag_b0q4":
+        hit = 1
+        print(html_tag(([])))
+    if c == "Ahtml_tag_less":
+        hit = 1
+        print(html_tag())
+    if c == "Ahtml_tag_more":
+        hit = 1
+        print(html_tag(null, null))
+    if c == "Zhtml_query_b0q0":
+        hit = 1
+        print(html_query(null, "p"))
+    if c == "Zhtml_query_b0q1":
+        hit = 1
+        print(html_query(true, "p"))
+    if c == "Zhtml_query_b0q2":
+        hit = 1
+        print(html_query(7, "p"))
+    if c == "Zhtml_query_b0q3":
+        hit = 1
+        print(html_query("s", "p"))
+    if c == "Zhtml_query_b0q4":
+        hit = 1
+        print(html_query(([]), "p"))
+    if c == "Zhtml_query_b1q0":
+        hit = 1
+        print(html_query(html_parse("<p>x</p>"), null))
+    if c == "Zhtml_query_b1q1":
+        hit = 1
+        print(html_query(html_parse("<p>x</p>"), true))
+    if c == "Zhtml_query_b1q2":
+        hit = 1
+        print(html_query(html_parse("<p>x</p>"), 7))
+    if c == "Zhtml_query_b1q3":
+        hit = 1
+        print(html_query(html_parse("<p>x</p>"), "s"))
+    if c == "Zhtml_query_b1q4":
+        hit = 1
+        print(html_query(html_parse("<p>x</p>"), ([])))
+    if c == "Ahtml_query_less":
+        hit = 1
+        print(html_query(null))
+    if c == "Ahtml_query_more":
+        hit = 1
+        print(html_query(null, null, null))
+    if c == "Ahx_entities_more":
+        hit = 1
+        print(hx_entities(null))
+    if c == "Ahx_void_tags_more":
+        hit = 1
+        print(hx_void_tags(null))
+    if c == "Ahx_raw_tags_more":
+        hit = 1
+        print(hx_raw_tags(null))
+    if c == "Ahx_implicit_close_more":
+        hit = 1
+        print(hx_implicit_close(null))
+    if c == "Zhx_new_node_b0q0":
+        hit = 1
+        print(hx_new_node(null))
+    if c == "Zhx_new_node_b0q1":
+        hit = 1
+        print(hx_new_node(true))
+    if c == "Zhx_new_node_b0q2":
+        hit = 1
+        print(hx_new_node(7))
+    if c == "Zhx_new_node_b0q3":
+        hit = 1
+        print(hx_new_node("s"))
+    if c == "Zhx_new_node_b0q4":
+        hit = 1
+        print(hx_new_node(([])))
+    if c == "Ahx_new_node_less":
+        hit = 1
+        print(hx_new_node())
+    if c == "Ahx_new_node_more":
+        hit = 1
+        print(hx_new_node(null, null))
+    if c == "Zhx_find_b0q0":
+        hit = 1
+        print(hx_find(null, 0, "b"))
+    if c == "Zhx_find_b0q1":
+        hit = 1
+        print(hx_find(true, 0, "b"))
+    if c == "Zhx_find_b0q2":
+        hit = 1
+        print(hx_find(7, 0, "b"))
+    if c == "Zhx_find_b0q3":
+        hit = 1
+        print(hx_find("s", 0, "b"))
+    if c == "Zhx_find_b0q4":
+        hit = 1
+        print(hx_find(([]), 0, "b"))
+    if c == "Zhx_find_b1q0":
+        hit = 1
+        print(hx_find("abc", null, "b"))
+    if c == "Zhx_find_b1q1":
+        hit = 1
+        print(hx_find("abc", true, "b"))
+    if c == "Zhx_find_b1q2":
+        hit = 1
+        print(hx_find("abc", 7, "b"))
+    if c == "Zhx_find_b1q3":
+        hit = 1
+        print(hx_find("abc", "s", "b"))
+    if c == "Zhx_find_b1q4":
+        hit = 1
+        print(hx_find("abc", ([]), "b"))
+    if c == "Zhx_find_b2q0":
+        hit = 1
+        print(hx_find("abc", 0, null))
+    if c == "Zhx_find_b2q1":
+        hit = 1
+        print(hx_find("abc", 0, true))
+    if c == "Zhx_find_b2q2":
+        hit = 1
+        print(hx_find("abc", 0, 7))
+    if c == "Zhx_find_b2q3":
+        hit = 1
+        print(hx_find("abc", 0, "s"))
+    if c == "Zhx_find_b2q4":
+        hit = 1
+        print(hx_find("abc", 0, ([])))
+    if c == "Ahx_find_less":
+        hit = 1
+        print(hx_find(null, null))
+    if c == "Ahx_find_more":
+        hit = 1
+        print(hx_find(null, null, null, null))
+    if c == "Zhx_find_ci_b0q0":
+        hit = 1
+        print(hx_find_ci(null, 0, "B"))
+    if c == "Zhx_find_ci_b0q1":
+        hit = 1
+        print(hx_find_ci(true, 0, "B"))
+    if c == "Zhx_find_ci_b0q2":
+        hit = 1
+        print(hx_find_ci(7, 0, "B"))
+    if c == "Zhx_find_ci_b0q3":
+        hit = 1
+        print(hx_find_ci("s", 0, "B"))
+    if c == "Zhx_find_ci_b0q4":
+        hit = 1
+        print(hx_find_ci(([]), 0, "B"))
+    if c == "Zhx_find_ci_b1q0":
+        hit = 1
+        print(hx_find_ci("abc", null, "B"))
+    if c == "Zhx_find_ci_b1q1":
+        hit = 1
+        print(hx_find_ci("abc", true, "B"))
+    if c == "Zhx_find_ci_b1q2":
+        hit = 1
+        print(hx_find_ci("abc", 7, "B"))
+    if c == "Zhx_find_ci_b1q3":
+        hit = 1
+        print(hx_find_ci("abc", "s", "B"))
+    if c == "Zhx_find_ci_b1q4":
+        hit = 1
+        print(hx_find_ci("abc", ([]), "B"))
+    if c == "Zhx_find_ci_b2q0":
+        hit = 1
+        print(hx_find_ci("abc", 0, null))
+    if c == "Zhx_find_ci_b2q1":
+        hit = 1
+        print(hx_find_ci("abc", 0, true))
+    if c == "Zhx_find_ci_b2q2":
+        hit = 1
+        print(hx_find_ci("abc", 0, 7))
+    if c == "Zhx_find_ci_b2q3":
+        hit = 1
+        print(hx_find_ci("abc", 0, "s"))
+    if c == "Zhx_find_ci_b2q4":
+        hit = 1
+        print(hx_find_ci("abc", 0, ([])))
+    if c == "Ahx_find_ci_less":
+        hit = 1
+        print(hx_find_ci(null, null))
+    if c == "Ahx_find_ci_more":
+        hit = 1
+        print(hx_find_ci(null, null, null, null))
+    if c == "Zhx_is_name_start_b0q0":
+        hit = 1
+        print(hx_is_name_start(null))
+    if c == "Zhx_is_name_start_b0q1":
+        hit = 1
+        print(hx_is_name_start(true))
+    if c == "Zhx_is_name_start_b0q2":
+        hit = 1
+        print(hx_is_name_start(7))
+    if c == "Zhx_is_name_start_b0q3":
+        hit = 1
+        print(hx_is_name_start("s"))
+    if c == "Zhx_is_name_start_b0q4":
+        hit = 1
+        print(hx_is_name_start(([])))
+    if c == "Ahx_is_name_start_less":
+        hit = 1
+        print(hx_is_name_start())
+    if c == "Ahx_is_name_start_more":
+        hit = 1
+        print(hx_is_name_start(null, null))
+    if c == "Zhx_is_name_char_b0q0":
+        hit = 1
+        print(hx_is_name_char(null))
+    if c == "Zhx_is_name_char_b0q1":
+        hit = 1
+        print(hx_is_name_char(true))
+    if c == "Zhx_is_name_char_b0q2":
+        hit = 1
+        print(hx_is_name_char(7))
+    if c == "Zhx_is_name_char_b0q3":
+        hit = 1
+        print(hx_is_name_char("s"))
+    if c == "Zhx_is_name_char_b0q4":
+        hit = 1
+        print(hx_is_name_char(([])))
+    if c == "Ahx_is_name_char_less":
+        hit = 1
+        print(hx_is_name_char())
+    if c == "Ahx_is_name_char_more":
+        hit = 1
+        print(hx_is_name_char(null, null))
+    if c == "Zhx_is_space_b0q0":
+        hit = 1
+        print(hx_is_space(null))
+    if c == "Zhx_is_space_b0q1":
+        hit = 1
+        print(hx_is_space(true))
+    if c == "Zhx_is_space_b0q2":
+        hit = 1
+        print(hx_is_space(7))
+    if c == "Zhx_is_space_b0q3":
+        hit = 1
+        print(hx_is_space("s"))
+    if c == "Zhx_is_space_b0q4":
+        hit = 1
+        print(hx_is_space(([])))
+    if c == "Ahx_is_space_less":
+        hit = 1
+        print(hx_is_space())
+    if c == "Ahx_is_space_more":
+        hit = 1
+        print(hx_is_space(null, null))
+    if c == "Zhx_parse_open_b0q0":
+        hit = 1
+        print(hx_parse_open(null))
+    if c == "Zhx_parse_open_b0q1":
+        hit = 1
+        print(hx_parse_open(true))
+    if c == "Zhx_parse_open_b0q2":
+        hit = 1
+        print(hx_parse_open(7))
+    if c == "Zhx_parse_open_b0q3":
+        hit = 1
+        print(hx_parse_open("s"))
+    if c == "Zhx_parse_open_b0q4":
+        hit = 1
+        print(hx_parse_open(([])))
+    if c == "Ahx_parse_open_less":
+        hit = 1
+        print(hx_parse_open())
+    if c == "Ahx_parse_open_more":
+        hit = 1
+        print(hx_parse_open(null, null))
+    if c == "Zhx_parse_end_b0q0":
+        hit = 1
+        print(hx_parse_end(null))
+    if c == "Zhx_parse_end_b0q1":
+        hit = 1
+        print(hx_parse_end(true))
+    if c == "Zhx_parse_end_b0q2":
+        hit = 1
+        print(hx_parse_end(7))
+    if c == "Zhx_parse_end_b0q3":
+        hit = 1
+        print(hx_parse_end("s"))
+    if c == "Zhx_parse_end_b0q4":
+        hit = 1
+        print(hx_parse_end(([])))
+    if c == "Ahx_parse_end_less":
+        hit = 1
+        print(hx_parse_end())
+    if c == "Ahx_parse_end_more":
+        hit = 1
+        print(hx_parse_end(null, null))
+    if c == "Zhx_parse_selector_b0q0":
+        hit = 1
+        print(hx_parse_selector(null))
+    if c == "Zhx_parse_selector_b0q1":
+        hit = 1
+        print(hx_parse_selector(true))
+    if c == "Zhx_parse_selector_b0q2":
+        hit = 1
+        print(hx_parse_selector(7))
+    if c == "Zhx_parse_selector_b0q3":
+        hit = 1
+        print(hx_parse_selector("s"))
+    if c == "Zhx_parse_selector_b0q4":
+        hit = 1
+        print(hx_parse_selector(([])))
+    if c == "Ahx_parse_selector_less":
+        hit = 1
+        print(hx_parse_selector())
+    if c == "Ahx_parse_selector_more":
+        hit = 1
+        print(hx_parse_selector(null, null))
+    if hit == 0:
+        print("NOCASE")
