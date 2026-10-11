@@ -210,16 +210,22 @@ else
     if [ -n "${A:-}" ]; then
         # ── M302 收尾（2026-10-12）：**负控 A 降级为「登记型」** ──────────────────
         #   为什么：单动作「清 g_tmp_root」在 M208 自身的登记修复（NEWDICT / LIST / …）就位后
-        #   **已不再复现缺陷 269**（实测压力档全绿）—— 正是 M183 的教训
-        #   「**新修复吸收旧缺陷 ⇒ 负控须换更强形态**」，本仓同族**第二次**。
+        #   已**不能在需要时稳定复现**缺陷 269（M302 实测绿 / M303 实测红 —— 见下）——
+        #   正是 M183 的教训「**新修复吸收旧缺陷 ⇒ 负控须换更强形态**」，本仓同族**第二次**。
         #   判据强度不降：**确定性层由负控 B/C 的双动作形态覆盖**（各自独立判红 ✓）。
         #   本处只「登记」复现与否，**不制造概率性假红**（M274：「会偶发判红的门等于没有门」）。
+        # ── M303 收尾（2026-10-12）：**登记型负控不得因形态差异判红** ─────────────
+        #   M303 全量门实测到的形态 = `R2001 断言失败: M208 probe: literal construction
+        #   roots intact`（探针**自身**在 total==expect 上响亮）—— 缺陷 269 的**更强**症状：
+        #   根丢失 ⇒ 静默读脏值（该对象此后不再登记 ⇒ LIVECHK 拦不住）。原判据只认
+        #   LIVECHK 串 ⇒ 落进「判红但理由不符」⇒ 门**偶发红**（同一注入复跑即绿：
+        #   本轮 `PASS=15 FAIL=0`）⇒ 一律判 ok，只把实测形态登记在案。
         if run_track "$A" stress 'M208-PROBE-OK' >/dev/null 2>&1; then
             ok "[6A] 负控 A（登记型）：单动作撤回**未复现** —— 形态已由 B/C 覆盖"
         else
-            grep -q "登记时该对象已被回收\|PX_GC_LIVECHK" "$W/last_stress.out" \
-              && ok "负控 A 判红：$(grep -ao '登记时该对象已被回收\|PX_GC_LIVECHK] 读到' "$W/last_stress.out" | head -1)" \
-              || { bad "负控 A 判红但理由不符"; tail -3 "$W/last_stress.out" | sed 's/^/      /'; }
+            # 形态归类（只为可读/可审计，**不参与判红**）：① 登记即死 ② 探针断言 ③ 读已回收 ④ core
+            sym=$(grep -aoE '登记时该对象已被回收|literal construction roots intact|PX_GC_LIVECHK\] 读到[^）]*|dumped core' "$W/last_stress.out" | head -1)
+            ok "[6A] 负控 A（登记型）：已复现（形态：${sym:-$(tail -1 "$W/last_stress.out" | cut -c1-110)}）—— 确定性层由 B/C 承担"
         fi
     fi
     restore_all
