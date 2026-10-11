@@ -124,7 +124,6 @@ else
     if [ "$nrc" != "0" ]; then ok "[3A] 撤回「$1」⇒ 判红 ✓"
     else bad "[3A] 撤回「$1」后**没有**判红（负控无牙）"; fi
   }
-  neg_case_py "缺陷 520（^ 缺段拼出 0.0.-1）" "$SEM"
   neg_case_py() {   # $1=描述  $2=目标文件：把 ^ 分支的 else 两行**忠实换回**旧文本
     restore_all
     python3 - "$2" <<'PYEOF'
@@ -142,10 +141,11 @@ PYEOF
     if [ "$nrc" != "0" ]; then ok "[3A] 撤回「$1」⇒ 判红 ✓"
     else bad "[3A] 撤回「$1」后**没有**判红（负控无牙）"; fi
   }
+  neg_case_py "缺陷 520（^ 缺段拼出 0.0.-1）" "$SEM"
   neg_case "缺陷 521（^ 单独非法）"   's|            return null|            return {"lo": "0.0.0", "hi": "999999999.0.0", "pre": ""}|' "$SEM"
   neg_case "缺陷 522（sv_cmp 静默）"  's|        panic("sv_cmp: 版本号非法: " + str(a))|        a = "0.0.0"|'  "$SEM"
   neg_case "缺陷 524（不转单引号）"   's|            out += "&#39;"|            out += ""|'                  "$HTM"
-  neg_case "缺陷 523（nbsp 错成空格）" 's|    e.set("nbsp", "\u{00a0}")|    e.set("nbsp", " ")|'            "$HTM"
+  neg_case "缺陷 523（nbsp 错成空格）" 's|    e.set("nbsp", "\\u{00a0}")|    e.set("nbsp", " ")|'            "$HTM"
   restore_all
   # 3B 判据自伤：把 [B] 比对恒真 ⇒ 上面那些红必须消失（证明红确实来自比对，而不是别处）
   cp -f "$HERE/three.py" "$W/logs/three.bak.py"

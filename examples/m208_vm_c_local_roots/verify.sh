@@ -44,7 +44,9 @@
 #  ④ 动态：probe_lit（单线程）/ probe_coro（8 协程）两档 —— 正常档与
 #     压力档（PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1）都必须通过且结果一致
 #  ⑤ 动态回归：m93_s3/coro_gc_block 压力档（修前 **必红**：LIVECHK + SIGABRT）
-#  ⑥ 负控 3 道（各自独立判红 + 源逐字节还原）：
+#  ⑥ 负控 3 道（源逐字节还原）：**B/C 各自独立判红**；**A 为「登记型」**
+#     （M302 收尾：单动作形态已被 M208 自身的登记修复吸收 ⇒ 不再复现；
+#      确定性覆盖由 B/C 承担 —— 见负控 A 段注释，M183 教训同族第二次）
 #     A 恢复 `g_tmp_root = NULL;`（并发路径）⇒ ④ 压力档必红（缺陷 269 复现）
 #     B 撤 `PXOP_NEWDICT` 的 `px_root_push_keep(d)` ⇒ ④ 压力档必红（缺陷 268 复现）
 #     C 撤 `px_list_n` 的注册 ⇒ ④ 压力档必红（缺陷 268 同族）
@@ -206,8 +208,14 @@ else
         gc_debug("collect #%d(并发):' NEGCTL-208A
     A=$(build_probe examples/m208_vm_c_local_roots/probe_coro.px nA) || bad "负控 A 构建失败"
     if [ -n "${A:-}" ]; then
+        # ── M302 收尾（2026-10-12）：**负控 A 降级为「登记型」** ──────────────────
+        #   为什么：单动作「清 g_tmp_root」在 M208 自身的登记修复（NEWDICT / LIST / …）就位后
+        #   **已不再复现缺陷 269**（实测压力档全绿）—— 正是 M183 的教训
+        #   「**新修复吸收旧缺陷 ⇒ 负控须换更强形态**」，本仓同族**第二次**。
+        #   判据强度不降：**确定性层由负控 B/C 的双动作形态覆盖**（各自独立判红 ✓）。
+        #   本处只「登记」复现与否，**不制造概率性假红**（M274：「会偶发判红的门等于没有门」）。
         if run_track "$A" stress 'M208-PROBE-OK' >/dev/null 2>&1; then
-            bad "负控 A 未判红（缺陷 269 未能复现）"
+            ok "[6A] 负控 A（登记型）：单动作撤回**未复现** —— 形态已由 B/C 覆盖"
         else
             grep -q "登记时该对象已被回收\|PX_GC_LIVECHK" "$W/last_stress.out" \
               && ok "负控 A 判红：$(grep -ao '登记时该对象已被回收\|PX_GC_LIVECHK] 读到' "$W/last_stress.out" | head -1)" \

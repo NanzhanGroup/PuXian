@@ -1,6 +1,6 @@
 # stdlib 覆盖面台账基线（**只减不增**）· 未提及的门语料函数
 # 格式：<module>.<fn>	<理由>
-# cap=190
+# cap=167
 cookiejar.cj_is_int	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_blank	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_parse_setcookie	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
@@ -22,25 +22,9 @@ go_strings.go_prefix	存量欠账：尚无门的语料以调用形态提及（M3
 go_strings.go_truncate	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 go_strings.go_index	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 go_strings.go_parse_i64	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_void_tags	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_raw_tags	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_implicit_close	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_new_node	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_add_text	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_open	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_close_upto	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_find	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_find_ci	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_entities	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_decode	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_is_name_start	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_is_name_char	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_is_space	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_parse_open	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_parse_end	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.html_children	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.html_tag	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_parse_selector	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_collect	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 io.write_all	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
@@ -86,13 +70,6 @@ pxml.px_parse_array	存量欠账：尚无门的语料以调用形态提及（M30
 pxml.px_parse_body	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_parse_container	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_parse_document	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_is_digit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_is_alnum	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_is_all_digits	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_index_of	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_cmp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_range_parse	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-semver.sv_best	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_isdigit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_rfind	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_rtrim	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
