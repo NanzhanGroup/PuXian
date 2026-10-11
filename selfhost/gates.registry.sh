@@ -1477,3 +1477,22 @@ run m298_quic_write_wait bash examples/m298_quic_write_wait/verify.sh
 #   ⚠️ 本门**不提供** `--neg-skip`：两道负控都只改 $W 里的副本（≈1s）⇒ 任何档位全跑。
 # ═══════════════════════════════════════════════════════════════════════════
 run m299_wake_channel bash examples/m299_wake_channel/verify.sh
+
+# ═══════════════════════════════════════════════════════════════════════════
+# M300（第 174 轮）：stdlib **覆盖面台账**（把口头账变成可判定）+ 第二批边界面
+#   （std.strings 16 + std.url 7 = 23 个公开导出 · 375 例 × 三轨 × 2 遍 = 2250 次执行）
+#   立论：M279 开了 stdlib 边界面，但**只有 21 例**；而 CHANGELOG 写的
+#        「第一批取 std.collections + std.path」在实测上是**口头账**
+#        （std.path 9 个导出**只被碰到 1 个**）。
+#   台账 `selfhost/stdlib_coverage.py`（口径 = **语料面提及率**，四判据 C1–C4 · 自证 9/0 ·
+#        基线 `selfhost/stdlib_uncovered.tsv` **只减不增** cap=N）：建账即 313 导出里 212 个未提及。
+#   判据四层：[A] 三轨一致 · [B] 合法侧**独立期望值**（ref.py，不同语言/不同算法）·
+#        [C] **确定性**（同二进制两遍逐字节）· [D] 契约表**双向**；另有 [E] NOCASE（防驱动器脱节）。
+#   新登记 **缺陷 518**：编译两轨对「函数调用的实参个数不符」**不做前置检查**
+#        （解释轨 R1005 指名缺哪个参数 · VM 轨多参静默忽略 · **C 轨缺参静默给 null**）
+#        —— 由 `ARITY_KNOWN.tsv` **双向**看守（修好后登记过期 ⇒ 判红逼更新）。
+#   ⚡ 耗时：**门内并行**（M244 的 `selfhost/gate_par.py` · `pmap`）—— 2250 次 spawn 彼此无依赖
+#        ⇒ 实测 **串行 480s → 并行 84s（5.7×）**；已登记进
+#        `examples/m244_gate_parallel/targets.tsv`，并由 [2k] 断言「串行 ⇄ 并行逐条读数相同」。
+# ═══════════════════════════════════════════════════════════════════════════
+run m300_stdlib_surface2 bash examples/m300_stdlib_surface2/verify.sh
