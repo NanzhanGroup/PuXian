@@ -9,15 +9,23 @@
 #
 #   修前：链红 / 裁决不一致 / 前提不成立 ⇒ 只挂 p1 ⇒ 45 分钟无人了结 ⇒
 #         `dy-notify.sh esc` **推一条 QQ 给用户**（用户既不能也不该去修）。
-#   修后：**立即调 dy-wake.sh 叫醒东月**（走 QQ 网关的网关注入通道 msg_type=inject
-#         ⇒ 网关构造一条 owner 原生消息 ⇒ 完整会话链路 ⇒ 东月自己修 + 汇报）。
-#         p1 仍保留 ⇒ `esc` 45 分钟后**再次唤醒**（不再推用户）；
+#   修后：**立即挂 p1 叫醒东月** —— `dy-notify.sh p1`（v2.5 起）写**交接单** +
+#         `ws-core -task-park`，走**文殊系统原生任务自驱**（唤醒时把交接单正文喂进提示词
+#         ⇒ 有上下文；自驱任务不受黑名单限制）⇒ 东月自己修 + 汇报；
+#         `esc` 45 分钟后**再次唤醒**（兜底，不再推用户）；
 #         只有「叫醒东月这条路本身断了」才惊动用户（基础设施事故，1 小时一次上限）。
+#   ⚠️ v3（2026-10-11）：观察器**删掉了自己那次 `wake`（dy-wake.sh 注入）** —— 它曾与
+#         p1 的原生自驱构成**两条并行唤醒通道**，一次事故叫醒两个会话、同抢一个仓库
+#         （M299 实测：11:58 dy-wake 注入 + 12:00 总线唤醒 · 缺陷 517）。
+#         ⇒ 本门判据由「观察器是否调 dy-wake」改为**机制无关契约**：
+#           ① 失败态（RED/INCONSISTENT/PREMISE）**必须挂 p1**（唤醒由 p1 侧保证）
+#           ② 观察器**不得再调 dy-wake**（反向判据，挡住并行通道复活）
 #
 # 层：
 #   [1] 静态（源码派生 + 反向判据 + 规模锚点）
-#   [2] 动态：观察器四分支 —— RED/INCONSISTENT/PREMISE **必须唤醒**；GREEN **必须不**唤醒
-#   [3] 动态：dy-wake 去重与三重限流（真实脚本；CI 上无此文件 ⇒ 响亮 SKIP 并计数）
+#   [2] 动态：观察器四分支 —— RED/INCONSISTENT/PREMISE **必须挂 p1（=唤醒入口）**；
+#       GREEN **必须不**挂 p1、且推 p0
+#   [3] 动态：dy-wake 去重与三重限流（**已退役组件的遗留覆盖**；真实脚本；CI 上无 ⇒ SKIP）
 #   [4] 负控 2 道（各自独立判红 · 只改 $W 里的副本，**不动仓库源**）
 #   [5] 覆盖边界
 #
@@ -45,24 +53,25 @@ DN="/usr/local/sbin/dy-notify.sh"
 DW="/usr/local/sbin/dy-wake.sh"
 SKIP=0
 
-printf '\n══ [1] 静态：三分支唤醒 + esc 改道 + openid 剥后缀 ══\n'
+printf '\n══ [1] 静态：三分支挂 p1（=唤醒入口）+ 反向「不得再调 dy-wake」+ esc 改道 + 剥后缀 ══\n'
 [ -f "$WC" ] || { bad "观察器不存在：$WC"; echo 'M299-VERIFY-FAIL'; exit 1; }
 
-# 1.1 wake() 定义在位
-n="$(code "$WC" | grep -c '^wake()' || true)"; chk '观察器定义了 wake()' "$n" '1'
-# 1.2 三分支各调一次 wake（RED / INCONSISTENT / PREMISE 的键）
+# 1.1 v3 反向：观察器**不得再定义/调用 wake()**、不得再引用 dy-wake
+#     （dy-wake 那条并行通道必须彻底消失 —— 否则一次事故又叫醒两个会话）
+n="$(code "$WC" | grep -c '^wake()' || true)"; chk '观察器不再定义 wake()（v3 反向判据）' "$n" '0'
+n="$(code "$WC" | grep -c 'dy-wake' || true)"; chk '观察器不再引用 dy-wake（v3 反向判据）' "$n" '0'
+# 1.2 三分支各挂一次 p1 —— 这就是**唤醒入口**（dy-notify.sh p1 自 v2.5 起原生自驱）
 for k in red verdict premise; do
-  n="$(code "$WC" | grep -c "wake \"m\$N-$k\"" || true)"
-  chk "分支 $k 调用 wake" "$n" '1'
+  n="$(code "$WC" | grep -c "notify p1 \"m\$N-$k\"" || true)"
+  chk "分支 $k 挂 p1（唤醒入口）" "$n" '1'
 done
-# 1.3 反向：唤醒调用必须在**分支体**内（不能只在函数定义里出现）
-n="$(code "$WC" | grep -c 'wake ' || true)"
-if [ "$n" -ge 4 ]; then ok "wake 调用点 ≥4（定义 1 + 分支 3+）"; else bad "wake 调用点仅 $n 处"; fi
-# 1.4 绿色路径：**唯一允许**的唤醒是「make_tag 推送失败」的补救（那也不是结论，是行动）
-#     ⚠️ 首版写成『GREEN 分支 wake 数 == 0』是**错的判据** —— 那把「发版没推上去」也
-#     当成「不用叫醒」，而那恰恰需要东月去救。真正的红线由 [2] 动态层判（GREEN 正常路径不唤醒）。
-n="$(code "$WC" | awk '/^GREEN\)/,/^[[:space:]]*;;/' | grep -c '^ *wake ' || true)"
-if [ "$n" -le 1 ]; then ok "GREEN 分支唤醒点 ≤1（仅 make_tag 失败补救）"; else bad "GREEN 分支有 $n 处唤醒"; fi
+# 1.3 规模锚点：观察器仍是一个**真实动作**的脚本（不是把动作全删了）
+n="$(code "$WC" | grep -c 'notify ' || true)"
+if [ "$n" -ge 4 ]; then ok "notify 调用点 ≥4（resolve/p0 + 三分支 p1）"; else bad "notify 调用点仅 $n 处"; fi
+# 1.4 绿色路径：**不得**挂 p1（正常绿不叫醒东月）；只有 make_tag 失败补救允许 1 处
+#     ⚠️ 判据是「≤1」而非「==0」：『发版没推上去』恰恰需要东月去救（真实红线由 [2] 判）。
+n="$(code "$WC" | awk '/^GREEN\)/,/^[[:space:]]*;;/' | grep -c 'notify p1 ' || true)"
+if [ "$n" -le 1 ]; then ok "GREEN 分支 p1 点 ≤1（仅 make_tag 失败补救）"; else bad "GREEN 分支有 $n 处 p1"; fi
 n="$(awk '/^GREEN\)/,/^[[:space:]]*;;/' "$WC" | grep -c 'make_tag.sh' || true)"
 if [ "$n" -ge 1 ]; then ok 'GREEN 分支含 make_tag（发版动作在位）'; else bad 'GREEN 分支缺 make_tag'; fi
 
@@ -130,20 +139,21 @@ mklog "$W/logs/green.log" green
 
 rc="$(run_wc red)"
 chk 'RED 分支退出码 1' "$rc" '1'
-n="$(grep -c '^WAKE m299-red ' "$STUBLOG" || true)"; chk 'RED ⇒ **唤醒**（键 m299-red）' "$n" '1'
-n="$(grep -c '^NOTIFY p1 m299-red ' "$STUBLOG" || true)"; chk 'RED ⇒ 仍挂 p1（供 esc 重试）' "$n" '1'
+n="$(grep -c '^NOTIFY p1 m299-red ' "$STUBLOG" || true)"; chk 'RED ⇒ 挂 p1（唤醒入口 · 键 m299-red）' "$n" '1'
+n="$(grep -c '^WAKE ' "$STUBLOG" || true)"; chk 'RED ⇒ **不再**调 dy-wake（并行通道已断）' "$n" '0'
 
 rc="$(run_wc inconsistent)"
 chk 'INCONSISTENT 分支退出码 2' "$rc" '2'
-n="$(grep -c '^WAKE m299-verdict ' "$STUBLOG" || true)"; chk 'INCONSISTENT ⇒ 唤醒（键 m299-verdict）' "$n" '1'
+n="$(grep -c '^NOTIFY p1 m299-verdict ' "$STUBLOG" || true)"; chk 'INCONSISTENT ⇒ 挂 p1（键 m299-verdict）' "$n" '1'
 
 rc="$(run_wc red '--runner /nonexistent/run_gates.sh')"
 chk 'PREMISE 分支退出码 3' "$rc" '3'
-n="$(grep -c '^WAKE m299-premise ' "$STUBLOG" || true)"; chk 'PREMISE ⇒ 唤醒（键 m299-premise）' "$n" '1'
+n="$(grep -c '^NOTIFY p1 m299-premise ' "$STUBLOG" || true)"; chk 'PREMISE ⇒ 挂 p1（键 m299-premise）' "$n" '1'
 
 rc="$(run_wc green)"
 chk 'GREEN 分支退出码 0' "$rc" '0'
-n="$(grep -c '^WAKE ' "$STUBLOG" || true)"; chk 'GREEN ⇒ **不**唤醒' "$n" '0'
+n="$(grep -c '^WAKE ' "$STUBLOG" || true)"; chk 'GREEN ⇒ 不调 dy-wake' "$n" '0'
+n="$(grep -c '^NOTIFY p1 ' "$STUBLOG" || true)"; chk 'GREEN ⇒ 不挂 p1（正常绿不叫醒）' "$n" '0'
 n="$(grep -c '^NOTIFY p0 ' "$STUBLOG" || true)"; chk 'GREEN ⇒ p0（结论推用户）' "$n" '1'
 
 printf '\n══ [3] 动态：dy-wake 去重与三重限流 ══\n'
@@ -187,13 +197,13 @@ fi
 unset DY_WAKE_SOCK DY_WAKE_DIR DY_WAKE_LOG DY_WAKE_COOLDOWN DY_WAKE_MAX DY_WAKE_HOURLY 2>/dev/null || true
 
 printf '\n══ [4] 负控（只改工作区副本，不动仓库源）══\n'
-# NC-A：把 RED 分支的唤醒调用从副本里删掉 ⇒ 红线必须**不再唤醒**（判据有牙）
+# NC-A：把 RED 分支的 p1 调用从副本里删掉 ⇒ 红线必须**不再挂 p1**（判据有牙）
 mkdir -p "$W/nc/packaging/chain"
 cp -a packaging/chain/. "$W/nc/packaging/chain/"
 python3 - "$W/nc/$WC" <<'PY'
 import io, sys
 p = sys.argv[1]; s = io.open(p, encoding='utf-8').read()
-old = '    wake "m$N-red" "M$N 全量门红（未推送）" "红门：$RL｜门日志：$LOG"\n'
+old = '    notify p1 "m$N-red" "M$N 全量门红（未推送）" "红门：$RL"\n'
 assert s.count(old) == 1, 'NC-A 锚点命中 %d 次' % s.count(old)
 io.open(p, 'w', encoding='utf-8').write(s.replace(old, ''))
 PY
@@ -201,8 +211,8 @@ if [ $? = 0 ]; then
   : > "$STUBLOG"
   mkdir -p "$W/nc/logs"; cp -a "$W/logs/red.log" "$W/nc/logs/red.log"
   PATH="$W/bin:$PATH" bash "$W/nc/$WC" 299 "$W/nc/logs/red.log" --no-push >"$W/nc/out" 2>&1
-  n="$(grep -c '^WAKE m299-red' "$STUBLOG" || true)"
-  chk 'NC-A：删掉唤醒 ⇒ RED 不再唤醒（负控成立）' "$n" '0'
+  n="$(grep -c '^NOTIFY p1 m299-red' "$STUBLOG" || true)"
+  chk 'NC-A：删掉 p1 ⇒ RED 不再挂 p1（负控成立）' "$n" '0'
 else
   bad 'NC-A 打桩失败（锚点缺失）'
 fi
@@ -238,7 +248,8 @@ cat <<'TXT'
     「真通道能把我叫醒」由**人工演练**证明（M299 已做：注入 → 网关日志
     `[inject] 收到 … user=<裸 openid>` → `[inject-] 收到来自 … C2C_MESSAGE_CREATE`
     → `已创建任务 T…`），**不是**由本门保证。
-  · [2] 只判「观察器是否调用 wake」；`dy-wake.sh` 内部的限流由 [3] 覆盖（两者互补）。
+  · [2] 只判「观察器是否挂 p1（唤醒入口）」+ 反向「是否偷调 dy-wake」；`dy-wake.sh`
+    内部的限流由 [3] 覆盖（**该组件已于 2026-10-11 退役**，[3] 仅作遗留覆盖）。
   · CI 上 `dy-notify.sh` / `dy-wake.sh` 不在（它们住在服务器的 /usr/local/sbin）⇒
     相关层**响亮 SKIP 并计数**，不静默绿。
   · 不覆盖：`dy-ops-escalate.timer` 的实际触发（systemd 单元本体）· QQ 网关侧的

@@ -11,16 +11,18 @@
 #                  [--runner run_gates.sh] [--tag-push] [--dry]
 # 行为：
 #   GREEN        ⇒ resolve-topic m<N> · make_tag --milestone N --push（默认）· p0
-#   RED          ⇒ p1 m<N>-red + **dy-wake 叫醒东月**（红门清单）
-#   INCONSISTENT ⇒ p1 m<N>-verdict + **dy-wake**（**措辞刻意不同**：这不是「门红」，是判据问题）
-#   PREMISE-FAIL ⇒ p1 m<N>-premise + **dy-wake**（裁决器与门实现脱节）
+#   RED          ⇒ p1 m<N>-red（挂 p1 即**唤醒**东月 —— 见下方 v2/v3 说明）
+#   INCONSISTENT ⇒ p1 m<N>-verdict（**措辞刻意不同**：这不是「门红」，是判据问题）
+#   PREMISE-FAIL ⇒ p1 m<N>-premise（裁决器与门实现脱节）
 #
 # ⚠️ v2（2026-10-11，用户令）：「无人值守失败」**不该推给用户** ——
 #   用户原话：「推给我，难道我能起来干活吗？那就不应该推给我，应该是推给你，
 #   你干完活给我报告，我不需要这种无人值守的脚本推送消息。」
-#   ⇒ 红/不一致/前提不成立时，除挂 p1（供 esc 重试）外**立即 dy-wake 注入一条
-#     owner 原生消息**把东月叫醒（走完整会话链路 ⇒ 东月自己修 + 汇报）。
-#   p1 仍保留：唤醒失败时由 `dy-notify.sh esc` 在 45 分钟后**再次唤醒**（现在也是唤醒，不是推用户）。
+#   ⇒ 红/不一致/前提不成立时**只挂 p1** —— **叫醒那一步由 `dy-notify.sh p1` 自己完成**：
+#     v2.5 起它写**交接单** + `ws-core -task-park`，走文殊系统原生任务自驱（唤醒时把交接单
+#     正文喂进提示词 ⇒ 有上下文；自驱任务不受黑名单限制），不再伪造 QQ 消息注入。
+#   `dy-notify.sh esc` 仍保留，作为 45 分钟仍未了结的兜底（同样是自驱，不是推用户）。
+#   ⚠️ v3：本脚本**已删掉自己那次 wake**（两条并行通道会一次事故叫醒两个会话 —— 见下方 v3 注释）。
 #
 # ⚠️ 三条纪律（都是实测换来的）：
 #   ① **等待用 PID，不用日志内容** —— 追加式日志里的旧 FAIL 行会让「曾经失败」
@@ -61,15 +63,14 @@ notify() {
     "$N_BIN" "$@" >/dev/null 2>&1 || true
 }
 
-# v2：自唤醒（叫醒东月，不是推给用户）—— 见文件头 v2 说明
-W_BIN="$(command -v dy-wake.sh 2>/dev/null || true)"
-[ -n "$W_BIN" ] || { [ -x /usr/local/sbin/dy-wake.sh ] && W_BIN=/usr/local/sbin/dy-wake.sh; }
-[ -n "$W_BIN" ] || W_BIN=""
-wake() {
-    [ -n "$W_BIN" ] || return 0
-    if [ "$DRY" = 1 ]; then printf '   [dry] dy-wake %s\n' "$1"; return 0; fi
-    "$W_BIN" "$@" >>"${LOG}.wake" 2>&1 || true
-}
+# ⚠️ v3（2026-10-11）：**本脚本不再自己调 dy-wake.sh**。
+#   到此为止 `wake()` 与 `notify p1` 是**两条并行的唤醒通道**（文殊系统原生自驱 +
+#   伪造 QQ 消息注入）—— 一次事故会被叫醒**两个会话**、同抢一个仓库：M299 实测
+#   11:58 `dy-wake` 注入 + 12:00 `buswake` 总线唤醒，两个会话互踩（缺陷 517）。
+#   既然 `dy-notify.sh p1` 自 v2.5 起已改走**文殊系统原生任务自驱**（写交接单 +
+#   `ws-core -task-park`，唤醒时把交接单正文喂进提示词 ⇒ 有上下文；自驱任务不受
+#   黑名单限制），这里再 wake 一次纯属重复 ⇒ **删掉 `wake()` 与 W_BIN 探测**。
+#   （`dy-wake.sh` 文件保留在 /usr/local/sbin/ 仅作回滚，任何脚本都不再调用它。）
 
 # ── ① 等门（按 PID —— 不用日志内容当状态）──────────────────────────
 if [ -n "$PID" ]; then
@@ -95,7 +96,6 @@ GREEN)
         else
             bash packaging/make_tag.sh --milestone "$N" --push || {
                 notify p1 "m$N-tag" "make_tag rc≠0（门已绿但推送失败）" "见 stdout"
-                wake "m$N-tag" "M$N 门已绿但 make_tag 推送失败" "见 $LOG / stdout"
             }
         fi
     fi
@@ -105,18 +105,14 @@ RED)
     RL="$(printf '%s\n' "$OUT" | awk '/^  红门：/{sub(/^  红门：/,""); print}')"
     [ -n "$RL" ] || RL="（清单为空 —— 这不是门红，请看 INCONSISTENT 分支）"
     notify p1 "m$N-red" "M$N 全量门红（未推送）" "红门：$RL"
-    wake "m$N-red" "M$N 全量门红（未推送）" "红门：$RL｜门日志：$LOG"
     ;;
 INCONSISTENT)
     notify p1 "m$N-verdict" "M$N 门裁决不一致（未推送）" \
 "判据/日志互相矛盾，**不是门红** —— 按缺陷 495 的处置：先查判据串，别查门。
 详见 stdout / $LOG。"
-    wake "m$N-verdict" "M$N 门裁决不一致（未推送）" \
-"判据/日志互相矛盾，**不是门红** —— 按缺陷 495：先查判据串，别查门。门日志：$LOG"
     ;;
 *)
     notify p1 "m$N-premise" "M$N 裁决前提不成立" "裁决器与门实现脱节（rc=$rc）⇒ 人工介入。"
-    wake "m$N-premise" "M$N 裁决前提不成立（门未推送）" "裁决器与门实现脱节 rc=$rc｜门日志：$LOG"
     ;;
 esac
 exit "$rc"
