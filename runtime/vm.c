@@ -272,6 +272,30 @@ static const PxVMFunc* vm_closure_func(LXValue env) {
     return (const PxVMFunc*)(intptr_t)v.as.i;
 }
 
+// M301（缺陷 518）：调用**实参个数**的唯一判据。
+//   VM 函数对象携带 arity（必需参数数）/ ndefault（带默认值的参数个数）⇒ total = arity + ndefault。
+//   修前只有 CALL 指令的下界（见下），而 **C 层进入的两条入口**（px_call / px_method /
+//   native 回调 → px_vm_entry / px_vm_closure_entry）**完全不查** ⇒ `x.m()` 的多给/少给静默，
+//   且「少给」要等函数体用到该参数才在下游炸（错误指不到真因）。
+//   本函数合并「下界 + 上界」；where/line 为 NULL 时用无前缀文案（C 层入口没有 VM 行号）。
+static void vm_check_arity(const PxVMFunc* f, int nargs, const char* where, int line) {
+    int total = f->arity + f->ndefault;
+    if (nargs < f->arity) {
+        if (where) {
+            px_error("R1005: VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
+                     where, line, f->name, f->arity, nargs);
+        }
+        px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", f->name, f->arity, nargs);
+    }
+    if (nargs > total) {
+        if (where) {
+            px_error("R1005: VM %s:%d CALL %s 参数过多: 最多 %d 给 %d",
+                     where, line, f->name, total, nargs);
+        }
+        px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", f->name, total, nargs);
+    }
+}
+
 // M160：压**闭包**帧 —— 先常规压帧（参数/槽），再把捕获名对应的 cell 从 env 绑到
 //   槽（槽 = 本帧参数数 + i，与发射器 bc_emit_push_lambda 的槽分配同源）。
 static PxFrame* vm_frame_push_clo(PxVmState* st, const PxVMFunc* f,
@@ -624,11 +648,11 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             if (fnv.type == PX_FUNC &&
                 fnv.as.obj->as.func.fn == px_vm_entry) {
                 PxVMFunc* cf2 = (PxVMFunc*)fnv.as.obj->as.func.ctx;
-                if (argc < cf2->arity) {      // 参数不足（默认参数 S3-B 补）
+                // M301（缺陷 518）：下界 + **上界**（修前只查下界 ⇒ 多给静默忽略）
+                if (argc < cf2->arity || argc > cf2->arity + cf2->ndefault) {
                     free(abuf);
-                    px_error("R1005: VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
-                             fr->f->name, fr->line, cf2->name, cf2->arity, argc);
-                    break;
+                    vm_check_arity(cf2, argc, fr->f->name, fr->line);
+                    break;   // 不可达（px_error noreturn）—— 留作形式完整
                 }
                 vm_frame_push(st, cf2, abuf, argc, dst);  // 压子帧，循环继续
                 free(abuf);
@@ -642,10 +666,9 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                     px_error("R9001: VM %s:%d CALL 闭包对象缺少所属函数", fr->f->name, fr->line);
                     break;
                 }
-                if (argc < cf2->arity) {
+                if (argc < cf2->arity || argc > cf2->arity + cf2->ndefault) {
                     free(abuf);
-                    px_error("R1005: VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
-                             fr->f->name, fr->line, cf2->name, cf2->arity, argc);
+                    vm_check_arity(cf2, argc, fr->f->name, fr->line);
                     break;
                 }
                 vm_frame_push_clo(st, cf2, abuf, argc, dst, cenv);
@@ -1165,6 +1188,9 @@ int px_vm_resume(PxVmState* st) {
 LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) {
     PxVMFunc* f = (PxVMFunc*)ctx;
     if (!f) return px_null();
+    // M301（缺陷 518）：C 层入口（px_call / px_method / native 回调）此前**无任何检查**
+    //   —— 这是 `x.m()`（CALLM → px_method → px_call）多给/少给静默的唯一原因。
+    vm_check_arity(f, nargs, NULL, 0);
     return px_vm_run_func(px_vm_state(), f, args, nargs);
 }
 
@@ -1178,6 +1204,7 @@ LXValue px_vm_closure_entry(LXValue* args, int nargs, void* ctx) {
         px_error("R9001: VM: 闭包对象缺少所属函数（env 无 %s）", PX_VM_CLO_KEY);
         return px_null();
     }
+    vm_check_arity(f, nargs, NULL, 0);   // M301（缺陷 518）：C 层入口同口径
     PxVmState* st = px_vm_state();
     int base = st->nframes;
     vm_frame_push_clo(st, f, args, nargs, -1, env);

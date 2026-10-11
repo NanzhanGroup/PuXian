@@ -1496,3 +1496,4 @@ run m299_wake_channel bash examples/m299_wake_channel/verify.sh
 #        `examples/m244_gate_parallel/targets.tsv`，并由 [2k] 断言「串行 ⇄ 并行逐条读数相同」。
 # ═══════════════════════════════════════════════════════════════════════════
 run m300_stdlib_surface2 bash examples/m300_stdlib_surface2/verify.sh
+run m301_argcount bash examples/m301_argcount/verify.sh

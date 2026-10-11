@@ -1252,6 +1252,11 @@ jobs:
           bash examples/m300_stdlib_surface2/verify.sh > /tmp/v_m300.log 2>&1 || { echo "❌ m300 门失败（台账自证 · 生成物漂移 · 375 例三轨对拍 · 契约表/登记表双向 · 负控 A/B/C）"; grep -E '^(  ❌|     |        )' /tmp/v_m300.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '汇总：通过|三轨分叉|未提及' /tmp/v_m300.log | tail -4 || true
           echo "✅ m300_stdlib_surface2（台账 27 模块 / 313 导出 · strings+url 23 导出 × 375 例 × 三轨 × 2 遍 · 已登记缺陷 518）PASS"
+      - name: m301_argcount（函数调用实参个数三轨对拍 · 缺陷 518 · M301）
+        run: |
+          bash examples/m301_argcount/verify.sh --neg-skip > /tmp/v_m301.log 2>&1 || { echo "❌ m301 门失败（静态判据 4 · 21 例三轨对拍 · strict/legal 分层）"; grep -E '^(  ❌|     |        )' /tmp/v_m301.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '汇总：通过|统计：strict|分叉' /tmp/v_m301.log | tail -4 || true
+          echo "✅ m301_argcount（21 例 × 三轨 · 分叉 0 · 缺陷 518 收口）PASS"
 
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()

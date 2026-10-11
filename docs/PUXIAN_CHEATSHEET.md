@@ -3254,3 +3254,35 @@ set_timeout(fn (): print("once after 2s"), 2000)
        「两次 send 合成一段」（那是内核行为）⇒ 用裸 socket 才做得出**确定性**夹具。
        判据见 §7 · 门 `examples/m288_ws_handshake_residual/`（4 模式 × 三轨 +
        服务端两侧 + 负载档 20 次 + 负控 3 道 · 覆盖边界 5 条）。
+
+---
+
+### M301（第 175 轮）：函数调用的**实参个数**
+
+一句话：**多给响亮、少给照默认值补、两类都在函数体入口拦**（不靠调用点特判）。
+
+```px
+def f2(a, b):        return a + b
+def g2(a, b = 10):   return a + b
+
+f2(1)          # R1005 缺少参数 'b'（三轨一致）
+f2(1, 2, 3)    # R1005 参数过多（三轨一致 —— 修前 VM/C 轨**静默**给 3）
+g2(1)          # 11（缺的按默认值补）
+z0(1)          # R1005 参数过多（零参函数给 1 个 —— 修前静默返回 7）
+
+let cl = fn (x, y = 5): x + y
+cl(1)          # 6（闭包默认值 —— 修前 VM 轨误报、C 轨丢默认值）
+```
+
+| 位置 | 落点 |
+|---|---|
+| C 轨 | 函数体 / 闭包体**开头**发射检查（`cg_gen_func_named` · `cg_gen_closure`） |
+| VM 轨 | `vm_check_arity()` + 四个调用点（`CALL`×2 · **`px_vm_entry`** · **`px_vm_closure_entry`**） |
+| 闭包默认值 | `bc_emit_push_lambda` 识别 arity/ndefault + 入口 `bc_emit_default_fill` |
+
+⚠️ **`x.m()` 走的是 `CALLM → px_method → px_call → px_vm_entry`**，**不经过 `CALL` 指令**
+⇒ 只修 `CALL` 的话方法面仍分叉（这是缺陷 518 里 d1/d2 的成因）。
+
+⚠️ **不覆盖**：生成器 lambda 的合成形参（实参由运行时给出）· 非尾部默认参数（M90-S1 契约为尾部）·
+原生函数 arity（属 M199 面）· `chan.send` 等方法（属 M226 面）。
+错误的**通道与措辞**三轨仍不同（**缺陷 186 族**），门只判 R 码 + 响亮性。
