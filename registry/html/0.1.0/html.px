@@ -103,7 +103,7 @@ def hx_entities():
     e.set("gt", ">")
     e.set("quot", "\"")
     e.set("apos", "'")
-    e.set("nbsp", "\u{00a0}")   # M302（缺陷 523）：U+00A0 才是 HTML 的 &nbsp;（此前错成普通空格 U+0020）
+    e.set("nbsp", "\u{00a0}")  # M302（缺陷 523）：U+00A0 才是 HTML 的 &nbsp;（此前错成普通空格 U+0020）
     return e
 # ---- 解码最小命名实体（&name;）----
 def hx_decode(s):
