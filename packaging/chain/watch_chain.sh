@@ -72,12 +72,70 @@ notify() {
 #   黑名单限制），这里再 wake 一次纯属重复 ⇒ **删掉 `wake()` 与 W_BIN 探测**。
 #   （`dy-wake.sh` 文件保留在 /usr/local/sbin/ 仅作回滚，任何脚本都不再调用它。）
 
+# ── ①.5 等待前提守卫（缺陷 495 同族 · 2026-10-11）────────────────────
+#   症状（M301 实测）：观察器等的是 PID-A（已结束），却拿一份属于**仍在跑的
+#   PID-B** 的日志去裁决 ⇒ 日志里没有汇总行 ⇒ 立刻 INCONSISTENT 挂 p1（误报）。
+#   错不在「等待用 PID」（纪律①没错），而在**这个 PID 指错了对象**：同一份日志
+#   被先后两场门写。补救：PID 结束后若目标日志**没有汇总行**，先别裁决 ——
+#     ① 宽限等待 N 秒（写者可能尚在刷新）；② 校验「该日志是否正被另一活门写」
+#        （锁文件里的 PID 仍存活 / 日志仍在增长 / /proc 里有人开着这个文件）。
+#   命中 ⇒ 报「未跑完·继续等」并接着等，而不是立刻 INCONSISTENT 挂 p1。
+WAIT_GUARD_GRACE="${WAIT_GUARD_GRACE:-20}"                     # 每轮宽限秒数
+WAIT_GUARD_MAX="${WAIT_GUARD_MAX:-3}"                          # 最多宽限轮数
+WAIT_GUARD_LOCKS="${WAIT_GUARD_LOCKS-/tmp/.m116_gates.lock /tmp/.px_gate_lock}"
+
+log_has_summary() {   # 0=有汇总行（门跑完）
+    awk '/汇总：失败/ { f = 1 } END { exit(f ? 0 : 1) }' "$LOG" 2>/dev/null
+}
+live_gate_writer() {  # 打印正在写 $LOG 的活进程 PID（无则 rc=1）
+    local lk p fd tgt
+    for lk in $WAIT_GUARD_LOCKS; do
+        [ -f "$lk" ] || continue
+        p="$(tr -dc '0-9' <"$lk" 2>/dev/null || true)"; [ -n "$p" ] || continue
+        kill -0 "$p" 2>/dev/null && { printf '%s\n' "$p"; return 0; }
+    done
+    for fd in /proc/[0-9]*/fd/*; do
+        tgt="$(readlink "$fd" 2>/dev/null || true)"; [ "$tgt" = "$LOG" ] || continue
+        p="${fd#/proc/}"; p="${p%%/*}"
+        [ "$p" = "$$" ] && continue
+        kill -0 "$p" 2>/dev/null && { printf '%s\n' "$p"; return 0; }
+    done
+    return 1
+}
+wait_gate_finished() {
+    local round=0 s1 s2 writer
+    while :; do
+        log_has_summary && return 0
+        round=$((round + 1))
+        [ "$round" -le "$WAIT_GUARD_MAX" ] || return 0   # 宽限用尽 ⇒ 交裁决器
+        printf '⏳ 无汇总行：宽限 %ss 观察写者（第 %s/%s 轮）…\n' "$WAIT_GUARD_GRACE" "$round" "$WAIT_GUARD_MAX"
+        s1="$(wc -c <"$LOG" 2>/dev/null || echo 0)"
+        sleep "$WAIT_GUARD_GRACE"
+        s2="$(wc -c <"$LOG" 2>/dev/null || echo 0)"
+        writer="$(live_gate_writer || true)"
+        if [ "$s2" -gt "$s1" ] || [ -n "$writer" ]; then
+            printf '   ↳ 未跑完：日志 %s→%s 字节%s ⇒ **继续等**（不裁决、不挂 p1）\n' \
+                "$s1" "$s2" "${writer:+ · 活门 PID=$writer}"
+            if [ -n "$writer" ]; then
+                while kill -0 "$writer" 2>/dev/null; do sleep 10; done
+                printf '   ↳ 活门 PID=%s 已结束\n' "$writer"
+            fi
+            continue
+        fi
+        printf '   ↳ 日志不再增长且无活门写者 ⇒ 视作真·未跑完/被中止，交裁决器\n'
+        return 0
+    done
+}
+
 # ── ① 等门（按 PID —— 不用日志内容当状态）──────────────────────────
 if [ -n "$PID" ]; then
     printf '等门 PID=%s …\n' "$PID"
     while kill -0 "$PID" 2>/dev/null; do sleep 60; done
 fi
 printf '门已结束：%s\n' "$(date '+%F %T')"
+
+# ── ①.5 等待前提守卫：日志没跑完就别急着裁决 ───────────────────────
+wait_gate_finished || true
 
 # ── ② 裁决（唯一权威）──────────────────────────────────────────────
 VB="packaging/chain/gate_verdict.sh"
