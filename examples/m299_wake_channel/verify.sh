@@ -66,16 +66,21 @@ if [ "$n" -le 1 ]; then ok "GREEN 分支唤醒点 ≤1（仅 make_tag 失败补�
 n="$(awk '/^GREEN\)/,/^[[:space:]]*;;/' "$WC" | grep -c 'make_tag.sh' || true)"
 if [ "$n" -ge 1 ]; then ok 'GREEN 分支含 make_tag（发版动作在位）'; else bad 'GREEN 分支缺 make_tag'; fi
 
-# 1.5 dy-notify esc 改道（CI 上无该文件 ⇒ SKIP）
+# 1.5 失败态**接上唤醒通道**（CI 上无该文件 ⇒ SKIP）
+#     ⚠️ M299s1：判据改**机制无关**。理由（如实登记）：v2.5（2026-10-11 11:12，用户令
+#        「不要使用 dy-notify.sh 脚本（dy-wake.sh 那套伪造 QQ 消息），要完善文殊系统」）
+#        把叫醒机制由「dy-wake.sh 伪造 QQ 消息经网关注入」换成**文殊原生任务自驱**
+#        （写 handoff 交接单 + `ws-core -task-park`）。本门判的是**契约**
+#        「失败态叫醒东月、且不推给用户」，**不是**某一种实现 ⇒ 两种形态都算通过。
 if [ -f "$DN" ]; then
-  n="$(code "$DN" | grep -c 'dy-wake.sh\|dy_wake' || true)"
-  if [ "$n" -ge 1 ]; then ok "dy-notify esc 调用 dy-wake（$n 处）"; else bad 'dy-notify esc 未接 dy-wake'; fi
+  n="$(code "$DN" | grep -c 'dy-wake.sh\|dy_wake\|task-park\|handoff' || true)"
+  if [ "$n" -ge 1 ]; then ok "dy-notify 的失败态接上唤醒通道（$n 处 · 机制无关判据）"; else bad 'dy-notify 失败态未接唤醒通道'; fi
   # esc 段里不得再有「直接推用户」的合并块
   n="$(code "$DN" | awk '/^cmd_esc\(\)/,/^}/' | grep -c 'push_qq "\$t"' || true)"
   chk 'esc 不再直接合并推用户' "$n" '0'
   # 只有「通道坏了」才推用户（那条分支必须在）
-  n="$(code "$DN" | grep -c 'WAKE-FAIL' || true)"
-  if [ "$n" -ge 1 ]; then ok 'esc 保留「唤醒失败才推用户」分支'; else bad '缺 WAKE-FAIL 分支'; fi
+  n="$(code "$DN" | grep -cE 'WAKE-FAIL|自驱失败|唤醒失败' || true)"
+  if [ "$n" -ge 1 ]; then ok 'esc 保留「唤醒失败才推用户」分支'; else bad '缺「唤醒失败才推用户」分支'; fi
 else
   SKIP=$((SKIP+1)); printf '  ⏭ dy-notify.sh 不在本机（%s）⇒ 静态 1.5 跳过\n' "$DN"
 fi
