@@ -24,3 +24,4 @@ m246_compound_assign	examples/m246_compound_assign/three_tracks.py	-
 m246_compound_assign	examples/m246_compound_assign/pair_check.py	-
 m250_onnx_tensor	examples/m250_onnx_tensor/three_tracks.py	-
 m300_stdlib_surface2	examples/m300_stdlib_surface2/three.py	84
+m302_stdlib_surface3	examples/m302_stdlib_surface3/three.py	-
