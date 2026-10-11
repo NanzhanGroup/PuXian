@@ -1,0 +1,35 @@
+# m267_perf/src/onnx_mm512.px —— ONNX MatMul 512x512x512 性能负载（M303 / S1）
+# ---------------------------------------------------------------
+# 为什么是 512：
+#   实测本机 512³ = 0.242 s（**1.12 GFLOPS**），落在"无页对齐崩塌"区 ——
+#   用来量**常规**内核性能（与 1024³ 构成"有/无崩塌"的对照）。
+#
+# 为什么内部跑 5 次：
+#   单次 0.24 s 太短，计时噪声占比高。内部 5 次 ⇒ 单次测量约 1.2 s，
+#   与 M267 既有负载（fib28 1.04 s / jsonwb 1.42 s）同一量级。
+#   外层 time_run 再取 REPS 轮的**最小值**（抗偶发干扰）—— 两层各有其职。
+#
+# 输出： OK <输出字节数>   —— 固定值，充当**正确性锚点**
+#   （512*512*4 = 1048576）。比数值更好：数值正确性由 m157 门守，
+#   本门只需证明"图真的跑了、输出尺寸对"。
+#
+# usage: onnx_mm512 <model.onnx>
+let a = args()
+if len(a) < 2:
+    print("用法: onnx_mm512 <model.onnx>\n")
+    exit(2)
+let m = onnx_model_open(a[1])
+if type(m) == "result":
+    print("OPEN-ERR " + str(m) + "\n")
+    exit(3)
+var i = 0
+var nb = 0
+while i < 5:
+    let res = onnx_run(m["id"], {})
+    if type(res) == "result":
+        print("RUN-ERR " + str(res) + "\n")
+        exit(4)
+    nb = res["outputs"]["C"]["nbytes"]
+    i = i + 1
+print("OK " + str(nb) + "\n")
+onnx_model_close(m["id"])

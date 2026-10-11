@@ -18,10 +18,15 @@
 # 用法：
 #   bash examples/m267_perf/verify.sh               # 跑门（默认）
 #   bash examples/m267_perf/verify.sh --update       # 刷新基线表（人工确认后提交）
-#   bash examples/m267_perf/verify.sh --neg          # 负控（4 道，各自独立判红）
+#   bash examples/m267_perf/verify.sh --neg          # 负控（5 道，各自独立判红）
 #   bash examples/m267_perf/verify.sh --list         # 列出负载与基线
 #   bash examples/m267_perf/verify.sh --only fib28_vm
-# 环境：M267_REPS / M267_WARN / M267_FAIL / M267_W / M267_ROOT / M267_DIR
+# ── M303（S1）扩展：接入 **ONNX 负载** ──────────────────────────
+#   在此之前性能门**一个 ONNX 项都没有** ⇒ 谁把 MatMul 改快改慢，没有任何判据看得见。
+#   两档刻意构成对照：512³ 在"无崩塌"区（1.12 GFLOPS）、1024³ 在**跨页崩塌**区
+#   （本机实测 0.313 GFLOPS ⇒ 慢 3.58×；观音那台同形状慢 13×）⇒ 后者是路线 S3 的靶子。
+#   ⚠️ ONNX 负载**单轨**（vm/c 同一份 C 实现）；kind 记为 `onnx`，与 `run` 区分。
+# 环境：M267_REPS / M267_WARN / M267_FAIL / M267_W / M267_ROOT / M267_DIR / M267_MODELS
 # ══════════════════════════════════════════════════════════════
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
@@ -37,6 +42,12 @@ REPS="${M267_REPS:-5}"
 WARN_R="${M267_WARN:-1.25}"
 FAIL_R="${M267_FAIL:-2.00}"
 LOADS="fib28 while_sum mixed jsonwb"
+# ⭐ M303（S1）新增：**单轨 ONNX 负载**（只有 VM 轨一份产物 —— ONNX 执行全在 runtime 的
+#    C 代码里，两轨跑的是同一个 onnx_exec_run ⇒ vm/c 对照对本类负载无意义）。
+#    它们在 baseline.tsv 里的 kind 是 `onnx`，因此 [1] 层"vm/c 成对登记"那条判据
+#    （只筛 kind==run）不会误伤它们。
+ONNX_LOADS="onnx_mm512 onnx_mm1024"
+MODELS_DIR="${M267_MODELS:-$W/models}"
 
 # ── 负控期间的「基线还原护栏」（M213 教训：门被中途杀掉会留下负控残留）──
 #   本轮实测踩过：--neg 跑到 NC-A 时被我这边 120s 工具上限杀掉 ⇒ baseline.tsv
@@ -61,6 +72,17 @@ read_baseline() { grep -v '^#' "$BASE" | grep -v '^$'; }
 # ── 计时：钉核 + min of N ─────────────────────────────────────
 PIN=""
 command -v taskset >/dev/null 2>&1 && PIN="taskset -c 3"
+
+# ── 每个负载的**外层轮数**（ONNX 负载的"单次"成本差两个数量级，不能用同一个 REPS）──
+#   onnx_mm1024 单次就 6.9 s ⇒ 2 轮即可；onnx_mm512 单次 1.3 s ⇒ 3 轮；
+#   纯语言负载沿用全局 REPS（默认 5）。
+reps_of() {
+    case "$1" in
+      onnx_mm1024) echo 2 ;;
+      onnx_mm512)  echo 3 ;;
+      *)           echo "$REPS" ;;
+    esac
+}
 
 time_run() { # $1=轮数 $2...=命令
     local r="$1"; shift
@@ -103,6 +125,19 @@ build_all() {
     done
     mkdir -p "$W/empty"; printf 'print(1)\n' > "$W/empty/empty.px"
     ( cd "$W/empty" && "$PX" build "empty.px" >/dev/null 2>&1 ) || { echo "  构建失败 empty"; fail=1; }
+    # ── ⭐ M303（S1）：ONNX 负载 = 先**生成模型**（不入库，见 tools/gen_perf_models.py 头注），
+    #    再编译负载程序。模型每次重新生成（约 2.8 s）——刻意不缓存：陈旧模型会让
+    #    "账本"失去意义，而 2.8 s 不值得换那类风险。
+    if [ -n "$ONNX_LOADS" ]; then
+        mkdir -p "$MODELS_DIR" "$W/onnx"
+        if ! python3 "$DIR/tools/gen_perf_models.py" "$MODELS_DIR" >/dev/null 2>&1; then
+            echo "  模型生成失败（$DIR/tools/gen_perf_models.py）"; fail=1
+        fi
+        for n in $ONNX_LOADS; do
+            cp "$SRC/$n.px" "$W/onnx/"
+            ( cd "$W/onnx" && "$PX" build "$n.px" >/dev/null 2>&1 ) || { echo "  构建失败 ONNX $n"; fail=1; }
+        done
+    fi
     return $fail
 }
 
@@ -112,9 +147,16 @@ measure_one() { # $1=name $2=kind
     case "$k" in
       run)
         case "$n" in
-          *_vm) time_run "$REPS" "$W/vm_${n%_vm}/build/${n%_vm}" ;;
-          *_c)  time_run "$REPS" "$W/c_${n%_c}/build/${n%_c}" ;;
+          *_vm) time_run "$(reps_of "$n")" "$W/vm_${n%_vm}/build/${n%_vm}" ;;
+          *_c)  time_run "$(reps_of "$n")" "$W/c_${n%_c}/build/${n%_c}" ;;
           *)    echo "-1"; return 1 ;;
+        esac ;;
+      onnx)
+        # ONNX 负载：单轨，需把**模型路径**作为参数传给负载程序
+        case "$n" in
+          onnx_mm512)  time_run "$(reps_of "$n")" "$W/onnx/build/onnx_mm512"  "$MODELS_DIR/onnx_mm512.onnx" ;;
+          onnx_mm1024) time_run "$(reps_of "$n")" "$W/onnx/build/onnx_mm1024" "$MODELS_DIR/onnx_mm1024.onnx" ;;
+          *)           echo "-1"; return 1 ;;
         esac ;;
       startup)
         local s e
@@ -141,6 +183,15 @@ run_compare() {
         if [ "$got" = "-1" ]; then bad "$name 无法测量（未知 kind=$kind）"; continue; fi
         r=$(echo "$got $base" | awk '{if ($2+0>0) printf "%.3f", $1/$2; else print "0"}')
         local verdict="✅"
+        # ⭐ M303 **下限判据**：实测比基线**快 10 倍以上** ⇒ 负载疑似**根本没执行**
+        #    （图被空转 / 提前退出 / 输入为空）。比值判据只看得见"变慢"这一侧，
+        #    这条补上"快得不可能"那一侧 —— 否则一张坏掉的模型会以"性能大幅提升"
+        #    的面目**通过**性能门（比漏报退化更危险：它会把 S3 的基线污染掉）。
+        if [ "$(echo "$r 0.10" | awk '{print ($1 < $2) ? 1 : 0}')" = 1 ]; then
+            printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "$name" "$base" "$got" "${r}x" "❌" "$WARN_R/$FAIL_R"
+            bad "$name 实测 ${r}x —— 比基线快 10 倍以上，负载疑似未真执行（M303 下限判据）"
+            continue
+        fi
         if [ "$(echo "$r $FAIL_R" | awk '{print ($1 > $2) ? 1 : 0}')" = 1 ]; then
             local got2 r2
             got2=$(measure_one "$name" "$kind")
@@ -180,7 +231,7 @@ update_baseline() {
 # ── 负控 ──────────────────────────────────────────────────────
 run_neg() {
     echo "══ 负控（每道必须独立判红）══"
-    local rc_all=0 na nb nd
+    local rc_all=0 na nb nd ne
     cp "$BASE" "$W/base.bak"
     BASE_ORIG="$W/base.bak"          # ← 交给 EXIT trap（中途被杀也能还原）
     local h0; h0=$(sha256sum "$BASE" | cut -c1-16)
@@ -215,6 +266,15 @@ run_neg() {
     cp "$W/base.bak" "$BASE"
     if [ "$nd" -eq 0 ]; then echo "  ✅ NC-D 生效：fail 阈值放空 ⇒ 同一假基线不再判红（红来自比对）"; else echo "  ❌ NC-D 未生效（仍有 $nd 判红）"; rc_all=1; fi
 
+    # ── NC-E（M303 新增）**下限判据**必须有牙：基线放大 20 倍 ⇒ 比值 <0.10 ⇒ 必须判红 ──
+    #    与 NC-A 方向相反：NC-A 证明"变慢"看得见，NC-E 证明"快得不可能"也看得见。
+    #    缺了这条，一张坏掉的 ONNX 模型会以"性能大幅提升"的面目**通过**性能门。
+    echo "── NC-E 下限判据：基线放大 20 倍 ⇒ 比值 <0.10 ⇒ 必须判红"
+    awk '/^#/ {print; next} NF>=4 { $4=$4*20 } { print }' "$W/base.bak" > "$BASE"
+    ne=$(run_compare "" 2>&1 | grep -c '负载疑似未真执行')
+    cp "$W/base.bak" "$BASE"
+    if [ "$ne" -ge 1 ]; then echo "  ✅ NC-E 生效（$ne 个负载触发下限判据）"; else echo "  ❌ NC-E 未生效：快得不可能却没判红"; rc_all=1; fi
+
     # ── 还原核对：负控跑完 baseline.tsv 必须**逐字节回到原样** ──
     local h1; h1=$(sha256sum "$BASE" | cut -c1-16)
     if [ "$h0" = "$h1" ]; then echo "  ✅ 还原核对：baseline.tsv 逐字节还原（sha $h1）"
@@ -235,16 +295,22 @@ case "$MODE" in
   --update) build_all >/dev/null 2>&1 || true; update_baseline; exit 0 ;;
   --neg)    build_all >/dev/null || { echo "❌ 构建失败，负控无法进行"; exit 1; }
             run_neg; rc=$?
-            echo "══ 负控结果：$([ $rc = 0 ] && echo '4/4 各自独立判红 ✅' || echo '有未生效 ❌') ══"
+            echo "══ 负控结果：$([ $rc = 0 ] && echo '5/5 各自独立判红 ✅' || echo '有未生效 ❌') ══"
             exit $rc ;;
 esac
 only=""; [ "$MODE" = "--only" ] && only="${2:-}"
 
 echo
 echo "[1] 静态自证"
-for f in $LOADS; do
+for f in $LOADS $ONNX_LOADS; do
     [ -f "$SRC/$f.px" ] && ok "负载源码存在 $f.px" || bad "缺负载源码 $f.px"
 done
+[ -f "$DIR/tools/gen_perf_models.py" ] && ok "ONNX 模型生成器存在（tools/gen_perf_models.py）" \
+    || bad "缺 ONNX 模型生成器 tools/gen_perf_models.py"
+# ONNX 负载必须以 kind=onnx 登记 —— 若误登成 run，[1] 下面那条"vm/c 成对"判据会误伤它们
+nb_onnx=$(read_baseline | awk '$2=="onnx"' | wc -l)
+[ "$nb_onnx" -ge 2 ] && ok "ONNX 负载登记 $nb_onnx 行（kind=onnx，下限 2）" \
+    || bad "ONNX 负载登记 $nb_onnx 行（应 ≥2；kind 必须写 onnx）"
 nb2=$(read_baseline | wc -l)
 [ "$nb2" -ge 4 ] && ok "基线表 $nb2 行（下限 4）" || bad "基线表只有 $nb2 行（下限 4）"
 # 每条 run 负载必须有 vm 与 c 两行（防"只登记一半"）
@@ -256,22 +322,35 @@ grep -q 'M267' "$BASE" && ok "基线表标注来历（M267）" || bad "基线表
 echo
 echo "[2] 产物身份自检（M266 那类腐烂的守卫）"
 if build_all; then
-    ident_bad=0
+    ident_bad=0; nident=0
     for n in $LOADS; do
         check_identity "$W/vm_$n/build/$n" VM || { bad "VM 轨身份错 $n：$ID_MSG"; ident_bad=1; }
         check_identity "$W/c_$n/build/$n"  C  || { bad "C 轨身份错 $n：$ID_MSG"; ident_bad=1; }
+        nident=$((nident+2))
     done
-    [ "$ident_bad" = 0 ] && ok "8/8 产物身份正确（VM 无 fn_* / C 有 fn_*）"
+    # ONNX 负载是**单轨**（ONNX 执行在 runtime 的 C 代码里，vm/c 跑同一份实现）⇒ 只查 VM 身份
+    for n in $ONNX_LOADS; do
+        check_identity "$W/onnx/build/$n" VM || { bad "ONNX 负载身份错 $n：$ID_MSG"; ident_bad=1; }
+        nident=$((nident+1))
+    done
+    [ "$ident_bad" = 0 ] && ok "$nident/$nident 产物身份正确（VM 无 fn_* / C 有 fn_*）"
 else
     bad "构建失败，无法自检"
 fi
 
 echo
-echo "[3] 正确性锚点（双轨 stdout 必须一致）"
+echo "[3] 正确性锚点（双轨 stdout 必须一致 + ONNX 输出尺寸）"
 for n in $LOADS; do
     ov=$($PIN "$W/vm_$n/build/$n" 2>&1); oc=$($PIN "$W/c_$n/build/$n" 2>&1)
     [ "$ov" = "$oc" ] && ok "$n 双轨 stdout 一致（$ov）" || bad "$n 双轨 stdout 不一致 VM=[$ov] C=[$oc]"
 done
+# ONNX 通路锚点：证明"模型真被解析 / 图真被执行 / 输出尺寸与声明一致"。
+# ⚠️ 只对 mm512 做（约 1.3 s）。mm1024 由 [4] 的**下限判据**覆盖 —— 图没真跑的话耗时
+#    会塌到 1/10 以下而当场判红，不必再花 7.5 s 去"证明它跑了"。
+exp512=$((512 * 512 * 4))
+og=$($PIN "$W/onnx/build/onnx_mm512" "$MODELS_DIR/onnx_mm512.onnx" 2>&1)
+[ "$og" = "OK $exp512" ] && ok "onnx_mm512 输出尺寸锚点（期望 OK $exp512）" \
+    || bad "onnx_mm512 锚点失败：[$og]（期望 OK $exp512）"
 
 echo
 echo "[4] 相对基线比对"
@@ -284,6 +363,10 @@ info "冷构建（清 .rtcache）刻意不纳入：会污染同机其它门/构�
 info "基线绝对值只对**同机同工具链**有意义 —— 换机器/换 gcc/换 px 版本须 --update 重定基"
 info "C 轨只取 fib28_c/while_sum_c 作比值锚（全谱见 docs/PERF_BASELINE_V2.md §五）"
 info "本门**不覆盖** px run（解释轨）面 —— 那是 M268 的活；字符串 += O(n²) 是 M270"
+info "ONNX 负载只覆盖 **MatMul**（512³ 常规区 + 1024³ 跨页崩塌区）；Conv / RMSNorm / RoPE / KV-cache **不在面内**（M303 §五 S4）"
+info "ONNX 负载是**单轨**（vm 与 c 跑的是同一份 runtime C 实现 onnx_exec_run）⇒ 只登记一行，无 vm/c 对照"
+info "ONNX 模型**不入库**（512³ 2 MiB / 1024³ 8 MiB）：由 tools/gen_perf_models.py **每次生成**到 work 目录（刻意不缓存）"
+info "ONNX 负载测的是**单线程内核**：多线程 GEMM / GPU 后端不在面内（M303 §五 S5 另立基准机流程）"
 
 echo
 echo "══ M267 结果：$PASS 通过 / $FAILN 失败 ══"

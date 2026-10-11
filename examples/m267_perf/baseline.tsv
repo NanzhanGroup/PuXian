@@ -6,6 +6,11 @@
 # ⚠️ 换机器 / 换 gcc / 换 px 版本 ⇒ 必须 --update 重定基（否则比值无意义）
 # 依据：docs/PERF_BASELINE_V2.md（M266 建立）· docs/PERF_BASELINE_METRICS_SPEC.md（口径）
 # 采集时间：2026-10-05T05:28:46Z .. 2026-10-05T05:31:40Z（3 次独立采集 · 固化值 = 各次最小值 min）
+# M303（S1）追加 ONNX 两行：2026-10-12T02:5xZ（3 组独立采集 · 同款测法 taskset -c3 + min）
+#   onnx_mm512  1.2758/1.2168/1.2169 ⇒ 1.2168   （组内 3 轮取 min × 3 组取 min）
+#   onnx_mm1024 7.4179/7.3119/7.3705 ⇒ 7.3119   （组内 2 轮取 min × 3 组取 min）
+#   ⇒ 512³ = 1.12 GFLOPS；1024³ = 0.313 GFLOPS（**慢 3.58×** —— 跨页 TLB 崩塌，与算力无关）
+#   ⇒ 同形状在观音机（AMD A8-7600）上是 13× ⇒ 幅度随机器变、**形状一致**，是可复现的真现象
 # 代码版本：09457e24b3ceb19a18a15241e88aa201bce2c490（M271 补（缺陷 470）：`px run` 发现性提示只对 TTY 说话 —— 全量门当场照出）
 # 口径指纹：sha256 0dc65700dc7a7d79ea7da86cd26ff27c4071fdc39967c16e6352dd94179f2447
 fib28_vm       run      s      1.0377     纯递归 fib(28)x5 —— 纯计算最坏情形（VM 轨）
@@ -18,3 +23,5 @@ jsonwb_vm      run      s      1.4235     JSON 2 万对象 构→串→解 —�
 jsonwb_c       run      s      1.416      JSON 2 万对象 —— C 轨（比值锚）
 startup_exec   startup  s      0.001463   空程序连跑 200 次 / 200（进程启动开销）
 hot_build      build    s      0.4646     px build 热缓存（空程序，含自动裁剪）
+onnx_mm512     onnx     s      1.2168     ONNX MatMul 512³ ×5 —— 常规内核区（无跨页崩塌）
+onnx_mm1024    onnx     s      7.3119     ONNX MatMul 1024³ ×1 —— 跨页崩塌探针（本机慢 3.58× · 路线 S3 的靶子）
