@@ -54,15 +54,20 @@ elif CMD == 'negA_on':
     print('M301-NEG-A-ON')
 
 elif CMD == 'negB_on':
-    # 负控 B：停用 **C 轨**两处发射的实参个数检查（函数体 + 闭包体）。
+    # 负控 B：停用 **C 轨**函数体（`cg_gen_func_named`）发射的实参个数检查（下界 + 上界）。
     #   ⚠️ 实现方式 = **整行注释掉** —— 首版写成 `if (0) s += "…"` 是**普贤语法错误**
     #   （缩进语法没有单行 if 体）⇒ 编译器构建失败、负控「构建失败」而非「判红」，
     #   红得指不到真因（本门首跑实测）。
+    #   ⚠️ 9e60d9c（M301 收尾）起，下界的发射被**包进 `if req_n > 0:` 里**（required==0
+    #   时省掉恒不成立的下界检查）。此时只注释「发射行」会让该 `if` **体空** ——
+    #   空块同样是**普贤语法错误** ⇒ 构建失败（全量门实测：负控 B「构建失败」）。
+    #   ⇒ 必须**连同 `if req_n > 0:` 这一行一起注释**，让整个块消失、不留空体。
     s = rd(CG)
-    s = one(s, '    s += "    if (nargs < " + str(req_n)',
-            '    # M301-NEG-B(mute): s += "    if (nargs < " + str(req_n)', 'negB-1')
+    s = one(s, '    if req_n > 0:\n        s += "    if (nargs < ',
+            '    # M301-NEG-B(mute): if req_n > 0:\n'
+            '        # M301-NEG-B(mute): s += "    if (nargs < ', 'negB-if-and-lt')
     s = one(s, '    s += "    if (nargs > " + str(len(params))',
-            '    # M301-NEG-B(mute): s += "    if (nargs > " + str(len(params))', 'negB-2')
+            '    # M301-NEG-B(mute): s += "    if (nargs > " + str(len(params))', 'negB-gt')
     wr(CG, s)
     print('M301-NEG-B-ON')
 

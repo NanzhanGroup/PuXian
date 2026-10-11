@@ -16,7 +16,7 @@ Ps_count_of_b0p1q3	0||0
 Ps_count_of_b0p1q4	0||0
 Ps_count_of_b0p1q5	0||0
 As_count_of_less	1|R1005|
-As_count_of_more	1|R1002|
+As_count_of_more	1|R1005|
 Ls_index_of_1	0||2
 Ls_index_of_2	0||3
 Ls_index_of_3	0||0
@@ -34,7 +34,7 @@ Ps_index_of_b0p1q3	0||-1
 Ps_index_of_b0p1q4	0||0
 Ps_index_of_b0p1q5	0||0
 As_index_of_less	1|R1005|
-As_index_of_more	1|R1002|
+As_index_of_more	1|R1005|
 Ls_index_of_from_1	0||4
 Ls_index_of_from_2	0||0
 Ls_index_of_from_3	0||-1
@@ -58,7 +58,7 @@ Ps_index_of_from_b0p2q3	1|R1002|
 Ps_index_of_from_b0p2q4	1|R1002|
 Ps_index_of_from_b0p2q5	1|R1002|
 As_index_of_from_less	1|R1005|
-As_index_of_from_more	1|R1002|
+As_index_of_from_more	1|R1005|
 Ls_is_hex_1	0||true
 Ls_is_hex_2	0||false
 Ls_is_hex_3	0||false
@@ -70,7 +70,7 @@ Ps_is_hex_b0p0q3	0||false
 Ps_is_hex_b0p0q4	0||false
 Ps_is_hex_b0p0q5	0||false
 As_is_hex_less	1|R1005|
-As_is_hex_more	1|R1002|
+As_is_hex_more	1|R1005|
 Ls_last_index_of_1	0||4
 Ls_last_index_of_2	0||3
 Ls_last_index_of_3	0||3
@@ -87,7 +87,7 @@ Ps_last_index_of_b0p1q3	0||-1
 Ps_last_index_of_b0p1q4	0||6
 Ps_last_index_of_b0p1q5	0||6
 As_last_index_of_less	1|R1005|
-As_last_index_of_more	1|R1002|
+As_last_index_of_more	1|R1005|
 Ls_pad_left_1	0||007
 Ls_pad_left_2	0||777
 Ls_pad_left_3	0||007
@@ -111,7 +111,7 @@ Ps_pad_left_b0p2q3	0||777
 Ps_pad_left_b0p2q4	0||007
 Ps_pad_left_b0p2q5	0||007
 As_pad_left_less	1|R1005|
-As_pad_left_more	1|R1002|
+As_pad_left_more	1|R1005|
 Ls_pad_right_1	0||7..
 Ls_pad_right_2	0||7
 Ls_pad_right_3	0||7  
@@ -135,7 +135,7 @@ Ps_pad_right_b0p2q3	0||777
 Ps_pad_right_b0p2q4	0||7  
 Ps_pad_right_b0p2q5	0||7  
 As_pad_right_less	1|R1005|
-As_pad_right_more	1|R1002|
+As_pad_right_more	1|R1005|
 Ls_repeat_str_1	0||ababab
 Ls_repeat_str_2	0||
 Ls_repeat_str_3	0||
@@ -153,7 +153,7 @@ Ps_repeat_str_b0p1q3	1|R1002|
 Ps_repeat_str_b0p1q4	1|R1002|
 Ps_repeat_str_b0p1q5	1|R1002|
 As_repeat_str_less	1|R1005|
-As_repeat_str_more	1|R1002|
+As_repeat_str_more	1|R1005|
 Ls_split_lines_1	0||[a, b, c]
 Ls_split_lines_2	0||[]
 Ls_split_lines_3	0||[a, ]
@@ -164,7 +164,7 @@ Ps_split_lines_b0p0q3	0||[7]
 Ps_split_lines_b0p0q4	1|R1002|
 Ps_split_lines_b0p0q5	1|R1002|
 As_split_lines_less	1|R1005|
-As_split_lines_more	1|R1002|
+As_split_lines_more	1|R1005|
 Ls_split_n_1	0||[a, b,c]
 Ls_split_n_2	0||[abc]
 Ls_split_n_3	0||[a,b,c]
@@ -188,7 +188,7 @@ Ps_split_n_b0p2q3	1|R1002|
 Ps_split_n_b0p2q4	1|R1002|
 Ps_split_n_b0p2q5	1|R1002|
 As_split_n_less	1|R1005|
-As_split_n_more	1|R1002|
+As_split_n_more	1|R1005|
 Ls_str_reverse_1	0||a文中
 Ls_str_reverse_2	0||
 Ls_str_reverse_3	0||ba
@@ -199,7 +199,7 @@ Ps_str_reverse_b0p0q3	0||7
 Ps_str_reverse_b0p0q4	0||
 Ps_str_reverse_b0p0q5	0||
 As_str_reverse_less	1|R1005|
-As_str_reverse_more	1|R1002|
+As_str_reverse_more	1|R1005|
 Ls_trim_chars_1	0||
 Ls_trim_chars_2	0||ab
 Ls_trim_chars_3	0||x
@@ -216,7 +216,7 @@ Ps_trim_chars_b0p1q3	0||aaxaa
 Ps_trim_chars_b0p1q4	0||aaxaa
 Ps_trim_chars_b0p1q5	0||aaxaa
 As_trim_chars_less	1|R1005|
-As_trim_chars_more	1|R1002|
+As_trim_chars_more	1|R1005|
 Ls_trim_left_chars_1	0||ay
 Ls_trim_left_chars_2	0||ab
 Ls_trim_left_chars_3	0||
@@ -233,7 +233,7 @@ Ps_trim_left_chars_b0p1q3	0||xxay
 Ps_trim_left_chars_b0p1q4	0||xxay
 Ps_trim_left_chars_b0p1q5	0||xxay
 As_trim_left_chars_less	1|R1005|
-As_trim_left_chars_more	1|R1002|
+As_trim_left_chars_more	1|R1005|
 Ls_trim_prefix_1	0||id
 Ls_trim_prefix_2	0||abc
 Ls_trim_prefix_3	0||abc
@@ -251,7 +251,7 @@ Ps_trim_prefix_b0p1q3	0||wsa-id
 Ps_trim_prefix_b0p1q4	0||wsa-id
 Ps_trim_prefix_b0p1q5	0||wsa-id
 As_trim_prefix_less	1|R1005|
-As_trim_prefix_more	1|R1002|
+As_trim_prefix_more	1|R1005|
 Ls_trim_right_chars_1	0||ay
 Ls_trim_right_chars_2	0||ab
 Ls_trim_right_chars_3	0||
@@ -268,7 +268,7 @@ Ps_trim_right_chars_b0p1q3	0||ayxx
 Ps_trim_right_chars_b0p1q4	0||ayxx
 Ps_trim_right_chars_b0p1q5	0||ayxx
 As_trim_right_chars_less	1|R1005|
-As_trim_right_chars_more	1|R1002|
+As_trim_right_chars_more	1|R1005|
 Ls_trim_suffix_1	0||a
 Ls_trim_suffix_2	0||abc
 Ls_trim_suffix_3	0||abc
@@ -286,7 +286,7 @@ Ps_trim_suffix_b0p1q3	0||ab/
 Ps_trim_suffix_b0p1q4	0||ab/
 Ps_trim_suffix_b0p1q5	0||ab/
 As_trim_suffix_less	1|R1005|
-As_trim_suffix_more	1|R1002|
+As_trim_suffix_more	1|R1005|
 Lu_url_parse_1	0||https
 Lu_url_parse_2	0||u
 Lu_url_parse_3	0||h:8080
@@ -302,7 +302,7 @@ Pu_url_parse_b0p0q3	0||{fragment: , host: , path: 7, rawquery: , scheme: , user:
 Pu_url_parse_b0p0q4	0||{fragment: , host: , path: [], rawquery: , scheme: , user: }
 Pu_url_parse_b0p0q5	0||{fragment: , host: , path: {}, rawquery: , scheme: , user: }
 Au_url_parse_less	1|R1005|
-Au_url_parse_more	1|R1002|
+Au_url_parse_more	1|R1005|
 Lu_url_parse_query_1	0||[1, 2]
 Lu_url_parse_query_2	0||true
 Lu_url_parse_query_3	0||false
@@ -314,7 +314,7 @@ Pu_url_parse_query_b0p0q3	0||[{7: []}, true]
 Pu_url_parse_query_b0p0q4	1|R1002|
 Pu_url_parse_query_b0p0q5	1|R1002|
 Au_url_parse_query_less	1|R1005|
-Au_url_parse_query_more	1|R1002|
+Au_url_parse_query_more	1|R1005|
 Lu_url_path_escape_1	0||a%2Fb%20c
 Lu_url_path_escape_2	0||a~b
 Lu_url_path_escape_3	0||%E4%B8%AD
@@ -326,7 +326,7 @@ Pu_url_path_escape_b0p0q3	0||7
 Pu_url_path_escape_b0p0q4	0||%5B%5D
 Pu_url_path_escape_b0p0q5	0||%7B%7D
 Au_url_path_escape_less	1|R1005|
-Au_url_path_escape_more	0||null
+Au_url_path_escape_more	1|R1005|
 Lu_url_query_escape_1	0||a+b~%21
 Lu_url_query_escape_2	0||
 Lu_url_query_escape_3	0||%E4%B8%AD
@@ -338,7 +338,7 @@ Pu_url_query_escape_b0p0q3	0||7
 Pu_url_query_escape_b0p0q4	0||%5B%5D
 Pu_url_query_escape_b0p0q5	0||%7B%7D
 Au_url_query_escape_less	1|R1005|
-Au_url_query_escape_more	0||null
+Au_url_query_escape_more	1|R1005|
 Lu_url_query_unescape_1	0||A b
 Lu_url_query_unescape_2	0||%
 Lu_url_query_unescape_3	0||%zz
@@ -350,7 +350,7 @@ Pu_url_query_unescape_b0p0q3	0||7
 Pu_url_query_unescape_b0p0q4	0||[]
 Pu_url_query_unescape_b0p0q5	0||{}
 Au_url_query_unescape_less	1|R1005|
-Au_url_query_unescape_more	0||null
+Au_url_query_unescape_more	1|R1005|
 Lu_url_query_unescape_keep_q_1	0||A+b
 Lu_url_query_unescape_keep_q_2	0||%
 Lu_url_query_unescape_keep_q_3	0||a/b
@@ -362,7 +362,7 @@ Pu_url_query_unescape_keep_q_b0p0q3	0||7
 Pu_url_query_unescape_keep_q_b0p0q4	0||[]
 Pu_url_query_unescape_keep_q_b0p0q5	0||{}
 Au_url_query_unescape_keep_q_less	1|R1005|
-Au_url_query_unescape_keep_q_more	0||null
+Au_url_query_unescape_keep_q_more	1|R1005|
 Lu_url_values_encode_1	0||a=1
 Lu_url_values_encode_2	0||a=1&a=2
 Lu_url_values_encode_3	0||
@@ -373,4 +373,4 @@ Pu_url_values_encode_b0p0q3	1|R1007|
 Pu_url_values_encode_b0p0q4	1|R1007|
 Pu_url_values_encode_b0p0q5	0||
 Au_url_values_encode_less	1|R1005|
-Au_url_values_encode_more	1|R1007|
+Au_url_values_encode_more	1|R1005|
