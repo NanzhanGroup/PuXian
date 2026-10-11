@@ -1,0 +1,376 @@
+# label	kind	expr	expect
+Ls_count_of_1	legal	count_of("abcabc", "bc")	2
+Ls_count_of_2	legal	count_of("aaa", "aa")	1
+Ls_count_of_3	legal	count_of("abc", "")	0
+Ls_count_of_4	legal	count_of("aaaa", "aa")	2
+Ps_count_of_b0p0q0	poison	count_of(null, "bc")	LOCK
+Ps_count_of_b0p0q1	poison	count_of(true, "bc")	LOCK
+Ps_count_of_b0p0q2	poison	count_of(7, "bc")	LOCK
+Ps_count_of_b0p0q3	poison	count_of("7", "bc")	LOCK
+Ps_count_of_b0p0q4	poison	count_of([], "bc")	LOCK
+Ps_count_of_b0p0q5	poison	count_of({}, "bc")	LOCK
+Ps_count_of_b0p1q0	poison	count_of("abcabc", null)	LOCK
+Ps_count_of_b0p1q1	poison	count_of("abcabc", true)	LOCK
+Ps_count_of_b0p1q2	poison	count_of("abcabc", 7)	LOCK
+Ps_count_of_b0p1q3	poison	count_of("abcabc", "7")	LOCK
+Ps_count_of_b0p1q4	poison	count_of("abcabc", [])	LOCK
+Ps_count_of_b0p1q5	poison	count_of("abcabc", {})	LOCK
+As_count_of_less	arity	count_of(null)	LOCK
+As_count_of_more	arity	count_of(null, null, null)	LOCK
+Ls_index_of_1	legal	index_of("hello", "l")	2
+Ls_index_of_2	legal	index_of("中文ab", "b")	3
+Ls_index_of_3	legal	index_of("", "")	0
+Ls_index_of_4	legal	index_of("aaa", "a")	0
+Ps_index_of_b0p0q0	poison	index_of(null, "l")	LOCK
+Ps_index_of_b0p0q1	poison	index_of(true, "l")	LOCK
+Ps_index_of_b0p0q2	poison	index_of(7, "l")	LOCK
+Ps_index_of_b0p0q3	poison	index_of("7", "l")	LOCK
+Ps_index_of_b0p0q4	poison	index_of([], "l")	LOCK
+Ps_index_of_b0p0q5	poison	index_of({}, "l")	LOCK
+Ps_index_of_b0p1q0	poison	index_of("hello", null)	LOCK
+Ps_index_of_b0p1q1	poison	index_of("hello", true)	LOCK
+Ps_index_of_b0p1q2	poison	index_of("hello", 7)	LOCK
+Ps_index_of_b0p1q3	poison	index_of("hello", "7")	LOCK
+Ps_index_of_b0p1q4	poison	index_of("hello", [])	LOCK
+Ps_index_of_b0p1q5	poison	index_of("hello", {})	LOCK
+As_index_of_less	arity	index_of(null)	LOCK
+As_index_of_more	arity	index_of(null, null, null)	LOCK
+Ls_index_of_from_1	legal	index_of_from("abcabc", "bc", 2)	4
+Ls_index_of_from_2	legal	index_of_from("abc", "a", -5)	0
+Ls_index_of_from_3	legal	index_of_from("abc", "z", 1)	-1
+Ls_index_of_from_4	legal	index_of_from("abc", "a", 99)	-1
+Ps_index_of_from_b0p0q0	poison	index_of_from(null, "bc", 2)	LOCK
+Ps_index_of_from_b0p0q1	poison	index_of_from(true, "bc", 2)	LOCK
+Ps_index_of_from_b0p0q2	poison	index_of_from(7, "bc", 2)	LOCK
+Ps_index_of_from_b0p0q3	poison	index_of_from("7", "bc", 2)	LOCK
+Ps_index_of_from_b0p0q4	poison	index_of_from([], "bc", 2)	LOCK
+Ps_index_of_from_b0p0q5	poison	index_of_from({}, "bc", 2)	LOCK
+Ps_index_of_from_b0p1q0	poison	index_of_from("abcabc", null, 2)	LOCK
+Ps_index_of_from_b0p1q1	poison	index_of_from("abcabc", true, 2)	LOCK
+Ps_index_of_from_b0p1q2	poison	index_of_from("abcabc", 7, 2)	LOCK
+Ps_index_of_from_b0p1q3	poison	index_of_from("abcabc", "7", 2)	LOCK
+Ps_index_of_from_b0p1q4	poison	index_of_from("abcabc", [], 2)	LOCK
+Ps_index_of_from_b0p1q5	poison	index_of_from("abcabc", {}, 2)	LOCK
+Ps_index_of_from_b0p2q0	poison	index_of_from("abcabc", "bc", null)	LOCK
+Ps_index_of_from_b0p2q1	poison	index_of_from("abcabc", "bc", true)	LOCK
+Ps_index_of_from_b0p2q2	poison	index_of_from("abcabc", "bc", 7)	LOCK
+Ps_index_of_from_b0p2q3	poison	index_of_from("abcabc", "bc", "7")	LOCK
+Ps_index_of_from_b0p2q4	poison	index_of_from("abcabc", "bc", [])	LOCK
+Ps_index_of_from_b0p2q5	poison	index_of_from("abcabc", "bc", {})	LOCK
+As_index_of_from_less	arity	index_of_from(null, null)	LOCK
+As_index_of_from_more	arity	index_of_from(null, null, null, null)	LOCK
+Ls_is_hex_1	legal	is_hex("4aF0")	true
+Ls_is_hex_2	legal	is_hex("")	false
+Ls_is_hex_3	legal	is_hex("abc")	false
+Ls_is_hex_4	legal	is_hex("00")	true
+Ps_is_hex_b0p0q0	poison	is_hex(null)	LOCK
+Ps_is_hex_b0p0q1	poison	is_hex(true)	LOCK
+Ps_is_hex_b0p0q2	poison	is_hex(7)	LOCK
+Ps_is_hex_b0p0q3	poison	is_hex("7")	LOCK
+Ps_is_hex_b0p0q4	poison	is_hex([])	LOCK
+Ps_is_hex_b0p0q5	poison	is_hex({})	LOCK
+As_is_hex_less	arity	is_hex()	LOCK
+As_is_hex_more	arity	is_hex(null, null)	LOCK
+Ls_last_index_of_1	legal	last_index_of("abcabc", "bc")	4
+Ls_last_index_of_2	legal	last_index_of("abc", "")	3
+Ls_last_index_of_3	legal	last_index_of("中文中文", "文")	3
+Ps_last_index_of_b0p0q0	poison	last_index_of(null, "bc")	LOCK
+Ps_last_index_of_b0p0q1	poison	last_index_of(true, "bc")	LOCK
+Ps_last_index_of_b0p0q2	poison	last_index_of(7, "bc")	LOCK
+Ps_last_index_of_b0p0q3	poison	last_index_of("7", "bc")	LOCK
+Ps_last_index_of_b0p0q4	poison	last_index_of([], "bc")	LOCK
+Ps_last_index_of_b0p0q5	poison	last_index_of({}, "bc")	LOCK
+Ps_last_index_of_b0p1q0	poison	last_index_of("abcabc", null)	LOCK
+Ps_last_index_of_b0p1q1	poison	last_index_of("abcabc", true)	LOCK
+Ps_last_index_of_b0p1q2	poison	last_index_of("abcabc", 7)	LOCK
+Ps_last_index_of_b0p1q3	poison	last_index_of("abcabc", "7")	LOCK
+Ps_last_index_of_b0p1q4	poison	last_index_of("abcabc", [])	LOCK
+Ps_last_index_of_b0p1q5	poison	last_index_of("abcabc", {})	LOCK
+As_last_index_of_less	arity	last_index_of(null)	LOCK
+As_last_index_of_more	arity	last_index_of(null, null, null)	LOCK
+Ls_pad_left_1	legal	pad_left("7", 3, "0")	007
+Ls_pad_left_2	legal	pad_left("777", 2, "0")	777
+Ls_pad_left_3	legal	pad_left("7", 3, "")	007
+Ls_pad_left_4	legal	pad_left("", 3, "0")	000
+Ps_pad_left_b0p0q0	poison	pad_left(null, 3, "0")	LOCK
+Ps_pad_left_b0p0q1	poison	pad_left(true, 3, "0")	LOCK
+Ps_pad_left_b0p0q2	poison	pad_left(7, 3, "0")	LOCK
+Ps_pad_left_b0p0q3	poison	pad_left("7", 3, "0")	LOCK
+Ps_pad_left_b0p0q4	poison	pad_left([], 3, "0")	LOCK
+Ps_pad_left_b0p0q5	poison	pad_left({}, 3, "0")	LOCK
+Ps_pad_left_b0p1q0	poison	pad_left("7", null, "0")	LOCK
+Ps_pad_left_b0p1q1	poison	pad_left("7", true, "0")	LOCK
+Ps_pad_left_b0p1q2	poison	pad_left("7", 7, "0")	LOCK
+Ps_pad_left_b0p1q3	poison	pad_left("7", "7", "0")	LOCK
+Ps_pad_left_b0p1q4	poison	pad_left("7", [], "0")	LOCK
+Ps_pad_left_b0p1q5	poison	pad_left("7", {}, "0")	LOCK
+Ps_pad_left_b0p2q0	poison	pad_left("7", 3, null)	LOCK
+Ps_pad_left_b0p2q1	poison	pad_left("7", 3, true)	LOCK
+Ps_pad_left_b0p2q2	poison	pad_left("7", 3, 7)	LOCK
+Ps_pad_left_b0p2q3	poison	pad_left("7", 3, "7")	LOCK
+Ps_pad_left_b0p2q4	poison	pad_left("7", 3, [])	LOCK
+Ps_pad_left_b0p2q5	poison	pad_left("7", 3, {})	LOCK
+As_pad_left_less	arity	pad_left(null, null)	LOCK
+As_pad_left_more	arity	pad_left(null, null, null, null)	LOCK
+Ls_pad_right_1	legal	pad_right("7", 3, ".")	7..
+Ls_pad_right_2	legal	pad_right("7", 1, ".")	7
+Ls_pad_right_3	legal	pad_right("7", 3, "")	7  
+Ls_pad_right_4	legal	pad_right("", 3, "0")	000
+Ps_pad_right_b0p0q0	poison	pad_right(null, 3, ".")	LOCK
+Ps_pad_right_b0p0q1	poison	pad_right(true, 3, ".")	LOCK
+Ps_pad_right_b0p0q2	poison	pad_right(7, 3, ".")	LOCK
+Ps_pad_right_b0p0q3	poison	pad_right("7", 3, ".")	LOCK
+Ps_pad_right_b0p0q4	poison	pad_right([], 3, ".")	LOCK
+Ps_pad_right_b0p0q5	poison	pad_right({}, 3, ".")	LOCK
+Ps_pad_right_b0p1q0	poison	pad_right("7", null, ".")	LOCK
+Ps_pad_right_b0p1q1	poison	pad_right("7", true, ".")	LOCK
+Ps_pad_right_b0p1q2	poison	pad_right("7", 7, ".")	LOCK
+Ps_pad_right_b0p1q3	poison	pad_right("7", "7", ".")	LOCK
+Ps_pad_right_b0p1q4	poison	pad_right("7", [], ".")	LOCK
+Ps_pad_right_b0p1q5	poison	pad_right("7", {}, ".")	LOCK
+Ps_pad_right_b0p2q0	poison	pad_right("7", 3, null)	LOCK
+Ps_pad_right_b0p2q1	poison	pad_right("7", 3, true)	LOCK
+Ps_pad_right_b0p2q2	poison	pad_right("7", 3, 7)	LOCK
+Ps_pad_right_b0p2q3	poison	pad_right("7", 3, "7")	LOCK
+Ps_pad_right_b0p2q4	poison	pad_right("7", 3, [])	LOCK
+Ps_pad_right_b0p2q5	poison	pad_right("7", 3, {})	LOCK
+As_pad_right_less	arity	pad_right(null, null)	LOCK
+As_pad_right_more	arity	pad_right(null, null, null, null)	LOCK
+Ls_repeat_str_1	legal	repeat_str("ab", 3)	ababab
+Ls_repeat_str_2	legal	repeat_str("ab", 0)	
+Ls_repeat_str_3	legal	repeat_str("ab", -1)	
+Ls_repeat_str_4	legal	repeat_str("", 5)	
+Ps_repeat_str_b0p0q0	poison	repeat_str(null, 3)	LOCK
+Ps_repeat_str_b0p0q1	poison	repeat_str(true, 3)	LOCK
+Ps_repeat_str_b0p0q2	poison	repeat_str(7, 3)	LOCK
+Ps_repeat_str_b0p0q3	poison	repeat_str("7", 3)	LOCK
+Ps_repeat_str_b0p0q4	poison	repeat_str([], 3)	LOCK
+Ps_repeat_str_b0p0q5	poison	repeat_str({}, 3)	LOCK
+Ps_repeat_str_b0p1q0	poison	repeat_str("ab", null)	LOCK
+Ps_repeat_str_b0p1q1	poison	repeat_str("ab", true)	LOCK
+Ps_repeat_str_b0p1q2	poison	repeat_str("ab", 7)	LOCK
+Ps_repeat_str_b0p1q3	poison	repeat_str("ab", "7")	LOCK
+Ps_repeat_str_b0p1q4	poison	repeat_str("ab", [])	LOCK
+Ps_repeat_str_b0p1q5	poison	repeat_str("ab", {})	LOCK
+As_repeat_str_less	arity	repeat_str(null)	LOCK
+As_repeat_str_more	arity	repeat_str(null, null, null)	LOCK
+Ls_split_lines_1	legal	split_lines("a\r\nb\nc")	[a, b, c]
+Ls_split_lines_2	legal	split_lines("")	[]
+Ls_split_lines_3	legal	split_lines("a\n")	[a, ]
+Ps_split_lines_b0p0q0	poison	split_lines(null)	LOCK
+Ps_split_lines_b0p0q1	poison	split_lines(true)	LOCK
+Ps_split_lines_b0p0q2	poison	split_lines(7)	LOCK
+Ps_split_lines_b0p0q3	poison	split_lines("7")	LOCK
+Ps_split_lines_b0p0q4	poison	split_lines([])	LOCK
+Ps_split_lines_b0p0q5	poison	split_lines({})	LOCK
+As_split_lines_less	arity	split_lines()	LOCK
+As_split_lines_more	arity	split_lines(null, null)	LOCK
+Ls_split_n_1	legal	split_n("a,b,c", ",", 2)	[a, b,c]
+Ls_split_n_2	legal	split_n("abc", "", 3)	[abc]
+Ls_split_n_3	legal	split_n("a,b,c", ",", 1)	[a,b,c]
+Ls_split_n_4	legal	split_n("a,b,c", ",", 9)	[a, b, c]
+Ps_split_n_b0p0q0	poison	split_n(null, ",", 2)	LOCK
+Ps_split_n_b0p0q1	poison	split_n(true, ",", 2)	LOCK
+Ps_split_n_b0p0q2	poison	split_n(7, ",", 2)	LOCK
+Ps_split_n_b0p0q3	poison	split_n("7", ",", 2)	LOCK
+Ps_split_n_b0p0q4	poison	split_n([], ",", 2)	LOCK
+Ps_split_n_b0p0q5	poison	split_n({}, ",", 2)	LOCK
+Ps_split_n_b0p1q0	poison	split_n("a,b,c", null, 2)	LOCK
+Ps_split_n_b0p1q1	poison	split_n("a,b,c", true, 2)	LOCK
+Ps_split_n_b0p1q2	poison	split_n("a,b,c", 7, 2)	LOCK
+Ps_split_n_b0p1q3	poison	split_n("a,b,c", "7", 2)	LOCK
+Ps_split_n_b0p1q4	poison	split_n("a,b,c", [], 2)	LOCK
+Ps_split_n_b0p1q5	poison	split_n("a,b,c", {}, 2)	LOCK
+Ps_split_n_b0p2q0	poison	split_n("a,b,c", ",", null)	LOCK
+Ps_split_n_b0p2q1	poison	split_n("a,b,c", ",", true)	LOCK
+Ps_split_n_b0p2q2	poison	split_n("a,b,c", ",", 7)	LOCK
+Ps_split_n_b0p2q3	poison	split_n("a,b,c", ",", "7")	LOCK
+Ps_split_n_b0p2q4	poison	split_n("a,b,c", ",", [])	LOCK
+Ps_split_n_b0p2q5	poison	split_n("a,b,c", ",", {})	LOCK
+As_split_n_less	arity	split_n(null, null)	LOCK
+As_split_n_more	arity	split_n(null, null, null, null)	LOCK
+Ls_str_reverse_1	legal	str_reverse("中文a")	a文中
+Ls_str_reverse_2	legal	str_reverse("")	
+Ls_str_reverse_3	legal	str_reverse("ab")	ba
+Ps_str_reverse_b0p0q0	poison	str_reverse(null)	LOCK
+Ps_str_reverse_b0p0q1	poison	str_reverse(true)	LOCK
+Ps_str_reverse_b0p0q2	poison	str_reverse(7)	LOCK
+Ps_str_reverse_b0p0q3	poison	str_reverse("7")	LOCK
+Ps_str_reverse_b0p0q4	poison	str_reverse([])	LOCK
+Ps_str_reverse_b0p0q5	poison	str_reverse({})	LOCK
+As_str_reverse_less	arity	str_reverse()	LOCK
+As_str_reverse_more	arity	str_reverse(null, null)	LOCK
+Ls_trim_chars_1	legal	trim_chars("aa", "a")	
+Ls_trim_chars_2	legal	trim_chars("ab", "")	ab
+Ls_trim_chars_3	legal	trim_chars("\"x\"", "\"")	x
+Ps_trim_chars_b0p0q0	poison	trim_chars(null, "a")	LOCK
+Ps_trim_chars_b0p0q1	poison	trim_chars(true, "a")	LOCK
+Ps_trim_chars_b0p0q2	poison	trim_chars(7, "a")	LOCK
+Ps_trim_chars_b0p0q3	poison	trim_chars("7", "a")	LOCK
+Ps_trim_chars_b0p0q4	poison	trim_chars([], "a")	LOCK
+Ps_trim_chars_b0p0q5	poison	trim_chars({}, "a")	LOCK
+Ps_trim_chars_b0p1q0	poison	trim_chars("aaxaa", null)	LOCK
+Ps_trim_chars_b0p1q1	poison	trim_chars("aaxaa", true)	LOCK
+Ps_trim_chars_b0p1q2	poison	trim_chars("aaxaa", 7)	LOCK
+Ps_trim_chars_b0p1q3	poison	trim_chars("aaxaa", "7")	LOCK
+Ps_trim_chars_b0p1q4	poison	trim_chars("aaxaa", [])	LOCK
+Ps_trim_chars_b0p1q5	poison	trim_chars("aaxaa", {})	LOCK
+As_trim_chars_less	arity	trim_chars(null)	LOCK
+As_trim_chars_more	arity	trim_chars(null, null, null)	LOCK
+Ls_trim_left_chars_1	legal	trim_left_chars("xxay", "x")	ay
+Ls_trim_left_chars_2	legal	trim_left_chars("ab", "b")	ab
+Ls_trim_left_chars_3	legal	trim_left_chars("", "x")	
+Ps_trim_left_chars_b0p0q0	poison	trim_left_chars(null, "x")	LOCK
+Ps_trim_left_chars_b0p0q1	poison	trim_left_chars(true, "x")	LOCK
+Ps_trim_left_chars_b0p0q2	poison	trim_left_chars(7, "x")	LOCK
+Ps_trim_left_chars_b0p0q3	poison	trim_left_chars("7", "x")	LOCK
+Ps_trim_left_chars_b0p0q4	poison	trim_left_chars([], "x")	LOCK
+Ps_trim_left_chars_b0p0q5	poison	trim_left_chars({}, "x")	LOCK
+Ps_trim_left_chars_b0p1q0	poison	trim_left_chars("xxay", null)	LOCK
+Ps_trim_left_chars_b0p1q1	poison	trim_left_chars("xxay", true)	LOCK
+Ps_trim_left_chars_b0p1q2	poison	trim_left_chars("xxay", 7)	LOCK
+Ps_trim_left_chars_b0p1q3	poison	trim_left_chars("xxay", "7")	LOCK
+Ps_trim_left_chars_b0p1q4	poison	trim_left_chars("xxay", [])	LOCK
+Ps_trim_left_chars_b0p1q5	poison	trim_left_chars("xxay", {})	LOCK
+As_trim_left_chars_less	arity	trim_left_chars(null)	LOCK
+As_trim_left_chars_more	arity	trim_left_chars(null, null, null)	LOCK
+Ls_trim_prefix_1	legal	trim_prefix("wsa-id", "wsa-")	id
+Ls_trim_prefix_2	legal	trim_prefix("abc", "z")	abc
+Ls_trim_prefix_3	legal	trim_prefix("abc", "")	abc
+Ls_trim_prefix_4	legal	trim_prefix("abc", "abcd")	abc
+Ps_trim_prefix_b0p0q0	poison	trim_prefix(null, "wsa-")	LOCK
+Ps_trim_prefix_b0p0q1	poison	trim_prefix(true, "wsa-")	LOCK
+Ps_trim_prefix_b0p0q2	poison	trim_prefix(7, "wsa-")	LOCK
+Ps_trim_prefix_b0p0q3	poison	trim_prefix("7", "wsa-")	LOCK
+Ps_trim_prefix_b0p0q4	poison	trim_prefix([], "wsa-")	LOCK
+Ps_trim_prefix_b0p0q5	poison	trim_prefix({}, "wsa-")	LOCK
+Ps_trim_prefix_b0p1q0	poison	trim_prefix("wsa-id", null)	LOCK
+Ps_trim_prefix_b0p1q1	poison	trim_prefix("wsa-id", true)	LOCK
+Ps_trim_prefix_b0p1q2	poison	trim_prefix("wsa-id", 7)	LOCK
+Ps_trim_prefix_b0p1q3	poison	trim_prefix("wsa-id", "7")	LOCK
+Ps_trim_prefix_b0p1q4	poison	trim_prefix("wsa-id", [])	LOCK
+Ps_trim_prefix_b0p1q5	poison	trim_prefix("wsa-id", {})	LOCK
+As_trim_prefix_less	arity	trim_prefix(null)	LOCK
+As_trim_prefix_more	arity	trim_prefix(null, null, null)	LOCK
+Ls_trim_right_chars_1	legal	trim_right_chars("ayxx", "x")	ay
+Ls_trim_right_chars_2	legal	trim_right_chars("ab", "a")	ab
+Ls_trim_right_chars_3	legal	trim_right_chars("", "x")	
+Ps_trim_right_chars_b0p0q0	poison	trim_right_chars(null, "x")	LOCK
+Ps_trim_right_chars_b0p0q1	poison	trim_right_chars(true, "x")	LOCK
+Ps_trim_right_chars_b0p0q2	poison	trim_right_chars(7, "x")	LOCK
+Ps_trim_right_chars_b0p0q3	poison	trim_right_chars("7", "x")	LOCK
+Ps_trim_right_chars_b0p0q4	poison	trim_right_chars([], "x")	LOCK
+Ps_trim_right_chars_b0p0q5	poison	trim_right_chars({}, "x")	LOCK
+Ps_trim_right_chars_b0p1q0	poison	trim_right_chars("ayxx", null)	LOCK
+Ps_trim_right_chars_b0p1q1	poison	trim_right_chars("ayxx", true)	LOCK
+Ps_trim_right_chars_b0p1q2	poison	trim_right_chars("ayxx", 7)	LOCK
+Ps_trim_right_chars_b0p1q3	poison	trim_right_chars("ayxx", "7")	LOCK
+Ps_trim_right_chars_b0p1q4	poison	trim_right_chars("ayxx", [])	LOCK
+Ps_trim_right_chars_b0p1q5	poison	trim_right_chars("ayxx", {})	LOCK
+As_trim_right_chars_less	arity	trim_right_chars(null)	LOCK
+As_trim_right_chars_more	arity	trim_right_chars(null, null, null)	LOCK
+Ls_trim_suffix_1	legal	trim_suffix("a/", "/")	a
+Ls_trim_suffix_2	legal	trim_suffix("abc", "z")	abc
+Ls_trim_suffix_3	legal	trim_suffix("abc", "")	abc
+Ls_trim_suffix_4	legal	trim_suffix("ab", "abcd")	ab
+Ps_trim_suffix_b0p0q0	poison	trim_suffix(null, "/")	LOCK
+Ps_trim_suffix_b0p0q1	poison	trim_suffix(true, "/")	LOCK
+Ps_trim_suffix_b0p0q2	poison	trim_suffix(7, "/")	LOCK
+Ps_trim_suffix_b0p0q3	poison	trim_suffix("7", "/")	LOCK
+Ps_trim_suffix_b0p0q4	poison	trim_suffix([], "/")	LOCK
+Ps_trim_suffix_b0p0q5	poison	trim_suffix({}, "/")	LOCK
+Ps_trim_suffix_b0p1q0	poison	trim_suffix("ab/", null)	LOCK
+Ps_trim_suffix_b0p1q1	poison	trim_suffix("ab/", true)	LOCK
+Ps_trim_suffix_b0p1q2	poison	trim_suffix("ab/", 7)	LOCK
+Ps_trim_suffix_b0p1q3	poison	trim_suffix("ab/", "7")	LOCK
+Ps_trim_suffix_b0p1q4	poison	trim_suffix("ab/", [])	LOCK
+Ps_trim_suffix_b0p1q5	poison	trim_suffix("ab/", {})	LOCK
+As_trim_suffix_less	arity	trim_suffix(null)	LOCK
+As_trim_suffix_more	arity	trim_suffix(null, null, null)	LOCK
+Lu_url_parse_1	legal	url_parse("https://u@h:8080/p?q=1#f")["scheme"]	https
+Lu_url_parse_2	legal	url_parse("https://u@h:8080/p?q=1#f")["user"]	u
+Lu_url_parse_3	legal	url_parse("https://u@h:8080/p?q=1#f")["host"]	h:8080
+Lu_url_parse_4	legal	url_parse("https://u@h:8080/p?q=1#f")["path"]	/p
+Lu_url_parse_5	legal	url_parse("https://u@h:8080/p?q=1#f")["rawquery"]	q=1
+Lu_url_parse_6	legal	url_parse("https://u@h:8080/p?q=1#f")["fragment"]	f
+Lu_url_parse_7	legal	url_parse("/a%20b")["path"]	/a b
+Lu_url_parse_8	legal	url_parse("")["path"]	
+Pu_url_parse_b0p0q0	poison	url_parse(null)	LOCK
+Pu_url_parse_b0p0q1	poison	url_parse(true)	LOCK
+Pu_url_parse_b0p0q2	poison	url_parse(7)	LOCK
+Pu_url_parse_b0p0q3	poison	url_parse("7")	LOCK
+Pu_url_parse_b0p0q4	poison	url_parse([])	LOCK
+Pu_url_parse_b0p0q5	poison	url_parse({})	LOCK
+Au_url_parse_less	arity	url_parse()	LOCK
+Au_url_parse_more	arity	url_parse(null, null)	LOCK
+Lu_url_parse_query_1	legal	url_parse_query("a=1&a=2&b=%41")[0]["a"]	[1, 2]
+Lu_url_parse_query_2	legal	url_parse_query("a=1")[1]	true
+Lu_url_parse_query_3	legal	url_parse_query("a=1;b=2")[1]	false
+Lu_url_parse_query_4	legal	url_parse_query("a=1&a=2")[0]["a"]	[1, 2]
+Pu_url_parse_query_b0p0q0	poison	url_parse_query(null)	LOCK
+Pu_url_parse_query_b0p0q1	poison	url_parse_query(true)	LOCK
+Pu_url_parse_query_b0p0q2	poison	url_parse_query(7)	LOCK
+Pu_url_parse_query_b0p0q3	poison	url_parse_query("7")	LOCK
+Pu_url_parse_query_b0p0q4	poison	url_parse_query([])	LOCK
+Pu_url_parse_query_b0p0q5	poison	url_parse_query({})	LOCK
+Au_url_parse_query_less	arity	url_parse_query()	LOCK
+Au_url_parse_query_more	arity	url_parse_query(null, null)	LOCK
+Lu_url_path_escape_1	legal	url_path_escape("a/b c")	a%2Fb%20c
+Lu_url_path_escape_2	legal	url_path_escape("a~b")	a~b
+Lu_url_path_escape_3	legal	url_path_escape("中")	%E4%B8%AD
+Lu_url_path_escape_4	legal	url_path_escape("a+b")	a+b
+Pu_url_path_escape_b0p0q0	poison	url_path_escape(null)	LOCK
+Pu_url_path_escape_b0p0q1	poison	url_path_escape(true)	LOCK
+Pu_url_path_escape_b0p0q2	poison	url_path_escape(7)	LOCK
+Pu_url_path_escape_b0p0q3	poison	url_path_escape("7")	LOCK
+Pu_url_path_escape_b0p0q4	poison	url_path_escape([])	LOCK
+Pu_url_path_escape_b0p0q5	poison	url_path_escape({})	LOCK
+Au_url_path_escape_less	arity	url_path_escape()	LOCK
+Au_url_path_escape_more	arity	url_path_escape(null, null)	LOCK
+Lu_url_query_escape_1	legal	url_query_escape("a b~!")	a+b~%21
+Lu_url_query_escape_2	legal	url_query_escape("")	
+Lu_url_query_escape_3	legal	url_query_escape("中")	%E4%B8%AD
+Lu_url_query_escape_4	legal	url_query_escape("a/b?c=d&e")	a%2Fb%3Fc%3Dd%26e
+Pu_url_query_escape_b0p0q0	poison	url_query_escape(null)	LOCK
+Pu_url_query_escape_b0p0q1	poison	url_query_escape(true)	LOCK
+Pu_url_query_escape_b0p0q2	poison	url_query_escape(7)	LOCK
+Pu_url_query_escape_b0p0q3	poison	url_query_escape("7")	LOCK
+Pu_url_query_escape_b0p0q4	poison	url_query_escape([])	LOCK
+Pu_url_query_escape_b0p0q5	poison	url_query_escape({})	LOCK
+Au_url_query_escape_less	arity	url_query_escape()	LOCK
+Au_url_query_escape_more	arity	url_query_escape(null, null)	LOCK
+Lu_url_query_unescape_1	legal	url_query_unescape("%41+b")	A b
+Lu_url_query_unescape_2	legal	url_query_unescape("%")	%
+Lu_url_query_unescape_3	legal	url_query_unescape("%zz")	%zz
+Lu_url_query_unescape_4	legal	url_query_unescape("%4")	%4
+Pu_url_query_unescape_b0p0q0	poison	url_query_unescape(null)	LOCK
+Pu_url_query_unescape_b0p0q1	poison	url_query_unescape(true)	LOCK
+Pu_url_query_unescape_b0p0q2	poison	url_query_unescape(7)	LOCK
+Pu_url_query_unescape_b0p0q3	poison	url_query_unescape("7")	LOCK
+Pu_url_query_unescape_b0p0q4	poison	url_query_unescape([])	LOCK
+Pu_url_query_unescape_b0p0q5	poison	url_query_unescape({})	LOCK
+Au_url_query_unescape_less	arity	url_query_unescape()	LOCK
+Au_url_query_unescape_more	arity	url_query_unescape(null, null)	LOCK
+Lu_url_query_unescape_keep_q_1	legal	url_query_unescape_keep_q("%41+b")	A+b
+Lu_url_query_unescape_keep_q_2	legal	url_query_unescape_keep_q("%")	%
+Lu_url_query_unescape_keep_q_3	legal	url_query_unescape_keep_q("a%2Fb")	a/b
+Lu_url_query_unescape_keep_q_4	legal	url_query_unescape_keep_q("%4")	%4
+Pu_url_query_unescape_keep_q_b0p0q0	poison	url_query_unescape_keep_q(null)	LOCK
+Pu_url_query_unescape_keep_q_b0p0q1	poison	url_query_unescape_keep_q(true)	LOCK
+Pu_url_query_unescape_keep_q_b0p0q2	poison	url_query_unescape_keep_q(7)	LOCK
+Pu_url_query_unescape_keep_q_b0p0q3	poison	url_query_unescape_keep_q("7")	LOCK
+Pu_url_query_unescape_keep_q_b0p0q4	poison	url_query_unescape_keep_q([])	LOCK
+Pu_url_query_unescape_keep_q_b0p0q5	poison	url_query_unescape_keep_q({})	LOCK
+Au_url_query_unescape_keep_q_less	arity	url_query_unescape_keep_q()	LOCK
+Au_url_query_unescape_keep_q_more	arity	url_query_unescape_keep_q(null, null)	LOCK
+Lu_url_values_encode_1	legal	url_values_encode({"a": "1"})	a=1
+Lu_url_values_encode_2	legal	url_values_encode({"a": ["1", "2"]})	a=1&a=2
+Lu_url_values_encode_3	legal	url_values_encode({})	
+Pu_url_values_encode_b0p0q0	poison	url_values_encode(null)	LOCK
+Pu_url_values_encode_b0p0q1	poison	url_values_encode(true)	LOCK
+Pu_url_values_encode_b0p0q2	poison	url_values_encode(7)	LOCK
+Pu_url_values_encode_b0p0q3	poison	url_values_encode("7")	LOCK
+Pu_url_values_encode_b0p0q4	poison	url_values_encode([])	LOCK
+Pu_url_values_encode_b0p0q5	poison	url_values_encode({})	LOCK
+Au_url_values_encode_less	arity	url_values_encode()	LOCK
+Au_url_values_encode_more	arity	url_values_encode(null, null)	LOCK

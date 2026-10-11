@@ -1247,6 +1247,12 @@ jobs:
           grep -E '汇总：通过|⏭' /tmp/v_m299.log | tail -3 || true
           echo "✅ m299_wake_channel（静态 11 · 观察器四分支 • RED/INCONSISTENT/PREMISE 必唤醒 · GREEN 必不唤醒 · dy-wake 三重限流 · 负控 A/B）PASS"
 
+      - name: m300_stdlib_surface2（stdlib 覆盖面台账 + 第二批边界面 · 缺陷 518 · M300）
+        run: |
+          bash examples/m300_stdlib_surface2/verify.sh > /tmp/v_m300.log 2>&1 || { echo "❌ m300 门失败（台账自证 · 生成物漂移 · 375 例三轨对拍 · 契约表/登记表双向 · 负控 A/B/C）"; grep -E '^(  ❌|     |        )' /tmp/v_m300.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '汇总：通过|三轨分叉|未提及' /tmp/v_m300.log | tail -4 || true
+          echo "✅ m300_stdlib_surface2（台账 27 模块 / 313 导出 · strings+url 23 导出 × 375 例 × 三轨 × 2 遍 · 已登记缺陷 518）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

@@ -1,0 +1,1134 @@
+import std.strings
+import std.url
+
+def main():
+    var a = args()
+    var c = a[1]
+    var hit = 0
+    if c == "Ls_count_of_1":
+        hit = 1
+        print(count_of("abcabc", "bc"))
+    if c == "Ls_count_of_2":
+        hit = 1
+        print(count_of("aaa", "aa"))
+    if c == "Ls_count_of_3":
+        hit = 1
+        print(count_of("abc", ""))
+    if c == "Ls_count_of_4":
+        hit = 1
+        print(count_of("aaaa", "aa"))
+    if c == "Ps_count_of_b0p0q0":
+        hit = 1
+        print(count_of(null, "bc"))
+    if c == "Ps_count_of_b0p0q1":
+        hit = 1
+        print(count_of(true, "bc"))
+    if c == "Ps_count_of_b0p0q2":
+        hit = 1
+        print(count_of(7, "bc"))
+    if c == "Ps_count_of_b0p0q3":
+        hit = 1
+        print(count_of("7", "bc"))
+    if c == "Ps_count_of_b0p0q4":
+        hit = 1
+        print(count_of([], "bc"))
+    if c == "Ps_count_of_b0p0q5":
+        hit = 1
+        print(count_of({}, "bc"))
+    if c == "Ps_count_of_b0p1q0":
+        hit = 1
+        print(count_of("abcabc", null))
+    if c == "Ps_count_of_b0p1q1":
+        hit = 1
+        print(count_of("abcabc", true))
+    if c == "Ps_count_of_b0p1q2":
+        hit = 1
+        print(count_of("abcabc", 7))
+    if c == "Ps_count_of_b0p1q3":
+        hit = 1
+        print(count_of("abcabc", "7"))
+    if c == "Ps_count_of_b0p1q4":
+        hit = 1
+        print(count_of("abcabc", []))
+    if c == "Ps_count_of_b0p1q5":
+        hit = 1
+        print(count_of("abcabc", {}))
+    if c == "As_count_of_less":
+        hit = 1
+        print(count_of(null))
+    if c == "As_count_of_more":
+        hit = 1
+        print(count_of(null, null, null))
+    if c == "Ls_index_of_1":
+        hit = 1
+        print(index_of("hello", "l"))
+    if c == "Ls_index_of_2":
+        hit = 1
+        print(index_of("中文ab", "b"))
+    if c == "Ls_index_of_3":
+        hit = 1
+        print(index_of("", ""))
+    if c == "Ls_index_of_4":
+        hit = 1
+        print(index_of("aaa", "a"))
+    if c == "Ps_index_of_b0p0q0":
+        hit = 1
+        print(index_of(null, "l"))
+    if c == "Ps_index_of_b0p0q1":
+        hit = 1
+        print(index_of(true, "l"))
+    if c == "Ps_index_of_b0p0q2":
+        hit = 1
+        print(index_of(7, "l"))
+    if c == "Ps_index_of_b0p0q3":
+        hit = 1
+        print(index_of("7", "l"))
+    if c == "Ps_index_of_b0p0q4":
+        hit = 1
+        print(index_of([], "l"))
+    if c == "Ps_index_of_b0p0q5":
+        hit = 1
+        print(index_of({}, "l"))
+    if c == "Ps_index_of_b0p1q0":
+        hit = 1
+        print(index_of("hello", null))
+    if c == "Ps_index_of_b0p1q1":
+        hit = 1
+        print(index_of("hello", true))
+    if c == "Ps_index_of_b0p1q2":
+        hit = 1
+        print(index_of("hello", 7))
+    if c == "Ps_index_of_b0p1q3":
+        hit = 1
+        print(index_of("hello", "7"))
+    if c == "Ps_index_of_b0p1q4":
+        hit = 1
+        print(index_of("hello", []))
+    if c == "Ps_index_of_b0p1q5":
+        hit = 1
+        print(index_of("hello", {}))
+    if c == "As_index_of_less":
+        hit = 1
+        print(index_of(null))
+    if c == "As_index_of_more":
+        hit = 1
+        print(index_of(null, null, null))
+    if c == "Ls_index_of_from_1":
+        hit = 1
+        print(index_of_from("abcabc", "bc", 2))
+    if c == "Ls_index_of_from_2":
+        hit = 1
+        print(index_of_from("abc", "a", -5))
+    if c == "Ls_index_of_from_3":
+        hit = 1
+        print(index_of_from("abc", "z", 1))
+    if c == "Ls_index_of_from_4":
+        hit = 1
+        print(index_of_from("abc", "a", 99))
+    if c == "Ps_index_of_from_b0p0q0":
+        hit = 1
+        print(index_of_from(null, "bc", 2))
+    if c == "Ps_index_of_from_b0p0q1":
+        hit = 1
+        print(index_of_from(true, "bc", 2))
+    if c == "Ps_index_of_from_b0p0q2":
+        hit = 1
+        print(index_of_from(7, "bc", 2))
+    if c == "Ps_index_of_from_b0p0q3":
+        hit = 1
+        print(index_of_from("7", "bc", 2))
+    if c == "Ps_index_of_from_b0p0q4":
+        hit = 1
+        print(index_of_from([], "bc", 2))
+    if c == "Ps_index_of_from_b0p0q5":
+        hit = 1
+        print(index_of_from({}, "bc", 2))
+    if c == "Ps_index_of_from_b0p1q0":
+        hit = 1
+        print(index_of_from("abcabc", null, 2))
+    if c == "Ps_index_of_from_b0p1q1":
+        hit = 1
+        print(index_of_from("abcabc", true, 2))
+    if c == "Ps_index_of_from_b0p1q2":
+        hit = 1
+        print(index_of_from("abcabc", 7, 2))
+    if c == "Ps_index_of_from_b0p1q3":
+        hit = 1
+        print(index_of_from("abcabc", "7", 2))
+    if c == "Ps_index_of_from_b0p1q4":
+        hit = 1
+        print(index_of_from("abcabc", [], 2))
+    if c == "Ps_index_of_from_b0p1q5":
+        hit = 1
+        print(index_of_from("abcabc", {}, 2))
+    if c == "Ps_index_of_from_b0p2q0":
+        hit = 1
+        print(index_of_from("abcabc", "bc", null))
+    if c == "Ps_index_of_from_b0p2q1":
+        hit = 1
+        print(index_of_from("abcabc", "bc", true))
+    if c == "Ps_index_of_from_b0p2q2":
+        hit = 1
+        print(index_of_from("abcabc", "bc", 7))
+    if c == "Ps_index_of_from_b0p2q3":
+        hit = 1
+        print(index_of_from("abcabc", "bc", "7"))
+    if c == "Ps_index_of_from_b0p2q4":
+        hit = 1
+        print(index_of_from("abcabc", "bc", []))
+    if c == "Ps_index_of_from_b0p2q5":
+        hit = 1
+        print(index_of_from("abcabc", "bc", {}))
+    if c == "As_index_of_from_less":
+        hit = 1
+        print(index_of_from(null, null))
+    if c == "As_index_of_from_more":
+        hit = 1
+        print(index_of_from(null, null, null, null))
+    if c == "Ls_is_hex_1":
+        hit = 1
+        print(is_hex("4aF0"))
+    if c == "Ls_is_hex_2":
+        hit = 1
+        print(is_hex(""))
+    if c == "Ls_is_hex_3":
+        hit = 1
+        print(is_hex("abc"))
+    if c == "Ls_is_hex_4":
+        hit = 1
+        print(is_hex("00"))
+    if c == "Ps_is_hex_b0p0q0":
+        hit = 1
+        print(is_hex(null))
+    if c == "Ps_is_hex_b0p0q1":
+        hit = 1
+        print(is_hex(true))
+    if c == "Ps_is_hex_b0p0q2":
+        hit = 1
+        print(is_hex(7))
+    if c == "Ps_is_hex_b0p0q3":
+        hit = 1
+        print(is_hex("7"))
+    if c == "Ps_is_hex_b0p0q4":
+        hit = 1
+        print(is_hex([]))
+    if c == "Ps_is_hex_b0p0q5":
+        hit = 1
+        print(is_hex({}))
+    if c == "As_is_hex_less":
+        hit = 1
+        print(is_hex())
+    if c == "As_is_hex_more":
+        hit = 1
+        print(is_hex(null, null))
+    if c == "Ls_last_index_of_1":
+        hit = 1
+        print(last_index_of("abcabc", "bc"))
+    if c == "Ls_last_index_of_2":
+        hit = 1
+        print(last_index_of("abc", ""))
+    if c == "Ls_last_index_of_3":
+        hit = 1
+        print(last_index_of("中文中文", "文"))
+    if c == "Ps_last_index_of_b0p0q0":
+        hit = 1
+        print(last_index_of(null, "bc"))
+    if c == "Ps_last_index_of_b0p0q1":
+        hit = 1
+        print(last_index_of(true, "bc"))
+    if c == "Ps_last_index_of_b0p0q2":
+        hit = 1
+        print(last_index_of(7, "bc"))
+    if c == "Ps_last_index_of_b0p0q3":
+        hit = 1
+        print(last_index_of("7", "bc"))
+    if c == "Ps_last_index_of_b0p0q4":
+        hit = 1
+        print(last_index_of([], "bc"))
+    if c == "Ps_last_index_of_b0p0q5":
+        hit = 1
+        print(last_index_of({}, "bc"))
+    if c == "Ps_last_index_of_b0p1q0":
+        hit = 1
+        print(last_index_of("abcabc", null))
+    if c == "Ps_last_index_of_b0p1q1":
+        hit = 1
+        print(last_index_of("abcabc", true))
+    if c == "Ps_last_index_of_b0p1q2":
+        hit = 1
+        print(last_index_of("abcabc", 7))
+    if c == "Ps_last_index_of_b0p1q3":
+        hit = 1
+        print(last_index_of("abcabc", "7"))
+    if c == "Ps_last_index_of_b0p1q4":
+        hit = 1
+        print(last_index_of("abcabc", []))
+    if c == "Ps_last_index_of_b0p1q5":
+        hit = 1
+        print(last_index_of("abcabc", {}))
+    if c == "As_last_index_of_less":
+        hit = 1
+        print(last_index_of(null))
+    if c == "As_last_index_of_more":
+        hit = 1
+        print(last_index_of(null, null, null))
+    if c == "Ls_pad_left_1":
+        hit = 1
+        print(pad_left("7", 3, "0"))
+    if c == "Ls_pad_left_2":
+        hit = 1
+        print(pad_left("777", 2, "0"))
+    if c == "Ls_pad_left_3":
+        hit = 1
+        print(pad_left("7", 3, ""))
+    if c == "Ls_pad_left_4":
+        hit = 1
+        print(pad_left("", 3, "0"))
+    if c == "Ps_pad_left_b0p0q0":
+        hit = 1
+        print(pad_left(null, 3, "0"))
+    if c == "Ps_pad_left_b0p0q1":
+        hit = 1
+        print(pad_left(true, 3, "0"))
+    if c == "Ps_pad_left_b0p0q2":
+        hit = 1
+        print(pad_left(7, 3, "0"))
+    if c == "Ps_pad_left_b0p0q3":
+        hit = 1
+        print(pad_left("7", 3, "0"))
+    if c == "Ps_pad_left_b0p0q4":
+        hit = 1
+        print(pad_left([], 3, "0"))
+    if c == "Ps_pad_left_b0p0q5":
+        hit = 1
+        print(pad_left({}, 3, "0"))
+    if c == "Ps_pad_left_b0p1q0":
+        hit = 1
+        print(pad_left("7", null, "0"))
+    if c == "Ps_pad_left_b0p1q1":
+        hit = 1
+        print(pad_left("7", true, "0"))
+    if c == "Ps_pad_left_b0p1q2":
+        hit = 1
+        print(pad_left("7", 7, "0"))
+    if c == "Ps_pad_left_b0p1q3":
+        hit = 1
+        print(pad_left("7", "7", "0"))
+    if c == "Ps_pad_left_b0p1q4":
+        hit = 1
+        print(pad_left("7", [], "0"))
+    if c == "Ps_pad_left_b0p1q5":
+        hit = 1
+        print(pad_left("7", {}, "0"))
+    if c == "Ps_pad_left_b0p2q0":
+        hit = 1
+        print(pad_left("7", 3, null))
+    if c == "Ps_pad_left_b0p2q1":
+        hit = 1
+        print(pad_left("7", 3, true))
+    if c == "Ps_pad_left_b0p2q2":
+        hit = 1
+        print(pad_left("7", 3, 7))
+    if c == "Ps_pad_left_b0p2q3":
+        hit = 1
+        print(pad_left("7", 3, "7"))
+    if c == "Ps_pad_left_b0p2q4":
+        hit = 1
+        print(pad_left("7", 3, []))
+    if c == "Ps_pad_left_b0p2q5":
+        hit = 1
+        print(pad_left("7", 3, {}))
+    if c == "As_pad_left_less":
+        hit = 1
+        print(pad_left(null, null))
+    if c == "As_pad_left_more":
+        hit = 1
+        print(pad_left(null, null, null, null))
+    if c == "Ls_pad_right_1":
+        hit = 1
+        print(pad_right("7", 3, "."))
+    if c == "Ls_pad_right_2":
+        hit = 1
+        print(pad_right("7", 1, "."))
+    if c == "Ls_pad_right_3":
+        hit = 1
+        print(pad_right("7", 3, ""))
+    if c == "Ls_pad_right_4":
+        hit = 1
+        print(pad_right("", 3, "0"))
+    if c == "Ps_pad_right_b0p0q0":
+        hit = 1
+        print(pad_right(null, 3, "."))
+    if c == "Ps_pad_right_b0p0q1":
+        hit = 1
+        print(pad_right(true, 3, "."))
+    if c == "Ps_pad_right_b0p0q2":
+        hit = 1
+        print(pad_right(7, 3, "."))
+    if c == "Ps_pad_right_b0p0q3":
+        hit = 1
+        print(pad_right("7", 3, "."))
+    if c == "Ps_pad_right_b0p0q4":
+        hit = 1
+        print(pad_right([], 3, "."))
+    if c == "Ps_pad_right_b0p0q5":
+        hit = 1
+        print(pad_right({}, 3, "."))
+    if c == "Ps_pad_right_b0p1q0":
+        hit = 1
+        print(pad_right("7", null, "."))
+    if c == "Ps_pad_right_b0p1q1":
+        hit = 1
+        print(pad_right("7", true, "."))
+    if c == "Ps_pad_right_b0p1q2":
+        hit = 1
+        print(pad_right("7", 7, "."))
+    if c == "Ps_pad_right_b0p1q3":
+        hit = 1
+        print(pad_right("7", "7", "."))
+    if c == "Ps_pad_right_b0p1q4":
+        hit = 1
+        print(pad_right("7", [], "."))
+    if c == "Ps_pad_right_b0p1q5":
+        hit = 1
+        print(pad_right("7", {}, "."))
+    if c == "Ps_pad_right_b0p2q0":
+        hit = 1
+        print(pad_right("7", 3, null))
+    if c == "Ps_pad_right_b0p2q1":
+        hit = 1
+        print(pad_right("7", 3, true))
+    if c == "Ps_pad_right_b0p2q2":
+        hit = 1
+        print(pad_right("7", 3, 7))
+    if c == "Ps_pad_right_b0p2q3":
+        hit = 1
+        print(pad_right("7", 3, "7"))
+    if c == "Ps_pad_right_b0p2q4":
+        hit = 1
+        print(pad_right("7", 3, []))
+    if c == "Ps_pad_right_b0p2q5":
+        hit = 1
+        print(pad_right("7", 3, {}))
+    if c == "As_pad_right_less":
+        hit = 1
+        print(pad_right(null, null))
+    if c == "As_pad_right_more":
+        hit = 1
+        print(pad_right(null, null, null, null))
+    if c == "Ls_repeat_str_1":
+        hit = 1
+        print(repeat_str("ab", 3))
+    if c == "Ls_repeat_str_2":
+        hit = 1
+        print(repeat_str("ab", 0))
+    if c == "Ls_repeat_str_3":
+        hit = 1
+        print(repeat_str("ab", -1))
+    if c == "Ls_repeat_str_4":
+        hit = 1
+        print(repeat_str("", 5))
+    if c == "Ps_repeat_str_b0p0q0":
+        hit = 1
+        print(repeat_str(null, 3))
+    if c == "Ps_repeat_str_b0p0q1":
+        hit = 1
+        print(repeat_str(true, 3))
+    if c == "Ps_repeat_str_b0p0q2":
+        hit = 1
+        print(repeat_str(7, 3))
+    if c == "Ps_repeat_str_b0p0q3":
+        hit = 1
+        print(repeat_str("7", 3))
+    if c == "Ps_repeat_str_b0p0q4":
+        hit = 1
+        print(repeat_str([], 3))
+    if c == "Ps_repeat_str_b0p0q5":
+        hit = 1
+        print(repeat_str({}, 3))
+    if c == "Ps_repeat_str_b0p1q0":
+        hit = 1
+        print(repeat_str("ab", null))
+    if c == "Ps_repeat_str_b0p1q1":
+        hit = 1
+        print(repeat_str("ab", true))
+    if c == "Ps_repeat_str_b0p1q2":
+        hit = 1
+        print(repeat_str("ab", 7))
+    if c == "Ps_repeat_str_b0p1q3":
+        hit = 1
+        print(repeat_str("ab", "7"))
+    if c == "Ps_repeat_str_b0p1q4":
+        hit = 1
+        print(repeat_str("ab", []))
+    if c == "Ps_repeat_str_b0p1q5":
+        hit = 1
+        print(repeat_str("ab", {}))
+    if c == "As_repeat_str_less":
+        hit = 1
+        print(repeat_str(null))
+    if c == "As_repeat_str_more":
+        hit = 1
+        print(repeat_str(null, null, null))
+    if c == "Ls_split_lines_1":
+        hit = 1
+        print(split_lines("a\r\nb\nc"))
+    if c == "Ls_split_lines_2":
+        hit = 1
+        print(split_lines(""))
+    if c == "Ls_split_lines_3":
+        hit = 1
+        print(split_lines("a\n"))
+    if c == "Ps_split_lines_b0p0q0":
+        hit = 1
+        print(split_lines(null))
+    if c == "Ps_split_lines_b0p0q1":
+        hit = 1
+        print(split_lines(true))
+    if c == "Ps_split_lines_b0p0q2":
+        hit = 1
+        print(split_lines(7))
+    if c == "Ps_split_lines_b0p0q3":
+        hit = 1
+        print(split_lines("7"))
+    if c == "Ps_split_lines_b0p0q4":
+        hit = 1
+        print(split_lines([]))
+    if c == "Ps_split_lines_b0p0q5":
+        hit = 1
+        print(split_lines({}))
+    if c == "As_split_lines_less":
+        hit = 1
+        print(split_lines())
+    if c == "As_split_lines_more":
+        hit = 1
+        print(split_lines(null, null))
+    if c == "Ls_split_n_1":
+        hit = 1
+        print(split_n("a,b,c", ",", 2))
+    if c == "Ls_split_n_2":
+        hit = 1
+        print(split_n("abc", "", 3))
+    if c == "Ls_split_n_3":
+        hit = 1
+        print(split_n("a,b,c", ",", 1))
+    if c == "Ls_split_n_4":
+        hit = 1
+        print(split_n("a,b,c", ",", 9))
+    if c == "Ps_split_n_b0p0q0":
+        hit = 1
+        print(split_n(null, ",", 2))
+    if c == "Ps_split_n_b0p0q1":
+        hit = 1
+        print(split_n(true, ",", 2))
+    if c == "Ps_split_n_b0p0q2":
+        hit = 1
+        print(split_n(7, ",", 2))
+    if c == "Ps_split_n_b0p0q3":
+        hit = 1
+        print(split_n("7", ",", 2))
+    if c == "Ps_split_n_b0p0q4":
+        hit = 1
+        print(split_n([], ",", 2))
+    if c == "Ps_split_n_b0p0q5":
+        hit = 1
+        print(split_n({}, ",", 2))
+    if c == "Ps_split_n_b0p1q0":
+        hit = 1
+        print(split_n("a,b,c", null, 2))
+    if c == "Ps_split_n_b0p1q1":
+        hit = 1
+        print(split_n("a,b,c", true, 2))
+    if c == "Ps_split_n_b0p1q2":
+        hit = 1
+        print(split_n("a,b,c", 7, 2))
+    if c == "Ps_split_n_b0p1q3":
+        hit = 1
+        print(split_n("a,b,c", "7", 2))
+    if c == "Ps_split_n_b0p1q4":
+        hit = 1
+        print(split_n("a,b,c", [], 2))
+    if c == "Ps_split_n_b0p1q5":
+        hit = 1
+        print(split_n("a,b,c", {}, 2))
+    if c == "Ps_split_n_b0p2q0":
+        hit = 1
+        print(split_n("a,b,c", ",", null))
+    if c == "Ps_split_n_b0p2q1":
+        hit = 1
+        print(split_n("a,b,c", ",", true))
+    if c == "Ps_split_n_b0p2q2":
+        hit = 1
+        print(split_n("a,b,c", ",", 7))
+    if c == "Ps_split_n_b0p2q3":
+        hit = 1
+        print(split_n("a,b,c", ",", "7"))
+    if c == "Ps_split_n_b0p2q4":
+        hit = 1
+        print(split_n("a,b,c", ",", []))
+    if c == "Ps_split_n_b0p2q5":
+        hit = 1
+        print(split_n("a,b,c", ",", {}))
+    if c == "As_split_n_less":
+        hit = 1
+        print(split_n(null, null))
+    if c == "As_split_n_more":
+        hit = 1
+        print(split_n(null, null, null, null))
+    if c == "Ls_str_reverse_1":
+        hit = 1
+        print(str_reverse("中文a"))
+    if c == "Ls_str_reverse_2":
+        hit = 1
+        print(str_reverse(""))
+    if c == "Ls_str_reverse_3":
+        hit = 1
+        print(str_reverse("ab"))
+    if c == "Ps_str_reverse_b0p0q0":
+        hit = 1
+        print(str_reverse(null))
+    if c == "Ps_str_reverse_b0p0q1":
+        hit = 1
+        print(str_reverse(true))
+    if c == "Ps_str_reverse_b0p0q2":
+        hit = 1
+        print(str_reverse(7))
+    if c == "Ps_str_reverse_b0p0q3":
+        hit = 1
+        print(str_reverse("7"))
+    if c == "Ps_str_reverse_b0p0q4":
+        hit = 1
+        print(str_reverse([]))
+    if c == "Ps_str_reverse_b0p0q5":
+        hit = 1
+        print(str_reverse({}))
+    if c == "As_str_reverse_less":
+        hit = 1
+        print(str_reverse())
+    if c == "As_str_reverse_more":
+        hit = 1
+        print(str_reverse(null, null))
+    if c == "Ls_trim_chars_1":
+        hit = 1
+        print(trim_chars("aa", "a"))
+    if c == "Ls_trim_chars_2":
+        hit = 1
+        print(trim_chars("ab", ""))
+    if c == "Ls_trim_chars_3":
+        hit = 1
+        print(trim_chars("\"x\"", "\""))
+    if c == "Ps_trim_chars_b0p0q0":
+        hit = 1
+        print(trim_chars(null, "a"))
+    if c == "Ps_trim_chars_b0p0q1":
+        hit = 1
+        print(trim_chars(true, "a"))
+    if c == "Ps_trim_chars_b0p0q2":
+        hit = 1
+        print(trim_chars(7, "a"))
+    if c == "Ps_trim_chars_b0p0q3":
+        hit = 1
+        print(trim_chars("7", "a"))
+    if c == "Ps_trim_chars_b0p0q4":
+        hit = 1
+        print(trim_chars([], "a"))
+    if c == "Ps_trim_chars_b0p0q5":
+        hit = 1
+        print(trim_chars({}, "a"))
+    if c == "Ps_trim_chars_b0p1q0":
+        hit = 1
+        print(trim_chars("aaxaa", null))
+    if c == "Ps_trim_chars_b0p1q1":
+        hit = 1
+        print(trim_chars("aaxaa", true))
+    if c == "Ps_trim_chars_b0p1q2":
+        hit = 1
+        print(trim_chars("aaxaa", 7))
+    if c == "Ps_trim_chars_b0p1q3":
+        hit = 1
+        print(trim_chars("aaxaa", "7"))
+    if c == "Ps_trim_chars_b0p1q4":
+        hit = 1
+        print(trim_chars("aaxaa", []))
+    if c == "Ps_trim_chars_b0p1q5":
+        hit = 1
+        print(trim_chars("aaxaa", {}))
+    if c == "As_trim_chars_less":
+        hit = 1
+        print(trim_chars(null))
+    if c == "As_trim_chars_more":
+        hit = 1
+        print(trim_chars(null, null, null))
+    if c == "Ls_trim_left_chars_1":
+        hit = 1
+        print(trim_left_chars("xxay", "x"))
+    if c == "Ls_trim_left_chars_2":
+        hit = 1
+        print(trim_left_chars("ab", "b"))
+    if c == "Ls_trim_left_chars_3":
+        hit = 1
+        print(trim_left_chars("", "x"))
+    if c == "Ps_trim_left_chars_b0p0q0":
+        hit = 1
+        print(trim_left_chars(null, "x"))
+    if c == "Ps_trim_left_chars_b0p0q1":
+        hit = 1
+        print(trim_left_chars(true, "x"))
+    if c == "Ps_trim_left_chars_b0p0q2":
+        hit = 1
+        print(trim_left_chars(7, "x"))
+    if c == "Ps_trim_left_chars_b0p0q3":
+        hit = 1
+        print(trim_left_chars("7", "x"))
+    if c == "Ps_trim_left_chars_b0p0q4":
+        hit = 1
+        print(trim_left_chars([], "x"))
+    if c == "Ps_trim_left_chars_b0p0q5":
+        hit = 1
+        print(trim_left_chars({}, "x"))
+    if c == "Ps_trim_left_chars_b0p1q0":
+        hit = 1
+        print(trim_left_chars("xxay", null))
+    if c == "Ps_trim_left_chars_b0p1q1":
+        hit = 1
+        print(trim_left_chars("xxay", true))
+    if c == "Ps_trim_left_chars_b0p1q2":
+        hit = 1
+        print(trim_left_chars("xxay", 7))
+    if c == "Ps_trim_left_chars_b0p1q3":
+        hit = 1
+        print(trim_left_chars("xxay", "7"))
+    if c == "Ps_trim_left_chars_b0p1q4":
+        hit = 1
+        print(trim_left_chars("xxay", []))
+    if c == "Ps_trim_left_chars_b0p1q5":
+        hit = 1
+        print(trim_left_chars("xxay", {}))
+    if c == "As_trim_left_chars_less":
+        hit = 1
+        print(trim_left_chars(null))
+    if c == "As_trim_left_chars_more":
+        hit = 1
+        print(trim_left_chars(null, null, null))
+    if c == "Ls_trim_prefix_1":
+        hit = 1
+        print(trim_prefix("wsa-id", "wsa-"))
+    if c == "Ls_trim_prefix_2":
+        hit = 1
+        print(trim_prefix("abc", "z"))
+    if c == "Ls_trim_prefix_3":
+        hit = 1
+        print(trim_prefix("abc", ""))
+    if c == "Ls_trim_prefix_4":
+        hit = 1
+        print(trim_prefix("abc", "abcd"))
+    if c == "Ps_trim_prefix_b0p0q0":
+        hit = 1
+        print(trim_prefix(null, "wsa-"))
+    if c == "Ps_trim_prefix_b0p0q1":
+        hit = 1
+        print(trim_prefix(true, "wsa-"))
+    if c == "Ps_trim_prefix_b0p0q2":
+        hit = 1
+        print(trim_prefix(7, "wsa-"))
+    if c == "Ps_trim_prefix_b0p0q3":
+        hit = 1
+        print(trim_prefix("7", "wsa-"))
+    if c == "Ps_trim_prefix_b0p0q4":
+        hit = 1
+        print(trim_prefix([], "wsa-"))
+    if c == "Ps_trim_prefix_b0p0q5":
+        hit = 1
+        print(trim_prefix({}, "wsa-"))
+    if c == "Ps_trim_prefix_b0p1q0":
+        hit = 1
+        print(trim_prefix("wsa-id", null))
+    if c == "Ps_trim_prefix_b0p1q1":
+        hit = 1
+        print(trim_prefix("wsa-id", true))
+    if c == "Ps_trim_prefix_b0p1q2":
+        hit = 1
+        print(trim_prefix("wsa-id", 7))
+    if c == "Ps_trim_prefix_b0p1q3":
+        hit = 1
+        print(trim_prefix("wsa-id", "7"))
+    if c == "Ps_trim_prefix_b0p1q4":
+        hit = 1
+        print(trim_prefix("wsa-id", []))
+    if c == "Ps_trim_prefix_b0p1q5":
+        hit = 1
+        print(trim_prefix("wsa-id", {}))
+    if c == "As_trim_prefix_less":
+        hit = 1
+        print(trim_prefix(null))
+    if c == "As_trim_prefix_more":
+        hit = 1
+        print(trim_prefix(null, null, null))
+    if c == "Ls_trim_right_chars_1":
+        hit = 1
+        print(trim_right_chars("ayxx", "x"))
+    if c == "Ls_trim_right_chars_2":
+        hit = 1
+        print(trim_right_chars("ab", "a"))
+    if c == "Ls_trim_right_chars_3":
+        hit = 1
+        print(trim_right_chars("", "x"))
+    if c == "Ps_trim_right_chars_b0p0q0":
+        hit = 1
+        print(trim_right_chars(null, "x"))
+    if c == "Ps_trim_right_chars_b0p0q1":
+        hit = 1
+        print(trim_right_chars(true, "x"))
+    if c == "Ps_trim_right_chars_b0p0q2":
+        hit = 1
+        print(trim_right_chars(7, "x"))
+    if c == "Ps_trim_right_chars_b0p0q3":
+        hit = 1
+        print(trim_right_chars("7", "x"))
+    if c == "Ps_trim_right_chars_b0p0q4":
+        hit = 1
+        print(trim_right_chars([], "x"))
+    if c == "Ps_trim_right_chars_b0p0q5":
+        hit = 1
+        print(trim_right_chars({}, "x"))
+    if c == "Ps_trim_right_chars_b0p1q0":
+        hit = 1
+        print(trim_right_chars("ayxx", null))
+    if c == "Ps_trim_right_chars_b0p1q1":
+        hit = 1
+        print(trim_right_chars("ayxx", true))
+    if c == "Ps_trim_right_chars_b0p1q2":
+        hit = 1
+        print(trim_right_chars("ayxx", 7))
+    if c == "Ps_trim_right_chars_b0p1q3":
+        hit = 1
+        print(trim_right_chars("ayxx", "7"))
+    if c == "Ps_trim_right_chars_b0p1q4":
+        hit = 1
+        print(trim_right_chars("ayxx", []))
+    if c == "Ps_trim_right_chars_b0p1q5":
+        hit = 1
+        print(trim_right_chars("ayxx", {}))
+    if c == "As_trim_right_chars_less":
+        hit = 1
+        print(trim_right_chars(null))
+    if c == "As_trim_right_chars_more":
+        hit = 1
+        print(trim_right_chars(null, null, null))
+    if c == "Ls_trim_suffix_1":
+        hit = 1
+        print(trim_suffix("a/", "/"))
+    if c == "Ls_trim_suffix_2":
+        hit = 1
+        print(trim_suffix("abc", "z"))
+    if c == "Ls_trim_suffix_3":
+        hit = 1
+        print(trim_suffix("abc", ""))
+    if c == "Ls_trim_suffix_4":
+        hit = 1
+        print(trim_suffix("ab", "abcd"))
+    if c == "Ps_trim_suffix_b0p0q0":
+        hit = 1
+        print(trim_suffix(null, "/"))
+    if c == "Ps_trim_suffix_b0p0q1":
+        hit = 1
+        print(trim_suffix(true, "/"))
+    if c == "Ps_trim_suffix_b0p0q2":
+        hit = 1
+        print(trim_suffix(7, "/"))
+    if c == "Ps_trim_suffix_b0p0q3":
+        hit = 1
+        print(trim_suffix("7", "/"))
+    if c == "Ps_trim_suffix_b0p0q4":
+        hit = 1
+        print(trim_suffix([], "/"))
+    if c == "Ps_trim_suffix_b0p0q5":
+        hit = 1
+        print(trim_suffix({}, "/"))
+    if c == "Ps_trim_suffix_b0p1q0":
+        hit = 1
+        print(trim_suffix("ab/", null))
+    if c == "Ps_trim_suffix_b0p1q1":
+        hit = 1
+        print(trim_suffix("ab/", true))
+    if c == "Ps_trim_suffix_b0p1q2":
+        hit = 1
+        print(trim_suffix("ab/", 7))
+    if c == "Ps_trim_suffix_b0p1q3":
+        hit = 1
+        print(trim_suffix("ab/", "7"))
+    if c == "Ps_trim_suffix_b0p1q4":
+        hit = 1
+        print(trim_suffix("ab/", []))
+    if c == "Ps_trim_suffix_b0p1q5":
+        hit = 1
+        print(trim_suffix("ab/", {}))
+    if c == "As_trim_suffix_less":
+        hit = 1
+        print(trim_suffix(null))
+    if c == "As_trim_suffix_more":
+        hit = 1
+        print(trim_suffix(null, null, null))
+    if c == "Lu_url_parse_1":
+        hit = 1
+        print(url_parse("https://u@h:8080/p?q=1#f")["scheme"])
+    if c == "Lu_url_parse_2":
+        hit = 1
+        print(url_parse("https://u@h:8080/p?q=1#f")["user"])
+    if c == "Lu_url_parse_3":
+        hit = 1
+        print(url_parse("https://u@h:8080/p?q=1#f")["host"])
+    if c == "Lu_url_parse_4":
+        hit = 1
+        print(url_parse("https://u@h:8080/p?q=1#f")["path"])
+    if c == "Lu_url_parse_5":
+        hit = 1
+        print(url_parse("https://u@h:8080/p?q=1#f")["rawquery"])
+    if c == "Lu_url_parse_6":
+        hit = 1
+        print(url_parse("https://u@h:8080/p?q=1#f")["fragment"])
+    if c == "Lu_url_parse_7":
+        hit = 1
+        print(url_parse("/a%20b")["path"])
+    if c == "Lu_url_parse_8":
+        hit = 1
+        print(url_parse("")["path"])
+    if c == "Pu_url_parse_b0p0q0":
+        hit = 1
+        print(url_parse(null))
+    if c == "Pu_url_parse_b0p0q1":
+        hit = 1
+        print(url_parse(true))
+    if c == "Pu_url_parse_b0p0q2":
+        hit = 1
+        print(url_parse(7))
+    if c == "Pu_url_parse_b0p0q3":
+        hit = 1
+        print(url_parse("7"))
+    if c == "Pu_url_parse_b0p0q4":
+        hit = 1
+        print(url_parse([]))
+    if c == "Pu_url_parse_b0p0q5":
+        hit = 1
+        print(url_parse({}))
+    if c == "Au_url_parse_less":
+        hit = 1
+        print(url_parse())
+    if c == "Au_url_parse_more":
+        hit = 1
+        print(url_parse(null, null))
+    if c == "Lu_url_parse_query_1":
+        hit = 1
+        print(url_parse_query("a=1&a=2&b=%41")[0]["a"])
+    if c == "Lu_url_parse_query_2":
+        hit = 1
+        print(url_parse_query("a=1")[1])
+    if c == "Lu_url_parse_query_3":
+        hit = 1
+        print(url_parse_query("a=1;b=2")[1])
+    if c == "Lu_url_parse_query_4":
+        hit = 1
+        print(url_parse_query("a=1&a=2")[0]["a"])
+    if c == "Pu_url_parse_query_b0p0q0":
+        hit = 1
+        print(url_parse_query(null))
+    if c == "Pu_url_parse_query_b0p0q1":
+        hit = 1
+        print(url_parse_query(true))
+    if c == "Pu_url_parse_query_b0p0q2":
+        hit = 1
+        print(url_parse_query(7))
+    if c == "Pu_url_parse_query_b0p0q3":
+        hit = 1
+        print(url_parse_query("7"))
+    if c == "Pu_url_parse_query_b0p0q4":
+        hit = 1
+        print(url_parse_query([]))
+    if c == "Pu_url_parse_query_b0p0q5":
+        hit = 1
+        print(url_parse_query({}))
+    if c == "Au_url_parse_query_less":
+        hit = 1
+        print(url_parse_query())
+    if c == "Au_url_parse_query_more":
+        hit = 1
+        print(url_parse_query(null, null))
+    if c == "Lu_url_path_escape_1":
+        hit = 1
+        print(url_path_escape("a/b c"))
+    if c == "Lu_url_path_escape_2":
+        hit = 1
+        print(url_path_escape("a~b"))
+    if c == "Lu_url_path_escape_3":
+        hit = 1
+        print(url_path_escape("中"))
+    if c == "Lu_url_path_escape_4":
+        hit = 1
+        print(url_path_escape("a+b"))
+    if c == "Pu_url_path_escape_b0p0q0":
+        hit = 1
+        print(url_path_escape(null))
+    if c == "Pu_url_path_escape_b0p0q1":
+        hit = 1
+        print(url_path_escape(true))
+    if c == "Pu_url_path_escape_b0p0q2":
+        hit = 1
+        print(url_path_escape(7))
+    if c == "Pu_url_path_escape_b0p0q3":
+        hit = 1
+        print(url_path_escape("7"))
+    if c == "Pu_url_path_escape_b0p0q4":
+        hit = 1
+        print(url_path_escape([]))
+    if c == "Pu_url_path_escape_b0p0q5":
+        hit = 1
+        print(url_path_escape({}))
+    if c == "Au_url_path_escape_less":
+        hit = 1
+        print(url_path_escape())
+    if c == "Au_url_path_escape_more":
+        hit = 1
+        print(url_path_escape(null, null))
+    if c == "Lu_url_query_escape_1":
+        hit = 1
+        print(url_query_escape("a b~!"))
+    if c == "Lu_url_query_escape_2":
+        hit = 1
+        print(url_query_escape(""))
+    if c == "Lu_url_query_escape_3":
+        hit = 1
+        print(url_query_escape("中"))
+    if c == "Lu_url_query_escape_4":
+        hit = 1
+        print(url_query_escape("a/b?c=d&e"))
+    if c == "Pu_url_query_escape_b0p0q0":
+        hit = 1
+        print(url_query_escape(null))
+    if c == "Pu_url_query_escape_b0p0q1":
+        hit = 1
+        print(url_query_escape(true))
+    if c == "Pu_url_query_escape_b0p0q2":
+        hit = 1
+        print(url_query_escape(7))
+    if c == "Pu_url_query_escape_b0p0q3":
+        hit = 1
+        print(url_query_escape("7"))
+    if c == "Pu_url_query_escape_b0p0q4":
+        hit = 1
+        print(url_query_escape([]))
+    if c == "Pu_url_query_escape_b0p0q5":
+        hit = 1
+        print(url_query_escape({}))
+    if c == "Au_url_query_escape_less":
+        hit = 1
+        print(url_query_escape())
+    if c == "Au_url_query_escape_more":
+        hit = 1
+        print(url_query_escape(null, null))
+    if c == "Lu_url_query_unescape_1":
+        hit = 1
+        print(url_query_unescape("%41+b"))
+    if c == "Lu_url_query_unescape_2":
+        hit = 1
+        print(url_query_unescape("%"))
+    if c == "Lu_url_query_unescape_3":
+        hit = 1
+        print(url_query_unescape("%zz"))
+    if c == "Lu_url_query_unescape_4":
+        hit = 1
+        print(url_query_unescape("%4"))
+    if c == "Pu_url_query_unescape_b0p0q0":
+        hit = 1
+        print(url_query_unescape(null))
+    if c == "Pu_url_query_unescape_b0p0q1":
+        hit = 1
+        print(url_query_unescape(true))
+    if c == "Pu_url_query_unescape_b0p0q2":
+        hit = 1
+        print(url_query_unescape(7))
+    if c == "Pu_url_query_unescape_b0p0q3":
+        hit = 1
+        print(url_query_unescape("7"))
+    if c == "Pu_url_query_unescape_b0p0q4":
+        hit = 1
+        print(url_query_unescape([]))
+    if c == "Pu_url_query_unescape_b0p0q5":
+        hit = 1
+        print(url_query_unescape({}))
+    if c == "Au_url_query_unescape_less":
+        hit = 1
+        print(url_query_unescape())
+    if c == "Au_url_query_unescape_more":
+        hit = 1
+        print(url_query_unescape(null, null))
+    if c == "Lu_url_query_unescape_keep_q_1":
+        hit = 1
+        print(url_query_unescape_keep_q("%41+b"))
+    if c == "Lu_url_query_unescape_keep_q_2":
+        hit = 1
+        print(url_query_unescape_keep_q("%"))
+    if c == "Lu_url_query_unescape_keep_q_3":
+        hit = 1
+        print(url_query_unescape_keep_q("a%2Fb"))
+    if c == "Lu_url_query_unescape_keep_q_4":
+        hit = 1
+        print(url_query_unescape_keep_q("%4"))
+    if c == "Pu_url_query_unescape_keep_q_b0p0q0":
+        hit = 1
+        print(url_query_unescape_keep_q(null))
+    if c == "Pu_url_query_unescape_keep_q_b0p0q1":
+        hit = 1
+        print(url_query_unescape_keep_q(true))
+    if c == "Pu_url_query_unescape_keep_q_b0p0q2":
+        hit = 1
+        print(url_query_unescape_keep_q(7))
+    if c == "Pu_url_query_unescape_keep_q_b0p0q3":
+        hit = 1
+        print(url_query_unescape_keep_q("7"))
+    if c == "Pu_url_query_unescape_keep_q_b0p0q4":
+        hit = 1
+        print(url_query_unescape_keep_q([]))
+    if c == "Pu_url_query_unescape_keep_q_b0p0q5":
+        hit = 1
+        print(url_query_unescape_keep_q({}))
+    if c == "Au_url_query_unescape_keep_q_less":
+        hit = 1
+        print(url_query_unescape_keep_q())
+    if c == "Au_url_query_unescape_keep_q_more":
+        hit = 1
+        print(url_query_unescape_keep_q(null, null))
+    if c == "Lu_url_values_encode_1":
+        hit = 1
+        print(url_values_encode({"a": "1"}))
+    if c == "Lu_url_values_encode_2":
+        hit = 1
+        print(url_values_encode({"a": ["1", "2"]}))
+    if c == "Lu_url_values_encode_3":
+        hit = 1
+        print(url_values_encode({}))
+    if c == "Pu_url_values_encode_b0p0q0":
+        hit = 1
+        print(url_values_encode(null))
+    if c == "Pu_url_values_encode_b0p0q1":
+        hit = 1
+        print(url_values_encode(true))
+    if c == "Pu_url_values_encode_b0p0q2":
+        hit = 1
+        print(url_values_encode(7))
+    if c == "Pu_url_values_encode_b0p0q3":
+        hit = 1
+        print(url_values_encode("7"))
+    if c == "Pu_url_values_encode_b0p0q4":
+        hit = 1
+        print(url_values_encode([]))
+    if c == "Pu_url_values_encode_b0p0q5":
+        hit = 1
+        print(url_values_encode({}))
+    if c == "Au_url_values_encode_less":
+        hit = 1
+        print(url_values_encode())
+    if c == "Au_url_values_encode_more":
+        hit = 1
+        print(url_values_encode(null, null))
+    if hit == 0:
+        print("NOCASE")
