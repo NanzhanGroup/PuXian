@@ -14,6 +14,8 @@ px_cerr_1:
 }
 static LXValue fn_closure_2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "<closure2>", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "<closure2>", 1, nargs);
     LXValue _v152 = (nargs > 0) ? args[0] : px_null();
     LXValue px_cerr_2_val = px_null();
     int px_cerr_2_proped = 0;
@@ -26,6 +28,8 @@ px_cerr_2:
 static LXValue fn_v_type(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_type");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_type", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_type", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_2_val = px_null();
     int px_err_2_proped = 0;
@@ -39,6 +43,8 @@ px_err_2:
 static LXValue fn_v_str(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_str");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_str", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_str", 1, nargs);
     LXValue _v3 = (nargs > 0) ? args[0] : px_null();
     LXValue _v4 = px_uninit();
     LXValue _v5 = px_uninit();
@@ -112,6 +118,8 @@ px_err_10:
 static LXValue fn_v_eq(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_eq");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_eq", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_eq", 2, nargs);
     LXValue _v17 = (nargs > 0) ? args[0] : px_null();
     LXValue _v18 = (nargs > 1) ? args[1] : px_null();
     LXValue _v19 = px_uninit();
@@ -243,6 +251,8 @@ px_err_24:
 static LXValue fn_v_cmp(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_cmp");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_cmp", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_cmp", 2, nargs);
     LXValue _v41 = (nargs > 0) ? args[0] : px_null();
     LXValue _v42 = (nargs > 1) ? args[1] : px_null();
     LXValue _v43 = px_uninit();
@@ -324,6 +334,8 @@ px_err_47:
 static LXValue fn_v_arith(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_arith");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_arith", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_arith", 3, nargs);
     LXValue _v53 = (nargs > 0) ? args[0] : px_null();
     LXValue _v54 = (nargs > 1) ? args[1] : px_null();
     LXValue _v55 = (nargs > 2) ? args[2] : px_null();
@@ -417,6 +429,8 @@ px_err_60:
 static LXValue fn_v_int_op(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_int_op");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_int_op", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_int_op", 3, nargs);
     LXValue _v74 = (nargs > 0) ? args[0] : px_null();
     LXValue _v75 = (nargs > 1) ? args[1] : px_null();
     LXValue _v76 = (nargs > 2) ? args[2] : px_null();
@@ -502,6 +516,8 @@ px_err_77:
 static LXValue fn_v_opname(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_opname");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_opname", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_opname", 1, nargs);
     LXValue _v78 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_79_val = px_null();
     int px_err_79_proped = 0;
@@ -545,6 +561,8 @@ px_err_79:
 static LXValue fn_v_bitname(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_bitname");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_bitname", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_bitname", 1, nargs);
     LXValue _v80 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_81_val = px_null();
     int px_err_81_proped = 0;
@@ -588,6 +606,8 @@ px_err_81:
 static LXValue fn_v_is_bit(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_is_bit");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_is_bit", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_is_bit", 1, nargs);
     LXValue _v82 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_83_val = px_null();
     int px_err_83_proped = 0;
@@ -601,6 +621,8 @@ px_err_83:
 static LXValue fn_v_float_op(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_float_op");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_float_op", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_float_op", 3, nargs);
     LXValue _v89 = (nargs > 0) ? args[0] : px_null();
     LXValue _v90 = (nargs > 1) ? args[1] : px_null();
     LXValue _v91 = (nargs > 2) ? args[2] : px_null();
@@ -703,6 +725,8 @@ px_err_96:
 static LXValue fn_v_truthy(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_truthy");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_truthy", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_truthy", 1, nargs);
     LXValue _v99 = (nargs > 0) ? args[0] : px_null();
     LXValue _v100 = px_uninit();
     LXValue px_err_101_val = px_null();
@@ -754,6 +778,8 @@ px_err_101:
 static LXValue fn_v_int(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_int");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_int", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_int", 1, nargs);
     LXValue _v102 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_103_val = px_null();
     int px_err_103_proped = 0;
@@ -767,6 +793,8 @@ px_err_103:
 static LXValue fn_v_float(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("v_float");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "v_float", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "v_float", 1, nargs);
     LXValue _v104 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_105_val = px_null();
     int px_err_105_proped = 0;
@@ -780,6 +808,8 @@ px_err_105:
 static LXValue fn_check(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check", 2, nargs);
     LXValue _v106 = (nargs > 0) ? args[0] : px_null();
     LXValue _v107 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_108_val = px_null();
@@ -805,6 +835,8 @@ px_err_108:
 static LXValue fn_check_value(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check_value");
+    if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check_value", 2, nargs);
+    if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check_value", 2, nargs);
     LXValue _v109 = (nargs > 0) ? args[0] : px_null();
     LXValue _v110 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_111_val = px_null();
@@ -821,6 +853,8 @@ px_err_111:
 static LXValue fn_check_eq(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check_eq");
+    if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check_eq", 4, nargs);
+    if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check_eq", 4, nargs);
     LXValue _v112 = (nargs > 0) ? args[0] : px_null();
     LXValue _v113 = (nargs > 1) ? args[1] : px_null();
     LXValue _v114 = (nargs > 2) ? args[2] : px_null();
@@ -839,6 +873,8 @@ px_err_116:
 static LXValue fn_check_cmp(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check_cmp");
+    if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check_cmp", 4, nargs);
+    if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check_cmp", 4, nargs);
     LXValue _v117 = (nargs > 0) ? args[0] : px_null();
     LXValue _v118 = (nargs > 1) ? args[1] : px_null();
     LXValue _v119 = (nargs > 2) ? args[2] : px_null();
@@ -871,6 +907,8 @@ px_err_122:
 static LXValue fn_check_arith(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check_arith");
+    if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check_arith", 5, nargs);
+    if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check_arith", 5, nargs);
     LXValue _v126 = (nargs > 0) ? args[0] : px_null();
     LXValue _v127 = (nargs > 1) ? args[1] : px_null();
     LXValue _v128 = (nargs > 2) ? args[2] : px_null();
@@ -900,6 +938,8 @@ px_err_132:
 static LXValue fn_check_arith_err(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check_arith_err");
+    if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check_arith_err", 4, nargs);
+    if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check_arith_err", 4, nargs);
     LXValue _v133 = (nargs > 0) ? args[0] : px_null();
     LXValue _v134 = (nargs > 1) ? args[1] : px_null();
     LXValue _v135 = (nargs > 2) ? args[2] : px_null();
@@ -919,6 +959,8 @@ px_err_138:
 static LXValue fn_check_truthy(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("check_truthy");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "check_truthy", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "check_truthy", 3, nargs);
     LXValue _v139 = (nargs > 0) ? args[0] : px_null();
     LXValue _v140 = (nargs > 1) ? args[1] : px_null();
     LXValue _v141 = (nargs > 2) ? args[2] : px_null();

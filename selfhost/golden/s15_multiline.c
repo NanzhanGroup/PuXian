@@ -6,6 +6,8 @@
 static LXValue fn_lookup(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("lookup");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "lookup", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "lookup", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_2_val = px_null();
     int px_err_2_proped = 0;
@@ -19,6 +21,8 @@ px_err_2:
 static LXValue fn_add3(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("add3");
+    if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "add3", 3, nargs);
+    if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "add3", 3, nargs);
     LXValue _v3 = (nargs > 0) ? args[0] : px_null();
     LXValue _v4 = (nargs > 1) ? args[1] : px_null();
     LXValue _v5 = (nargs > 2) ? args[2] : px_null();
@@ -34,6 +38,7 @@ px_err_6:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "main", 0, nargs);
     LXValue _v7 = px_uninit();
     LXValue _v8 = px_uninit();
     LXValue _v9 = px_uninit();

@@ -182,7 +182,9 @@ def cg_gen_closure(params, body, dispname):
             cl_seen = true
         cq += 1
     let clname_c = cg_escape_str(dispname)
-    fdef += "    if (nargs < " + str(cl_req) + ") px_error(\"R1005: 调用 %s 参数不足: 需 %d 给 %d\", \"" + clname_c + "\", " + str(cl_req) + ", nargs);\n"
+    # M301（补）：required == 0 ⇒ 下界检查恒不成立 ⇒ 不发射（同 cg_gen_func_named）
+    if cl_req > 0:
+        fdef += "    if (nargs < " + str(cl_req) + ") px_error(\"R1005: 调用 %s 参数不足: 需 %d 给 %d\", \"" + clname_c + "\", " + str(cl_req) + ", nargs);\n"
     fdef += "    if (nargs > " + str(len(params)) + ") px_error(\"R1005: 调用 %s 参数过多: 最多 %d 给 %d\", \"" + clname_c + "\", " + str(len(params)) + ", nargs);\n"
     var pi = 0
     while pi < len(params):

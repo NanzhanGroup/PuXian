@@ -6,6 +6,8 @@
 static LXValue fn_desc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("desc");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "desc", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "desc", 1, nargs);
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2 = px_uninit();
     LXValue px_err_3_val = px_null();
@@ -22,6 +24,7 @@ px_err_3:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
+    if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "main", 0, nargs);
     LXValue _v6 = px_uninit();
     LXValue _v7 = px_uninit();
     LXValue px_err_8_val = px_null();
