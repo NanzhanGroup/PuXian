@@ -1,0 +1,648 @@
+# label	kind	expr	expect
+C0	legal	sv_cmp("1.0.0-alpha", "1.0.0-alpha.1")	-1
+Cr0	legal	sv_cmp("1.0.0-alpha.1", "1.0.0-alpha")	1
+C1	legal	sv_cmp("1.0.0-alpha.1", "1.0.0-alpha.beta")	-1
+Cr1	legal	sv_cmp("1.0.0-alpha.beta", "1.0.0-alpha.1")	1
+C2	legal	sv_cmp("1.0.0-alpha.beta", "1.0.0-beta")	-1
+Cr2	legal	sv_cmp("1.0.0-beta", "1.0.0-alpha.beta")	1
+C3	legal	sv_cmp("1.0.0-beta", "1.0.0-beta.2")	-1
+Cr3	legal	sv_cmp("1.0.0-beta.2", "1.0.0-beta")	1
+C4	legal	sv_cmp("1.0.0-beta.2", "1.0.0-beta.11")	-1
+Cr4	legal	sv_cmp("1.0.0-beta.11", "1.0.0-beta.2")	1
+C5	legal	sv_cmp("1.0.0-beta.11", "1.0.0-rc.1")	-1
+Cr5	legal	sv_cmp("1.0.0-rc.1", "1.0.0-beta.11")	1
+C6	legal	sv_cmp("1.0.0-rc.1", "1.0.0")	-1
+Cr6	legal	sv_cmp("1.0.0", "1.0.0-rc.1")	1
+C7	legal	sv_cmp("1.0.0", "2.0.0")	-1
+Cr7	legal	sv_cmp("2.0.0", "1.0.0")	1
+Cx_1_0_0_1_0_0pb	legal	sv_cmp("1.0.0", "1.0.0+b")	0
+Cx_1_0_0pa_1_0_0pb	legal	sv_cmp("1.0.0+a", "1.0.0+b")	0
+Cx_1_0_0m1_1_0_0malpha	legal	sv_cmp("1.0.0-1", "1.0.0-alpha")	-1
+Cx_1_0_0malpha_1_1_0_0malpha_1_1	legal	sv_cmp("1.0.0-alpha.1", "1.0.0-alpha.1.1")	-1
+Cx_0_9_9_1_0_0	legal	sv_cmp("0.9.9", "1.0.0")	-1
+Cx_1_2_3_1_2_3	legal	sv_cmp("1.2.3", "1.2.3")	0
+P0	legal	sv_parse("1.2.3-alpha.1+build5")["major"]	1
+P1	legal	sv_parse("1.2.3-alpha.1+build5")["pre"]	alpha.1
+P2	legal	sv_parse("1.2.3-alpha.1+build5")["build"]	build5
+P3	legal	sv_parse("10.20.30")["minor"]	20
+P4	legal	sv_parse("0.0.0")["patch"]	0
+P5	legal	sv_parse("1.0.0-rc.1")["pre"]	rc.1
+P6	legal	sv_parse("1.0.0")["pre"]	
+P7	legal	sv_parse("1.0.0")["build"]	
+Pb0	legal	str(sv_parse("1.2"))	null
+Pb1	legal	str(sv_parse("01.2.3"))	null
+Pb2	legal	str(sv_parse("1.2.3-01"))	null
+Pb3	legal	str(sv_parse("1.2.3.4"))	null
+Pb4	legal	str(sv_parse("v1.2.3"))	null
+Pb5	legal	str(sv_parse("1..2"))	null
+Pb6	legal	str(sv_parse("1.2.3-"))	null
+Pb7	legal	str(sv_parse("1.2.3+"))	null
+Pb8	legal	str(sv_parse(""))	null
+Pb9	legal	str(sv_parse("abc"))	null
+S0_0	legal	sv_satisfies("0.0.0", "^1.2.3")	false
+S0_1	legal	sv_satisfies("0.0.3", "^1.2.3")	false
+S0_2	legal	sv_satisfies("0.0.4", "^1.2.3")	false
+S0_3	legal	sv_satisfies("0.1.0", "^1.2.3")	false
+S0_4	legal	sv_satisfies("0.2.3", "^1.2.3")	false
+S0_5	legal	sv_satisfies("0.2.5", "^1.2.3")	false
+S0_6	legal	sv_satisfies("0.3.0", "^1.2.3")	false
+S0_7	legal	sv_satisfies("1.0.0", "^1.2.3")	false
+S0_8	legal	sv_satisfies("1.2.3", "^1.2.3")	true
+S0_9	legal	sv_satisfies("1.2.9", "^1.2.3")	true
+S0_10	legal	sv_satisfies("1.3.0", "^1.2.3")	true
+S0_11	legal	sv_satisfies("1.9.9", "^1.2.3")	true
+S0_12	legal	sv_satisfies("2.0.0", "^1.2.3")	false
+S0_13	legal	sv_satisfies("1.0.0-alpha", "^1.2.3")	false
+S1_0	legal	sv_satisfies("0.0.0", "^0.2.3")	false
+S1_1	legal	sv_satisfies("0.0.3", "^0.2.3")	false
+S1_2	legal	sv_satisfies("0.0.4", "^0.2.3")	false
+S1_3	legal	sv_satisfies("0.1.0", "^0.2.3")	false
+S1_4	legal	sv_satisfies("0.2.3", "^0.2.3")	true
+S1_5	legal	sv_satisfies("0.2.5", "^0.2.3")	true
+S1_6	legal	sv_satisfies("0.3.0", "^0.2.3")	false
+S1_7	legal	sv_satisfies("1.0.0", "^0.2.3")	false
+S1_8	legal	sv_satisfies("1.2.3", "^0.2.3")	false
+S1_9	legal	sv_satisfies("1.2.9", "^0.2.3")	false
+S1_10	legal	sv_satisfies("1.3.0", "^0.2.3")	false
+S1_11	legal	sv_satisfies("1.9.9", "^0.2.3")	false
+S1_12	legal	sv_satisfies("2.0.0", "^0.2.3")	false
+S1_13	legal	sv_satisfies("1.0.0-alpha", "^0.2.3")	false
+S2_0	legal	sv_satisfies("0.0.0", "^0.0.3")	false
+S2_1	legal	sv_satisfies("0.0.3", "^0.0.3")	true
+S2_2	legal	sv_satisfies("0.0.4", "^0.0.3")	false
+S2_3	legal	sv_satisfies("0.1.0", "^0.0.3")	false
+S2_4	legal	sv_satisfies("0.2.3", "^0.0.3")	false
+S2_5	legal	sv_satisfies("0.2.5", "^0.0.3")	false
+S2_6	legal	sv_satisfies("0.3.0", "^0.0.3")	false
+S2_7	legal	sv_satisfies("1.0.0", "^0.0.3")	false
+S2_8	legal	sv_satisfies("1.2.3", "^0.0.3")	false
+S2_9	legal	sv_satisfies("1.2.9", "^0.0.3")	false
+S2_10	legal	sv_satisfies("1.3.0", "^0.0.3")	false
+S2_11	legal	sv_satisfies("1.9.9", "^0.0.3")	false
+S2_12	legal	sv_satisfies("2.0.0", "^0.0.3")	false
+S2_13	legal	sv_satisfies("1.0.0-alpha", "^0.0.3")	false
+S3_0	legal	sv_satisfies("0.0.0", "^0")	true
+S3_1	legal	sv_satisfies("0.0.3", "^0")	true
+S3_2	legal	sv_satisfies("0.0.4", "^0")	true
+S3_3	legal	sv_satisfies("0.1.0", "^0")	true
+S3_4	legal	sv_satisfies("0.2.3", "^0")	true
+S3_5	legal	sv_satisfies("0.2.5", "^0")	true
+S3_6	legal	sv_satisfies("0.3.0", "^0")	true
+S3_7	legal	sv_satisfies("1.0.0", "^0")	false
+S3_8	legal	sv_satisfies("1.2.3", "^0")	false
+S3_9	legal	sv_satisfies("1.2.9", "^0")	false
+S3_10	legal	sv_satisfies("1.3.0", "^0")	false
+S3_11	legal	sv_satisfies("1.9.9", "^0")	false
+S3_12	legal	sv_satisfies("2.0.0", "^0")	false
+S3_13	legal	sv_satisfies("1.0.0-alpha", "^0")	false
+S4_0	legal	sv_satisfies("0.0.0", "^0.0")	true
+S4_1	legal	sv_satisfies("0.0.3", "^0.0")	true
+S4_2	legal	sv_satisfies("0.0.4", "^0.0")	true
+S4_3	legal	sv_satisfies("0.1.0", "^0.0")	false
+S4_4	legal	sv_satisfies("0.2.3", "^0.0")	false
+S4_5	legal	sv_satisfies("0.2.5", "^0.0")	false
+S4_6	legal	sv_satisfies("0.3.0", "^0.0")	false
+S4_7	legal	sv_satisfies("1.0.0", "^0.0")	false
+S4_8	legal	sv_satisfies("1.2.3", "^0.0")	false
+S4_9	legal	sv_satisfies("1.2.9", "^0.0")	false
+S4_10	legal	sv_satisfies("1.3.0", "^0.0")	false
+S4_11	legal	sv_satisfies("1.9.9", "^0.0")	false
+S4_12	legal	sv_satisfies("2.0.0", "^0.0")	false
+S4_13	legal	sv_satisfies("1.0.0-alpha", "^0.0")	false
+S5_0	legal	sv_satisfies("0.0.0", "^0.x")	true
+S5_1	legal	sv_satisfies("0.0.3", "^0.x")	true
+S5_2	legal	sv_satisfies("0.0.4", "^0.x")	true
+S5_3	legal	sv_satisfies("0.1.0", "^0.x")	true
+S5_4	legal	sv_satisfies("0.2.3", "^0.x")	true
+S5_5	legal	sv_satisfies("0.2.5", "^0.x")	true
+S5_6	legal	sv_satisfies("0.3.0", "^0.x")	true
+S5_7	legal	sv_satisfies("1.0.0", "^0.x")	false
+S5_8	legal	sv_satisfies("1.2.3", "^0.x")	false
+S5_9	legal	sv_satisfies("1.2.9", "^0.x")	false
+S5_10	legal	sv_satisfies("1.3.0", "^0.x")	false
+S5_11	legal	sv_satisfies("1.9.9", "^0.x")	false
+S5_12	legal	sv_satisfies("2.0.0", "^0.x")	false
+S5_13	legal	sv_satisfies("1.0.0-alpha", "^0.x")	false
+S6_0	legal	sv_satisfies("0.0.0", "^1.x")	false
+S6_1	legal	sv_satisfies("0.0.3", "^1.x")	false
+S6_2	legal	sv_satisfies("0.0.4", "^1.x")	false
+S6_3	legal	sv_satisfies("0.1.0", "^1.x")	false
+S6_4	legal	sv_satisfies("0.2.3", "^1.x")	false
+S6_5	legal	sv_satisfies("0.2.5", "^1.x")	false
+S6_6	legal	sv_satisfies("0.3.0", "^1.x")	false
+S6_7	legal	sv_satisfies("1.0.0", "^1.x")	true
+S6_8	legal	sv_satisfies("1.2.3", "^1.x")	true
+S6_9	legal	sv_satisfies("1.2.9", "^1.x")	true
+S6_10	legal	sv_satisfies("1.3.0", "^1.x")	true
+S6_11	legal	sv_satisfies("1.9.9", "^1.x")	true
+S6_12	legal	sv_satisfies("2.0.0", "^1.x")	false
+S6_13	legal	sv_satisfies("1.0.0-alpha", "^1.x")	false
+S7_0	legal	sv_satisfies("0.0.0", "^1")	false
+S7_1	legal	sv_satisfies("0.0.3", "^1")	false
+S7_2	legal	sv_satisfies("0.0.4", "^1")	false
+S7_3	legal	sv_satisfies("0.1.0", "^1")	false
+S7_4	legal	sv_satisfies("0.2.3", "^1")	false
+S7_5	legal	sv_satisfies("0.2.5", "^1")	false
+S7_6	legal	sv_satisfies("0.3.0", "^1")	false
+S7_7	legal	sv_satisfies("1.0.0", "^1")	true
+S7_8	legal	sv_satisfies("1.2.3", "^1")	true
+S7_9	legal	sv_satisfies("1.2.9", "^1")	true
+S7_10	legal	sv_satisfies("1.3.0", "^1")	true
+S7_11	legal	sv_satisfies("1.9.9", "^1")	true
+S7_12	legal	sv_satisfies("2.0.0", "^1")	false
+S7_13	legal	sv_satisfies("1.0.0-alpha", "^1")	false
+S8_0	legal	sv_satisfies("0.0.0", "~1.2.3")	false
+S8_1	legal	sv_satisfies("0.0.3", "~1.2.3")	false
+S8_2	legal	sv_satisfies("0.0.4", "~1.2.3")	false
+S8_3	legal	sv_satisfies("0.1.0", "~1.2.3")	false
+S8_4	legal	sv_satisfies("0.2.3", "~1.2.3")	false
+S8_5	legal	sv_satisfies("0.2.5", "~1.2.3")	false
+S8_6	legal	sv_satisfies("0.3.0", "~1.2.3")	false
+S8_7	legal	sv_satisfies("1.0.0", "~1.2.3")	false
+S8_8	legal	sv_satisfies("1.2.3", "~1.2.3")	true
+S8_9	legal	sv_satisfies("1.2.9", "~1.2.3")	true
+S8_10	legal	sv_satisfies("1.3.0", "~1.2.3")	false
+S8_11	legal	sv_satisfies("1.9.9", "~1.2.3")	false
+S8_12	legal	sv_satisfies("2.0.0", "~1.2.3")	false
+S8_13	legal	sv_satisfies("1.0.0-alpha", "~1.2.3")	false
+S9_0	legal	sv_satisfies("0.0.0", "~1.2")	false
+S9_1	legal	sv_satisfies("0.0.3", "~1.2")	false
+S9_2	legal	sv_satisfies("0.0.4", "~1.2")	false
+S9_3	legal	sv_satisfies("0.1.0", "~1.2")	false
+S9_4	legal	sv_satisfies("0.2.3", "~1.2")	false
+S9_5	legal	sv_satisfies("0.2.5", "~1.2")	false
+S9_6	legal	sv_satisfies("0.3.0", "~1.2")	false
+S9_7	legal	sv_satisfies("1.0.0", "~1.2")	false
+S9_8	legal	sv_satisfies("1.2.3", "~1.2")	true
+S9_9	legal	sv_satisfies("1.2.9", "~1.2")	true
+S9_10	legal	sv_satisfies("1.3.0", "~1.2")	false
+S9_11	legal	sv_satisfies("1.9.9", "~1.2")	false
+S9_12	legal	sv_satisfies("2.0.0", "~1.2")	false
+S9_13	legal	sv_satisfies("1.0.0-alpha", "~1.2")	false
+S10_0	legal	sv_satisfies("0.0.0", "~1")	false
+S10_1	legal	sv_satisfies("0.0.3", "~1")	false
+S10_2	legal	sv_satisfies("0.0.4", "~1")	false
+S10_3	legal	sv_satisfies("0.1.0", "~1")	false
+S10_4	legal	sv_satisfies("0.2.3", "~1")	false
+S10_5	legal	sv_satisfies("0.2.5", "~1")	false
+S10_6	legal	sv_satisfies("0.3.0", "~1")	false
+S10_7	legal	sv_satisfies("1.0.0", "~1")	true
+S10_8	legal	sv_satisfies("1.2.3", "~1")	true
+S10_9	legal	sv_satisfies("1.2.9", "~1")	true
+S10_10	legal	sv_satisfies("1.3.0", "~1")	true
+S10_11	legal	sv_satisfies("1.9.9", "~1")	true
+S10_12	legal	sv_satisfies("2.0.0", "~1")	false
+S10_13	legal	sv_satisfies("1.0.0-alpha", "~1")	false
+S11_0	legal	sv_satisfies("0.0.0", "~0.0")	true
+S11_1	legal	sv_satisfies("0.0.3", "~0.0")	true
+S11_2	legal	sv_satisfies("0.0.4", "~0.0")	true
+S11_3	legal	sv_satisfies("0.1.0", "~0.0")	false
+S11_4	legal	sv_satisfies("0.2.3", "~0.0")	false
+S11_5	legal	sv_satisfies("0.2.5", "~0.0")	false
+S11_6	legal	sv_satisfies("0.3.0", "~0.0")	false
+S11_7	legal	sv_satisfies("1.0.0", "~0.0")	false
+S11_8	legal	sv_satisfies("1.2.3", "~0.0")	false
+S11_9	legal	sv_satisfies("1.2.9", "~0.0")	false
+S11_10	legal	sv_satisfies("1.3.0", "~0.0")	false
+S11_11	legal	sv_satisfies("1.9.9", "~0.0")	false
+S11_12	legal	sv_satisfies("2.0.0", "~0.0")	false
+S11_13	legal	sv_satisfies("1.0.0-alpha", "~0.0")	false
+S12_0	legal	sv_satisfies("0.0.0", "1.2.x")	false
+S12_1	legal	sv_satisfies("0.0.3", "1.2.x")	false
+S12_2	legal	sv_satisfies("0.0.4", "1.2.x")	false
+S12_3	legal	sv_satisfies("0.1.0", "1.2.x")	false
+S12_4	legal	sv_satisfies("0.2.3", "1.2.x")	false
+S12_5	legal	sv_satisfies("0.2.5", "1.2.x")	false
+S12_6	legal	sv_satisfies("0.3.0", "1.2.x")	false
+S12_7	legal	sv_satisfies("1.0.0", "1.2.x")	false
+S12_8	legal	sv_satisfies("1.2.3", "1.2.x")	true
+S12_9	legal	sv_satisfies("1.2.9", "1.2.x")	true
+S12_10	legal	sv_satisfies("1.3.0", "1.2.x")	false
+S12_11	legal	sv_satisfies("1.9.9", "1.2.x")	false
+S12_12	legal	sv_satisfies("2.0.0", "1.2.x")	false
+S12_13	legal	sv_satisfies("1.0.0-alpha", "1.2.x")	false
+S13_0	legal	sv_satisfies("0.0.0", "1.x")	false
+S13_1	legal	sv_satisfies("0.0.3", "1.x")	false
+S13_2	legal	sv_satisfies("0.0.4", "1.x")	false
+S13_3	legal	sv_satisfies("0.1.0", "1.x")	false
+S13_4	legal	sv_satisfies("0.2.3", "1.x")	false
+S13_5	legal	sv_satisfies("0.2.5", "1.x")	false
+S13_6	legal	sv_satisfies("0.3.0", "1.x")	false
+S13_7	legal	sv_satisfies("1.0.0", "1.x")	true
+S13_8	legal	sv_satisfies("1.2.3", "1.x")	true
+S13_9	legal	sv_satisfies("1.2.9", "1.x")	true
+S13_10	legal	sv_satisfies("1.3.0", "1.x")	true
+S13_11	legal	sv_satisfies("1.9.9", "1.x")	true
+S13_12	legal	sv_satisfies("2.0.0", "1.x")	false
+S13_13	legal	sv_satisfies("1.0.0-alpha", "1.x")	false
+S14_0	legal	sv_satisfies("0.0.0", "1")	false
+S14_1	legal	sv_satisfies("0.0.3", "1")	false
+S14_2	legal	sv_satisfies("0.0.4", "1")	false
+S14_3	legal	sv_satisfies("0.1.0", "1")	false
+S14_4	legal	sv_satisfies("0.2.3", "1")	false
+S14_5	legal	sv_satisfies("0.2.5", "1")	false
+S14_6	legal	sv_satisfies("0.3.0", "1")	false
+S14_7	legal	sv_satisfies("1.0.0", "1")	true
+S14_8	legal	sv_satisfies("1.2.3", "1")	true
+S14_9	legal	sv_satisfies("1.2.9", "1")	true
+S14_10	legal	sv_satisfies("1.3.0", "1")	true
+S14_11	legal	sv_satisfies("1.9.9", "1")	true
+S14_12	legal	sv_satisfies("2.0.0", "1")	false
+S14_13	legal	sv_satisfies("1.0.0-alpha", "1")	false
+S15_0	legal	sv_satisfies("0.0.0", "*")	true
+S15_1	legal	sv_satisfies("0.0.3", "*")	true
+S15_2	legal	sv_satisfies("0.0.4", "*")	true
+S15_3	legal	sv_satisfies("0.1.0", "*")	true
+S15_4	legal	sv_satisfies("0.2.3", "*")	true
+S15_5	legal	sv_satisfies("0.2.5", "*")	true
+S15_6	legal	sv_satisfies("0.3.0", "*")	true
+S15_7	legal	sv_satisfies("1.0.0", "*")	true
+S15_8	legal	sv_satisfies("1.2.3", "*")	true
+S15_9	legal	sv_satisfies("1.2.9", "*")	true
+S15_10	legal	sv_satisfies("1.3.0", "*")	true
+S15_11	legal	sv_satisfies("1.9.9", "*")	true
+S15_12	legal	sv_satisfies("2.0.0", "*")	true
+S15_13	legal	sv_satisfies("1.0.0-alpha", "*")	false
+S16_0	legal	sv_satisfies("0.0.0", "")	true
+S16_1	legal	sv_satisfies("0.0.3", "")	true
+S16_2	legal	sv_satisfies("0.0.4", "")	true
+S16_3	legal	sv_satisfies("0.1.0", "")	true
+S16_4	legal	sv_satisfies("0.2.3", "")	true
+S16_5	legal	sv_satisfies("0.2.5", "")	true
+S16_6	legal	sv_satisfies("0.3.0", "")	true
+S16_7	legal	sv_satisfies("1.0.0", "")	true
+S16_8	legal	sv_satisfies("1.2.3", "")	true
+S16_9	legal	sv_satisfies("1.2.9", "")	true
+S16_10	legal	sv_satisfies("1.3.0", "")	true
+S16_11	legal	sv_satisfies("1.9.9", "")	true
+S16_12	legal	sv_satisfies("2.0.0", "")	true
+S16_13	legal	sv_satisfies("1.0.0-alpha", "")	false
+S17_0	legal	sv_satisfies("0.0.0", "1.2.3")	false
+S17_1	legal	sv_satisfies("0.0.3", "1.2.3")	false
+S17_2	legal	sv_satisfies("0.0.4", "1.2.3")	false
+S17_3	legal	sv_satisfies("0.1.0", "1.2.3")	false
+S17_4	legal	sv_satisfies("0.2.3", "1.2.3")	false
+S17_5	legal	sv_satisfies("0.2.5", "1.2.3")	false
+S17_6	legal	sv_satisfies("0.3.0", "1.2.3")	false
+S17_7	legal	sv_satisfies("1.0.0", "1.2.3")	false
+S17_8	legal	sv_satisfies("1.2.3", "1.2.3")	true
+S17_9	legal	sv_satisfies("1.2.9", "1.2.3")	false
+S17_10	legal	sv_satisfies("1.3.0", "1.2.3")	false
+S17_11	legal	sv_satisfies("1.9.9", "1.2.3")	false
+S17_12	legal	sv_satisfies("2.0.0", "1.2.3")	false
+S17_13	legal	sv_satisfies("1.0.0-alpha", "1.2.3")	false
+B0	legal	str(sv_best(["1.2.0", "1.2.5", "2.0.0"], "^1.2.0"))	1.2.5
+B1	legal	str(sv_best(["1.2.0", "1.2.5", "2.0.0"], "^2.0.0"))	2.0.0
+B2	legal	str(sv_best(["1.0.0", "0.9.0"], "^1.0.0"))	1.0.0
+B3	legal	str(sv_best(["3.0.0"], "^1.0.0"))	null
+B4	legal	str(sv_best(["1.2.0", "1.2.9", "1.3.0"], "~1.2"))	1.2.9
+B5	legal	str(sv_best(["0.0.1", "0.0.2"], "^0.0.1"))	0.0.1
+B6	legal	str(sv_best(["1.0.0", "1.0.0-alpha"], "^1.0.0"))	1.0.0
+B7	legal	str(sv_best(["2.0.0", "1.0.0"], "*"))	2.0.0
+E0	legal	html_escape("")	
+E1	legal	html_escape("abc")	abc
+E2	legal	html_escape("<a>")	&lt;a&gt;
+E3	legal	html_escape("&")	&amp;
+E4	legal	html_escape("\"")	&quot;
+E5	legal	html_escape("'")	&#39;
+E6	legal	html_escape("a&b")	a&amp;b
+E7	legal	html_escape("<p class='x'>")	&lt;p class=&#39;x&#39;&gt;
+E8	legal	html_escape("中文")	中文
+E9	legal	html_escape("&&")	&amp;&amp;
+E10	legal	html_escape("><")	&gt;&lt;
+E11	legal	html_escape("it's")	it&#39;s
+E12	legal	html_escape("<script>alert(1)</script>")	&lt;script&gt;alert(1)&lt;/script&gt;
+E13	legal	html_escape("a&amp;b")	a&amp;amp;b
+E14	legal	html_escape(" ")	 
+D0	legal	hx_decode("")	
+D1	legal	hx_decode("abc")	abc
+D2	legal	hx_decode("&amp;")	&
+D3	legal	hx_decode("&lt;")	<
+D4	legal	hx_decode("&gt;")	>
+D5	legal	hx_decode("&quot;")	"
+D6	legal	hx_decode("&apos;")	'
+D7	legal	hx_decode("&nbsp;")	 
+D8	legal	hx_decode("&copy;")	&copy;
+D9	legal	hx_decode("&#65;")	&#65;
+D10	legal	hx_decode("&AMP;")	&AMP;
+D11	legal	hx_decode("a&amp;b")	a&b
+D12	legal	hx_decode("&amp")	&amp
+D13	legal	hx_decode("&nosuch;")	&nosuch;
+D14	legal	hx_decode("&")	&
+D15	legal	hx_decode("&&amp;")	&&
+D16	legal	hx_decode("&amp;&amp;")	&&
+D17	legal	hx_decode("x&nbsp;y")	x y
+D18	legal	hx_decode("&#x41;")	&#x41;
+D19	legal	hx_decode("&amp;;")	&;
+G0t	legal	html_text(html_parse("<div id=\"x\">a<b>b</b></div>"))	ab
+G0g	legal	html_tag(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0])	div
+G0q	legal	str(len(html_query(html_parse("<div id=\"x\">a<b>b</b></div>"), "div")))	1
+G0a	legal	html_attr(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0], "id")	x
+G0k	legal	str(len(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0]["children"]))	2
+G0c	legal	html_tag(html_children(html_parse("<div id=\"x\">a<b>b</b></div>")["children"][0])[0])	#text
+G1t	legal	html_text(html_parse("<p>x</p><!--c-->"))	x
+G1g	legal	html_tag(html_parse("<p>x</p><!--c-->")["children"][0])	p
+G1q	legal	str(len(html_query(html_parse("<p>x</p><!--c-->"), "p")))	1
+G1a	legal	html_attr(html_parse("<p>x</p><!--c-->")["children"][0], "class")	
+G1k	legal	str(len(html_parse("<p>x</p><!--c-->")["children"][0]["children"]))	1
+G1c	legal	html_tag(html_children(html_parse("<p>x</p><!--c-->")["children"][0])[0])	#text
+G2t	legal	html_text(html_parse("<div><script>1<2</script>y</div>"))	y
+G2g	legal	html_tag(html_parse("<div><script>1<2</script>y</div>")["children"][0])	div
+G2q	legal	str(len(html_query(html_parse("<div><script>1<2</script>y</div>"), "div")))	1
+G2a	legal	html_attr(html_parse("<div><script>1<2</script>y</div>")["children"][0], "class")	
+G2k	legal	str(len(html_parse("<div><script>1<2</script>y</div>")["children"][0]["children"]))	2
+G2c	legal	html_tag(html_children(html_parse("<div><script>1<2</script>y</div>")["children"][0])[0])	script
+G3t	legal	html_text(html_parse("<span class=\"k\">v</span>"))	v
+G3g	legal	html_tag(html_parse("<span class=\"k\">v</span>")["children"][0])	span
+G3q	legal	str(len(html_query(html_parse("<span class=\"k\">v</span>"), "span")))	1
+G3a	legal	html_attr(html_parse("<span class=\"k\">v</span>")["children"][0], "class")	k
+G3k	legal	str(len(html_parse("<span class=\"k\">v</span>")["children"][0]["children"]))	1
+G3c	legal	html_tag(html_children(html_parse("<span class=\"k\">v</span>")["children"][0])[0])	#text
+G4t	legal	html_text(html_parse("<ul><li>1</li><li>2</li></ul>"))	12
+G4g	legal	html_tag(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0])	ul
+G4q	legal	str(len(html_query(html_parse("<ul><li>1</li><li>2</li></ul>"), "ul")))	1
+G4a	legal	html_attr(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0], "class")	
+G4k	legal	str(len(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0]["children"]))	2
+G4c	legal	html_tag(html_children(html_parse("<ul><li>1</li><li>2</li></ul>")["children"][0])[0])	li
+Gq_multi	legal	str(len(html_query(html_parse("<p>1</p><p>2</p>"), "p")))	2
+Gq_cls	legal	str(len(html_query(html_parse("<p class='a'>1</p><p>2</p>"), "p.a")))	1
+Gent	legal	str(len(hx_entities()))	6
+Gvoid	legal	str(len(hx_void_tags()))	14
+Graw	legal	str(len(hx_raw_tags()))	4
+Groot	legal	html_tag(html_parse("<p>x</p>"))	#root
+Gempty	legal	html_text(html_parse(""))	
+Gtext_node	legal	html_text(html_parse("<p>a</p>")["children"][0]["children"][0])	a
+N0	neg	sv_cmp("abc", "1.2.3")	R2001
+N0b	legal	sv_satisfies("abc", "^1.0.0")	false
+N1	neg	sv_cmp("1.2", "1.2.3")	R2001
+N1b	legal	sv_satisfies("1.2", "^1.0.0")	false
+N2	neg	sv_cmp("1.2.3.4", "1.2.3")	R2001
+N2b	legal	sv_satisfies("1.2.3.4", "^1.0.0")	false
+N3	neg	sv_cmp("01.2.3", "1.2.3")	R2001
+N3b	legal	sv_satisfies("01.2.3", "^1.0.0")	false
+N4	neg	sv_cmp("v1.2.3", "1.2.3")	R2001
+N4b	legal	sv_satisfies("v1.2.3", "^1.0.0")	false
+N5	neg	sv_cmp("1..2", "1.2.3")	R2001
+N5b	legal	sv_satisfies("1..2", "^1.0.0")	false
+N6	neg	sv_cmp("1.2.3-", "1.2.3")	R2001
+N6b	legal	sv_satisfies("1.2.3-", "^1.0.0")	false
+N7	neg	sv_cmp("1.2.3+", "1.2.3")	R2001
+N7b	legal	sv_satisfies("1.2.3+", "^1.0.0")	false
+N8	neg	sv_cmp("-1.2.3", "1.2.3")	R2001
+N8b	legal	sv_satisfies("-1.2.3", "^1.0.0")	false
+N9	neg	sv_cmp("1.2.x", "1.2.3")	R2001
+N9b	legal	sv_satisfies("1.2.x", "^1.0.0")	false
+N10	neg	sv_cmp("", "1.2.3")	R2001
+N10b	legal	sv_satisfies("", "^1.0.0")	false
+N11	neg	sv_cmp("a.b.c", "1.2.3")	R2001
+N11b	legal	sv_satisfies("a.b.c", "^1.0.0")	false
+N12	neg	sv_cmp("1.2.3-01", "1.2.3")	R2001
+N12b	legal	sv_satisfies("1.2.3-01", "^1.0.0")	false
+N13	neg	sv_cmp("+1.2.3", "1.2.3")	R2001
+N13b	legal	sv_satisfies("+1.2.3", "^1.0.0")	false
+N14	neg	sv_cmp("1.2.3-alpha..1", "1.2.3")	R2001
+N14b	legal	sv_satisfies("1.2.3-alpha..1", "^1.0.0")	false
+Nr0	legal	sv_satisfies("1.5.0", "abc")	false
+Nr1	legal	sv_satisfies("1.5.0", "^")	false
+Nr2	legal	sv_satisfies("1.5.0", "~")	false
+Nr3	legal	sv_satisfies("1.5.0", "^^1.2.3")	false
+Nr4	legal	sv_satisfies("1.5.0", "1.2.3.4")	false
+Nr5	legal	sv_satisfies("1.5.0", "01.2.3")	false
+Nr6	legal	sv_satisfies("1.5.0", "*x")	false
+Nr7	legal	sv_satisfies("1.5.0", "v1.2.3")	false
+Zsv_parse_b0q0	poison	sv_parse(null)	LOCK
+Zsv_parse_b0q1	poison	sv_parse(true)	LOCK
+Zsv_parse_b0q2	poison	sv_parse(7)	LOCK
+Zsv_parse_b0q3	poison	sv_parse("s")	LOCK
+Zsv_parse_b0q4	poison	sv_parse(([]))	LOCK
+Asv_parse_less	arity	sv_parse()	LOCK
+Asv_parse_more	arity	sv_parse(null, null)	LOCK
+Zsv_cmp_b0q0	poison	sv_cmp(null, "2.0.0")	LOCK
+Zsv_cmp_b0q1	poison	sv_cmp(true, "2.0.0")	LOCK
+Zsv_cmp_b0q2	poison	sv_cmp(7, "2.0.0")	LOCK
+Zsv_cmp_b0q3	poison	sv_cmp("s", "2.0.0")	LOCK
+Zsv_cmp_b0q4	poison	sv_cmp(([]), "2.0.0")	LOCK
+Zsv_cmp_b1q0	poison	sv_cmp("1.2.3", null)	LOCK
+Zsv_cmp_b1q1	poison	sv_cmp("1.2.3", true)	LOCK
+Zsv_cmp_b1q2	poison	sv_cmp("1.2.3", 7)	LOCK
+Zsv_cmp_b1q3	poison	sv_cmp("1.2.3", "s")	LOCK
+Zsv_cmp_b1q4	poison	sv_cmp("1.2.3", ([]))	LOCK
+Asv_cmp_less	arity	sv_cmp(null)	LOCK
+Asv_cmp_more	arity	sv_cmp(null, null, null)	LOCK
+Zsv_range_parse_b0q0	poison	sv_range_parse(null)	LOCK
+Zsv_range_parse_b0q1	poison	sv_range_parse(true)	LOCK
+Zsv_range_parse_b0q2	poison	sv_range_parse(7)	LOCK
+Zsv_range_parse_b0q3	poison	sv_range_parse("s")	LOCK
+Zsv_range_parse_b0q4	poison	sv_range_parse(([]))	LOCK
+Asv_range_parse_less	arity	sv_range_parse()	LOCK
+Asv_range_parse_more	arity	sv_range_parse(null, null)	LOCK
+Zsv_satisfies_b0q0	poison	sv_satisfies(null, "^1.2.0")	LOCK
+Zsv_satisfies_b0q1	poison	sv_satisfies(true, "^1.2.0")	LOCK
+Zsv_satisfies_b0q2	poison	sv_satisfies(7, "^1.2.0")	LOCK
+Zsv_satisfies_b0q3	poison	sv_satisfies("s", "^1.2.0")	LOCK
+Zsv_satisfies_b0q4	poison	sv_satisfies(([]), "^1.2.0")	LOCK
+Zsv_satisfies_b1q0	poison	sv_satisfies("1.2.5", null)	LOCK
+Zsv_satisfies_b1q1	poison	sv_satisfies("1.2.5", true)	LOCK
+Zsv_satisfies_b1q2	poison	sv_satisfies("1.2.5", 7)	LOCK
+Zsv_satisfies_b1q3	poison	sv_satisfies("1.2.5", "s")	LOCK
+Zsv_satisfies_b1q4	poison	sv_satisfies("1.2.5", ([]))	LOCK
+Asv_satisfies_less	arity	sv_satisfies(null)	LOCK
+Asv_satisfies_more	arity	sv_satisfies(null, null, null)	LOCK
+Zsv_best_b0q0	poison	sv_best(null, "^1.2.0")	LOCK
+Zsv_best_b0q1	poison	sv_best(true, "^1.2.0")	LOCK
+Zsv_best_b0q2	poison	sv_best(7, "^1.2.0")	LOCK
+Zsv_best_b0q3	poison	sv_best("s", "^1.2.0")	LOCK
+Zsv_best_b0q4	poison	sv_best(([]), "^1.2.0")	LOCK
+Zsv_best_b1q0	poison	sv_best(["1.2.0", "1.2.5"], null)	LOCK
+Zsv_best_b1q1	poison	sv_best(["1.2.0", "1.2.5"], true)	LOCK
+Zsv_best_b1q2	poison	sv_best(["1.2.0", "1.2.5"], 7)	LOCK
+Zsv_best_b1q3	poison	sv_best(["1.2.0", "1.2.5"], "s")	LOCK
+Zsv_best_b1q4	poison	sv_best(["1.2.0", "1.2.5"], ([]))	LOCK
+Asv_best_less	arity	sv_best(null)	LOCK
+Asv_best_more	arity	sv_best(null, null, null)	LOCK
+Zsv_is_digit_b0q0	poison	sv_is_digit(null)	LOCK
+Zsv_is_digit_b0q1	poison	sv_is_digit(true)	LOCK
+Zsv_is_digit_b0q2	poison	sv_is_digit(7)	LOCK
+Zsv_is_digit_b0q3	poison	sv_is_digit("s")	LOCK
+Zsv_is_digit_b0q4	poison	sv_is_digit(([]))	LOCK
+Asv_is_digit_less	arity	sv_is_digit()	LOCK
+Asv_is_digit_more	arity	sv_is_digit(null, null)	LOCK
+Zsv_is_alnum_b0q0	poison	sv_is_alnum(null)	LOCK
+Zsv_is_alnum_b0q1	poison	sv_is_alnum(true)	LOCK
+Zsv_is_alnum_b0q2	poison	sv_is_alnum(7)	LOCK
+Zsv_is_alnum_b0q3	poison	sv_is_alnum("s")	LOCK
+Zsv_is_alnum_b0q4	poison	sv_is_alnum(([]))	LOCK
+Asv_is_alnum_less	arity	sv_is_alnum()	LOCK
+Asv_is_alnum_more	arity	sv_is_alnum(null, null)	LOCK
+Zsv_is_all_digits_b0q0	poison	sv_is_all_digits(null)	LOCK
+Zsv_is_all_digits_b0q1	poison	sv_is_all_digits(true)	LOCK
+Zsv_is_all_digits_b0q2	poison	sv_is_all_digits(7)	LOCK
+Zsv_is_all_digits_b0q3	poison	sv_is_all_digits("s")	LOCK
+Zsv_is_all_digits_b0q4	poison	sv_is_all_digits(([]))	LOCK
+Asv_is_all_digits_less	arity	sv_is_all_digits()	LOCK
+Asv_is_all_digits_more	arity	sv_is_all_digits(null, null)	LOCK
+Zsv_index_of_b0q0	poison	sv_index_of(null, "b")	LOCK
+Zsv_index_of_b0q1	poison	sv_index_of(true, "b")	LOCK
+Zsv_index_of_b0q2	poison	sv_index_of(7, "b")	LOCK
+Zsv_index_of_b0q3	poison	sv_index_of("s", "b")	LOCK
+Zsv_index_of_b0q4	poison	sv_index_of(([]), "b")	LOCK
+Zsv_index_of_b1q0	poison	sv_index_of("abc", null)	LOCK
+Zsv_index_of_b1q1	poison	sv_index_of("abc", true)	LOCK
+Zsv_index_of_b1q2	poison	sv_index_of("abc", 7)	LOCK
+Zsv_index_of_b1q3	poison	sv_index_of("abc", "s")	LOCK
+Zsv_index_of_b1q4	poison	sv_index_of("abc", ([]))	LOCK
+Asv_index_of_less	arity	sv_index_of(null)	LOCK
+Asv_index_of_more	arity	sv_index_of(null, null, null)	LOCK
+Zhtml_escape_b0q0	poison	html_escape(null)	LOCK
+Zhtml_escape_b0q1	poison	html_escape(true)	LOCK
+Zhtml_escape_b0q2	poison	html_escape(7)	LOCK
+Zhtml_escape_b0q3	poison	html_escape("s")	LOCK
+Zhtml_escape_b0q4	poison	html_escape(([]))	LOCK
+Ahtml_escape_less	arity	html_escape()	LOCK
+Ahtml_escape_more	arity	html_escape(null, null)	LOCK
+Zhx_decode_b0q0	poison	hx_decode(null)	LOCK
+Zhx_decode_b0q1	poison	hx_decode(true)	LOCK
+Zhx_decode_b0q2	poison	hx_decode(7)	LOCK
+Zhx_decode_b0q3	poison	hx_decode("s")	LOCK
+Zhx_decode_b0q4	poison	hx_decode(([]))	LOCK
+Ahx_decode_less	arity	hx_decode()	LOCK
+Ahx_decode_more	arity	hx_decode(null, null)	LOCK
+Zhtml_parse_b0q0	poison	html_parse(null)	LOCK
+Zhtml_parse_b0q1	poison	html_parse(true)	LOCK
+Zhtml_parse_b0q2	poison	html_parse(7)	LOCK
+Zhtml_parse_b0q3	poison	html_parse("s")	LOCK
+Zhtml_parse_b0q4	poison	html_parse(([]))	LOCK
+Ahtml_parse_less	arity	html_parse()	LOCK
+Ahtml_parse_more	arity	html_parse(null, null)	LOCK
+Zhtml_text_b0q0	poison	html_text(null)	LOCK
+Zhtml_text_b0q1	poison	html_text(true)	LOCK
+Zhtml_text_b0q2	poison	html_text(7)	LOCK
+Zhtml_text_b0q3	poison	html_text("s")	LOCK
+Zhtml_text_b0q4	poison	html_text(([]))	LOCK
+Ahtml_text_less	arity	html_text()	LOCK
+Ahtml_text_more	arity	html_text(null, null)	LOCK
+Zhtml_children_b0q0	poison	html_children(null)	LOCK
+Zhtml_children_b0q1	poison	html_children(true)	LOCK
+Zhtml_children_b0q2	poison	html_children(7)	LOCK
+Zhtml_children_b0q3	poison	html_children("s")	LOCK
+Zhtml_children_b0q4	poison	html_children(([]))	LOCK
+Ahtml_children_less	arity	html_children()	LOCK
+Ahtml_children_more	arity	html_children(null, null)	LOCK
+Zhtml_attr_b0q0	poison	html_attr(null, "class")	LOCK
+Zhtml_attr_b0q1	poison	html_attr(true, "class")	LOCK
+Zhtml_attr_b0q2	poison	html_attr(7, "class")	LOCK
+Zhtml_attr_b0q3	poison	html_attr("s", "class")	LOCK
+Zhtml_attr_b0q4	poison	html_attr(([]), "class")	LOCK
+Zhtml_attr_b1q0	poison	html_attr(html_parse("<p>x</p>"), null)	LOCK
+Zhtml_attr_b1q1	poison	html_attr(html_parse("<p>x</p>"), true)	LOCK
+Zhtml_attr_b1q2	poison	html_attr(html_parse("<p>x</p>"), 7)	LOCK
+Zhtml_attr_b1q3	poison	html_attr(html_parse("<p>x</p>"), "s")	LOCK
+Zhtml_attr_b1q4	poison	html_attr(html_parse("<p>x</p>"), ([]))	LOCK
+Ahtml_attr_less	arity	html_attr(null)	LOCK
+Ahtml_attr_more	arity	html_attr(null, null, null)	LOCK
+Zhtml_tag_b0q0	poison	html_tag(null)	LOCK
+Zhtml_tag_b0q1	poison	html_tag(true)	LOCK
+Zhtml_tag_b0q2	poison	html_tag(7)	LOCK
+Zhtml_tag_b0q3	poison	html_tag("s")	LOCK
+Zhtml_tag_b0q4	poison	html_tag(([]))	LOCK
+Ahtml_tag_less	arity	html_tag()	LOCK
+Ahtml_tag_more	arity	html_tag(null, null)	LOCK
+Zhtml_query_b0q0	poison	html_query(null, "p")	LOCK
+Zhtml_query_b0q1	poison	html_query(true, "p")	LOCK
+Zhtml_query_b0q2	poison	html_query(7, "p")	LOCK
+Zhtml_query_b0q3	poison	html_query("s", "p")	LOCK
+Zhtml_query_b0q4	poison	html_query(([]), "p")	LOCK
+Zhtml_query_b1q0	poison	html_query(html_parse("<p>x</p>"), null)	LOCK
+Zhtml_query_b1q1	poison	html_query(html_parse("<p>x</p>"), true)	LOCK
+Zhtml_query_b1q2	poison	html_query(html_parse("<p>x</p>"), 7)	LOCK
+Zhtml_query_b1q3	poison	html_query(html_parse("<p>x</p>"), "s")	LOCK
+Zhtml_query_b1q4	poison	html_query(html_parse("<p>x</p>"), ([]))	LOCK
+Ahtml_query_less	arity	html_query(null)	LOCK
+Ahtml_query_more	arity	html_query(null, null, null)	LOCK
+Ahx_entities_more	arity	hx_entities(null)	LOCK
+Ahx_void_tags_more	arity	hx_void_tags(null)	LOCK
+Ahx_raw_tags_more	arity	hx_raw_tags(null)	LOCK
+Ahx_implicit_close_more	arity	hx_implicit_close(null)	LOCK
+Zhx_new_node_b0q0	poison	hx_new_node(null)	LOCK
+Zhx_new_node_b0q1	poison	hx_new_node(true)	LOCK
+Zhx_new_node_b0q2	poison	hx_new_node(7)	LOCK
+Zhx_new_node_b0q3	poison	hx_new_node("s")	LOCK
+Zhx_new_node_b0q4	poison	hx_new_node(([]))	LOCK
+Ahx_new_node_less	arity	hx_new_node()	LOCK
+Ahx_new_node_more	arity	hx_new_node(null, null)	LOCK
+Zhx_find_b0q0	poison	hx_find(null, 0, "b")	LOCK
+Zhx_find_b0q1	poison	hx_find(true, 0, "b")	LOCK
+Zhx_find_b0q2	poison	hx_find(7, 0, "b")	LOCK
+Zhx_find_b0q3	poison	hx_find("s", 0, "b")	LOCK
+Zhx_find_b0q4	poison	hx_find(([]), 0, "b")	LOCK
+Zhx_find_b1q0	poison	hx_find("abc", null, "b")	LOCK
+Zhx_find_b1q1	poison	hx_find("abc", true, "b")	LOCK
+Zhx_find_b1q2	poison	hx_find("abc", 7, "b")	LOCK
+Zhx_find_b1q3	poison	hx_find("abc", "s", "b")	LOCK
+Zhx_find_b1q4	poison	hx_find("abc", ([]), "b")	LOCK
+Zhx_find_b2q0	poison	hx_find("abc", 0, null)	LOCK
+Zhx_find_b2q1	poison	hx_find("abc", 0, true)	LOCK
+Zhx_find_b2q2	poison	hx_find("abc", 0, 7)	LOCK
+Zhx_find_b2q3	poison	hx_find("abc", 0, "s")	LOCK
+Zhx_find_b2q4	poison	hx_find("abc", 0, ([]))	LOCK
+Ahx_find_less	arity	hx_find(null, null)	LOCK
+Ahx_find_more	arity	hx_find(null, null, null, null)	LOCK
+Zhx_find_ci_b0q0	poison	hx_find_ci(null, 0, "B")	LOCK
+Zhx_find_ci_b0q1	poison	hx_find_ci(true, 0, "B")	LOCK
+Zhx_find_ci_b0q2	poison	hx_find_ci(7, 0, "B")	LOCK
+Zhx_find_ci_b0q3	poison	hx_find_ci("s", 0, "B")	LOCK
+Zhx_find_ci_b0q4	poison	hx_find_ci(([]), 0, "B")	LOCK
+Zhx_find_ci_b1q0	poison	hx_find_ci("abc", null, "B")	LOCK
+Zhx_find_ci_b1q1	poison	hx_find_ci("abc", true, "B")	LOCK
+Zhx_find_ci_b1q2	poison	hx_find_ci("abc", 7, "B")	LOCK
+Zhx_find_ci_b1q3	poison	hx_find_ci("abc", "s", "B")	LOCK
+Zhx_find_ci_b1q4	poison	hx_find_ci("abc", ([]), "B")	LOCK
+Zhx_find_ci_b2q0	poison	hx_find_ci("abc", 0, null)	LOCK
+Zhx_find_ci_b2q1	poison	hx_find_ci("abc", 0, true)	LOCK
+Zhx_find_ci_b2q2	poison	hx_find_ci("abc", 0, 7)	LOCK
+Zhx_find_ci_b2q3	poison	hx_find_ci("abc", 0, "s")	LOCK
+Zhx_find_ci_b2q4	poison	hx_find_ci("abc", 0, ([]))	LOCK
+Ahx_find_ci_less	arity	hx_find_ci(null, null)	LOCK
+Ahx_find_ci_more	arity	hx_find_ci(null, null, null, null)	LOCK
+Zhx_is_name_start_b0q0	poison	hx_is_name_start(null)	LOCK
+Zhx_is_name_start_b0q1	poison	hx_is_name_start(true)	LOCK
+Zhx_is_name_start_b0q2	poison	hx_is_name_start(7)	LOCK
+Zhx_is_name_start_b0q3	poison	hx_is_name_start("s")	LOCK
+Zhx_is_name_start_b0q4	poison	hx_is_name_start(([]))	LOCK
+Ahx_is_name_start_less	arity	hx_is_name_start()	LOCK
+Ahx_is_name_start_more	arity	hx_is_name_start(null, null)	LOCK
+Zhx_is_name_char_b0q0	poison	hx_is_name_char(null)	LOCK
+Zhx_is_name_char_b0q1	poison	hx_is_name_char(true)	LOCK
+Zhx_is_name_char_b0q2	poison	hx_is_name_char(7)	LOCK
+Zhx_is_name_char_b0q3	poison	hx_is_name_char("s")	LOCK
+Zhx_is_name_char_b0q4	poison	hx_is_name_char(([]))	LOCK
+Ahx_is_name_char_less	arity	hx_is_name_char()	LOCK
+Ahx_is_name_char_more	arity	hx_is_name_char(null, null)	LOCK
+Zhx_is_space_b0q0	poison	hx_is_space(null)	LOCK
+Zhx_is_space_b0q1	poison	hx_is_space(true)	LOCK
+Zhx_is_space_b0q2	poison	hx_is_space(7)	LOCK
+Zhx_is_space_b0q3	poison	hx_is_space("s")	LOCK
+Zhx_is_space_b0q4	poison	hx_is_space(([]))	LOCK
+Ahx_is_space_less	arity	hx_is_space()	LOCK
+Ahx_is_space_more	arity	hx_is_space(null, null)	LOCK
+Zhx_parse_open_b0q0	poison	hx_parse_open(null)	LOCK
+Zhx_parse_open_b0q1	poison	hx_parse_open(true)	LOCK
+Zhx_parse_open_b0q2	poison	hx_parse_open(7)	LOCK
+Zhx_parse_open_b0q3	poison	hx_parse_open("s")	LOCK
+Zhx_parse_open_b0q4	poison	hx_parse_open(([]))	LOCK
+Ahx_parse_open_less	arity	hx_parse_open()	LOCK
+Ahx_parse_open_more	arity	hx_parse_open(null, null)	LOCK
+Zhx_parse_end_b0q0	poison	hx_parse_end(null)	LOCK
+Zhx_parse_end_b0q1	poison	hx_parse_end(true)	LOCK
+Zhx_parse_end_b0q2	poison	hx_parse_end(7)	LOCK
+Zhx_parse_end_b0q3	poison	hx_parse_end("s")	LOCK
+Zhx_parse_end_b0q4	poison	hx_parse_end(([]))	LOCK
+Ahx_parse_end_less	arity	hx_parse_end()	LOCK
+Ahx_parse_end_more	arity	hx_parse_end(null, null)	LOCK
+Zhx_parse_selector_b0q0	poison	hx_parse_selector(null)	LOCK
+Zhx_parse_selector_b0q1	poison	hx_parse_selector(true)	LOCK
+Zhx_parse_selector_b0q2	poison	hx_parse_selector(7)	LOCK
+Zhx_parse_selector_b0q3	poison	hx_parse_selector("s")	LOCK
+Zhx_parse_selector_b0q4	poison	hx_parse_selector(([]))	LOCK
+Ahx_parse_selector_less	arity	hx_parse_selector()	LOCK
+Ahx_parse_selector_more	arity	hx_parse_selector(null, null)	LOCK

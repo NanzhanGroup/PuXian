@@ -287,6 +287,7 @@ examples/m297_quic_path_switch/srv.px src=9ed7e6345b51d66c rc=0 out=0a3a4798a694
 examples/m298_quic_write_wait/cli_migrate.px src=fdc71dad9d7b9043 rc=0 out=804c5aba050704af49b0d42bd2f06308 err=e3b0c44298fc1c14
 examples/m298_quic_write_wait/srv.px src=9ed7e6345b51d66c rc=0 out=0a3a4798a694eef67f396ed7bde96ead err=e3b0c44298fc1c14
 examples/m300_stdlib_surface2/drv.px src=440f447d49654660 rc=0 out=73c70dc4d5a2d2e1a7645f00d8f37ee9 err=e3b0c44298fc1c14
+examples/m302_stdlib_surface3/drv.px src=44cc52c23e1afe84 rc=0 out=8948b3b68119f00341e63a975e55f5d3 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -368,7 +369,7 @@ examples/m83_s1_http_body_nul/serve_daemon.px src=89df3687918162bb rc=0 out=0437
 examples/m83_s2_archive_gaps/s2_verify.px src=d89d093f2cd695fb rc=0 out=302fe595bc687a2547bf53d45ad2114b err=e3b0c44298fc1c14
 examples/m83_s3_ed25519/s3_verify.px src=dc19e9e2e953e786 rc=0 out=7b7eebc1b0b2493d10a9b39cef39ef1f err=e3b0c44298fc1c14
 examples/m83_s4/s4_verify.px src=676a19572c5f8241 rc=0 out=a39b2b32a4f3c973b3c093781d512f46 err=e3b0c44298fc1c14
-examples/m83_s5/libs_test.px src=c3a87733ac8cd527 rc=0 out=b780c6c3daa7cb584732d273e5070f99 err=e3b0c44298fc1c14
+examples/m83_s5/libs_test.px src=c3a87733ac8cd527 rc=0 out=b23234d78f089bf373f607ce231ae550 err=e3b0c44298fc1c14
 examples/m83_s5/m83_s5_client.px src=1017f9477bac50de rc=0 out=4b219b1565af649ec44efedd603ca669 err=e3b0c44298fc1c14
 examples/m83_s5/serve_daemon.px src=b948e3b0294db7a4 rc=0 out=adce983ca7520c398ae5f62ff713b03c err=e3b0c44298fc1c14
 examples/m83_s5/smtp_test.px src=2053517885af434e rc=0 out=db08c7b6845273cbcfafff5d0d6f57cd err=e3b0c44298fc1c14
@@ -465,7 +466,7 @@ selfhost/cases/s10_nullable.px src=522794f4a7e3a72a rc=0 out=305046eec6e00db5ffd
 selfhost/cases/s11_generics.px src=6149d19f2979ec80 rc=0 out=b0a69ee7994301ac85b1011947feff12 err=e3b0c44298fc1c14
 selfhost/cases/s12_cffi.px src=064f9a659a8864c4 rc=0 out=2438087d32d2fa1d4c7425dc979a733f err=e3b0c44298fc1c14
 selfhost/cases/s13_langsugar.px src=7ee402ab6bc82713 rc=0 out=8ef4c4ccabdfd22dba02db6863bbbb6d err=e3b0c44298fc1c14
-selfhost/cases/s14_semver.px src=9dd54216d35d6384 rc=0 out=35674c002f4b904df0dafe6738a48844 err=e3b0c44298fc1c14
+selfhost/cases/s14_semver.px src=9dd54216d35d6384 rc=0 out=583166bc49e1444989ea91572262308a err=e3b0c44298fc1c14
 selfhost/cases/s15_multiline.px src=cff70b7cba09d2ed rc=0 out=99f3dd3cf3cfc641e462dd5021300211 err=e3b0c44298fc1c14
 selfhost/cases/v01_value.px src=3b49797916ac6cb9 rc=0 out=159be666009d388e7444908c12e2fe35 err=e3b0c44298fc1c14
 selfhost/cases/v02_env.px src=4a30676fd261bac7 rc=0 out=d828c7b7a6bc2da4771aed5c092d2f0d err=e3b0c44298fc1c14

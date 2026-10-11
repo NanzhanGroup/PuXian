@@ -1,0 +1,33 @@
+# M302 签名表：fn<TAB>arity<TAB>典型合法实参（`|` 分隔，px 字面量）
+# 口径：**公开 API + 主要辅助导出**（stdlib_coverage 台账的「语料面提及」由本门语料补齐）
+# 毒值用例 = 逐位置替换成错类型；arity 用例 = 少给/多给一个 null
+sv_parse	1	"1.2.3"
+sv_cmp	2	"1.2.3"|"2.0.0"
+sv_range_parse	1	"^1.2.0"
+sv_satisfies	2	"1.2.5"|"^1.2.0"
+sv_best	2	["1.2.0", "1.2.5"]|"^1.2.0"
+sv_is_digit	1	"7"
+sv_is_alnum	1	"a"
+sv_is_all_digits	1	"123"
+sv_index_of	2	"abc"|"b"
+html_escape	1	"<a>"
+hx_decode	1	"&amp;"
+html_parse	1	"<p>x</p>"
+html_text	1	html_parse("<p>x</p>")
+html_children	1	html_parse("<p>x</p>")
+html_attr	2	html_parse("<p>x</p>")|"class"
+html_tag	1	html_parse("<p>x</p>")
+html_query	2	html_parse("<p>x</p>")|"p"
+hx_entities	0	
+hx_void_tags	0	
+hx_raw_tags	0	
+hx_implicit_close	0	
+hx_new_node	1	"div"
+hx_find	3	"abc"|0|"b"
+hx_find_ci	3	"abc"|0|"B"
+hx_is_name_start	1	"a"
+hx_is_name_char	1	"a"
+hx_is_space	1	" "
+hx_parse_open	1	"div class=\"a\""
+hx_parse_end	1	"/div"
+hx_parse_selector	1	"p.a"

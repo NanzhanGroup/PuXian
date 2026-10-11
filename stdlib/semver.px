@@ -49,11 +49,20 @@ def sv_parse(v):
     let plus = sv_index_of(s, "+")
     if plus >= 0:
         build = s[plus + 1:len(s)]
+        # M302（缺陷 525）：build 段**为空**（`1.2.3+`）此前被静默接受（当成“无 build”）。
+        #   规范（SemVer 2.0.0 §9）要求 `+` 后至少一个标识符。
+        if len(build) == 0:
+            return null
         s = s[0:plus]
     var pre = ""
     let dash = sv_index_of(s, "-")
     if dash >= 0:
         pre = s[dash + 1:len(s)]
+        # M302（缺陷 525）：prerelease 段**为空**（`1.2.3-`）此前被静默接受
+        #   ⇒ 整串被当成 `1.2.3`（实测：`sv_cmp("1.2.3-","1.2.3")` 返回 0、
+        #   `sv_satisfies("1.2.3-","^1.0.0")` 返回 true）。
+        if len(pre) == 0:
+            return null
         s = s[0:dash]
     let parts = split(s, ".")
     if len(parts) != 3:
@@ -92,8 +101,13 @@ def sv_parse(v):
 def sv_cmp(a, b):
     let pa = sv_parse(a)
     let pb = sv_parse(b)
-    if pa == null or pb == null:
-        return 0
+    # M302（缺陷 522）：此前**静默返回 0（= “相等”）** —— 而「相等」是一个**具体断言**，
+    #   会让排序/去重类调用把垃圾版本当成“相同”（实测：14/14 非法输入全返 0）。
+    #   现按本仓「响亮优于静默」口径：非法版本 ⇒ R2001，且**指名是哪一侧**。
+    if pa == null:
+        panic("sv_cmp: 版本号非法: " + str(a))
+    if pb == null:
+        panic("sv_cmp: 版本号非法: " + str(b))
     if pa["major"] < pb["major"]:
         return -1
     if pa["major"] > pb["major"]:
@@ -156,9 +170,19 @@ def sv_range_parse(rng):
         op = "~"
         r = trim(r[1:len(r)])
     if r == "" or r == "*":
+        # M302（缺陷 521）：`^` / `~` **单独出现**（后面没有版本）此前被当成“全范围”
+        #   ⇒ `sv_satisfies("1.5.0", "^")` 返回 **true**（静默接受非法范围）。
+        #   `*` 与空串是全范围的**正当写法**；带运算符却无版本 ⇒ **非法**。
+        if op != "":
+            return null
         return {"lo": "0.0.0", "hi": "999999999.0.0", "pre": ""}
     # 拆分 x.y.z（x/y/z 可含通配 x/*）
     let parts = split(r, ".")
+    # M302（缺陷 526）：段数 > 3（如 `1.2.3.4`）此前被**静默截断**成 `1.2.3`，
+    #   而「精确版本」分支的 lo 直接取**原始串** ⇒ 会生成一个**非法版本串**当区间下界
+    #   （修 522 后当场显形：`sv_cmp` 响亮报「版本号非法: 1.2.3.4」）。
+    if len(parts) > 3:
+        return null
     var nums = []
     var i = 0
     while i < len(parts) and i < 3:
@@ -193,17 +217,32 @@ def sv_range_parse(rng):
     # 显式 op
     if op == "^":
         # ^1.2.3 → >=1.2.3 <2.0.0；^0.2.3 → <0.3.0；^0.0.3 → <0.0.4
+        # M302（缺陷 520）：**缺段/通配**（nums 里的 -1）此前被**直接拼进上界** ——
+        #   `^0` / `^0.0` / `^0.x` 都会拼出 `"0.0.-1"`（一个**非法版本串**）⇒ 范围恒空。
+        #   现按 node-semver 语义：缺段当 0 参与下界，**上界按「最左非零位」抬升**。
+        var lo_mi = mi
+        var lo_pa = pa
+        if lo_mi < 0:
+            lo_mi = 0
+        if lo_pa < 0:
+            lo_pa = 0
         var lo = ""
         var hi = ""
         if ma > 0:
-            lo = str(ma) + "." + str(mi) + "." + str(pa)
+            lo = str(ma) + "." + str(lo_mi) + "." + str(lo_pa)
             hi = str(ma + 1) + ".0.0"
         elif mi > 0:
-            lo = "0." + str(mi) + "." + str(pa)
+            lo = "0." + str(mi) + "." + str(lo_pa)
             hi = "0." + str(mi + 1) + ".0"
-        else:
+        elif mi == 0 and pa >= 0:
             lo = "0.0." + str(pa)
             hi = "0.0." + str(pa + 1)
+        elif mi == 0:
+            lo = "0.0.0"
+            hi = "0.1.0"
+        else:
+            lo = "0.0.0"
+            hi = "1.0.0"
         return {"lo": lo, "hi": hi, "pre": ""}
     # op == "~"
     if ma >= 0 and mi < 0:
