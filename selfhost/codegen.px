@@ -763,6 +763,22 @@ def cg_gen_func_named(f, cname):
         # M181（缺陷 193）：形参**永远已初始化** ⇒ 入初始化集（读不检查）
         cg_inited_add(pname)
         i += 1
+    # M301（缺陷 518）：**实参个数**前置检查（required/total 编译期已知）。
+    #   修前 C 轨三处发射点**上下界都不查** —— 少给静默绑 px_null（错值，且下游错误指不到
+    #   真因）、多给静默忽略；而解释轨两侧都查、VM 轨只有下界 ⇒ 同一份源码三轨三种行为。
+    #   口径同 M90-S1「默认参数在尾部」：required = 首个带默认值的形参下标（无默认 = 全部）。
+    #   放在**函数体开头**（声明区之前）：直接调用与间接调用（值调用 / 回调 / px_call）一并覆盖。
+    var req_n = len(params)
+    var seen_def = false
+    var ri = 0
+    while ri < len(params):
+        if params[ri][3] != null and not seen_def:
+            req_n = ri
+            seen_def = true
+        ri += 1
+    let fname_c = cg_escape_str(rust_unescape(f[1]))
+    s += "    if (nargs < " + str(req_n) + ") px_error(\"R1005: 调用 %s 参数不足: 需 %d 给 %d\", \"" + fname_c + "\", " + str(req_n) + ", nargs);\n"
+    s += "    if (nargs > " + str(len(params)) + ") px_error(\"R1005: 调用 %s 参数过多: 最多 %d 给 %d\", \"" + fname_c + "\", " + str(len(params)) + ", nargs);\n"
     # 预扫描：函数体内需提升到函数顶的局部变量（Assign 目标 + VarDecl + For 循环变量，
     # Python 语义局部变量；顶层全局名除外）——M62-L5 块作用域对齐（解释器不新建块作用域）
     let hoist_names = []

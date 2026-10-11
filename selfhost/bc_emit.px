@@ -1027,10 +1027,23 @@ def bc_emit_methodcall_slot(func, obj_slot, mname, args, dst):
     return dst
 # 无捕获 lambda（对齐 cg_gen_lambda）：param_names + body 表达式 → PxVMFunc 入
 #   funcs 返回下标（LOADK PXK_FUNC 引用；'<' 名不注册全局）
-def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited):
+def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited, params_full = null):
     let name = "<closure" + str(g_bcm["nclosure"]) + ">"
     g_bcm["nclosure"] = g_bcm["nclosure"] + 1
-    let func = bc_new_func(name, len(param_names))
+    # M301（缺陷 518）：闭包同样支持**默认参数**（修前 arity = len(param_names)、ndefault 恒 0
+    #   ⇒ 带默认值的闭包「少给」被误判参数不足，且默认表达式从不求值 —— 与解释轨/C 轨分叉）。
+    var arity = len(param_names)
+    var ndefault = 0
+    if params_full != null:
+        var q = 0
+        while q < len(params_full):
+            if params_full[q][3] != null:
+                if ndefault == 0:
+                    arity = q
+                ndefault += 1
+            q += 1
+    let func = bc_new_func(name, arity)
+    func["ndefault"] = ndefault
     var pi = 0
     while pi < len(param_names):
         func["smap"][param_names[pi]] = pi
@@ -1090,6 +1103,10 @@ def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited):
         us2 += 1
     # M160：本帧自己的装箱（本帧里还有闭包/函数体内 def 时，本帧局部也要是 cell）
     bc_box_frame(func, body_expr)
+    # M301（缺陷 518）：带默认值的闭包 —— 入口按 NARGS 补齐缺失的默认槽
+    #   （与 bc_emit_func_body 的 bc_emit_default_fill 同源；修前闭包只认「必需参数」）。
+    if ndefault > 0:
+        bc_emit_default_fill(func, params_full, arity)
     let t = bc_tmp(func)
     bc_emit_expr(body_expr, t, func)
     bc_emit_inst(func, "RET", t, 0, 0)
@@ -1112,7 +1129,7 @@ def bc_emit_closure(params, body, dst, func):
         if func["smap"].has(cn):
             caps.append(cn)
         ci += 1
-    let fidx = bc_emit_push_lambda(pnames, body, caps, bc_inited_copy(func))
+    let fidx = bc_emit_push_lambda(pnames, body, caps, bc_inited_copy(func), params)
     if len(caps) == 0:
         let k = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
         bc_emit_inst(func, "LOADK", dst, k, 0)

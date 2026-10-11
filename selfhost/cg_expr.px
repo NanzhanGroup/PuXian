@@ -170,12 +170,29 @@ def cg_gen_closure(params, body, dispname):
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
     cg_cells = cg_new_dict()
+    # M301（缺陷 518）：闭包调用实参个数 —— 与函数体同口径（前置检查 + 默认值补齐）。
+    #   修前本处只发 `(nargs > i) ? args[i] : px_null()`：**默认值被丢弃**、上下界都不查
+    #   ⇒ 少给静默 null、多给静默忽略、带默认值的闭包少给也报错（实测三轨分叉）。
+    var cl_req = len(params)
+    var cl_seen = false
+    var cq = 0
+    while cq < len(params):
+        if params[cq][3] != null and not cl_seen:
+            cl_req = cq
+            cl_seen = true
+        cq += 1
+    let clname_c = cg_escape_str(dispname)
+    fdef += "    if (nargs < " + str(cl_req) + ") px_error(\"R1005: 调用 %s 参数不足: 需 %d 给 %d\", \"" + clname_c + "\", " + str(cl_req) + ", nargs);\n"
+    fdef += "    if (nargs > " + str(len(params)) + ") px_error(\"R1005: 调用 %s 参数过多: 最多 %d 给 %d\", \"" + clname_c + "\", " + str(len(params)) + ", nargs);\n"
     var pi = 0
     while pi < len(params):
         let pn2 = rust_unescape(params[pi][1])
         let v = cg_new_var(pn2)
         cg_inited_add(pn2)
-        fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
+        var cl_def_c = "px_null()"
+        if params[pi][3] != null:
+            cl_def_c = cg_gen_expr(params[pi][3])
+        fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : " + cl_def_c + ";\n"
         pi += 1
     # 捕获名：闭包体内各绑定一个同名的**新 C 变量**持 cell，并标记为 cell
     for cn in caps:
