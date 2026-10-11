@@ -28,11 +28,21 @@
 #   bash selfhost/emitc_freeze.sh --freeze    # 重定基（需人工确认发射差异是预期的）
 # ═══════════════════════════════════════════════════════════════════════
 set -u
-cd "$(dirname "$0")/.."
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SELF_DIR/.."
+# ⭐ M300s1（缺陷 519）：本脚本此前用**固定**临时路径（/tmp/emitc_freeze_now.sha 等）——
+#   两个实例并发时会**交叉追加**（M300 实测：473 行 → 838/859/868/914 行，差异集每次不同）
+#   ⇒ 门报**假红**（类别 B 虚假出现），甚至可能把被污染的集合写进基准。
+#   修法两条：① 自持门级锁（与 run_gates 同源 ⇒ 直接调用也安全）；② 临时目录按 PID 唯一化。
+. "$SELF_DIR/gate_lock.sh"
+WORK=$(mktemp -d "/tmp/emitc_freeze.$$.XXXXXX") || { echo "❌ 无法创建临时目录" >&2; exit 3; }
+trap 'rm -rf "$WORK"' EXIT
+export EMITC_WORK="$WORK"
 export LC_ALL=C LANG=C
 GOLDEN=selfhost/golden/emitc_freeze.sha
 MODE="${1:---check}"
-TMP=/tmp/emitc_freeze_now.sha
+TMP="$WORK/now.sha"
+ERRTMP="$WORK/err.txt"
 
 files() { ls selfhost/cases/*.px examples/*/*.px 2>/dev/null; }
 
@@ -40,10 +50,10 @@ gen() {
     : > "$TMP"
     for f in $(files); do
         src=$(sha256sum "$f" | cut -c1-16)
-        out=$(timeout 60 ./bootstrap/pxc_vm --emit-c "$f" 2>/tmp/emitc_freeze_err.txt)
+        out=$(timeout 60 ./bootstrap/pxc_vm --emit-c "$f" 2>"$ERRTMP")
         rc=$?
         h=$(printf '%s' "$out" | sha256sum | cut -c1-32)
-        eh=$(sha256sum < /tmp/emitc_freeze_err.txt | cut -c1-16)
+        eh=$(sha256sum < "$ERRTMP" | cut -c1-16)
         echo "$f src=$src rc=$rc out=$h err=$eh" >> "$TMP"
     done
 }
@@ -56,22 +66,35 @@ parse() {
 case "$MODE" in
 --freeze)
     gen
+    # ⭐ 前提自证（M283 精神）：集合含重复条目 = 并发污染的指纹 ⇒ 拒绝把它写进基准
+    _t=$(wc -l < "$TMP"); _u=$(awk '{print $1}' "$TMP" | sort -u | wc -l)
+    if [ "$_t" -ne "$_u" ]; then
+        echo "❌ 拒绝重定基：集合含重复条目（$_t 行 / $_u 个唯一文件）—— 并发污染的指纹" >&2
+        exit 3
+    fi
     cp "$TMP" "$GOLDEN"
     echo "✅ 已重定基：$GOLDEN（$(wc -l < "$GOLDEN") 个文件 · 含源码指纹）"
     ;;
 --check)
     [ -f "$GOLDEN" ] || { echo "❌ 缺基准文件 $GOLDEN（先 --freeze）"; exit 1; }
     gen
+    # ⭐ 前提自证（M300 缺陷 519）：集合含重复条目 ⇒ 是并发污染的指纹，**不是**发射差异
+    _t=$(wc -l < "$TMP"); _u=$(awk '{print $1}' "$TMP" | sort -u | wc -l)
+    if [ "$_t" -ne "$_u" ]; then
+        echo "❌ 环境异常：本次采集含重复条目（$_t 行 / $_u 个唯一文件）—— 疑似并发污染，不是发射差异" >&2
+        echo "   本脚本现已自持门级锁；请确认没有旧的固定路径实例在跑之后重跑。" >&2
+        exit 3
+    fi
     # 旧格式（无 src=）兼容：**不**自动重定基（那等于橡皮图章），只按旧语义比 rc/out/err。
     if ! grep -q ' src=' "$GOLDEN"; then
-        sed 's/ src=[0-9a-f]*//' "$TMP" > /tmp/emitc_freeze_now_oldfmt.sha
-        if diff -q "$GOLDEN" /tmp/emitc_freeze_now_oldfmt.sha > /dev/null; then
+        sed 's/ src=[0-9a-f]*//' "$TMP" > "$WORK/oldfmt.sha"
+        if diff -q "$GOLDEN" "$WORK/oldfmt.sha" > /dev/null; then
             echo "✅ 发射冻结：$(wc -l < "$TMP") 个文件的 --emit-c 输出与基准逐字节一致"
             echo "   ℹ️  基准为旧格式（无源码指纹）⇒ 建议跑一次 --freeze 升级（只加 src= 一列，判据不变）"
             exit 0
         fi
         echo "❌ 发射冻结被打破（旧格式基准，按 rc/out/err 比）："
-        diff "$GOLDEN" /tmp/emitc_freeze_now_oldfmt.sha | head -20 | sed 's/^/   /'
+        diff "$GOLDEN" "$WORK/oldfmt.sha" | head -20 | sed 's/^/   /'
         echo "   ⇒ 若差异是**有意的**发射改动：bash selfhost/emitc_freeze.sh --freeze（并在提交信息里说明）"
         exit 1
     fi
@@ -79,8 +102,8 @@ case "$MODE" in
         echo "✅ 发射冻结：$(wc -l < "$TMP") 个文件的 --emit-c 输出与基准逐字节一致"
         exit 0
     fi
-    parse "$GOLDEN" > /tmp/emitc_freeze_base.kv
-    parse "$TMP"    > /tmp/emitc_freeze_now.kv
+    parse "$GOLDEN" > "$WORK/base.kv"
+    parse "$TMP"    > "$WORK/now.kv"
     python3 - <<'PY'
 import collections, sys
 def load(p):
@@ -92,7 +115,9 @@ def load(p):
         k, v = kv.split('=', 1)
         d[f][k] = v
     return d
-base, now = load('/tmp/emitc_freeze_base.kv'), load('/tmp/emitc_freeze_now.kv')
+import os as _os
+W = _os.environ['EMITC_WORK']
+base, now = load(W + '/base.kv'), load(W + '/now.kv')
 # 判据列 = rc/out/err（**产物**）；src 只是诊断列 ⇒ 源码变了但产物没变 **不判红**。
 def judge(d, f): return (d[f].get('rc'), d[f].get('out'), d[f].get('err'))
 only_base = sorted(set(base) - set(now))
