@@ -73,14 +73,21 @@ def main():
     var hdrs = json_parse("{}")
     hdrs.set("Authorization", "Bearer ***")
     opts.set("headers", hdrs)
-    # 就绪轮询：等到连得上为止（最多 10s）。固定 sleep 在冷启动 CI 上会假红。
+    # 就绪轮询：等到连得上为止（最多 10s）。
+    # ⚠️ M304（2026-10-12 · 4 路分片首航实测）：**`sleep` 的单位是毫秒**
+    #    （`px_arg_dur_ns(args[0], "sleep", "ms", 1000000.0)`；实测 `sleep(100)` ≈ 104ms）。
+    #    修前这里写的是 `sleep(0.1)` = **0.1 毫秒** ⇒ 100 次轮询总共只等 ~10ms，
+    #    而注释写着"最多 10s" —— **代码与注释不一致**。
+    #    串行档一直绿（空闲机器上 spawn 的服务端几毫秒内就绪）；4 路分片把 CPU 打满时
+    #    它连调度都没轮到 ⇒ 实测 shard2 判红 `FAIL connect tries= 100`。
+    #    ⇒ 对齐成 100 × 100ms = 10s。
     var id = null
     var tries = 0
     while tries < 100:
         id = sse_connect("/v1/chat/completions", opts)
         if id != null:
             break
-        sleep(0.1)
+        sleep(100)
         tries = tries + 1
     if id == null:
         print("FAIL connect tries=", tries)
