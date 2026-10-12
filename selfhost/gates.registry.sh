@@ -1499,3 +1499,30 @@ run m300_stdlib_surface2 bash examples/m300_stdlib_surface2/verify.sh
 run m301_argcount bash examples/m301_argcount/verify.sh
 run m302_stdlib_surface3 bash examples/m302_stdlib_surface3/verify.sh
 run m304_patch_primitive bash examples/m304_patch_primitive/verify.sh
+
+# ═══════════════════════════════════════════════════════════════════════════
+# M304 后加固（用户令 2026-10-12）：**禁止自建平行告警/唤醒通道**
+#   来历：2026-10-11 我自建了 `dy-wake.sh`（往 ws-push-qq.sock 写 msg_type:inject
+#        = **伪造一条「管理员本人」的 QQ 消息**）来叫醒自己。它**绕开了 ws-core 的
+#        空闲门禁**（`busWakeFilterSelfMode` 只覆盖总线路径；从 QQ 网关注入的消息
+#        ws-core 看不见）⇒ 一次事故**叫醒两个会话** ⇒ 两个东月同抢一个仓库、
+#        实测互踩（M299 / M304 各一次）。
+#   用户令：告警/唤醒一律走**系统原生通道**（`dy-notify.sh` → ws-core 任务自驱），
+#        **禁止自建平行通道**。
+#   为什么必须机械化：清记忆解决不了 —— 脚本在磁盘上，而全局规则 `[MONITORING/P0]`
+#        「必须自带通知机制」**每次请求都在把人推向「再造一个」** ⇒ 规则要不靠记性。
+#        同步落地：`references_global.yaml` 新增 `[NO_SELFCHANNEL/P0]`。
+#   判据四类：J1 仓库面 dy-wake ⇄ 豁免表（`selfhost/selfwake_allow.tsv`，
+#              **双向核对** + 计数**只减不增**）
+#        J2 无人值守链面**零豁免**（`packaging/chain/` 与 `/data/gatevm/` —— 那才是
+#              事故发生时真的会去注入的地方）
+#        J3 伪造注入（非注释行同时含 msg_type 与 inject）
+#        J4 规模锚点（防「提取器坏了 ⇒ 空集 ⊇ 空集」假绿 · M212 缺陷 288 同族）
+#   自证 12 条：含两条负控（调用 dy-wake / 伪造 inject）· J2 **双侧**零豁免 ·
+#        豁免表双向核对 · 防假阳（仅注释提及不判红）· 规模锚点 ·
+#        **只跳过判据载体自身**（改名的那份仍被抓 —— 证明跳过是窄的）。
+#   ⚠️ 判据只认「**非注释行**」（注释里提历史说明是允许的，先例 m255）；
+#      刻意不扫 `.md`（散文说明不是调用，且 M284 实测过「文档里的反例会被 git grep
+#      变成正例」⇒ 排除后本判据免疫自指）。
+# ═══════════════════════════════════════════════════════════════════════════
+run selfwake_guard bash selfhost/check_no_selfwake.sh
