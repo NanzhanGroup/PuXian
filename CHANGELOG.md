@@ -1,3 +1,34 @@
+## M304 补充（2026-10-12）— 发布链的「红」是 **CI 质量门 job 超时被取消**（配置缺陷，非产品回归）
+
+> 现象：v0.2.304（6475b99）的 CI / Tag Guard / Release 三者里，**CI = cancelled**（Tag Guard / Release 均 success）。
+> 判据：`selfhost/ci_log.py jobs 38206510378` → job「工具链自举质量门」conclusion=`cancelled`。
+
+### 真因（step 级读数，不是「exit code 1」）
+
+| step | 结果 | 耗时 |
+|---|---|---|
+| 14 工具自测 | success | **33.4 min** |
+| 15–70（56 步） | success | 合计 ≈ 26 min |
+| 71 m302_stdlib_surface3 | **cancelled** | 1.1 min（被腰斩） |
+| 72 m304_patch_primitive | skipped | —— **M304 新门在 CI 上从未跑过** |
+| 74 m128_unlock_grow | failure | **0.0 min**（没跑就判） |
+
+⇒ 14 + 15–70 已 ≈ 59.6 min，第 71 步再跑 1.1 min ⇒ **越过 job 的 `timeout-minutes: 60`** ⇒ 整 job 被取消。
+- **不是**并发规则取消（同期 main 无更新的 run）、**不是** Release 资产步的幂等问题（Release 本就 success）。
+- **m128 的 failure 是误报**：它带 `if: always()`，在取消窗口被拉起又立刻 kill，而 step 末尾的
+  `… || { echo "❌ m128…失败"; exit 1; }` 把「被 kill」翻译成了 exit 1 ⇒ 记成 failure。
+  本机复跑 `bash examples/m128_unlock_grow/verify.sh` ⇒ **pass=90 fail=0**（全绿）。
+- 同款历史：`523` 无关 —— 是 521e69c2（M302）也 60.2 min 被取消、27346604（M303）50.6 min 侥幸通过，
+  即 **余量长期为负**（ci.yml 原注释自己写着「实测余量只有 ~7 分钟」）。
+
+### 处置
+
+1. `.github/workflows/ci.yml`：`toolchain` job 的 `timeout-minutes` **60 → 120**（GitHub-hosted 上限 360），
+   给足余量；「工具自测」步的 45 min step 级上限不变（保 `if: failure()` 诊断步仍能跑）。
+2. 重跑 v0.2.304 的 CI（run 38206510378），并推本次修复 ⇒ 其后 main 的 CI 有完整 120 min 余量。
+3. 教训：**「CI 红」也要先看 job 级读数**（conclusion=cancelled + step 耗时），
+   别把「job 超时」当成门红/产品红；`if: always()` 步在取消窗口被 kill 会伪装成 failure。
+
 ## M304（2026-10-12）— 门的负控打桩：`sed -i` → **零转义 · 失败响亮**的原语（缺陷 523 同族）· 第 178 轮
 
 > 一句话：本仓最硬的一条纪律是「**会静默失效的门等于没有门**」（M274）。

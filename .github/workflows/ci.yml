@@ -155,7 +155,15 @@ jobs:
     # M216s5：**30 → 60**。实测余量只有 ~7 分钟（见下），runner 性能一波动就超时；
     #   而「工具自测」步本身另设 45 分钟上限 ⇒ 极端情况下由**该步**先失败，
     #   `if: failure()` 的诊断 step 才跑得起来（job 级超时会让所有后续 step 全部 skip）。
-    timeout-minutes: 60
+    # M304 补（2026-10-12 · dy-ops-m304-ci-red）：**60 → 120**。实测余量**已是负数**：
+    #   「工具自测」步单独就要 **33.4 min**（历史 23–45，CI 共享 runner 波动大），
+    #   其后 15–70 步再 ~26 min ⇒ 累计到第 71 步 m302_stdlib_surface3 时越过 60 min
+    #   ⇒ **整个 job 被取消**（不是产品红，是配置余量为负）：
+    #     · 6475b99（v0.2.304）：60.7 min ⇒ cancelled —— m302 被腰斩、m304 新门被 skip、
+    #       m128 因 `|| { …; exit 1; }` 把「被 kill」误记成 failure（本机复跑 90/0 全绿）。
+    #     · 521e69c2（M302）：60.2 min ⇒ cancelled；27346604（M303）：50.6 min ⇒ 侥幸通过。
+    #   ⇒ 抬到 120 给足余量（GitHub-hosted 上限 360）。「工具自测」步的 45 min step 级上限不变。
+    timeout-minutes: 120
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
