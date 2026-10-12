@@ -10,7 +10,25 @@ def srv():
     http_serve(PORT, h)
 
 spawn srv()
-sleep(400)
+# ⚠️ 就绪等待必须是**轮询**，不能是固定 sleep（M306 实测 · 与 M305 的 m118 同族）：
+#   历史上本门 25–43s；M306 改了 runtime（onnx_*.c）⇒ 这一项的**构建变冷**
+#   ⇒ 门耗时涨到 147–154s，于是固定 `sleep(400)` 在 4 路分片负载下变成**边缘**
+#   ⇒ 实测 10 连跑里出现 1 次 `bad=1 / HANDOVER FAIL`（恰好第一个请求撞在
+#   `http_serve` 还没绑定完上）。⇒ 改为「轮询到**至少有一次响应带上了响应头**为止」。
+#   判据强度**不降**：本门要抓的是「**成功响应上丢头**」（缺陷 197），
+#   而这里只等「服务端是否已能回应」；等到了之后，计数循环仍是原样的 40 次全绿要求。
+#   （唯一的口径变化：就绪期内的失败不计入 bad —— 那是「还没起来」，不是「丢头」。）
+var ready = false
+for i in range(300):
+    let r0 = http_request(URL + "/ready" + str(i), "GET")
+    if type(r0) != "result":
+        if r0.headers != null:
+            ready = true
+            break
+    sleep(20)
+if ready == false:
+    print("READY-FAIL")
+    exit(2)
 bad = 0
 for i in range(40):
     r = http_request(URL + "/p" + str(i), "GET")
