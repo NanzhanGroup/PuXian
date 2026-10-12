@@ -124,10 +124,13 @@ def handler(req):
 
 def main():
     spawn http_serve_unix("/tmp/m120_srv.sock", handler)
-    sleep(1.0)
+    # ⚠️ M304（2026-10-12）：`sleep` 的单位是**毫秒**（实测 `sleep(100)` ≈ 104ms）。
+    #    这里原本写 `sleep(1.0)` = **1 毫秒**（本想等 1 秒就绪）⇒ 负载高时会假红
+    #    （m118 已在 4 路分片下实测复现同款）。⇒ 改成真的 1 秒。
+    sleep(1000)
     let r = http_unix("/tmp/m120_srv.sock", "/boom", "GET")
     print("client_status=" + str(r["status"]))
-    sleep(0.3)
+    sleep(300)
 PXI
 comp --vm "$WORK/serve.px" && { "$WORK/build/serve" > "$WORK/serve.vm.txt" 2>&1; rv=$?; } || rv=99
 chk "VM 轨客户端收到 500" "$(grep -c 'client_status=500' "$WORK/serve.vm.txt")" "1"
