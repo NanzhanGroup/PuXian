@@ -12,6 +12,7 @@
 # 判据七层（每层独立有牙）：
 #   [1] 静态：原语的四条性质在源码里可证（字面量匹配 / 找不到 rc≠0 / count 强校验 / 原子写）
 #   [2] 自证：原语自带 CLI 级自证（28 断言，含与 sed 的并排对照）
+#   [2b] 判据侧闭环：① 扫描器认新形态（m285/m286 的连带 · 首航实测）② diffcheck 的 --interp 前提自备
 #   [3] 差分：原语 ⇄ wst-edit 2.1.0（**金标准**），语义类 + 落盘字节 + 权限三者全等
 #   [4] 形状：sed 在这批用例上**确实会给出不同结果 / 确实会静默**（证明判据不是纸面推理）
 #   [5] 负控 A/B/C + **D0–D4** 各自独立判红（A 找不到静默 · B count 不校验 · C 判据自伤 ·
@@ -83,6 +84,27 @@ case "$LINE" in
   'SELFTEST OK · 通过 28 / 失败 0') ok "自证全部通过（$LINE）" ;;
   *) bad "自证未全绿（$LINE）" ;;
 esac
+
+# ── [2b] 判据侧闭环：新形态必须被**判据**认出来（M304 首航实测的两处连带）──
+#   来历（2026-10-12 · 4 路分片首航）：本门把 13 处 sed 迁成 gp_patch 之后，
+#     · m285 的「回放负控」**当场不再判红** —— 它的扫描器只认 sed ⇒ 打桩整条不在视野里；
+#     · m286 的规模下限（sed -i ≥45 / 可解析 ≥18）随迁移漂移到 43/12 ⇒ 判红。
+#   ⇒ 这两条静态判据把「换形态 = 判据跟着走」变成**本门自己的门**（不是靠我记着）。
+echo "[2b] 判据侧 —— 扫描器要认新形态 · 门的前提要自己备"
+CGA="$ROOT/selfhost/check_gate_assertions.py"
+DCF="$ROOT/selfhost/diffcheck.sh"
+if grep -q 'GP_CALL = re.compile' "$CGA" \
+   && [ "$(grep -c 'if _a1_present(old, tgt):' "$CGA")" = "2" ] \
+   && [ "$(grep -c 'return pat_present(old, read(tgt))' "$CGA")" = "1" ]; then
+  ok "[2b] 扫描器认 gp_patch：两处 A1 共用**单一实现** _a1_present（否则负控只关掉一半）"
+else
+  bad "[2b] 扫描器未认 gp_patch（或 A1 未收成单一实现）⇒ 迁移后 A1 对该形态形同不存在"
+fi
+if awk '/= "--interp"/,/^fi$/' "$DCF" | grep -q 'prepare_m5_modtest'; then
+  ok "[2b] diffcheck.sh 的 --interp 分支**自备** v03 的前提（修前靠 10-05 的 /tmp 残留才绿）"
+else
+  bad "[2b] diffcheck.sh --interp 未自备前提 ⇒ 干净机器 / 私有 tmp 上 v03_module 必失败"
+fi
 
 # ── [3] 差分（金标准）─────────────────────────────────────
 echo "[3] 差分 —— patch_file ⇄ wst-edit 2.1.0（语义类 + 字节 + 权限）"

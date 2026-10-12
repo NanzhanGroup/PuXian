@@ -175,13 +175,21 @@ check_codegen_file() {
 # ---- M-B5：值系统对拍（v0*.px 全 [PASS]） ----
 prepare_m5_modtest() {
     local d=/tmp/px_m5_modtest
-    if [ ! -d "$d" ]; then
-        mkdir -p "$d/pkg" "$d/lib" "$d/stdlib"
-        echo 'def mylib_fn(): return 1' > "$d/mylib.px"
-        echo 'def tool(): return 2' > "$d/pkg/tools.px"
-        echo 'def libfn(): return 3' > "$d/lib/mod.px"
-        echo 'def unique(): return 4' > "$d/stdlib/collections.px"
+    # ⚠️ M304（2026-10-12 · 分片首航实测）：本函数**必须被 `--interp` 分支也调用** ——
+    #   `--interp` 会跑 `cases/v0*.px`（含 v03_module），而 v03 的 4 条 `module_find` 断言
+    #   依赖本目录。修前只有 `--value` / `--all` 建它 ⇒ **干净机器（或私有 /tmp）上 v03 必失败**；
+    #   本机长期"绿"只是因为 /tmp 里留着 10-05 的残留目录（实测 mtime `Oct 5 05:34`）。
+    #   ⇒ 由「依赖外部残留」改成「**自备前提**」。
+    # 幂等判据从「目录存在」改成「**4 个文件齐**」：目录在而文件缺（半创建 / 被人删）时也能自愈。
+    if [ -f "$d/mylib.px" ] && [ -f "$d/pkg/tools.px" ] \
+       && [ -f "$d/lib/mod.px" ] && [ -f "$d/stdlib/collections.px" ]; then
+        return 0
     fi
+    mkdir -p "$d/pkg" "$d/lib" "$d/stdlib"
+    echo 'def mylib_fn(): return 1' > "$d/mylib.px"
+    echo 'def tool(): return 2' > "$d/pkg/tools.px"
+    echo 'def libfn(): return 3' > "$d/lib/mod.px"
+    echo 'def unique(): return 4' > "$d/stdlib/collections.px"
 }
 
 check_value_case() {
@@ -327,6 +335,7 @@ if [ "${1:-}" = "--interp" ]; then
         esac
         check_interp_stdout "$f" "$fail" || fail=1
     done
+    prepare_m5_modtest      # M304：v03_module 的前提必须**自己造**（见该函数头注）
     for f in "$(dirname "$0")"/cases/v0*.px; do
         [ -e "$f" ] || continue
         check_interp_value "$f" "" || fail=1
