@@ -73,12 +73,15 @@ printf '\n══ [2] 真仓扫描 + 规模锚点 + 豁免表 ══\n'
 out="$(python3 "$G" --count 2>&1)"; rc=$?
 printf '%s\n' "$out" | sed 's/^/  | /'
 chk '真仓 rc' "$rc" '0'
-NSED="$(printf '%s' "$out" | grep -o 'sed -i [0-9]*' | head -1 | grep -o '[0-9]*')"
-NSEP="$(printf '%s' "$out" | grep -o '可解析 [0-9]*' | head -1 | grep -o '[0-9]*')"
+# ── M304（2026-10-12）：门槛原本数的是 `sed -i`**个数**，而 m304 把 13 处迁成 `gp_patch`
+#   ⇒ 计数掉到 43/12、当场判红。**根因是判据在数"形态"而不是数"总量"。**
+#   改成数**打桩总数**（sed + gp_patch）：合法迁移不再判红；「扫描器瞎了」仍判红。
+NSED="$(printf '%s' "$out" | grep -o '打桩合计 [0-9]*' | head -1 | grep -o '[0-9]*')"
+NSEP="$(printf '%s' "$out" | grep -o '打桩可解析 [0-9]*' | head -1 | grep -o '[0-9]*')"
 NML="$(printf '%s' "$out" | grep -o '锚点多行 [0-9]*' | head -1 | grep -o '[0-9]*')"
 NWV="$(printf '%s' "$out" | grep -o '豁免 [0-9]*' | head -1 | grep -o '[0-9]*')"
-[ "${NSED:-0}" -ge 45 ] && ok "sed -i 规模（$NSED ≥ 45 · 含行地址写法）" || bad "sed -i 过少（$NSED < 45）"
-[ "${NSEP:-0}" -ge 18 ] && ok "目标可解析（$NSEP ≥ 18）" || bad "可解析过少（$NSEP < 18）"
+[ "${NSED:-0}" -ge 45 ] && ok "打桩总数（$NSED ≥ 45 · sed + gp_patch · 含行地址写法）" || bad "打桩总数过少（$NSED < 45）"
+[ "${NSEP:-0}" -ge 18 ] && ok "打桩目标可解析（$NSEP ≥ 18）" || bad "打桩目标可解析过少（$NSEP < 18）"
 chk '未豁免的多行锚点（本仓应为 0：M200/M196 已修 + M263 已豁免）' "${NML:-x}" '0'
 [ "${NWV:-0}" -ge 1 ] && ok "豁免表生效（$NWV ≥ 1）" || bad "豁免表未生效"
 if [ -f "$TSV" ]; then

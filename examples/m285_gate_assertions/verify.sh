@@ -70,12 +70,16 @@ printf '%s\n' "$out" | sed 's/^/  | /'
 chk '真仓 rc' "$rc" '0'
 NF="$(printf '%s' "$out" | grep -o '扫描 [0-9]* 个' | grep -o '[0-9]*')"
 NG2="$(printf '%s' "$out" | grep -o '判定串 [0-9]*' | head -1 | grep -o '[0-9]*')"
-NSED="$(printf '%s' "$out" | grep -o 'sed -i [0-9]*' | head -1 | grep -o '[0-9]*')"
-NSEP="$(printf '%s' "$out" | grep -o '可解析 [0-9]*' | head -1 | grep -o '[0-9]*')"
+# ── M304：判据从「数 sed」改成「数**打桩总数**（sed + gp_patch）」──
+#   为什么：m304 把 13 处 sed 迁成 gp_patch ⇒ 只数 sed 会让「扫描器没瞎」这条判据
+#   **因为一次合法的形态迁移而变红**（= 判据在数形态，而不是数总量）。
+#   改后：迁移不判红；扫描器真的瞎了（两边都少）仍然判红。
+NSED="$(printf '%s' "$out" | grep -o '打桩合计 [0-9]*' | head -1 | grep -o '[0-9]*')"
+NSEP="$(printf '%s' "$out" | grep -o '打桩可解析 [0-9]*' | head -1 | grep -o '[0-9]*')"
 NTA="$(printf '%s' "$out" | grep -o '目标 [0-9]*' | head -1 | grep -o '[0-9]*')"
 [ "${NF:-0}" -ge 300 ] && ok "扫描面规模（$NF 个 .sh ≥ 300）" || bad "扫描面过窄（$NF < 300）"
-[ "${NSED:-0}" -ge 20 ] && ok "sed -i 规模（$NSED ≥ 20）" || bad "sed -i 过少（$NSED < 20）"
-[ "${NSEP:-0}" -ge 10 ] && ok "sed 目标可解析（$NSEP ≥ 10）" || bad "sed 目标可解析过少（$NSEP < 10）"
+[ "${NSED:-0}" -ge 20 ] && ok "打桩总数（$NSED ≥ 20 · sed + gp_patch）" || bad "打桩总数过少（$NSED < 20）"
+[ "${NSEP:-0}" -ge 10 ] && ok "打桩目标可解析（$NSEP ≥ 10）" || bad "打桩目标可解析过少（$NSEP < 10）"
 [ "${NG2:-0}" -ge 300 ] && ok "判定串规模（$NG2 ≥ 300）" || bad "判定串过少（$NG2 < 300）"
 [ "${NTA:-0}" -ge 10 ] && ok "判定串目标可解析（$NTA ≥ 10）" || bad "目标可解析过少（$NTA < 10）"
 
@@ -132,6 +136,14 @@ printf '#!/usr/bin/env bash\ngrep -q %s运行时黑盒标记%s runtime/vm.h && b
 pk '反向断言（期望缺席）⇒ 不红' "$W/c_neg.sh"
 printf '#!/usr/bin/env bash\nsed -i %s|PXOP_ITERLEN|PXOP_ITERLEN_X|%s runtime/vm.h\ngrep -q PXOP_ITERLEN_X runtime/vm.h || bad %s打桩未生效%s\n' "'s" "'" '"' '"' > "$W/c_post.sh"
 pk '打桩后状态 ⇒ 不红' "$W/c_post.sh"
+# ── M304：打桩的**第二种形态**（`gp_patch`）—— 静态判据必须跟着形态走 ──
+#   来历（2026-10-12 分片首航实测）：m304 把 13 处 sed 迁成 gp_patch 之后，本门 [4] 段的
+#   「回放负控」**当场不再判红**（扫描器只认 sed ⇒ 打桩整条不在视野里 = 判据静默失效）。
+#   ⇒ 这两条把「认不认 gp_patch」变成**本门自己的判据**（而不是靠我记着）。
+printf '#!/usr/bin/env bash\ngp_patch runtime/vm.h %sPXOP_ITERLEN%s %sPXOP_ITERLEN_X%s\n' "'" "'" "'" "'" > "$W/c_gp1.sh"
+pk 'M304-gp_patch 形态·锚点在位 ⇒ 不红' "$W/c_gp1.sh"
+printf '#!/usr/bin/env bash\ngp_patch runtime/runtime.h %sGP_ANCHOR_M304_GONE%s %sGP_X%s\n' "'" "'" "'" "'" > "$W/c_gp2.sh"
+pk 'M304-gp_patch 形态·锚点不在位 ⇒ 判红' "$W/c_gp2.sh" 'A1'
 
 printf '\n══ [6] 负控 3 道（各自独立判红 · 源逐字节还原）══\n'
 snap() { cp -p "$1" "$W/$(basename "$1").snap"; }
@@ -140,12 +152,15 @@ snap "$G"
 trap 'cp -p "$W/check_gate_assertions.py.snap" "$G" 2>/dev/null || true; rm -rf "$W"' EXIT
 
 # NC-A：A1 的在场判定恒真 ⇒ 回放点必须**不再**判红
+#   ⚠️ M304：打桩形态从 1 种变 2 种（sed / gp_patch）后，A1 的判定被**收成单一实现**
+#      `_a1_present()` —— 否则本负控只打中其中一处 ⇒ **只关掉一半** ⇒ 负控失效
+#      （实测：改前 `NC-A：关掉 A1 后仍 rc=1`）。锚点因此从调用点改为函数体那一行。
 python3 - "$G" <<'PY'
 import io, sys
 p = sys.argv[1]
 s = io.open(p, encoding='utf-8').read()
-old = "            if pat_present(old, read(tgt)):"
-new = "            if True:  # NEGCTL-A"
+old = "    return pat_present(old, read(tgt))"
+new = "    return True  # NEGCTL-A"
 if old not in s:
     print("ANCHOR-MISS"); sys.exit(9)
 io.open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))

@@ -43,12 +43,45 @@ def derive_exports(root):
     return out
 
 
-def scan_corpus(root, pats, skip_files):
-    """扫语料面，返回「以调用形态出现过」的标识符集合"""
-    ids = set()
+def _git_tracked(root):
+    """`git ls-files` 的相对路径集合；git 不可用 ⇒ None（调用方回退）。"""
+    try:
+        import subprocess
+        r = subprocess.run(["git", "-C", root, "ls-files", "-z"],
+                           capture_output=True, check=True)
+        s = r.stdout.decode("utf-8", "ignore").split("\0")
+        return set(x for x in s if x)
+    except Exception:
+        return None
+
+
+def _list_corpus_files(root, pats):
+    """语料文件清单 —— **只认 git 跟踪的文件**。
+
+    ⚠️ M304（2026-10-12 · 分片首航实测）：修前是裸 `glob`，于是把 **gitignored 的 build
+       产物**也算进了「覆盖」面。实证：`examples/m142_go_json_indent/build/tamper/go_json_scan.px`
+       是**门自己跑出来的临时文件**，却在替 `go_json_*` 8 个导出「记覆盖」
+       ⇒ 台账的数字取决于「这棵树**跑过门没有**」= **判据被自己的副产品污染**。
+       在 fresh worktree（无残留）上，那 8 个导出当场现形为「新增欠账」判红。
+       ⇒ 覆盖面只认**提交进仓库的东西**；git 不可用时才回退 glob（保持可用性，不静默变空）。
+    """
     files = []
     for pat in pats:
         files += glob.glob(os.path.join(root, pat), recursive=True)
+    tracked = _git_tracked(root)
+    if tracked is None:
+        return files                       # 非 git 树 ⇒ 回退（不改变可用性）
+    out = []
+    for p in files:
+        if os.path.relpath(p, root) in tracked:
+            out.append(p)
+    return out
+
+
+def scan_corpus(root, pats, skip_files):
+    """扫语料面，返回「以调用形态出现过」的标识符集合"""
+    ids = set()
+    files = _list_corpus_files(root, pats)
     for p in files:
         if p in skip_files:
             continue

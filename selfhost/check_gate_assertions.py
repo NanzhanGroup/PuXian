@@ -76,6 +76,22 @@ SED_CALL = re.compile(r'(?<![\w-])sed\b(?P<flags>(?:\s+-[A-Za-z]+)*)\s*(?P<q>[\'
 _SED_ADDR_RE = re.compile(
     r'^(?P<a>\d+|\$|/(?:[^/\\]|\\.)*/)(?:,(?P<b>\d+|\$|/(?:[^/\\]|\\.)*/))?$')
 
+# ── M304（2026-10-12）· 打桩的**第二种形态**：`gp_patch <file> 'OLD' 'NEW' [count]` ──
+#   为什么必须认它：`gp_patch` 与 `sed -i 's|OLD|NEW|' <file>` 是**同一件事的两种写法**
+#   （M304 起为门的负控标准形态，因为 sed 有两类**静默失效**）。
+#   只认 sed ⇒ 迁移后这些打桩在 A1/A4 视野里**整条消失**
+#   （实测：m304 迁移 13 处后，`m285` 门自己的「回放负控」当场不再判红 = 判据静默失效）。
+#   ⇒ **判据必须跟着形态走**，而不是「我只记得 sed」。
+#   ⚠️ 语义差异（如实登记，消息分开写）：
+#     · sed 找不到锚点 ⇒ **静默**（打桩不生效、门照绿）
+#     · gp_patch 找不到 ⇒ **rc=1 响亮**（调用点查 rc ⇒ 门当场红）
+#   所以对 gp_patch 的 A1 判据含义是「打桩已失效」，不是「静默失牙」。
+#   A4（唯一性）**不适用**：gp_patch 的 count 默认 1 且由工具**强制**（多命中即拒写）
+#   ⇒ 不存在「超出声明意图」的事后扫描需求。
+GP_CALL = re.compile(r'(?<![\w-])gp_patch\b\s+(?P<file>[^\s]+)\s+(?P<q>[\'"])(?P<old>.*?)(?P=q)')
+#   JSON 形态（多处 / 多行走 spec 文件）⇒ 本扫描器**不解析**，如实计「未解析」（不许静默跳过）
+GP_SPEC_CALL = re.compile(r'(?<![\w-])gp_patch_spec\b')
+
 
 def _addr_hit(lines, spec, start=0):
     """地址 spec（`/re/` · `N` · `$`）命中的 **0-based 行号**（自 start 起找）；找不到 ⇒ -1。"""
@@ -220,6 +236,18 @@ def assertion_dir(line, after):
     return "pos"
 
 
+def _a1_present(old, tgt):
+    """A1 的「打桩锚点在位」判定 —— **单一实现**（sed 形态与 gp_patch 形态共用）。
+
+    为什么必须收成一处（M304 实测）：M304 起了**第二处** A1（`gp_patch` 形态）之后，
+    本门负控 NC-A（「关掉 A1 ⇒ 破坏锚点不应再判红」）只打中**第一处**
+    ⇒ **只关掉一半** ⇒ 回放点照样判红 ⇒ **负控当场失效**
+    （实测日志：`NC-A：关掉 A1 后仍 rc=1`）。
+    ⇒ 判定收成一个函数：关掉它就是关掉**整个 A1**（两种形态一起）。
+    """
+    return pat_present(old, read(tgt))
+
+
 def scan_file(path, rel, patched_targets, stats=None):
     bad = []
     lines = read(path).split("\n")
@@ -294,10 +322,35 @@ def scan_file(path, rel, patched_targets, stats=None):
                                 "（超出声明意图）· 地址 %s · 目标 %s · OLD %r"
                                 % (_nline, m.group("addr") or "（全文件）",
                                    os.path.relpath(tgt, ROOT), old[:70])))
-            if pat_present(old, read(tgt)):
+            if _a1_present(old, tgt):
                 continue
             bad.append(("A1", i, "打桩锚点不在位：sed 静默不生效 ⇒ 负控失牙 · 目标 %s · OLD %r"
                         % (os.path.relpath(tgt, ROOT), old[:80])))
+        # ── A1（M304）· 第二种打桩形态 `gp_patch <file> 'OLD' 'NEW' [count]` ──
+        #   见 GP_CALL 头注：**判据必须跟着形态走**（否则迁移即判据失效）。
+        for m in GP_SPEC_CALL.finditer(line):
+            if stats is not None:
+                stats["gp_n"] += 1
+                stats["gp_unres"] += 1        # spec 形态不解析（如实计，不许静默吞掉）
+        for m in GP_CALL.finditer(line):
+            # 定位用 masked（注释/消息里提到的 gp_patch 不算命令）
+            if masked[m.start():m.start() + 8] != line[m.start():m.start() + 8]:
+                continue
+            if stats is not None:
+                stats["gp_n"] += 1
+            old = m.group("old")
+            tgt = repo_path(m.group("file"))
+            if not tgt or not old.strip():
+                if stats is not None:
+                    stats["gp_unres"] += 1
+                continue                  # 目标不可解析（变量 / $W / /tmp）⇒ 不判
+            if stats is not None:
+                stats["gp_app"] += 1
+            patched_targets.add(tgt)
+            if _a1_present(old, tgt):
+                continue
+            bad.append(("A1", i, "打桩锚点不在位：gp_patch 会 rc=1 拒绝写入（**响亮**，非静默）· "
+                        "目标 %s · OLD %r" % (os.path.relpath(tgt, ROOT), old[:80])))
     # ── A2 判据串在场 ──
     for i, line in enumerate(lines, 1):
         if line.strip().startswith("#") or "grep" not in line:
@@ -362,6 +415,7 @@ def run_repo(verbose=True):
     patched, n_viol = set(), 0
     stats = collections.OrderedDict((k, 0) for k in
                                     ("files", "grep", "sed_i", "sed_app", "sed_unres",
+                                     "gp_n", "gp_app", "gp_unres",
                                      "a2_str", "a2_target", "a2_fallback",
                                      "a4_multi", "a4_waived"))
     for f in files:
@@ -381,10 +435,13 @@ def run_repo(verbose=True):
                 print("  ❌ %s [A4] 豁免登记过期：该处已不再锚点多行（表里有、实测没有）" % _k)
     if verbose:
         print("扫描 %d 个 .sh · grep %d · sed -i %d（可解析 %d / 跳过 %d）· "
+              "gp_patch %d（可解析 %d / 未解析 %d）· 打桩合计 %d · 打桩可解析 %d · "
               "判定串 %d（目标可解析 %d / 兜底 %d）· "
               "锚点多行 %d（豁免 %d / 整行替换 %d）· 违例 %d"
               % (stats["files"], stats["grep"], stats["sed_i"], stats["sed_app"],
-                 stats["sed_unres"], stats["a2_str"], stats["a2_target"],
+                 stats["sed_unres"], stats["gp_n"], stats["gp_app"], stats["gp_unres"],
+                 stats["sed_i"] + stats["gp_n"], stats["sed_app"] + stats["gp_app"],
+                 stats["a2_str"], stats["a2_target"],
                  stats["a2_fallback"], stats["a4_multi"], stats["a4_waived"], stats.get("whole_line", 0), n_viol))
     return stats, n_viol
 
@@ -423,6 +480,15 @@ grep -q '%s' runtime/runtime.h || { bad "锚点缺失"; exit 2; }
     "bad_a2_pat.sh": """#!/usr/bin/env bash
 if tail -60 /tmp/g.log | grep -q '%s'; then echo green; fi
 """ % FAB_CRIT,
+    # ── M304：打桩的**第二种形态**（`gp_patch`）必须有夹具 ──
+    #   没有它 ⇒ 「扫描器认不认 gp_patch」这件事**无人看守**，今天这种漏就会被再犯一次。
+    "ok_gp.sh": """#!/usr/bin/env bash
+set -uo pipefail
+gp_patch runtime/vm.h 'PXOP_ITERLEN' 'PXOP_ITERLEN_X' || exit 2
+""",
+    "bad_a1_gp.sh": """#!/usr/bin/env bash
+gp_patch runtime/runtime.h 'GP_ANCHOR_M304_IS_GONE' 'GP_X'
+""",
 }
 
 
@@ -474,7 +540,8 @@ def self_test():
             with open(os.path.join(dd, name), "w", encoding="utf-8") as fh:
                 fh.write(body)
     ok = fail = 0
-    want = {"ok_gate.sh": [], "bad_a1.sh": ["A1"], "bad_a2_file.sh": ["A2"], "bad_a2_pat.sh": ["A2"]}
+    want = {"ok_gate.sh": [], "bad_a1.sh": ["A1"], "bad_a2_file.sh": ["A2"], "bad_a2_pat.sh": ["A2"],
+            "ok_gp.sh": [], "bad_a1_gp.sh": ["A1"]}
     want2 = {"a4_target.txt": [], "bad_a4_multi.sh": ["A4"], "ok_a4_range.sh": [],
              "a4_target2.txt": [], "bad_a4_range2.sh": ["A4"],
              "a4_target3.txt": [], "bad_a4_miss.sh": ["A1r"],
@@ -566,9 +633,12 @@ def main():
         return 1 if tot else 0
     stats, n_viol = run_repo(verbose="--count" not in args)
     if "--count" in args:
-        print("扫描 %d 个 .sh · grep %d · sed -i %d（可解析 %d）· 判定串 %d（目标 %d / 兜底 %d）"
+        print("扫描 %d 个 .sh · grep %d · sed -i %d（可解析 %d）· gp_patch %d（可解析 %d）"
+              " · 打桩合计 %d · 打桩可解析 %d · 判定串 %d（目标 %d / 兜底 %d）"
               " · 锚点多行 %d（豁免 %d / 整行替换 %d）· 违例 %d"
               % (stats["files"], stats["grep"], stats["sed_i"], stats["sed_app"],
+                 stats["gp_n"], stats["gp_app"],
+                 stats["sed_i"] + stats["gp_n"], stats["sed_app"] + stats["gp_app"],
                  stats["a2_str"], stats["a2_target"], stats["a2_fallback"],
                  stats["a4_multi"], stats["a4_waived"], stats.get("whole_line", 0), n_viol))
     return 1 if n_viol else 0

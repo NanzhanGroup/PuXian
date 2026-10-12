@@ -72,6 +72,25 @@ if [ ! -f "$GEN" ] || [ ! -f "$REF" ]; then bad "[1e] 缺 gen.py / ref.py"; else
   else bad "[1i] 缺 $AK"; fi
   ncase="$(grep -vc '^#' "$HERE/CASES.tsv")"
   if [ "$ncase" -ge 300 ] 2>/dev/null; then ok "[1h] 用例规模 $ncase（≥300）"; else bad "[1h] 用例仅 $ncase（<300）"; fi
+  # ── [1j] M304：扫描面**只认 git 跟踪文件** —— 未跟踪文件不得影响台账 ──
+  #   来历（2026-10-12 分片首航实测）：扫描面此前用裸 glob ⇒ **gitignored 的 build 残留**
+  #   （`examples/m142…/build/tamper/go_json_scan.px` = 门自己跑出来的模块副本）在替
+  #   `go_json_scan` 的 32 个内部函数"记覆盖" ⇒ 台账数字取决于「这棵树跑过门没有」。
+  #   判据是**正**的（不是"我记着别再犯"）：造一个**未跟踪**的 examples/ 文件去调用一个
+  #   **未覆盖**导出 ⇒ 未提及数**必须不变**；只有这样，"跟踪文件才允许改变它"才被证明。
+  #   ⚠️ 文件名不得以 `.` 开头 —— glob 默认不匹配点文件 ⇒ 那样测的是"glob 不匹配点文件"，
+  #      而不是"扫描面只认跟踪文件"（首版就差点写成 `.untracked_probe.px`）。
+  JUNK="$HERE/zz_untracked_probe.px"
+  # ⚠️ 名字必须**拼接**出来：本文件是**被跟踪**的，若这里直接写出「函数名紧跟左括号」的形态，
+  #    扫描器会把它当成"门语料调用过该导出" ⇒ **本门自己的判据串改了自己的台账**
+  #    （实测：首版写完，未提及 200 → 199，[1b]/[1c] 当场判红）。与 M285 夹具同款做法。
+  NM='cj_''is_int'
+  printf 'def zz_probe(): return %s(1)\n' "$NM" > "$JUNK"
+  python3 "$COV" --root "$ROOT" --json "$W/cov_j.json" >/dev/null 2>&1
+  uj="$(jq_ "$W/cov_j.json" "d['uncovered']")"
+  rm -f "$JUNK"
+  if [ "${uj:-x}" = "$u" ]; then ok "[1j] 未跟踪文件不影响台账（未提及 $u 不变）"
+  else bad "[1j] 未跟踪文件改变了台账（未提及 $u → $uj）⇒ 扫描面又被副产品污染"; fi
 fi
 
 # ── [2] 三轨对拍 ────────────────────────────────────────────

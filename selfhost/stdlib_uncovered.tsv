@@ -1,170 +1,217 @@
 # stdlib 覆盖面台账基线（**只减不增**）· 未提及的门语料函数
 # 格式：<module>.<fn>	<理由>
-# cap=167
-cookiejar.cj_is_int	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+#
+# ⚠️ M304（2026-10-12 · 分片首航实测）· **cap 167 → 200 的一次性说明**：
+#   扫描面此前用裸 glob ⇒ 把 **gitignored 的 build 产物**也算进"覆盖"面。
+#   实证：`examples/m142_go_json_indent/build/tamper/go_json_scan.px`（**门自己跑出来的**
+#   模块副本）在替 `go_json_scan` 的 32 个内部函数「记覆盖」。
+#   ⇒ 台账数字取决于「这棵树跑过门没有」= **判据被自己的副产品污染**。
+#   修法：扫描面限定 **git 跟踪文件**（`git ls-files`）。
+#   ⇒ 于是 +33 条（go_json_scan 32 + go_json_indent 1）**真实存量欠账**浮出水面。
+#   ⚠️ 这是**度量更正**（债没增加，是账变准了），不是新增债务；cap 随之上调一次。
+#   ⚠️ 它们多为**模块内部**helper（`gji_newline` / `gjs_s_*` 状态标签），外部本就极少直接调用
+#      ⇒ 不写"假语料"去凑覆盖（那比账难看更糟）；如实入账。
+#   ⚠️ 防复发：`examples/m300_stdlib_surface2/verify.sh` [1j] 造一个**未跟踪**的 examples/ 文件
+#      调用未覆盖导出 ⇒ 未提及数**必须不变**（正判据，不是靠我记着）。
+#
+# cap=200
 cookiejar.cj_blank	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-cookiejar.cj_parse_setcookie	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+cookiejar.cj_clean	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+cookiejar.cj_domain_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_extract	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+cookiejar.cj_is_int	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+cookiejar.cj_parse_setcookie	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+cookiejar.cj_path_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_put	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_remove	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_url_host	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_url_path	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_url_secure	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.hx_url_find	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-cookiejar.cj_domain_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-cookiejar.cj_path_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-cookiejar.cj_clean	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 edge.gpio_request	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 edge.gpio_wait	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-gfx.canvas_w	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 gfx.canvas_h	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-go_strings.go_prefix	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-go_strings.go_truncate	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+gfx.canvas_w	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+go_json_indent.gji_newline	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_byte0	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_char	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_end_value	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_eof	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_err	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_errtext	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_esc_u	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_is_hex	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_is_space	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_latin1	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_lit	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_new	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_off	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_pop	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_push	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_0	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_1	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_begin_string	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_begin_string_or_empty	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_begin_value	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_begin_value_or_empty	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_dot	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_dot0	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_e	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_e0	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_end_top	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_end_value	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_esign	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_in_string	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_in_string_esc	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_s_neg	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
+go_json_scan.gjs_step	度量更正（M304 · 首次真实计量）：此前仅由 build 残留的模块副本冒充覆盖
 go_strings.go_index	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 go_strings.go_parse_i64	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+go_strings.go_prefix	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+go_strings.go_truncate	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_add_text	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_open	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_close_upto	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-html.hx_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 html.hx_collect	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+html.hx_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+html.hx_open	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 io.write_all	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 io.write_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+jsonx.jp_walk	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 jsonx.json_pretty	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 jsonx.json_pretty_indent	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-jsonx.jp_walk	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+lunar.lr_civil	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 lunar.lr_info	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-lunar.lr_month_days	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 lunar.lr_isleap	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 lunar.lr_mdays	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-lunar.lr_civil	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+lunar.lr_month_days	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 lunar.lr_un_civil	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 multipart.mp_boundary	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 multipart.mp_field_bytes	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 multipart.mp_file_bytes	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 multipart.mp_val_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+path.base_name	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+path.dir_name	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 path.path_clean	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+path.path_ext	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+path.path_is_abs	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 path.path_join	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 path.path_join3	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 path.path_join4	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-path.dir_name	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-path.base_name	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-path.path_ext	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-path.path_is_abs	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_nd	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_isdigit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_isalpha	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_isid0	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_isid	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_is_unit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_dur_ns	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_scan_string	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_scan_number	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_scan_ident	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_tokenize	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_seen	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_tname	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_parse_key	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_parse_value	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-pxml.px_parse_call	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_is_unit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_isalpha	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_isdigit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_isid	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_isid0	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_nd	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_parse_array	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_parse_body	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_parse_call	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_parse_container	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_parse_document	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_parse_key	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_parse_value	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_scan_ident	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_scan_number	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_scan_string	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_seen	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_tname	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+pxml.px_tokenize	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_build_msg	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_code	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_done	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_dot_escape	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_isdigit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_last_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_read_reply	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_reply_done	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_rfind	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_rtrim	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_last_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_reply_done	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_read_reply	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_code	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_send_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_dot_escape	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_build_msg	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_to_list	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-smtp.sm_done	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.smtp_send	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_pad2	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_pad4	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_slice	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_parts	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_off_hhmm	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_off_hh	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_frac	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_render	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.tg_h12	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.go_format	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.go_format_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.go_rfc3339	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.go_rfc3339_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 time_go.go_date	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-time_go.go_date_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 time_go.go_date_time	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 time_go.go_date_time_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.go_date_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.go_format	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.go_format_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 time_go.go_rfc1123	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-webroute.wr_methods	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.go_rfc3339	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.go_rfc3339_tz	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_frac	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_h12	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_off_hh	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_off_hhmm	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_pad2	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_pad4	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_parts	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_render	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+time_go.tg_slice	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 webroute.wr_is_special	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-webroute.wr_seg_to_pattern	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+webroute.wr_methods	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 webroute.wr_parse_file	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+webroute.wr_seg_to_pattern	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_esc_dq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_item_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_key_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_kv_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_needs_quote	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml.yl_parse_block	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml.yl_parse_map	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml.yl_parse_seq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_sp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_needs_quote	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_esc_dq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_key_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_scalar_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_render_key	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_kv_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_seq_map	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml.yl_item_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml.yl_render	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.yl_nd	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.yl_hexv	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_render_key	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_scalar_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_seq_map	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml.yl_sp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lex.yl_cp_utf8	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.yl_hexv	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.yl_is_seq_item	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.yl_nd	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.yl_parse_scalar	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.yl_split_kv	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lex.yl_unescape_dq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lex.yl_unquote	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lex.ylf_balanced	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lex.ylf_flow_kind	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.ylf_split_top	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.ylf_split_first_colon	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lex.ylf_parse_flow	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.yl_parse_scalar	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.yl_split_kv	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lex.yl_is_seq_item	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_isd	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_isws	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_strip_comment	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_prep_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_lit_header	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.ylf_split_first_colon	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lex.ylf_split_top	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_build_lines	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lines.yl_collect_literal	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_lit_quote	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_cp_ord	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lines.yl_dq_escape	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yaml_lines.yl_hex4	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_cp_ord	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yaml_lines.yl_build_lines	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_hex	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_dq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_cp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_sq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_literal_text	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_float_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_scalar_chunk	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_key_text	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_join	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_dict_chunks	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx.ylx_list_chunks	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_isd	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_isws	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_lit_header	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_lit_quote	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_prep_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yaml_lines.yl_strip_comment	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yamlx.yaml_stringify_go	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_pad	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_round4	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_break	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_cp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_dict_chunks	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_dq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_float_str	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_hex	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_join	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_key_text	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_list_chunks	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_literal_text	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_scalar_chunk	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx.ylx_sq	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yamlx_style.ylx_byte_len	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_printable	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_old_bool	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_base60	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_int	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_float	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
-yamlx_style.ylx_is_timestamp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yamlx_style.ylx_date_ok	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_base60	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_break	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_float	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_int	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_old_bool	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_printable	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_is_timestamp	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_pad	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yamlx_style.ylx_resolve_nonstring	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+yamlx_style.ylx_round4	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 yamlx_style.ylx_style	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
