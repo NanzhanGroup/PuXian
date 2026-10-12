@@ -1498,3 +1498,4 @@ run m299_wake_channel bash examples/m299_wake_channel/verify.sh
 run m300_stdlib_surface2 bash examples/m300_stdlib_surface2/verify.sh
 run m301_argcount bash examples/m301_argcount/verify.sh
 run m302_stdlib_surface3 bash examples/m302_stdlib_surface3/verify.sh
+run m304_patch_primitive bash examples/m304_patch_primitive/verify.sh

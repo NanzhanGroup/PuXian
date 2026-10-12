@@ -38,6 +38,7 @@
 # 退出码：0=绿 1=红 2=门自身前置自查失败
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
+. "$(dirname "$0")/../../selfhost/gate_patch.sh" || { echo "❌ [M304] 打桩原语 source 失败（selfhost/gate_patch.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -152,7 +153,8 @@ if [ "$NEG" = 1 ]; then
     echo "=== [3] 负控（各自独立判红 · 源逐字节还原）==="
     # A：删注册 ⇒ 三轨 R1001
     restore_all; snapshot
-    sed -i 's|^    px_set_global("bytes_to_dec", px_native("bytes_to_dec", bi_bytes_to_dec));|    /* NEGCTL-A */|' runtime/runtime.c
+    gp_patch runtime/runtime.c '    px_set_global("bytes_to_dec", px_native("bytes_to_dec", bi_bytes_to_dec));' '    /* NEGCTL-A */' \
+        || { echo "  FAIL [3A] 打桩失败（M304 gp_patch：OLD 未命中）"; fail=$((fail+1)); }
     grep -q 'NEGCTL-A' runtime/runtime.c || { echo "  FAIL [3A] 打桩失败"; fail=$((fail+1)); }
     build3 dec_pos >/dev/null 2>&1
     chk "[3A] 删注册 ⇒ 正例三轨判红" "! judge3 dec_pos \"\$WANT\""
@@ -168,7 +170,8 @@ if [ "$NEG" = 1 ]; then
     fi
     # C：宽度上限 16 → 8 ⇒ 仅 d16/d17 红
     restore_all; snapshot
-    sed -i 's|if (len < 1 \|\| len > 16) px_error("R1003: bytes_to_dec 需要 1..16 字节|if (len < 1 \|\| len > 8) px_error("R1003: bytes_to_dec 需要 1..8 字节|' runtime/runtime.c
+    gp_patch runtime/runtime.c 'if (len < 1 || len > 16) px_error("R1003: bytes_to_dec 需要 1..16 字节' 'if (len < 1 || len > 8) px_error("R1003: bytes_to_dec 需要 1..8 字节' \
+        || { echo "  FAIL [3C] 打桩失败（M304 gp_patch：OLD 未命中）"; fail=$((fail+1)); }
     if grep -q 'bytes_to_dec 需要 1..8 字节' runtime/runtime.c; then
         build3 dec_pos >/dev/null 2>&1
         chk "[3C] 宽度上限改 8 ⇒ 正例判红（d16/d17 = u128 用例）" "! judge3 dec_pos \"\$WANT\""

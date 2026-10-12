@@ -8,7 +8,7 @@
 #
 # 用法：
 #   watch_chain.sh <里程碑号> <门日志> --pid <门PID> [--times t.tsv]
-#                  [--runner run_gates.sh] [--tag-push] [--dry]
+#                  [--runner run_gates.sh] [--no-push] [--dry]
 # 行为：
 #   GREEN        ⇒ resolve-topic m<N> · make_tag --milestone N --push（默认）· p0
 #   RED          ⇒ p1 m<N>-red（挂 p1 即**唤醒**东月 —— 见下方 v2/v3 说明）
@@ -37,7 +37,7 @@ cd "$(cd "$(dirname "$0")/../.." && pwd)"
 N="${1:-}"; LOG="${2:-}"
 [ -n "$N" ] && [ -n "$LOG" ] || {
     echo "用法：watch_chain.sh <里程碑号> <门日志> --pid <门PID> [--times t.tsv]" >&2
-    echo "      [--runner run_gates.sh] [--tag-push] [--dry]" >&2
+    echo "      [--runner run_gates.sh] [--no-push] [--dry]" >&2
     exit 4
 }
 shift 2

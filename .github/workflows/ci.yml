@@ -1262,6 +1262,11 @@ jobs:
           bash examples/m302_stdlib_surface3/verify.sh --neg-skip > /tmp/v_m302.log 2>&1 || { echo "❌ m302 门失败（静态 7 处修复在位 · 647 例三轨对拍 · 独立真值 ref.py · 契约表双向 · 非法侧响亮指名）"; grep -E '^(  ❌|     |        )' /tmp/v_m302.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m302_stdlib_surface3（semver+html 35 导出 × 647 例 × 三轨 × 2 遍 = 3882 次执行 · 缺陷 520-526）PASS"
 
+      - name: m304_patch_primitive（打桩原语：sed → 零转义·失败响亮 · 缺陷 523 同族 · M304）
+        run: |
+          bash examples/m304_patch_primitive/verify.sh --neg-skip > /tmp/v_m304.log 2>&1 || { echo "❌ m304 门失败（静态四性质 · 原语自证 28 断言 · 差分形态层 · 负控 A/B/C）"; grep -E '^(  ❌|     |        )' /tmp/v_m304.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m304_patch_primitive（sed 形状层 differ=8/silent=1 · 原语自证 28 断言 · 差分 12/12）PASS"
+
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |

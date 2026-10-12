@@ -24,6 +24,7 @@
 # 退出码：0=绿 1=红 2=门自身前置自查失败
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
+. "$(dirname "$0")/../../selfhost/gate_patch.sh" || { echo "❌ [M304] 打桩原语 source 失败（selfhost/gate_patch.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -139,13 +140,15 @@ if [ "$NEG" = 1 ]; then
 
     # A 静态：去掉一处 INT 检查（read_at 偏移）⇒ [S5] 必须判红
     restore_all; snapshot
-    sed -i 's|px_arg_int(args\[1\], "read_at", "偏移")|int_val(args[1])|' runtime/runtime.c
+    gp_patch runtime/runtime.c 'px_arg_int(args[1], "read_at", "偏移")' 'int_val(args[1])' \
+        || { echo "  FAIL [3A] 打桩失败（M304 gp_patch：OLD 未命中）"; fail=$((fail+1)); }
     static_ok
     chk "[3A] 去掉 read_at 偏移的检查 ⇒ [S5] 判红" "[ \$? != 0 ] && grep -q 'read_at' '$W/static.log' && grep -qE '缺检查 [1-9]' '$W/static.log'"
 
     # B 静态：去掉一处 STR 检查（s3_get endpoint）⇒ [S5] 必须判红
     restore_all; snapshot
-    sed -i 's|px_arg_str(args\[0\], "s3_get", "endpoint")|val_cstr(args[0])|' runtime/runtime.c
+    gp_patch runtime/runtime.c 'px_arg_str(args[0], "s3_get", "endpoint")' 'val_cstr(args[0])' \
+        || { echo "  FAIL [3B] 打桩失败（M304 gp_patch：OLD 未命中）"; fail=$((fail+1)); }
     static_ok
     chk "[3B] 去掉 s3_get endpoint 的检查 ⇒ [S5] 判红" "[ \$? != 0 ] && grep -q 's3_get' '$W/static.log' && grep -qE '缺检查 [1-9]' '$W/static.log'"
 
