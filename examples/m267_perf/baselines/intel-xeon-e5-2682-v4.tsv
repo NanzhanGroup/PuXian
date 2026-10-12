@@ -1,0 +1,24 @@
+# M267 性能回归基线 —— **Xeon 档**（2026-10-12 宿主冷迁移后重定基 · M305）
+# machine-sig: intel-xeon-e5-2682-v4
+# 生成机：dongyue · Intel(R) Xeon(R) CPU E5-2682 v4 @ 2.50GHz · 8 核
+# 工具链：px 0.2.281 · gcc 11 · 2026-10-12T12:44:15Z
+# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>
+# ⚠️ 绝对值只对**同机同工具链**有意义；判据是**相对变化**。
+# 采集：3 组独立采集（12:37Z/12:40Z/12:41Z 起）· 固化值 = 各组的 **min**
+# 来历：M305（环境感知档）。amd-epyc-7k62.tsv **保留**作跨机对照。
+# 跨机对照（Xeon ÷ EPYC）：纯计算 1.41–1.59× · 内存/缓存敏感 1.92–2.33× · onnx_mm1024 **0.61×（反而更快）**
+#   ⚠️ 崩塌比（512³ ÷ 1024³ 的 GFLOPS）：EPYC = 1.103/0.294 = 3.75× ⇒ Xeon = 0.649/0.483 = **1.34×**
+#      EPYC 架构特性（分片 L3 / TLB 行为）。**直接后果：路线 S3（MatMul 分块 + B 预转置）
+#      在 Xeon 上的收益预期需下调** —— 这正是「跨机不可比」风险的实例。
+fib28_vm       run      s      1.5608     纯递归 fib(28)x5 —— 纯计算最坏情形（VM 轨）
+fib28_c        run      s      0.3676     纯递归 fib(28)x5 —— C 轨（比值锚）
+while_sum_vm   run      s      0.475      纯算术/比较/JMP 3M —— 专盯每指令固定开销漂移（VM 轨）
+while_sum_c    run      s      0.1031     纯算术 3M —— C 轨（比值锚）
+mixed_vm       run      s      0.9673     dict+list+str 20 万次 —— 生产形态 IO/字典型（VM 轨）
+mixed_c        run      s      0.9554     dict+list+str 20 万次 —— C 轨（比值锚）
+jsonwb_vm      run      s      3.0583     JSON 2 万对象 构→串→解 —— 生产形态（VM 轨）
+jsonwb_c       run      s      3.1418     JSON 2 万对象 —— C 轨（比值锚）
+startup_exec   startup  s      0.003342   空程序连跑 200 次 / 200（进程启动开销）
+hot_build      build    s      1.0572     px build 热缓存（空程序，含自动裁剪）
+onnx_mm512     onnx     s      2.0675     ONNX MatMul 512³ ×5 —— 常规内核区（无跨页崩塌）
+onnx_mm1024    onnx     s      4.4471     ONNX MatMul 1024³ ×1 —— 跨页崩塌探针（本机慢 1.34× · EPYC 档为 3.75× · 路线 S3 的靶子）
