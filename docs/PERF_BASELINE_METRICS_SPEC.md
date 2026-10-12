@@ -5,7 +5,7 @@
 > 一律按本文件的**基准场景 / 采样轮次 / 统计量 / 运行环境**执行；任何与本文件不符的跑法，其数字**不得入基线**。
 > 上游依据：清歌《PuXian 下一步发展方案 v1》§2.5 + P0-1、清歌《性能基线 v2》、晨曦《px run 解释轨性能》。
 > 落地现状（本文件对齐的既有资产）：`docs/PERF_BASELINE_V2.md`（v2 全谱与来历）、
-> `examples/m267_perf/verify.sh`（性能回归门）、`examples/m267_perf/baseline.tsv`（门用基线表）、
+> `examples/m267_perf/verify.sh`（性能回归门）、`examples/m267_perf/baselines/`（门用基线档 · 每机一档）、
 > `examples/m89_perf/bench_vm_vs_c.sh`（M89 旧生成器，M266 已修复）。
 > **自校验**：本文件「§10 参数一致性自校验」由 `examples/m267_perf/check_spec_consistency.sh` **机器核对**；
 > 若该脚本不通过（`SPEC-CONSISTENCY-OK` 未出现），本文件即视为**未生效**。
@@ -55,7 +55,7 @@ strings -a <bin> | grep -c '^fn_'      # C 轨 ≥ 1；VM 轨 == 0
 | — | `startup_exec`（空程序连跑 200 次） | 进程启动 | startup | 解释/链接/初始化固定成本 |
 | — | `hot_build`（空程序，热缓存） | 构建 | build | 迭代手感；链路/裁剪回归 |
 
-> 源码：`examples/m267_perf/src/{fib28,while_sum,mixed,jsonwb}.px`；基线表：`examples/m267_perf/baseline.tsv`。
+> 源码：`examples/m267_perf/src/{fib28,while_sum,mixed,jsonwb}.px`；基线档：`examples/m267_perf/baselines/<cpu-signature>.tsv`（M305 环境感知档）。
 > **每条 run 负载必须 VM / C 成对登记**（缺一即门自检判红）。
 
 ### 2.2 Tier-2 · 全谱（`docs/PERF_BASELINE_V2.md` §五，8 负载 × 双轨）
@@ -127,7 +127,16 @@ Tier-2 用于重定基文档的「VM/C 全谱」，**不要求每次门运行**�
 
 ## 5 基线文件格式（单一事实源）
 
-**文件**：`examples/m267_perf/baseline.tsv`（门直接读取，**基线清单的唯一来源**）。
+**文件**：`examples/m267_perf/baselines/<cpu-signature>.tsv`（**每台机器一档**；门按本机 CPU 签名选档）。
+
+> ⭐ **M305 档位机制**（2026-10-12 宿主冷迁移：EPYC 7K62 → Xeon E5-2682 v4 后建立）：
+> * 本机档存在 ⇒ 相对**本机档**判（严格）；
+> * 本机档缺失（如 CI runner）⇒ 用「各档**逐负载 max**」**合成档**
+>   （跨机绝对值本就不可比 ⇒ 上限判据自动宽松，但**下限判据不变**，仍能抓“负载没真跑”）；
+> * 签名单一实现：`examples/m267_perf/machine_sig.sh`（`verify.sh` 与 `check_spec_consistency.sh` 共用）；
+> * 在陌生机器上想看到严格判据：先 `bash verify.sh --update` 建本机档。
+> * **环境随档**（档头注自带 machine-sig / 生成机 / 工具链），
+>   SPEC 不再断言“实机必须匹配某个固定 CPU/px 版本”—— 那类断言只会变成假红源。
 
 **表头（`#` 注释，人可读 + 换机指引，缺则门自检判红）**：
 
@@ -226,7 +235,7 @@ bash examples/m267_perf/verify.sh --neg     # 负控（4 道各自独立判红�
 | **本文件** | **口径唯一尺** | — |
 | `docs/PERF_BASELINE_V2.md` | v2 全谱与来历 | 数字层；口径服从本文件 |
 | `examples/m267_perf/verify.sh` | 门实现 | **本口径的机器执行体** |
-| `examples/m267_perf/baseline.tsv` | 门用基线表 | 本口径 §5 格式 |
+| `examples/m267_perf/baselines/*.tsv` | 门用基线档（每机一档） | 本口径 §5 格式 |
 | `examples/m89_perf/bench_vm_vs_c.sh` | 旧生成器 | M266 已修（`--vm`→`--c` + 身份自检）；遗留 `median`/无 `taskset` 见 §10.3 |
 
 ---
@@ -234,7 +243,7 @@ bash examples/m267_perf/verify.sh --neg     # 负控（4 道各自独立判红�
 ## 10 参数一致性自校验（本任务内机器核对）
 
 由 `examples/m267_perf/check_spec_consistency.sh` 提取本文件的**机器可读参数块**，
-与 `verify.sh` / `baseline.tsv` / 实机环境逐项比对；通过输出 `SPEC-CONSISTENCY-OK`。
+与 `verify.sh` / `baselines/` 档 / 实机环境逐项比对；通过输出 `SPEC-CONSISTENCY-OK`。
 
 ### 10.1 声明参数（机器可读块）
 
@@ -255,16 +264,16 @@ full_loads=fib28 fib26 while_sum loop_sum mixed jsonwb textscan stridx64k
 identity_cmd=strings -a BIN | grep -c '^fn_'
 identity_c_ge=1
 identity_vm_eq=0
-baseline_file=examples/m267_perf/baseline.tsv
+baseline_dir=examples/m267_perf/baselines
+baseline_min_count=1
+baseline_env_keys=machine-sig 生成机 工具链
 baseline_format=name kind:run|startup|build unit seconds note
 gate_script=examples/m267_perf/verify.sh
 gate_registry_line=run m267_perf bash examples/m267_perf/verify.sh
-env_cpu=AMD EPYC 7K62
-env_cores=8
-env_mem_gib=15
-env_os=Rocky Linux 9.8
-env_gcc=11.5.0
-env_px=0.2.17
+# ⭐ M305：env_cpu/env_cores/env_gcc/env_px/env_os/env_mem_gib 六项**已移除** ——
+#   “环境随档”（baselines/<cpu-signature>.tsv 自带环境头注），不再由 SPEC 写死
+#   “实机必须匹配”。理由：这些量随机器/版本变（env_px 自 M271 起就与实机脱节），
+#   写死在口径里只会变成“每轮必红的假红源”。
 # <<< SPEC-PARAMS <<<
 ```
 
@@ -274,13 +283,13 @@ env_px=0.2.17
 |---|---|---|---|---|
 | 钉核 | `taskset -c 3` | `PIN="taskset -c 3"`（`command -v taskset` 守卫） | `taskset` 存在 | ✅ |
 | run 轮次 | 5 | `REPS="${M267_REPS:-5}"` | — | ✅ |
-| run 统计量 | min | `time_run`: `… \| sort -n \| head -1` | baseline.tsv 采 min | ✅ |
+| run 统计量 | min | `time_run`: `… \| sort -n \| head -1` | 档文件采 min | ✅ |
 | 启动次数 | 200 | `for _ in $(seq 200)`，`/200` | `startup_exec=0.001500` | ✅ |
 | 热构建预热 | 2 | `for _ in 1 2; do …; done` 后计时 1 次 | `hot_build=0.540` | ✅ |
 | warn | 1.25 | `WARN_R="${M267_WARN:-1.25}"` | — | ✅ |
 | fail | 2.00 | `FAIL_R="${M267_FAIL:-2.00}"` | — | ✅ |
 | 两轮确认 | 2 | 首轮超 fail ⇒ `measure_one` 复测取 min | — | ✅ |
-| 门内负载 | 4 | `LOADS="fib28 while_sum mixed jsonwb"` | baseline.tsv 4×双轨+2 | ✅ |
+| 门内负载 | 4 | `LOADS="fib28 while_sum mixed jsonwb"` | 档文件 4×双轨+2 | ✅ |
 | 身份自检 | C≥1 / VM=0 | `check_identity`: `grep -c '^fn_'` | — | ✅ |
 | 基线格式 | §5 | `read_baseline` 按 5 列解析 | 表头 4 行 | ✅ |
 | 门注册 | 1 行 | `selfhost/gates.registry.sh:1001` | — | ✅ |
@@ -303,7 +312,7 @@ env_px=0.2.17
 
 ## 11 自校验结论
 
-- 本文件 §10.1 声明参数与 `examples/m267_perf/verify.sh`、`examples/m267_perf/baseline.tsv`、
+- 本文件 §10.1 声明参数与 `examples/m267_perf/verify.sh`、`examples/m267_perf/baselines/`、
   `selfhost/gates.registry.sh` 及实机环境**逐项一致**（§10.2 全绿）。
 - 唯一不一致项集中在**旧生成器** `bench_vm_vs_c.sh`（§10.3 I1–I3），已显式登记隔离，**不入门基线**。
-- ⇒ 本口径**可直接照做**：`t2` 采集 → `t3` 固化 `baseline.tsv` → `t4/t5` 按 §6 判定。
+- ⇒ 本口径**可直接照做**：`t2` 采集 → `t3` 固化**档文件** → `t4/t5` 按 §6 判定。

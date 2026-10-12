@@ -18,7 +18,7 @@
 # 用法：
 #   bash examples/m267_perf/verify.sh               # 跑门（默认）
 #   bash examples/m267_perf/verify.sh --update       # 刷新基线表（人工确认后提交）
-#   bash examples/m267_perf/verify.sh --neg          # 负控（5 道，各自独立判红）
+#   bash examples/m267_perf/verify.sh --neg          # 负控（6 道，各自独立判红）
 #   bash examples/m267_perf/verify.sh --list         # 列出负载与基线
 #   bash examples/m267_perf/verify.sh --only fib28_vm
 # ── M303（S1）扩展：接入 **ONNX 负载** ──────────────────────────
@@ -26,6 +26,14 @@
 #   两档刻意构成对照：512³ 在"无崩塌"区（1.12 GFLOPS）、1024³ 在**跨页崩塌**区
 #   （本机实测 0.313 GFLOPS ⇒ 慢 3.58×；观音那台同形状慢 13×）⇒ 后者是路线 S3 的靶子。
 #   ⚠️ ONNX 负载**单轨**（vm/c 同一份 C 实现）；kind 记为 `onnx`，与 `run` 区分。
+# ── M305：环境感知基线档（baselines/<cpu-signature>.tsv）──────────
+#   2026-10-12 宿主冷迁移（EPYC 7K62 → Xeon E5-2682 v4）暴露的结构问题：
+#   单一 baseline.tsv 的比值**跨机不可比** ⇒ 门在新机上恒报 4 项红，而那不是回归
+#   （C 轨原生产物同样慢 1.5–2.1× ⇒ 机器本身慢了，与 PuXian 无关）。
+#   选档：本机档存在 ⇒ 相对本机档判（严格）；否则合成「各档逐负载 max」档
+#         （跨机时上限判据宽松但仍有牙，**下限判据不变**）。
+#   在陌生机器上想看到严格判据：先 `--update` 建本机档。
+#   新增用法：`--baselines` 列出所有机器档。
 # 环境：M267_REPS / M267_WARN / M267_FAIL / M267_W / M267_ROOT / M267_DIR / M267_MODELS
 # ══════════════════════════════════════════════════════════════
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -35,7 +43,14 @@ set -uo pipefail
 ROOT="${M267_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 DIR="${M267_DIR:-$ROOT/examples/m267_perf}"
 SRC="$DIR/src"
-BASE="$DIR/baseline.tsv"
+# ⭐ M305（环境感知基线档）：门不再直接读单一 baseline.tsv，而是按**本机 CPU 签名**选档。
+#    2026-10-12 宿主冷迁移（AMD EPYC 7K62 → Intel Xeon E5-2682 v4）后，单一基线的比值
+#    **跨机不可比** ⇒ 门恒报 4 项红（jsonwb×2.0 / startup×2.34 / hot_build×2.23），
+#    而那**不是**回归（C 轨原生产物同样慢 1.5–2.1× ⇒ 是机器本身慢了）。
+#    选档规则：baselines/<sig>.tsv 存在 ⇒ 用它；否则用「各档逐负载 max」合成档
+#    （跨机时仍保留「比最慢参考机还慢 N 倍」这条有牙判据，而不是把上限判据整个放空）。
+BASELINES="$DIR/baselines"
+BASE="${M267_BASE:-}"            # ← 由 select_baseline() 在主入口填（见下）
 PX="$ROOT/tools/px"
 W="${M267_W:-/tmp/m267_perf}"
 REPS="${M267_REPS:-5}"
@@ -44,7 +59,7 @@ FAIL_R="${M267_FAIL:-2.00}"
 LOADS="fib28 while_sum mixed jsonwb"
 # ⭐ M303（S1）新增：**单轨 ONNX 负载**（只有 VM 轨一份产物 —— ONNX 执行全在 runtime 的
 #    C 代码里，两轨跑的是同一个 onnx_exec_run ⇒ vm/c 对照对本类负载无意义）。
-#    它们在 baseline.tsv 里的 kind 是 `onnx`，因此 [1] 层"vm/c 成对登记"那条判据
+#    它们在**选定档**里的 kind 是 `onnx`，因此 [1] 层"vm/c 成对登记"那条判据
 #    （只筛 kind==run）不会误伤它们。
 ONNX_LOADS="onnx_mm512 onnx_mm1024"
 MODELS_DIR="${M267_MODELS:-$W/models}"
@@ -66,7 +81,54 @@ ok()   { echo "  ✅ $*"; PASS=$((PASS+1)); }
 bad()  { echo "  ❌ $*"; FAILN=$((FAILN+1)); }
 info() { echo "  · $*"; }
 
-# ── 负载清单（单一事实源 = baseline.tsv）────────────────────────
+# ── ⭐ M305：环境感知基线档（machine signature → baseline file）──────
+#   machine_sig() 抽到 machine_sig.sh —— **单一实现**（check_spec_consistency.sh 也用）
+. "$DIR/machine_sig.sh" || { echo "❌ 缺 machine_sig.sh（examples/m267_perf/）" >&2; exit 2; }
+
+# 合成档：各档逐负载取 max（= 最宽松但仍可判「比最慢参考机慢 N 倍」）
+synth_baseline() {
+    echo "# M267 性能回归基线 —— **合成档**（本机无档时自动生成，勿提交）"
+    echo "# 合成规则：baselines/*.tsv 逐负载取 **max**"
+    echo "# 用途：在陌生机器（如 CI runner）上仍保留「比最慢参考机还慢 N 倍」这条有牙判据"
+    echo "# 档数：$(ls "$BASELINES"/*.tsv 2>/dev/null | wc -l)"
+    echo "# ⚠️ 跨机绝对值不可比 —— 要在本机做性能回归判据，请先跑：bash verify.sh --update"
+    echo "# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>"
+    echo "# 来历：M267（合成 · M305 档位机制）"
+    awk '
+      /^#/ { next }
+      NF >= 4 {
+        name=$1; kind=$2; unit=$3; val=$4+0
+        note=""; for (i=5; i<=NF; i++) note = note (i>5 ? " " : "") $i
+        if (!(name in mx) || val > mx[name]) { mx[name]=val; kd[name]=kind; un[name]=unit; nt[name]=note }
+        if (!(name in seen)) { seen[name]=1; ord[++n]=name }
+      }
+      END { for (i=1; i<=n; i++) { nm=ord[i]; printf "%-14s %-8s %-6s %-10s %s\n", nm, kd[nm], un[nm], mx[nm], nt[nm] } }
+    ' "$BASELINES"/*.tsv 2>/dev/null
+}
+
+BASE_LABEL=""
+select_baseline() {
+    SIG="${M267_SIG:-$(machine_sig)}"
+    OWN_BASE="$BASELINES/$SIG.tsv"
+    if [ -n "${M267_BASE:-}" ]; then
+        BASE="$M267_BASE"; BASE_LABEL="显式指定（M267_BASE）· sig=$SIG"; return 0
+    fi
+    if [ -f "$OWN_BASE" ]; then
+        BASE="$OWN_BASE"; BASE_LABEL="本机档（$SIG）· 判据 = 相对本机基线"
+    else
+        local n; n=$(ls "$BASELINES"/*.tsv 2>/dev/null | wc -l)
+        if [ "$n" -eq 0 ]; then
+            echo "❌ 基线档缺失：$BASELINES/*.tsv 一份都没有 ⇒ 无法比对（M305 档位机制）" >&2
+            BASE="$BASELINES/__missing__.tsv"
+        else
+            BASE="$W/baseline.synth.tsv"
+            synth_baseline > "$BASE"
+            BASE_LABEL="**合成档**（本机无 $SIG 档）· 上限判据 = 相对各档 max ⇒ 跨机宽松，仅防失控"
+        fi
+    fi
+}
+
+# ── 负载清单（单一事实源 = 选定档）────────────────────────────
 read_baseline() { grep -v '^#' "$BASE" | grep -v '^$'; }
 
 # ── 计时：钉核 + min of N ─────────────────────────────────────
@@ -213,8 +275,10 @@ run_compare() {
 }
 
 update_baseline() {
-    echo "刷新基线（写入 $BASE）"
+    echo "刷新基线（写入 $OWN_BASE）"
+    mkdir -p "$BASELINES"
     { echo "# M267 性能回归基线 —— 由 verify.sh --update 生成"
+      echo "# machine-sig: $SIG"
       echo "# 生成机：$(uname -n) · $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //') · $(nproc) 核"
       echo "# 工具链：$("$PX" --version 2>/dev/null | head -1) · gcc $(gcc -dumpversion 2>/dev/null) · $(date -u +%FT%TZ)"
       echo "# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>"
@@ -223,9 +287,9 @@ update_baseline() {
         local v; v=$(measure_one "$name" "$kind")
         printf "%-14s %-8s %-6s %-10s %s\n" "$name" "$kind" "$unit" "$v" "$note"
       done < <(read_baseline)
-    } > "$BASE.new"
-    mv "$BASE.new" "$BASE"
-    echo "已写入。请 git diff 核对后提交。"
+    } > "$OWN_BASE.new"
+    mv "$OWN_BASE.new" "$OWN_BASE"
+    echo "已写入 $OWN_BASE。请 git diff 核对后提交。"
 }
 
 # ── 负控 ──────────────────────────────────────────────────────
@@ -275,9 +339,20 @@ run_neg() {
     cp "$W/base.bak" "$BASE"
     if [ "$ne" -ge 1 ]; then echo "  ✅ NC-E 生效（$ne 个负载触发下限判据）"; else echo "  ❌ NC-E 未生效：快得不可能却没判红"; rc_all=1; fi
 
-    # ── 还原核对：负控跑完 baseline.tsv 必须**逐字节回到原样** ──
+    # ── NC-F（M305 新增）档位回退：伪造签名 ⇒ 必须走「合成档」 ──
+    #    为什么用 `--list` + PX_GATE_LOCK_HELD=1：门内**不能重入**加锁（gate_lock 是门级互斥）。
+    #    `--list` 只读，不构建、不改档 ⇒ 安全；与 mount 无任何冲突。
+    echo "── NC-F 档位回退：伪造签名 ⇒ 必须走「合成档」（而非无声拿错档）"
+    PX_GATE_LOCK_HELD=1 M267_SIG=zzz-no-such-cpu M267_W="$W/ncf" bash "$0" --list > "$W/ncf.log" 2>&1
+    if grep -q '合成档' "$W/ncf.log"; then
+        echo "  ✅ NC-F 生效：无本机档 ⇒ 走合成档（上限判据退为「各档 max」，不再恒红）"
+    else
+        echo "  ❌ NC-F 未生效：无本机档却没有走合成档"; rc_all=1
+    fi
+
+    # ── 还原核对：负控跑完**选定档**必须**逐字节回到原样** ──
     local h1; h1=$(sha256sum "$BASE" | cut -c1-16)
-    if [ "$h0" = "$h1" ]; then echo "  ✅ 还原核对：baseline.tsv 逐字节还原（sha $h1）"
+    if [ "$h0" = "$h1" ]; then echo "  ✅ 还原核对：选定档逐字节还原（sha $h1）"
     else echo "  ❌ 还原核对失败：$h0 → $h1（负控残留！）"; rc_all=1; fi
     return $rc_all
 }
@@ -285,17 +360,27 @@ run_neg() {
 # ── 主入口 ────────────────────────────────────────────────────
 MODE="${1:-run}"
 mkdir -p "$W"
+select_baseline
 echo "══ M267 性能回归门 ══  机=$(uname -n) · $("$PX" --version 2>/dev/null | head -1) · REPS=$REPS · W=$W"
+echo "   基线档：$BASE_LABEL"
 
 case "$MODE" in
   --list)
     printf "  %-13s %-8s %-9s %s\n" "负载" "kind" "基线(s)" "说明"
     while read -r n k u b note; do printf "  %-13s %-8s %-9s %s\n" "$n" "$k" "$b" "$note"; done < <(read_baseline)
     exit 0 ;;
+  --baselines)
+    echo "   本机签名：$(machine_sig)"
+    echo "   档目录：$BASELINES"
+    for f in "$BASELINES"/*.tsv; do
+        [ -f "$f" ] || continue
+        printf "     %-28s %s\n" "$(basename "$f")" "$(grep -m1 '生成机' "$f" | sed 's/^# //')"
+    done
+    exit 0 ;;
   --update) build_all >/dev/null 2>&1 || true; update_baseline; exit 0 ;;
   --neg)    build_all >/dev/null || { echo "❌ 构建失败，负控无法进行"; exit 1; }
             run_neg; rc=$?
-            echo "══ 负控结果：$([ $rc = 0 ] && echo '5/5 各自独立判红 ✅' || echo '有未生效 ❌') ══"
+            echo "══ 负控结果：$([ $rc = 0 ] && echo '6/6 各自独立判红 ✅' || echo '有未生效 ❌') ══"
             exit $rc ;;
 esac
 only=""; [ "$MODE" = "--only" ] && only="${2:-}"
@@ -307,6 +392,17 @@ for f in $LOADS $ONNX_LOADS; do
 done
 [ -f "$DIR/tools/gen_perf_models.py" ] && ok "ONNX 模型生成器存在（tools/gen_perf_models.py）" \
     || bad "缺 ONNX 模型生成器 tools/gen_perf_models.py"
+# ⭐ M305：**档位机制在位**（防“档目录被删/头注掉字段 ⇒ 门无声走错档”）
+[ -f "$DIR/machine_sig.sh" ] && ok "机器签名实现存在（machine_sig.sh · 单一实现）" || bad "缺 machine_sig.sh"
+_nbtsv=$(ls "$BASELINES"/*.tsv 2>/dev/null | wc -l)
+[ "$_nbtsv" -ge 1 ] && ok "基线档 ≥1（当前 $_nbtsv 档）" || bad "基线档缺失（$BASELINES/*.tsv）"
+if grep -q '^# machine-sig: ' "$BASE" 2>/dev/null; then
+    ok "选定档头注含 machine-sig"
+elif grep -q '合成档' "$BASE" 2>/dev/null; then
+    ok "选定的是**合成档**（本机无档 ⇒ 上限判据退为「各档 max」）"
+else
+    bad "选定档头注既无 machine-sig 也不是合成档：$BASE"
+fi
 # ONNX 负载必须以 kind=onnx 登记 —— 若误登成 run，[1] 下面那条"vm/c 成对"判据会误伤它们
 nb_onnx=$(read_baseline | awk '$2=="onnx"' | wc -l)
 [ "$nb_onnx" -ge 2 ] && ok "ONNX 负载登记 $nb_onnx 行（kind=onnx，下限 2）" \
@@ -361,6 +457,9 @@ echo "[5] 覆盖边界（如实登记）"
 info "只覆盖**本机单核**负载；多核/IO/HTTP 服务型负载不在面内（M89 的 http_json 形态未纳入）"
 info "冷构建（清 .rtcache）刻意不纳入：会污染同机其它门/构建的缓存，代价不可控"
 info "基线绝对值只对**同机同工具链**有意义 —— 换机器/换 gcc/换 px 版本须 --update 重定基"
+info "⭐ M305：门按**本机 CPU 签名**选档（baselines/<sig>.tsv）；本机无档时用「各档 max」合成档"
+info "   ⇒ 跨机跑（如 CI runner）时上限判据自动宽松（跨机比值本就不可比），但下限判据（<0.10x）不变"
+info "   当前档：$BASE_LABEL"
 info "C 轨只取 fib28_c/while_sum_c 作比值锚（全谱见 docs/PERF_BASELINE_V2.md §五）"
 info "本门**不覆盖** px run（解释轨）面 —— 那是 M268 的活；字符串 += O(n²) 是 M270"
 info "ONNX 负载只覆盖 **MatMul**（512³ 常规区 + 1024³ 跨页崩塌区）；Conv / RMSNorm / RoPE / KV-cache **不在面内**（M303 §五 S4）"

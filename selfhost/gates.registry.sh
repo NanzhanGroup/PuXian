@@ -999,6 +999,8 @@ step "M267 · 性能回归门（清歌提案 P0-1 —— 首个**性能判据**�
 #   （examples/m89_perf/bench_vm_vs_c.sh）都静默烂了 8 个月（两条命令都走 VM 轨）而无人知晓。
 #   判据 = 相对基线的 x倍（不报绝对秒）· 两轮确认 · 产物身份自检（C 轨含 fn_* / VM 轨不含）。
 run m267_perf bash examples/m267_perf/verify.sh
+# M305 · 性能基线口径 ⇄ 实现 的机器核对（M266 建，M305 补注册 —— 此前从未被任何运行器跑过）
+run spec_consistency bash examples/m267_perf/check_spec_consistency.sh
 step "M269 · GC 根登记「覆盖强度」台账（清歌提案 P0-2 —— 「还有多少地方看不清」）"
 #   清歌 P0-2：建 native 桥 → 是否登记 GC 根的机械台账，把"未审计"显式列出并计数。
 #   我方加的必要条件：**台账必须自带自证**（锚点 + 规模下限 + 判据自伤负控）——

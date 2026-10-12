@@ -1047,9 +1047,15 @@ jobs:
       - name: m267_perf（性能回归门 · 清歌提案 P0-1 · 首个性能判据门）
         if: always()
         run: |
-          bash examples/m267_perf/verify.sh > /tmp/v_m267.log 2>&1 || { echo "❌ m267_perf 性能门失败（相对基线退化 > 2.0x，或快于 0.1x ⇒ 负载疑似未真执行）"; grep -E '^(  [❌⚠️]|  [a-z0-9_]+ +[0-9.]+ +[0-9.]+)' /tmp/v_m267.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m267_perf/verify.sh > /tmp/v_m267.log 2>&1 || { echo "❌ m267_perf 性能门失败（相对**选定档**退化 > 2.0x，或快于 0.1x ⇒ 负载疑似未真执行；CI runner 无本机档 ⇒ 走「各档 max」合成档）"; grep -E '^(  [❌⚠️]|  [a-z0-9_]+ +[0-9.]+ +[0-9.]+)' /tmp/v_m267.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^── M267|^  ✅ 8/8|^  ✅ 每条' /tmp/v_m267.log | tail -4 || true
-          echo "✅ m267_perf（12 负载 = 10 双轨 + 2 ONNX 单轨 · min-of-N · 身份自检 10/10 · 相对基线 1.0x ± 噪声）PASS"
+          echo "✅ m267_perf（12 负载 = 10 双轨 + 2 ONNX 单轨 · min-of-N · 身份自检 10/10 · 档位：本机档或无档时「各档 max」合成档）PASS"
+
+      - name: spec_consistency（性能基线口径 ⇄ 实现 · 机器核对 · M305 补注册）
+        if: always()
+        run: |
+          bash examples/m267_perf/check_spec_consistency.sh > /tmp/v_spec_consistency.log 2>&1 || { echo "❌ 口径一致性失败（口径文档 ⇄ verify.sh/档/注册）"; grep -E '❌' /tmp/v_spec_consistency.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^══ 结果|^SPEC-CONSISTENCY-OK' /tmp/v_spec_consistency.log | tail -2
 
       - name: m269_gcroot_coverage（GC 根登记覆盖强度台账 · 清歌提案 P0-2）
         if: always()
