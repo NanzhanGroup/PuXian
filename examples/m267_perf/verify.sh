@@ -57,6 +57,14 @@ REPS="${M267_REPS:-5}"
 WARN_R="${M267_WARN:-1.25}"
 FAIL_R="${M267_FAIL:-2.00}"
 LOADS="fib28 while_sum mixed jsonwb"
+# ⭐ M305：负控的**代表性负载子集**。
+#   为什么要收敛：M303 加 ONNX 两行后，4 道负控（各跑一次 run_compare）的耗时
+#   从 ≈3 分钟涨到 ≈13 分钟 —— 门总耗时贴到全量门的 `GATE_TIMEOUT_DEFAULT=900s` 上限，
+#   在 4 路分片（负载更高）下会**超时**（而超时是静默失败，最坏的一种）。
+#   负控的目的是「证明判据有牙」—— 代表三条不同形态（纯计算 / 容器 / ONNX 单轨）已足够；
+#   **正判据仍遍历全部 12 个负载**（那是主判据，不受影响）。
+#   要回全量：`M267_NEG_ONLY=""`（空值 = 不过滤）。
+NEG_ONLY="${M267_NEG_ONLY-fib28_vm mixed_vm onnx_mm512}"
 # ⭐ M303（S1）新增：**单轨 ONNX 负载**（只有 VM 轨一份产物 —— ONNX 执行全在 runtime 的
 #    C 代码里，两轨跑的是同一个 onnx_exec_run ⇒ vm/c 对照对本类负载无意义）。
 #    它们在**选定档**里的 kind 是 `onnx`，因此 [1] 层"vm/c 成对登记"那条判据
@@ -238,7 +246,8 @@ run_compare() {
     local only="${1:-}" nenv=0
     printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "负载" "基线(s)" "实测(s)" "倍数" "判定" "阈值 warn/fail"
     while read -r name kind unit base note; do
-        [ -n "$only" ] && [ "$name" != "$only" ] && continue
+        # ⭐ M305：`only` 支持**空格分隔的多值**（负控用代表性子集 —— 见 NEG_ONLY 的理由）
+        if [ -n "$only" ] && ! printf '%s\n' " $only " | grep -qF " $name "; then continue; fi
         nenv=$((nenv+1))
         local got r
         got=$(measure_one "$name" "$kind")
@@ -302,7 +311,7 @@ run_neg() {
 
     echo "── NC-A 基线被人为改坏（原值 ÷3 ⇒ 比值 ×3）⇒ 必须判红"
     awk '/^#/ {print; next} NF>=4 { $4=$4/3 } { print }' "$W/base.bak" > "$BASE"
-    na=$(run_compare "" 2>&1 | grep -c '❌')
+    na=$(run_compare "$NEG_ONLY" 2>&1 | grep -c '❌')
     cp "$W/base.bak" "$BASE"
     if [ "$na" -ge 1 ]; then echo "  ✅ NC-A 生效（$na 个负载判红）"; else echo "  ❌ NC-A 未生效：假基线未被判红"; rc_all=1; fi
 
@@ -311,7 +320,7 @@ run_neg() {
     #    只对子进程生效 ⇒ 覆盖无效（= M212/M209 记过的"覆盖变量式负控"老坑，本轮又踩）。
     echo "── NC-B fail 阈值调到不可能满足（0.5）⇒ 必须判红"
     local f_save="$FAIL_R"; FAIL_R=0.5
-    nb=$(run_compare "" 2>&1 | grep -c '❌')
+    nb=$(run_compare "$NEG_ONLY" 2>&1 | grep -c '❌')
     FAIL_R="$f_save"
     if [ "$nb" -ge 1 ]; then echo "  ✅ NC-B 生效（$nb 个负载判红）"; else echo "  ❌ NC-B 未生效"; rc_all=1; fi
 
@@ -325,7 +334,7 @@ run_neg() {
     echo "── NC-D 判据自伤：NC-A 的红必须来自比对本身"
     awk '/^#/ {print; next} NF>=4 { $4=$4/3 } { print }' "$W/base.bak" > "$BASE"
     FAIL_R=99
-    nd=$(run_compare "" 2>&1 | grep -c '❌')
+    nd=$(run_compare "$NEG_ONLY" 2>&1 | grep -c '❌')
     FAIL_R="$f_save"
     cp "$W/base.bak" "$BASE"
     if [ "$nd" -eq 0 ]; then echo "  ✅ NC-D 生效：fail 阈值放空 ⇒ 同一假基线不再判红（红来自比对）"; else echo "  ❌ NC-D 未生效（仍有 $nd 判红）"; rc_all=1; fi
@@ -335,7 +344,7 @@ run_neg() {
     #    缺了这条，一张坏掉的 ONNX 模型会以"性能大幅提升"的面目**通过**性能门。
     echo "── NC-E 下限判据：基线放大 20 倍 ⇒ 比值 <0.10 ⇒ 必须判红"
     awk '/^#/ {print; next} NF>=4 { $4=$4*20 } { print }' "$W/base.bak" > "$BASE"
-    ne=$(run_compare "" 2>&1 | grep -c '负载疑似未真执行')
+    ne=$(run_compare "$NEG_ONLY" 2>&1 | grep -c '负载疑似未真执行')
     cp "$W/base.bak" "$BASE"
     if [ "$ne" -ge 1 ]; then echo "  ✅ NC-E 生效（$ne 个负载触发下限判据）"; else echo "  ❌ NC-E 未生效：快得不可能却没判红"; rc_all=1; fi
 
