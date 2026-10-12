@@ -34,6 +34,7 @@
 # 退出码：0=绿 1=红 2=门自身前置自查失败
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
+. "$(dirname "$0")/../../selfhost/gate_patch.sh" || { echo "❌ [M304] 打桩原语 source 失败（selfhost/gate_patch.sh）" >&2; exit 2; }
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -166,13 +167,15 @@ if [ "$NEG" = 1 ]; then
 
     # A 静态：[S6] 不再看见单形参检查
     restore_all; snapshot
-    sed -i 's|px_arg_int(args\[0\], "bit_count", "n")|int_val(args[0])|' runtime/runtime.c
+    gp_patch runtime/runtime.c 'px_arg_int(args[0], "bit_count", "n")' 'int_val(args[0])' \
+        || { echo "  FAIL [3A] 打桩失败（M304 gp_patch：OLD 未命中）"; fail=$((fail+1)); }
     static_ok
     chk "[3A] 去掉 bit_count 的检查 ⇒ [S6] 判红" "[ \$? != 0 ] && grep -q 'bi_bit_count' '$W/static.log'"
 
     # B 静态：豁免表条目在源码里找不到（改名）
     restore_all; snapshot
-    sed -i 's|^static LXValue bi_xxhash(LXValue\* args|static LXValue bi_xxhash_renamed(LXValue* args|' runtime/runtime.c
+    gp_patch runtime/runtime.c 'static LXValue bi_xxhash(LXValue* args' 'static LXValue bi_xxhash_renamed(LXValue* args' \
+        || { echo "  FAIL [3B] 打桩失败（M304 gp_patch：OLD 未命中）"; fail=$((fail+1)); }
     static_ok
     chk "[3B] 豁免表条目在源码里找不到（bi_xxhash 改名）⇒ 判红" \
         "[ \$? != 0 ] && grep -q '在源码里\*\*找不到\*\*' '$W/static.log'"

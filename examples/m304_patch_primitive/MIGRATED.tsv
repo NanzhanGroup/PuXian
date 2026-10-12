@@ -1,0 +1,14 @@
+# M304 起：门的负控打桩从 `sed -i` 迁移到 `gp_patch`（selfhost/patch_file.py）
+# ------------------------------------------------------------
+# 列（TAB 分隔）：<门名>	<登记保留的 sed -i 打桩数>	<理由>
+#
+# 纪律（由 examples/m304_patch_primitive/migcheck.py 双向核对）：
+#   · 本表有的 ⇒ 必须真迁移了（source gate_patch.sh + 调用 gp_patch），否则「登记过期」判红
+#   · 真迁移了的 ⇒ 必须在本表里，否则「漏登记」判红
+#   · 保留 sed 的条目**必须写理由**（无理由豁免 = 把红当绿）
+#   · 迁移是逐门推进的：本轮（M304）只做 runtime_*.c 那几个最危险的 5 门
+m194_arg_guards	0	runtime.c ×2（px_arg_int / px_arg_str 的逐参守卫）
+m195_arg_guards2	1	其余 2 处已迁移；保留 1 处含正则 `[0-9]+`（原语是**字面量**匹配，不覆盖正则）
+m197_builtin_arity	0	runtime.c ×3 + sweep_arity.py ×1（原生 arity 文案负控）
+m198_argface	0	runtime_quic.c ×1 + sweep_upper.py ×1（删整行，走 $'…\n'）+ runtime.c ×1
+m201_bytes_dec	0	runtime.c ×2（删注册 / 宽度上限 16→8）
