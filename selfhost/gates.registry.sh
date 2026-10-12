@@ -1501,6 +1501,7 @@ run m300_stdlib_surface2 bash examples/m300_stdlib_surface2/verify.sh
 run m301_argcount bash examples/m301_argcount/verify.sh
 run m302_stdlib_surface3 bash examples/m302_stdlib_surface3/verify.sh
 run m304_patch_primitive bash examples/m304_patch_primitive/verify.sh
+run m306_onnx_quant bash examples/m306_onnx_quant/verify.sh
 
 # ═══════════════════════════════════════════════════════════════════════════
 # M304 后加固（用户令 2026-10-12）：**禁止自建平行告警/唤醒通道**

@@ -9,7 +9,8 @@
 #   ③ 算子覆盖：**每个注册算子都必须真的被执行过**（by_op 并集 == onnx_op_names()）
 #   ④ 执行器行为：乱序图必须能跑（不依赖文件顺序）；缺算子/环/广播不兼容/缺 feed 必须报错
 #   ⑤ erf 精度：1001 点网格对 math.erf 的最大绝对误差（双路径跨切换点）
-#   ⑥ 真实模型（可选 · **SKIP 不是 PASS**）：MiniLM 端到端 + 均值池化 + L2 归一化
+#   ⑥ 真实模型（**M306 起显式开启** `M157_REAL=1` · SKIP 不是 PASS）：MiniLM/int8-bge 端到端
+#      + 均值池化 + L2 归一化。默认不跑的理由见该段注释（本机资产跑一次十几分钟）。
 #   ⑦ C 侧负控 2 个（必须判红）+ 逐字节还原复跑 · ⑧ 三轨一致（VM vs 解释轨）
 # 另：可选 `M157_REAL_REF=1` 时追加"真模型 × 独立参考数值对拍"（纯 Python，约 20 分钟）
 # ══════════════════════════════════════════════════════════════════════
@@ -133,14 +134,23 @@ print("  %s erf 精度：1001 点（[-6,6]）最大绝对误差 %.3g（@x=%.2f�
       % ("✅" if worst < lim else "❌", worst, wx, lim))
 PY
 
-# ── ⑦ 真实模型（可选）──
-REAL="${M157_REAL_MODEL:-}"
-for cand in /tmp/onnxdl/minilm.onnx /data/app/ws/models/embed/model.onnx; do
-    [ -n "$REAL" ] && break
-    [ -f "$cand" ] && REAL="$cand"
-done
+# ── ⑦ 真实模型（可选 · **M306 起改为显式开启**）──
+#   ⚠️ 为什么从"自动探测"改成"显式开启"（M306 实测）：
+#     本机资产 `/data/app/ws/models/embed/model.onnx` 是 **102 MB / 1177 节点的 int8 模型**，
+#     M306 补齐量化算子后它**真的能跑**了 —— 但**跑一次要十几分钟**（朴素 MatMul + 2 GB 级
+#     中间张量），单这一项就会把 m157 顶穿全量门的逐门超时。⇒ 默认不跑，用
+#     `M157_REAL=1`（或 `M157_REAL_MODEL=<路径>`）显式开；**开启时的结果会被记录在案**。
+#   ⚠️ 这与 `M157_REAL_REF=1` 同一条理由：**它依赖的是环境资产，不是仓库资产**。
+REAL=""
+if [ "${M157_REAL:-0}" = "1" ]; then
+    REAL="${M157_REAL_MODEL:-}"
+    for cand in /tmp/onnxdl/minilm.onnx /data/app/ws/models/embed/model.onnx; do
+        [ -n "$REAL" ] && break
+        [ -f "$cand" ] && REAL="$cand"
+    done
+fi
 if [ -z "$REAL" ]; then
-    skip "真实模型端到端（未找到 $REAL / 环境变量 M157_REAL_MODEL 也未给）"
+    skip "真实模型端到端（未开启：设 M157_REAL=1 或 M157_REAL_MODEL=<路径>；本机资产跑一次约十几分钟）"
 else
     if ./build/embed_mini "$REAL" "$TMP/embed.json" > "$TMP/embed.log" 2>&1; then
         python3 - "$TMP" "$REAL" <<'PY' || FAIL=$((FAIL + 1))

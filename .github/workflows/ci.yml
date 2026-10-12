@@ -1281,6 +1281,11 @@ jobs:
           bash examples/m304_patch_primitive/verify.sh --neg-skip > /tmp/v_m304.log 2>&1 || { echo "❌ m304 门失败（静态四性质 · 原语自证 28 断言 · 差分形态层 · 负控 A/B/C）"; grep -E '^(  ❌|     |        )' /tmp/v_m304.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m304_patch_primitive（sed 形状层 differ=8/silent=1 · 原语自证 28 断言 · 差分 12/12）PASS"
 
+      - name: m306_onnx_quant（ONNX 量化算子面 S2：DequantizeLinear/QuantizeLinear · M306）
+        run: |
+          bash examples/m306_onnx_quant/verify.sh --neg-skip > /tmp/v_m306.log 2>&1 || { echo "❌ m306 门失败（三方对拍 18 例 · 9 条行为负控 · 算子覆盖 · 静态在位）"; grep -E '^(  ❌|     |        )' /tmp/v_m306.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m306_onnx_quant（逐张量/逐轴 × 就近偶数 × 双端饱和 × fp16/bf16 刻度 · 手算真值↔独立参考↔C · 18/0）PASS"
+
       - name: selfwake_guard（禁止自建平行告警/唤醒通道 · 用户令 2026-10-12）
         # 本机侧扫描面（/data/gatevm 的无人值守脚本）在 CI 上不存在 ⇒ 该档记 ℹ️ 跳过，
         # 判据**不因此失效**（J4 规模锚点只锚仓库面）。仓库面在 CI 上有完整牙。

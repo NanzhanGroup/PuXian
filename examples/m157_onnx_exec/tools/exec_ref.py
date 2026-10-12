@@ -23,7 +23,9 @@ import sys
 import itertools
 
 FLOAT, INT64, BOOL, INT32 = 1, 7, 9, 6
-DTNAME = {FLOAT: "float", INT64: "int64", BOOL: "bool", INT32: "int32"}
+INT8, UINT8 = 3, 2          # M306（S2）：量化算子面
+DTNAME = {FLOAT: "float", INT64: "int64", BOOL: "bool", INT32: "int32",
+          INT8: "int8", UINT8: "uint8"}
 
 
 # ══════════════════ 张量工具（行主序） ══════════════════
@@ -574,6 +576,83 @@ def mod_op(env, n):
     return ew(ts, lambda a, b: a - b * int(a / b), ts[0]["dtype"])
 
 
+# ══════════════════ M306（S2）：量化算子 —— 按 ONNX 定义从零写 ══════════════════
+# 为什么要有这一段：m157 的层 ④ 是「**每个注册算子都必须真的被执行过**」。
+#   M306 往算子表里加了两个算子 ⇒ 那句话立刻变红 ⇒ 语料必须跟上，
+#   而参考实现不跟上就会把「参考不认识」误报成「C 侧错」。
+Q_RANGE = {INT8: (-128, 127), UINT8: (0, 255), INT32: (-2 ** 31, 2 ** 31 - 1)}
+
+
+def op_dequantizelinear(env, n):
+    X, S = env[n["in"][0]], env[n["in"][1]]
+    Z = env[n["in"][2]] if len(n["in"]) > 2 and n["in"][2] else None
+    dims = X["dims"]
+    nsc = len(S["vals"])
+    per = nsc != 1
+    axis = int(n["attrs"].get("axis", 1))
+    inner = 1
+    if per:
+        if axis < 0:
+            axis += len(dims)
+        for d in dims[axis + 1:]:
+            inner *= d
+    vals = []
+    for i, xv in enumerate(X["vals"]):
+        si = (i // inner) % nsc if per else 0
+        zv = Z["vals"][si] if Z else 0
+        vals.append((float(xv) - float(zv)) * float(S["vals"][si]))
+    return T(dims, vals, FLOAT)
+
+
+def op_quantizelinear(env, n):
+    X, S = env[n["in"][0]], env[n["in"][1]]
+    Z = env[n["in"][2]] if len(n["in"]) > 2 and n["in"][2] else None
+    odt = Z["dtype"] if Z else UINT8
+    lo, hi = Q_RANGE[odt]
+    vals = []
+    for xv in X["vals"]:
+        r = rounded(float(xv) / float(S["vals"][0])) + (Z["vals"][0] if Z else 0)
+        vals.append(int(min(max(r, lo), hi)))
+    return T(X["dims"], vals, odt)
+
+
+def op_dynamicquantizelinear(env, n):
+    X = env[n["in"][0]]
+    xs = [float(v) for v in X["vals"]]
+    mn = min([0.0] + xs)                 # 规范：min/max **含 0**
+    mx = max([0.0] + xs)
+    sc = (mx - mn) / 255.0
+    if sc == 0.0 or sc != sc or math.isinf(sc):
+        sc = 1.0
+    zp = rounded(0.0 - mn / sc)
+    zp = min(max(zp, 0.0), 255.0)
+    yv = []
+    for v in xs:
+        r = min(max(rounded(v / sc) + zp, 0.0), 255.0)
+        yv.append(int(r))
+    return [T(X["dims"], yv, UINT8), T([], [sc], FLOAT), T([], [int(zp)], UINT8)]
+
+
+def op_matmulinteger(env, n):
+    A, B = env[n["in"][0]], env[n["in"][1]]
+    AZ = env[n["in"][2]] if len(n["in"]) > 2 and n["in"][2] else None
+    BZ = env[n["in"][3]] if len(n["in"]) > 3 and n["in"][3] else None
+    M, K = A["dims"][-2], A["dims"][-1]
+    K2, N = B["dims"][-2], B["dims"][-1]
+    assert K == K2, "MatMulInteger 内维不匹配"
+    av = [int(v) for v in A["vals"]]
+    bv = [int(v) for v in B["vals"]]
+    azv = [int(v) for v in AZ["vals"]] if AZ else [0]
+    bzv = [int(v) for v in BZ["vals"]] if BZ else [0]
+    out = []
+    for i in range(M):
+        az = azv[i] if len(azv) > 1 else azv[0]
+        for j in range(N):
+            bz = bzv[j] if len(bzv) > 1 else bzv[0]
+            out.append(sum((av[i * K + k] - az) * (bv[k * N + j] - bz) for k in range(K)))
+    return T([M, N], out, INT32)
+
+
 OPS = {
     "Identity": lambda env, n: [clone(env[n["in"][0]])],
     "Reshape": lambda env, n: [op_reshape(env, n)],
@@ -646,6 +725,11 @@ OPS = {
                                   n["attrs"]["value"].get("dtype", FLOAT))],
     "Range": lambda env, n: [op_range(env, n)],
     "Triu": lambda env, n: [op_triu(env, n)],
+    # M306（S2）：量化算子
+    "DequantizeLinear": lambda env, n: [op_dequantizelinear(env, n)],
+    "QuantizeLinear": lambda env, n: [op_quantizelinear(env, n)],
+    "DynamicQuantizeLinear": lambda env, n: op_dynamicquantizelinear(env, n),
+    "MatMulInteger": lambda env, n: [op_matmulinteger(env, n)],
 }
 
 
@@ -691,11 +775,17 @@ def run_graph(g, feeds):
 # ══════════════════ 比对 ══════════════════
 def decode_hex(hexs, dtype):
     b = bytes.fromhex(hexs)
-    n = len(b) // (4 if dtype in (FLOAT,) else 8 if dtype in (INT64,) else 1)
+    n = len(b) // (4 if dtype in (FLOAT, INT32) else 8 if dtype in (INT64,) else 1)
     if dtype == FLOAT:
         return list(struct.unpack("<%df" % n, b)), n
+    if dtype == INT32:           # M306：MatMulInteger 的输出恒为 int32
+        return list(struct.unpack("<%di" % n, b)), n
     if dtype == INT64:
         return list(struct.unpack("<%dq" % n, b)), n
+    if dtype == INT8:            # M306：量化输出（1 字节有符号）
+        return list(struct.unpack("<%db" % n, b)), n
+    if dtype == UINT8:
+        return list(struct.unpack("<%dB" % n, b)), n
     return [1 if x else 0 for x in b], n
 
 
@@ -704,7 +794,7 @@ def cmp_vals(got, want, dtype, rtol=1e-5, atol=1e-6):
         return "长度 %d ≠ %d" % (len(got), len(want))
     worst, wi = 0.0, -1
     for i, (a, b) in enumerate(zip(got, want)):
-        if dtype in (INT64, BOOL, INT32):
+        if dtype in (INT64, BOOL, INT32, INT8, UINT8):
             if int(a) != int(b):
                 return "下标 %d：%r ≠ %r（整型必须逐位相等）" % (i, a, b)
             continue
@@ -796,7 +886,8 @@ def main():
                 nout += 1
                 got, cnt = decode_hex(c["hex"], c["dtype"] if isinstance(c["dtype"], int)
                                       else {"float": FLOAT, "int64": INT64, "bool": BOOL,
-                                            "int32": INT32}[c["dtype"]])
+                                            "int32": INT32, "int8": INT8,
+                                            "uint8": UINT8}[c["dtype"]])
                 dt = t["dtype"] if isinstance(t["dtype"], int) else t["dtype"]
                 if list(c["dims"]) != list(t["dims"]):
                     print("  ❌ %s.%s：形状 %s ≠ 参考 %s" % (name, out, c["dims"], t["dims"]))

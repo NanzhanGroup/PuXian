@@ -1,0 +1,72 @@
+[
+ {
+  "name": "n01_block_size",
+  "expect_fail": true,
+  "why": "块量化（block_size≠0）必须报错，不许静默当逐张量"
+ },
+ {
+  "name": "n02_saturate0",
+  "expect_fail": true,
+  "why": "非饱和（saturate=0）必须报错，不许静默回绕"
+ },
+ {
+  "name": "n03_scale_len",
+  "expect_fail": true,
+  "why": "逐轴刻度长度与 dims[axis] 不符必须报错（axis=1 时轴上是 3 而不是 2，这里只给 2"
+ },
+ {
+  "name": "n04_zp_dtype",
+  "expect_fail": true,
+  "why": "零点类型与 x 不一致必须报错（float 零点当作 0 用是最典型的静默错值）"
+ },
+ {
+  "name": "n05_x_dtype_dq",
+  "expect_fail": true,
+  "why": "DequantizeLinear 的 x 必须是整型（给浮点应报错，不许当恒等）"
+ },
+ {
+  "name": "n06_q_x_dtype",
+  "expect_fail": true,
+  "why": "QuantizeLinear 的 x 必须是浮点"
+ },
+ {
+  "name": "n07_axis_oob",
+  "expect_fail": true,
+  "why": "axis 越界必须报错（不许夹到合法区间）"
+ },
+ {
+  "name": "n08_scale_zero",
+  "expect_fail": true,
+  "why": "刻度为 0 必须报错（不许静默饱和到端点）"
+ },
+ {
+  "name": "n09_scale_rank3",
+  "expect_fail": true,
+  "why": "刻度不是标量也不是 1 维必须报错"
+ },
+ {
+  "name": "n10_mi_zp_len",
+  "expect_fail": true,
+  "why": "a_zero_point 长度既不是 1 也不是「逐行」（这里给了 3，而行数是 2）必须报错"
+ },
+ {
+  "name": "n11_mi_inner",
+  "expect_fail": true,
+  "why": "MatMulInteger 内维不一致必须报错"
+ },
+ {
+  "name": "n12_dynquant_arity",
+  "expect_fail": true,
+  "why": "DynamicQuantizeLinear 只收 1 个输入（给 2 个必须报错，不许忽略）"
+ },
+ {
+  "name": "n13_mi_zp_dtype",
+  "expect_fail": true,
+  "why": "a_zero_point 类型与 A 不一致必须报错（浮点零点当 0 用是最典型的静默错值）"
+ },
+ {
+  "name": "n14_dynquant_int_in",
+  "expect_fail": true,
+  "why": "DynamicQuantizeLinear 的 x 必须是浮点"
+ }
+]

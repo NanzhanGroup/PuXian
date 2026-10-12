@@ -26,6 +26,10 @@ MODELS = os.path.join(OUT, "models")
 FEEDS = os.path.join(MODELS, "feeds")
 
 FLOAT, INT64, BOOL, INT32 = 1, 7, 9, 6
+UINT8, INT8 = 2, 3           # M306（S2）：量化算子面
+# dtype → struct 打包格式（raw_data 一律按**该 dtype 的真实宽度**写；
+#   旧实现把"非 float"一律按 int64 打包 —— 只能覆盖 int64 语料，加 uint8/int8 语料即失效）
+PACKFMT = {FLOAT: "<f", INT64: "<q", INT32: "<i", UINT8: "<B", INT8: "<b", BOOL: "<B"}
 
 
 # ══════════════════ protobuf 编码（只编码本门用到的字段） ══════════════════
@@ -69,8 +73,7 @@ def packed_f32(f, vals):
 
 def tensor_bytes(name, dims, vals, dtype=FLOAT):
     """TensorProto：用 raw_data（小端）承载 ⇒ 与 C 侧解析口径一致"""
-    raw = b"".join(struct.pack("<f", v) for v in vals) if dtype == FLOAT else \
-          b"".join(struct.pack("<q", v) for v in vals)
+    raw = b"".join(struct.pack(PACKFMT[dtype], v) for v in vals)
     body = packed_i64(1, dims) + i_field(2, dtype) + ld(9, raw) + s_field(8, name)
     return body
 
@@ -596,11 +599,55 @@ def m10_gather_rank2():
     return m
 
 
+def m11_quant():
+    """M306（S2）量化算子：DequantizeLinear → QuantizeLinear 的**往返恒等**。
+
+    为什么这两个算子必须进 **m157 的语料**（而不是只放 m306 门）：
+      本门的层 ④ 是「**每个注册算子都必须真的被执行过**」（注册表 ⇄ by_op 并集逐条对齐）。
+      M306 往算子表里加了两个算子 ⇒ 那句话当场变红 ⇒ **语料必须跟上**。
+      这条还顺带把「uint8 张量」引进了 m157 的比较面（decode_hex / cmp_vals 同步扩了 int8/uint8）。
+
+    真值（构造性）：WQ=[0,1,64,255] · WS=0.5 · WZ=128 ⇒ WF=(WQ-128)*0.5=[-64,-63.5,-32,63.5]
+      再量化 QS=0.5 · QZ=128 ⇒ round(WF/0.5)+128 = [-128,-127,-64,127]+128 = **[0,1,64,255]**（原值）
+    """
+    m = M("e11_quant_linear", opset=19)
+    m.init("WQ", [4], [0, 1, 64, 255], UINT8)
+    m.init("WS", [1], [0.5], FLOAT)
+    m.init("WZ", [1], [128], UINT8)
+    m.init("QS", [1], [0.5], FLOAT)
+    m.init("QZ", [1], [128], UINT8)
+    m.op("DequantizeLinear", ["WQ", "WS", "WZ"], ["WF"])
+    m.op("QuantizeLinear", ["WF", "QS", "QZ"], ["Y"])
+    m.out("Y", [4], UINT8)
+    m.exact("Y", [0, 1, 64, 255], "可表示范围内的往返恒等")
+    return m
+
+
+def m12_dynquant_mmint():
+    """M306（S2）另两个量化算子：**动态量化激活 → 整数矩阵乘**（真实图的形态）。
+
+    同样是层 ④ 的硬要求：注册表里有几个算子，语料就得跑过几个。
+      x=[[0,127.5]] ⇒ min=min(0,0)=0 · max=127.5 ⇒ scale=127.5/255=0.5（精确）· zp=0
+      YQ=round(x/0.5)+0=[[0,255]]
+      Y = YQ · W（W=[[1,2],[3,4]] · w_zp=0）= [0*1+255*3, 0*2+255*4] = **[765, 1020]**
+    """
+    m = M("e12_dynquant_mmint", opset=19)
+    m.inp("X", [1, 2], [[0.0, 127.5]])
+    m.init("W", [2, 2], [1, 2, 3, 4], INT8)
+    m.init("WZ", [1], [0], INT8)
+    m.op("DynamicQuantizeLinear", ["X"], ["YQ", "XS", "XZ"])
+    m.op("MatMulInteger", ["YQ", "W", "XZ", "WZ"], ["Y"])
+    m.out("Y", [1, 2], INT32)
+    m.exact("Y", [765, 1020], "动态量化激活 × int8 权重 ⇒ int32 累加")
+    return m
+
+
 def main():
     os.makedirs(MODELS, exist_ok=True)
     os.makedirs(FEEDS, exist_ok=True)
     ms = [m01_eltwise(), m02_matmul(), m03_softmax_reduce(), m04_movement(),
-          m05_gelu_funcs(), m06_layernorm(), m07_const_range(), m08_attn(), m09_erf_grid(), m10_gather_rank2()]
+          m05_gelu_funcs(), m06_layernorm(), m07_const_range(), m08_attn(), m09_erf_grid(), m10_gather_rank2(),
+          m11_quant(), m12_dynquant_mmint()]
     nego = os.path.join(MODELS, "neg")
     os.makedirs(nego, exist_ok=True)
     negs = []

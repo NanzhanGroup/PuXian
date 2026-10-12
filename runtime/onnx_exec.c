@@ -45,6 +45,34 @@ typedef struct {
     int       n, cap;
 } Env;
 
+/* ── 诊断通道：把 err 截成**合法 UTF-8**（M306 · 缺陷 528）──────────────────
+ * 为什么必须有：下面用 `%.Ns` 拼外层上下文，而 `N` 是**字节**精度，
+ *   消息里全是中文 ⇒ 一个汉字被切掉一半 ⇒ 缓冲区以**半个 UTF-8 序列**结尾。
+ *   实测后果：消费方按 UTF-8 解码即报 `invalid continuation byte`
+ *   （m306 门用 `subprocess(text=True)` 读它，当场炸）——
+ *   **「错误消息读不出来」等于没有消息**（M185「错误信息指不到根因」同族，只是更彻底）。
+ * 判据：`err` 作为字符串**恒为合法 UTF-8**（ASCII 前缀天然满足）。
+ * 做法：向前扫描，保留**最长的完整字符前缀**。
+ */
+static void onnx_err_utf8_trim(char* s) {
+    size_t i = 0, last = 0, n = strlen(s);
+    while (i < n) {
+        unsigned char c = (unsigned char)s[i];
+        size_t need = (c < 0x80) ? 1
+                    : ((c & 0xE0) == 0xC0) ? 2
+                    : ((c & 0xF0) == 0xE0) ? 3
+                    : ((c & 0xF8) == 0xF0) ? 4 : 0;
+        size_t k;
+        if (need == 0 || i + need > n) break;          /* 非法起始字节 / 不完整序列 */
+        for (k = 1; k < need; k++)
+            if (((unsigned char)s[i + k] & 0xC0) != 0x80) break;
+        if (k != need) break;                          /* 续字节不合格 */
+        i += need;
+        last = i;
+    }
+    s[last] = '\0';
+}
+
 static OnnxT* env_get(const Env* e, const char* name) {
     int i;
     if (!name || !*name) return NULL;
@@ -289,7 +317,7 @@ OnnxRunResult* onnx_exec_run(const OnnxModel* m, const char** feed_names, OnnxT*
                 char opn[64];
                 snprintf(inner, sizeof(inner), "%s", err);
                 snprintf(opn, sizeof(opn), "%s", nd->op_type);
-                snprintf(err, sizeof(err), "onnx: 节点 %.40s（op=%.20s）执行失败：%.80s",
+                snprintf(err, sizeof(err), "onnx: 节点 %.40s（op=%.32s）执行失败：%.80s",
                          nd->name ? nd->name : "-", opn, inner);
                 goto fail2;
             }
@@ -343,6 +371,7 @@ fail:
     for (i = 0; i < env.n; i++) free(env.v[i].name);
     free(env.v);
     run_free(r);
+    onnx_err_utf8_trim(err);                          /* M306（缺陷 528）：诊断通道恒为合法 UTF-8 */
     if (err_out) *err_out = strdup(err[0] ? err : "onnx: 执行失败");
     return NULL;
 }
