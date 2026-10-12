@@ -1,0 +1,357 @@
+{
+ "q01_dq_u8_pertensor": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    -64.0,
+    0.0,
+    63.5
+   ]
+  }
+ },
+ "q02_q_u8_pertensor": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    128,
+    255
+   ]
+  }
+ },
+ "q03_roundtrip": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    1,
+    64,
+    128,
+    255
+   ]
+  }
+ },
+ "q04_dq_i8_peraxis": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    1.0,
+    2.0,
+    3.0,
+    8.0,
+    10.0,
+    12.0
+   ]
+  }
+ },
+ "q05_q_i8_peraxis": {
+  "Y": {
+   "dtype": "int8",
+   "values": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ]
+  }
+ },
+ "q06_half_even_saturate": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    2,
+    2,
+    255
+   ]
+  }
+ },
+ "q07_half_even_i8": {
+  "Y": {
+   "dtype": "int8",
+   "values": [
+    -4,
+    -2,
+    -2,
+    0,
+    0,
+    2,
+    2,
+    4
+   ]
+  }
+ },
+ "q08_dq_no_zp": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    -256.0,
+    -2.0,
+    0.0,
+    2.0,
+    254.0
+   ]
+  }
+ },
+ "q09_dq_i32": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    0.0,
+    1.0,
+    -5.0,
+    1000000.0
+   ]
+  }
+ },
+ "q10_q_i8_negzp": {
+  "Y": {
+   "dtype": "int8",
+   "values": [
+    -128,
+    -128,
+    -127
+   ]
+  }
+ },
+ "q11_dq_fp16_scale": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    0.5,
+    1.0,
+    1.5
+   ]
+  }
+ },
+ "q12_dq_bf16_scale": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    0.5,
+    1.0,
+    1.5
+   ]
+  }
+ },
+ "q13_dq_neg_axis": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    10.0,
+    40.0,
+    90.0,
+    40.0,
+    100.0,
+    180.0
+   ]
+  }
+ },
+ "q14_int8_w_matmul_q": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    135,
+    138
+   ]
+  }
+ },
+ "q15_dynquant_range": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    126,
+    128,
+    130,
+    255
+   ]
+  },
+  "YS": {
+   "dtype": "float",
+   "values": [
+    1.0
+   ]
+  },
+  "YZ": {
+   "dtype": "uint8",
+   "values": [
+    128
+   ]
+  }
+ },
+ "q16_dynquant_allzero": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    0,
+    0
+   ]
+  },
+  "YS": {
+   "dtype": "float",
+   "values": [
+    1.0
+   ]
+  },
+  "YZ": {
+   "dtype": "uint8",
+   "values": [
+    0
+   ]
+  }
+ },
+ "q17_dynquant_nonneg": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    255
+   ]
+  },
+  "YS": {
+   "dtype": "float",
+   "values": [
+    0.5
+   ]
+  },
+  "YZ": {
+   "dtype": "uint8",
+   "values": [
+    0
+   ]
+  }
+ },
+ "q18_dynquant_neg": {
+  "Y": {
+   "dtype": "uint8",
+   "values": [
+    0,
+    127
+   ]
+  },
+  "YS": {
+   "dtype": "float",
+   "values": [
+    1.0
+   ]
+  },
+  "YZ": {
+   "dtype": "uint8",
+   "values": [
+    255
+   ]
+  }
+ },
+ "q19_matmulinteger": {
+  "Y": {
+   "dtype": "int32",
+   "values": [
+    4,
+    5,
+    10,
+    11
+   ]
+  }
+ },
+ "q20_matmulinteger_zp": {
+  "Y": {
+   "dtype": "int32",
+   "values": [
+    16,
+    24,
+    40,
+    64
+   ]
+  }
+ },
+ "q21_matmulinteger_percol": {
+  "Y": {
+   "dtype": "int32",
+   "values": [
+    6,
+    6,
+    6
+   ]
+  }
+ },
+ "q22_matmulinteger_u8": {
+  "Y": {
+   "dtype": "int32",
+   "values": [
+    20,
+    30,
+    60,
+    110
+   ]
+  }
+ },
+ "q23_dynquant_matmulinteger": {
+  "Y": {
+   "dtype": "int32",
+   "values": [
+    765,
+    1020
+   ]
+  }
+ },
+ "c01_fp16_read": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    0.0,
+    1.0,
+    -2.0,
+    0.5,
+    65504.0,
+    5.960464477539063e-08
+   ]
+  }
+ },
+ "c02_fp16_write": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    0.0,
+    1.0,
+    -2.0,
+    0.0999755859375,
+    1.0,
+    3.140625
+   ]
+  }
+ },
+ "c03_bf16_read": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    0.0,
+    1.0,
+    -2.0,
+    0.5,
+    3.3895313892515355e+38,
+    9.183549615799121e-41
+   ]
+  }
+ },
+ "c04_bf16_write": {
+  "Y": {
+   "dtype": "float",
+   "values": [
+    1.0,
+    1.0,
+    1.015625,
+    2.0,
+    0.25,
+    0.0
+   ]
+  }
+ }
+}

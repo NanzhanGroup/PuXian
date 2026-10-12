@@ -84,6 +84,88 @@ void onnx_arena_free(OnnxArena* a) {
     a->v = NULL; a->n = 0; a->cap = 0;
 }
 
+/* ── 半精度转换（M306 · 缺陷 527）────────────────────────────────────────────
+ * 为什么要单独一段：此前 `onnx_t_getf` / `onnx_t_setf` 对 float16 / bfloat16
+ *   落到 `default` —— 读**恒返回 0.0**、写**静默什么都不做**。
+ *   那不是「不支持」的响亮失败，而是**把每个元素读成 0** 的静默错值
+ *   （`Cast(to=FLOAT16)` 之后任何读取、以及 fp16/bf16 的 scale/zero_point 都会中招）。
+ *   ⇒ 两个方向都在这里实现，**唯一实现**；读/写两侧共用同一对函数。
+ *
+ * float16（IEEE-754 binary16）：符号 1 / 阶 5 / 尾 10 —— 含次正规、±Inf、NaN。
+ * bfloat16                     ：float32 的高 16 位（就近偶数舍入）—— 无需查表。
+ * 口径：一律「就近偶数」（与 host 浮点默认舍入模式一致，也与 onnxruntime 的
+ *   `nearbyintf` 行为对齐）。
+ */
+static float px_f16_to_f(uint16_t h) {
+    uint32_t sign = (uint32_t)(h >> 15) & 1u;
+    uint32_t exp  = (uint32_t)(h >> 10) & 0x1Fu;
+    uint32_t man  = (uint32_t)h & 0x3FFu;
+    uint32_t f;
+    if (exp == 0) {
+        if (man == 0) {
+            f = sign << 31;                                   /* ±0 */
+        } else {                                              /* 次正规 ⇒ 规格化 */
+            int e = -1;
+            uint32_t m = man;
+            do { e++; m <<= 1; } while ((m & 0x400u) == 0);
+            m &= 0x3FFu;
+            f = (sign << 31) | ((uint32_t)(112 - e) << 23) | (m << 13);
+        }
+    } else if (exp == 31) {
+        f = (sign << 31) | 0x7F800000u | (man << 13);          /* ±Inf / NaN */
+    } else {
+        f = (sign << 31) | ((exp + 112u) << 23) | (man << 13); /* exp-15+127 = exp+112 */
+    }
+    { float out; memcpy(&out, &f, 4); return out; }
+}
+
+static uint16_t px_f_to_f16(float x) {
+    uint32_t u, sign, man, rem;
+    int32_t  exp;
+    uint16_t h;
+    memcpy(&u, &x, 4);
+    sign = (u >> 16) & 0x8000u;
+    exp  = (int32_t)((u >> 23) & 0xFFu) - 127 + 15;
+    man  = u & 0x7FFFFFu;
+    if (((u >> 23) & 0xFFu) == 0xFFu)                          /* Inf / NaN */
+        return (uint16_t)(sign | 0x7C00u | (man ? ((man >> 13) | 1u) : 0u));
+    if (exp >= 31) return (uint16_t)(sign | 0x7C00u);          /* 上溢 ⇒ Inf */
+    if (exp <= 0) {                                            /* 次正规 / 下溢到 0 */
+        int shift;
+        if (exp < -10) return (uint16_t)sign;
+        man |= 0x800000u;
+        shift = 14 - exp;
+        h = (uint16_t)(man >> shift);
+        rem = man & ((1u << shift) - 1u);
+        if (rem > (1u << (shift - 1)) || (rem == (1u << (shift - 1)) && (h & 1u))) h++;
+        return (uint16_t)(sign | h);
+    }
+    h = (uint16_t)(sign | ((uint32_t)exp << 10) | (man >> 13));
+    rem = man & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (h & 1u))) h++;    /* 就近偶数 */
+    return h;
+}
+
+static float px_bf16_to_f(uint16_t h) {
+    uint32_t u = (uint32_t)h << 16;
+    float out;
+    memcpy(&out, &u, 4);
+    return out;
+}
+
+static uint16_t px_f_to_bf16(float x) {
+    uint32_t u, top, rem;
+    memcpy(&u, &x, 4);
+    top = u >> 16;
+    rem = u & 0xFFFFu;
+    if ((u & 0x7F800000u) == 0x7F800000u) {                    /* Inf / NaN */
+        if ((u & 0x7FFFFFu) != 0 && (top & 0x7Fu) == 0) top |= 1u;  /* 防 NaN 退化成 Inf */
+        return (uint16_t)top;
+    }
+    if (rem > 0x8000u || (rem == 0x8000u && (top & 1u))) top++;     /* 就近偶数 */
+    return (uint16_t)top;
+}
+
 /* ══════════════════════════ 元素访问（小端） ══════════════════════════ */
 
 double onnx_t_getf(const OnnxT* t, int64_t i) {
@@ -100,6 +182,8 @@ double onnx_t_getf(const OnnxT* t, int64_t i) {
     case ONNX_DT_BOOL:   return p[i] ? 1.0 : 0.0;
     case ONNX_DT_INT16:  { int16_t v; memcpy(&v, p + i * 2, 2); return (double)v; }
     case ONNX_DT_UINT16: { uint16_t v;memcpy(&v, p + i * 2, 2); return (double)v; }
+    case ONNX_DT_FLOAT16:  { uint16_t h; memcpy(&h, p + i * 2, 2); return (double)px_f16_to_f(h); }
+    case ONNX_DT_BFLOAT16: { uint16_t h; memcpy(&h, p + i * 2, 2); return (double)px_bf16_to_f(h); }
     default: return 0.0;
     }
 }
@@ -128,6 +212,11 @@ void onnx_t_setf(OnnxT* t, int64_t i, double v) {
     case ONNX_DT_UINT8:  { t->data[i] = (unsigned char)v; break; }
     case ONNX_DT_BOOL:   { t->data[i] = v != 0.0 ? 1 : 0; break; }
     case ONNX_DT_INT16:  { int16_t x = (int16_t)v; memcpy(t->data + i * 2, &x, 2); break; }
+    case ONNX_DT_UINT16:  { uint16_t x = (uint16_t)v; memcpy(t->data + i * 2, &x, 2); break; }
+    case ONNX_DT_UINT32:  { uint32_t x = (uint32_t)v; memcpy(t->data + i * 4, &x, 4); break; }
+    case ONNX_DT_UINT64:  { uint64_t x = (uint64_t)v; memcpy(t->data + i * 8, &x, 8); break; }
+    case ONNX_DT_FLOAT16:  { uint16_t h = px_f_to_f16((float)v); memcpy(t->data + i * 2, &h, 2); break; }
+    case ONNX_DT_BFLOAT16: { uint16_t h = px_f_to_bf16((float)v); memcpy(t->data + i * 2, &h, 2); break; }
     default: break;
     }
 }
@@ -417,7 +506,13 @@ int onnx_op_cast(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
     *out = onnx_arena_new(ar, (int)to, in[0]->ndim, in[0]->dims);
     if (!*out) FAILF("Cast: 分配失败");
     for (i = 0; i < in[0]->nelem; i++) {
-        if (to == ONNX_DT_FLOAT || to == ONNX_DT_DOUBLE) onnx_t_setf(*out, i, onnx_t_getf(in[0], i));
+        /* ⚠️ M306（缺陷 527 同族）：**浮点目标一律走 `setf`**。
+         *   旧写法只把 FLOAT/DOUBLE 认成"浮点目标"，FLOAT16/BFLOAT16 落到 `seti` 分支
+         *   ⇒ 先 `geti`（对浮点源是 `(int64_t)double`，0.1 被截成 0）再写 ⇒ **静默丢精度**；
+         *   且源为 inf/NaN 时 `(int64_t)` 是 UB（C11 6.3.1.4）。 */
+        if (to == ONNX_DT_FLOAT || to == ONNX_DT_DOUBLE ||
+            to == ONNX_DT_FLOAT16 || to == ONNX_DT_BFLOAT16)
+            onnx_t_setf(*out, i, onnx_t_getf(in[0], i));
         else onnx_t_seti(*out, i, to == ONNX_DT_BOOL ? (onnx_t_getf(in[0], i) != 0.0)
                                                      : onnx_t_geti(in[0], i));
     }

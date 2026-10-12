@@ -104,7 +104,7 @@
 > |---|---|---|
 > | **S1** | 性能门接 ONNX（512³ 常规区 + 1024³ 跨页崩塌区） | ✅ M303 |
 > | **S5** | 一次性基准机流程（租 → 跑 → 存 → 销毁；GPU / ARM 真机） | **暂缓**（2026-10-12 用户指示：先做其他；租机需他亲自操作，他在外面） |
-> | **S2** | 补 `DequantizeLinear` / `QuantizeLinear`（量化算子缺口） | 待做 |
+> | **S2** | 补 `DequantizeLinear` / `QuantizeLinear`（量化算子缺口） | ✅ M306（并顺带补 `DynamicQuantizeLinear` / `MatMulInteger` ⇒ 真实 int8 模型可端到端跑） |
 > | **S3** | MatMul 分块 + B 预转置（对症「跳页 TLB 崩塌」） | 待做 —— ⚠️ **M305 实测：收益预期须下调**（EPYC 崩塌 3.75× ⇒ Xeon 仅 **1.34×**，疑为 EPYC 架构特性；见 §十三.4） |
 > | **S4** | RMSNorm / SiLU / GELU → KV cache / RoPE | 待做 |
 >

@@ -81,5 +81,11 @@
  },
  "e10_gather_rank2": {
   "G": "按 axis=0 取 [1,0] ⇒ 两行互换"
+ },
+ "e11_quant_linear": {
+  "Y": "可表示范围内的往返恒等"
+ },
+ "e12_dynquant_mmint": {
+  "Y": "动态量化激活 × int8 权重 ⇒ int32 累加"
  }
 }

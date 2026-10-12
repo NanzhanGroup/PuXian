@@ -2519,5 +2519,181 @@
     "name": null
    }
   ]
+ },
+ "e11_quant_linear": {
+  "name": "e11_quant_linear",
+  "opset": 19,
+  "inputs": [],
+  "outputs": [
+   {
+    "name": "Y",
+    "dims": [
+     4
+    ],
+    "dtype": 2
+   }
+  ],
+  "initializers": [
+   {
+    "name": "WQ",
+    "dims": [
+     4
+    ],
+    "vals": [
+     0,
+     1,
+     64,
+     255
+    ],
+    "dtype": 2
+   },
+   {
+    "name": "WS",
+    "dims": [
+     1
+    ],
+    "vals": [
+     0.5
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "WZ",
+    "dims": [
+     1
+    ],
+    "vals": [
+     128
+    ],
+    "dtype": 2
+   },
+   {
+    "name": "QS",
+    "dims": [
+     1
+    ],
+    "vals": [
+     0.5
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "QZ",
+    "dims": [
+     1
+    ],
+    "vals": [
+     128
+    ],
+    "dtype": 2
+   }
+  ],
+  "nodes": [
+   {
+    "op": "DequantizeLinear",
+    "in": [
+     "WQ",
+     "WS",
+     "WZ"
+    ],
+    "out": [
+     "WF"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "QuantizeLinear",
+    "in": [
+     "WF",
+     "QS",
+     "QZ"
+    ],
+    "out": [
+     "Y"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e12_dynquant_mmint": {
+  "name": "e12_dynquant_mmint",
+  "opset": 19,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     1,
+     2
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "Y",
+    "dims": [
+     1,
+     2
+    ],
+    "dtype": 6
+   }
+  ],
+  "initializers": [
+   {
+    "name": "W",
+    "dims": [
+     2,
+     2
+    ],
+    "vals": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "dtype": 3
+   },
+   {
+    "name": "WZ",
+    "dims": [
+     1
+    ],
+    "vals": [
+     0
+    ],
+    "dtype": 3
+   }
+  ],
+  "nodes": [
+   {
+    "op": "DynamicQuantizeLinear",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "YQ",
+     "XS",
+     "XZ"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "MatMulInteger",
+    "in": [
+     "YQ",
+     "W",
+     "XZ",
+     "WZ"
+    ],
+    "out": [
+     "Y"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
  }
 }

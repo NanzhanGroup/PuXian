@@ -710,6 +710,307 @@ int onnx_op_triu(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
     return 0;
 }
 
+/* ══════════════════════════ 量化算子（M306 · S2） ══════════════════════════
+ * 为什么单列（不混进「逐元素」那族）：
+ *   · 它们是「类型转换 + 仿射」—— 一端整型、一端浮点，还有逐张量/逐轴两种 scale 形态；
+ *     走 eltwise 的 res_dtype 规则会**选错输出类型**（它是按输入 dtype 推的）。
+ *   · 它们的**静默出错代价最高**：量化权重解错 ⇒ 模型"能跑"但数值全错；
+ *     量化公式写错 ⇒ 权重文件被静默写坏。⇒ 一切非法形态**响亮报错**（不猜、不近似）。
+ *
+ * 语义（ONNX 规范）：
+ *   DequantizeLinear  y = (x - x_zero_point) * x_scale
+ *     x            ∈ {int8, uint8, int32}（规范 T；另收 int16/uint16 —— 公式与整型宽度无关，
+ *                    多收这两个**不会**引入"看着对其实错"的路径）
+ *     x_scale      : 标量（逐张量）或 1 维（逐轴，长度 = x.dims[axis]）
+ *     x_zero_point : 可选（缺省 0），与 x_scale 同形、与 x 同类型
+ *     attr axis    : 缺省 1；**负值按秩归一**
+ *     attr block_size：缺省 0（块量化，opset 21+）⇒ 非 0 一律报错（不静默当逐轴）
+ *   QuantizeLinear    y = saturate(round_half_even(x / y_scale) + y_zero_point)
+ *     x            : 浮点
+ *     y_zero_point : 可选；**输出类型由它决定**，缺省 uint8（零点 0）
+ *     舍入 = **就近偶数**（`round_half_even`，与 onnxruntime 的 nearbyintf 同口径）
+ *     attr saturate: 缺省 1（饱和）。saturate=0（非饱和/回绕）**不支持** ⇒ 响亮报错
+ *                    （静默回绕 = 用错值继续算，正是本仓最忌讳的那一类）
+ */
+static int q_int_ok(int dt) {
+    return dt == ONNX_DT_INT8 || dt == ONNX_DT_UINT8 || dt == ONNX_DT_INT32 ||
+           dt == ONNX_DT_INT16 || dt == ONNX_DT_UINT16;
+}
+static int q_float_ok(int dt) {
+    return dt == ONNX_DT_FLOAT || dt == ONNX_DT_DOUBLE ||
+           dt == ONNX_DT_FLOAT16 || dt == ONNX_DT_BFLOAT16;
+}
+/* 整型 dtypes 的可表示范围（double 表示下界/上界都精确：|值| ≤ 2^31） */
+static void q_range(int dt, double* lo, double* hi) {
+    switch (dt) {
+    case ONNX_DT_INT8:   *lo = -128.0;        *hi = 127.0;        break;
+    case ONNX_DT_UINT8:  *lo = 0.0;           *hi = 255.0;        break;
+    case ONNX_DT_INT16:  *lo = -32768.0;      *hi = 32767.0;      break;
+    case ONNX_DT_UINT16: *lo = 0.0;           *hi = 65535.0;      break;
+    case ONNX_DT_INT32:  *lo = -2147483648.0; *hi = 2147483647.0; break;
+    default:             *lo = 0.0;           *hi = 0.0;          break;
+    }
+}
+/* 量化前的舍入：非有限值**原样透传** ⇒ 交给饱和判据兜底
+ *   （若在这里就 `(int64_t)` 转换，NaN/Inf 是 UB —— 见 C11 6.3.1.4） */
+static double q_round(double q) {
+    if (isnan(q) || isinf(q)) return q;
+    return round_half_even(q);
+}
+
+/* 解析 scale / zero_point 形态（**两个算子共用**，防口径漂移）。
+ *   逐张量：scale 元素数 == 1（标量，或形状 [1]）
+ *   逐轴  ：scale 为 1 维且长度 == x.dims[axis]（axis 缺省 1、按秩归一）
+ *   zp 非空 ⇒ 其元素数必须与 scale 相同（调用方各自再查 dtype）
+ * 成功返回 0，并给出 per_axis / ax / inner（调用方索引第 si = (i/inner) % nsc 个 scale）。 */
+static int q_resolve(const char* op, const OnnxT* x, const OnnxT* sc, const OnnxT* zp,
+                     int64_t axis_attr, int* per_axis, int64_t* ax, int64_t* inner,
+                     char* err, size_t errc) {
+    int64_t nsc = sc->nelem, j;
+    if (zp && zp->nelem != nsc)
+        FAILF("%s: zero_point 元素数 %lld ≠ scale %lld", op,
+              (long long)zp->nelem, (long long)nsc);
+    if (nsc == 1) { *per_axis = 0; *ax = 0; *inner = 1; return 0; }
+    if (sc->ndim != 1)
+        FAILF("%s: scale 必须是标量或 1 维（得 rank=%d · nelem=%lld）", op, sc->ndim, (long long)nsc);
+    {
+        int64_t a = axis_attr;
+        if (a < 0) a += x->ndim;
+        if (a < 0 || a >= x->ndim)
+            FAILF("%s: axis=%lld 越界（输入秩 %d）", op, (long long)axis_attr, x->ndim);
+        if (x->dims[a] != nsc)
+            FAILF("%s: scale 长度 %lld ≠ 输入 dims[%lld]=%lld", op,
+                  (long long)nsc, (long long)a, (long long)x->dims[a]);
+        *inner = 1;
+        for (j = a + 1; j < x->ndim; j++) *inner *= x->dims[j];
+        *per_axis = 1; *ax = a;
+    }
+    return 0;
+}
+
+int onnx_op_dequantizelinear(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                             const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    const OnnxT *x, *sc, *zp;
+    int64_t i, nelem, nsc, ax = 0, inner = 1;
+    int per_axis = 0;
+    (void)n_out; (void)ax;
+    if (n_in < 2 || n_in > 3)
+        FAILF("DequantizeLinear: 需要 2–3 个输入（x, x_scale[, x_zero_point]），得 %d", n_in);
+    if (onnx_attr_i(attrs, n_attr, "block_size", 0) != 0)
+        FAILF("DequantizeLinear: 不支持块量化（block_size≠0）");
+    x = in[0]; sc = in[1]; zp = (n_in >= 3) ? in[2] : NULL;
+    if (zp && zp->nelem == 0) zp = NULL;                  /* 空张量 = 未提供 */
+    if (!q_int_ok(x->dtype))
+        FAILF("DequantizeLinear: x 必须是整型（int8/uint8/int32），得 dtype=%d", x->dtype);
+    if (!q_float_ok(sc->dtype))
+        FAILF("DequantizeLinear: x_scale 必须是浮点，得 dtype=%d", sc->dtype);
+    if (zp && zp->dtype != x->dtype)
+        FAILF("DequantizeLinear: x_zero_point 类型必须与 x 相同（%d ≠ %d）", zp->dtype, x->dtype);
+    if (q_resolve("DequantizeLinear", x, sc, zp, onnx_attr_i(attrs, n_attr, "axis", 1),
+                  &per_axis, &ax, &inner, err, errc)) return -1;
+    *out = onnx_arena_new(ar, ONNX_DT_FLOAT, x->ndim, x->dims);
+    if (!*out) FAILF("DequantizeLinear: 分配失败");
+    nelem = x->nelem; nsc = sc->nelem;
+    for (i = 0; i < nelem; i++) {
+        int64_t si = per_axis ? ((i / inner) % nsc) : 0;
+        double xv = (double)onnx_t_geti(x, i);
+        double sv = onnx_t_getf(sc, si);
+        double zv = zp ? (double)onnx_t_geti(zp, si) : 0.0;
+        onnx_t_setf(*out, i, (xv - zv) * sv);
+    }
+    return 0;
+}
+
+int onnx_op_quantizelinear(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                           const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    const OnnxT *x, *sc, *zp;
+    int64_t i, nelem, nsc, ax = 0, inner = 1;
+    int per_axis = 0, odt;
+    double lo, hi;
+    (void)n_out; (void)ax;
+    if (n_in < 2 || n_in > 3)
+        FAILF("QuantizeLinear: 需要 2–3 个输入（x, y_scale[, y_zero_point]），得 %d", n_in);
+    if (onnx_attr_i(attrs, n_attr, "block_size", 0) != 0)
+        FAILF("QuantizeLinear: 不支持块量化（block_size≠0）");
+    if (onnx_attr_i(attrs, n_attr, "saturate", 1) == 0)
+        FAILF("QuantizeLinear: 不支持 saturate=0（非饱和量化；本实现只做饱和，且不静默回绕）");
+    x = in[0]; sc = in[1]; zp = (n_in >= 3) ? in[2] : NULL;
+    if (zp && zp->nelem == 0) zp = NULL;
+    if (!q_float_ok(x->dtype))
+        FAILF("QuantizeLinear: x 必须是浮点，得 dtype=%d", x->dtype);
+    if (!q_float_ok(sc->dtype))
+        FAILF("QuantizeLinear: y_scale 必须是浮点，得 dtype=%d", sc->dtype);
+    if (zp && !q_int_ok(zp->dtype))
+        FAILF("QuantizeLinear: y_zero_point 必须是整型（int8/uint8/int32），得 dtype=%d", zp->dtype);
+    for (i = 0; i < sc->nelem; i++)                       /* 0 刻度 ⇒ 响亮点名（不静默饱和到端点） */
+        if (onnx_t_getf(sc, i) == 0.0)
+            FAILF("QuantizeLinear: y_scale 含 0（第 %lld 项）", (long long)i);
+    odt = zp ? zp->dtype : ONNX_DT_UINT8;                 /* 规范：缺省 uint8 */
+    q_range(odt, &lo, &hi);
+    if (q_resolve("QuantizeLinear", x, sc, zp, onnx_attr_i(attrs, n_attr, "axis", 1),
+                  &per_axis, &ax, &inner, err, errc)) return -1;
+    *out = onnx_arena_new(ar, odt, x->ndim, x->dims);
+    if (!*out) FAILF("QuantizeLinear: 分配失败");
+    nelem = x->nelem; nsc = sc->nelem;
+    for (i = 0; i < nelem; i++) {
+        int64_t si = per_axis ? ((i / inner) % nsc) : 0;
+        double sv = onnx_t_getf(sc, si);
+        double zv = zp ? (double)onnx_t_geti(zp, si) : 0.0;
+        double r = q_round(onnx_t_getf(x, i) / sv) + zv;
+        if (!(r >= lo)) r = lo;                           /* NaN / -Inf 也落这一支 */
+        else if (r > hi) r = hi;
+        onnx_t_seti(*out, i, (int64_t)r);
+    }
+    return 0;
+}
+
+/* ── DynamicQuantizeLinear（M306 · S2 同族）：**运行时**求刻度的 uint8 量化 ──
+ *   x ∈ 浮点 → (y: uint8, y_scale: float 标量, y_zero_point: uint8 标量)
+ *   min_x = min(0, min(x)) · max_x = max(0, max(x))      ← **含 0**（规范要求）
+ *   y_scale = (max_x - min_x) / 255
+ *   y_zero_point = clamp(round(0 - min_x / y_scale), 0, 255)
+ *   y = clamp(round(x / y_scale) + y_zero_point, 0, 255)
+ * ⚠️ 全常量输入（含全 0）⇒ y_scale == 0 ⇒ **取 1.0**（否则除零；这一步与 onnxruntime 同口径）。
+ * ⚠️ 舍入用 **就近偶数**（与 QuantizeLinear 同一份 `q_round`）。ONNX 的两份官方参考
+ *   （onnxruntime 的 `std::round` vs onnx 参考实现的 `np.round`）在**恰好 .5** 上就不一致；
+ *   真实激活里是测度零，但口径必须写死 ⇒ 本仓统一取就近偶数，并在此登记。
+ */
+int onnx_op_dynamicquantizelinear(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                                  const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    const OnnxT* x;
+    int64_t i, nelem;
+    double mn = 0.0, mx = 0.0, scale, zp, lo = 0.0, hi = 255.0;
+    (void)attrs; (void)n_attr;
+    if (n_in != 1) FAILF("DynamicQuantizeLinear: 需要 1 个输入");
+    if (n_out < 3)
+        FAILF("DynamicQuantizeLinear: 需要 3 个输出（y, y_scale, y_zero_point），得 %d", n_out);
+    x = in[0];
+    if (!q_float_ok(x->dtype))
+        FAILF("DynamicQuantizeLinear: x 必须是浮点，得 dtype=%d", x->dtype);
+    nelem = x->nelem;
+    for (i = 0; i < nelem; i++) {
+        double v = onnx_t_getf(x, i);
+        if (v < mn) mn = v;                      /* 初值 0 ⇒ min/max 天然含 0 */
+        if (v > mx) mx = v;
+    }
+    scale = (mx - mn) / (hi - lo);
+    if (scale == 0.0 || !(scale == scale) || isinf(scale)) scale = 1.0;
+    /* 输出的是 float32 ⇒ **后续一律用 round 过的这个值**（否则算 y/zp 用的刻度
+     *   与导出的刻度不是同一个数 —— 那种"差一点"最难查） */
+    scale = (double)(float)scale;
+    zp = q_round(lo - mn / scale);
+    if (!(zp >= lo)) zp = lo;                    /* NaN / -Inf 也落这一支 */
+    else if (zp > hi) zp = hi;
+    out[0] = onnx_arena_new(ar, ONNX_DT_UINT8, x->ndim, x->dims);
+    out[1] = onnx_arena_new(ar, ONNX_DT_FLOAT, 0, NULL);       /* 标量（秩 0） */
+    out[2] = onnx_arena_new(ar, ONNX_DT_UINT8, 0, NULL);
+    if (!out[0] || !out[1] || !out[2]) FAILF("DynamicQuantizeLinear: 分配失败");
+    for (i = 0; i < nelem; i++) {
+        double r = q_round(onnx_t_getf(x, i) / scale) + zp;
+        if (!(r >= lo)) r = lo;
+        else if (r > hi) r = hi;
+        onnx_t_seti(out[0], i, (int64_t)r);
+    }
+    onnx_t_setf(out[1], 0, scale);
+    onnx_t_seti(out[2], 0, (int64_t)zp);
+    return 0;
+}
+
+/* ── MatMulInteger（M306 · S2 同族）：整数矩阵乘，int32 累加 ──
+ *   Y[...,m,n] = Σ_k (A[...,m,k] - a_zp) * (B[...,k,n] - b_zp)
+ * 零点形态：标量（逐张量）· A 侧逐行（长度 = 除末维外全部）· B 侧逐列（长度 = N）；
+ *   其它长度**响亮报错**（不猜）。
+ * ⚠️ 输出恒 int32（规范）；累加用 int64 再**越界即响亮**（不静默回绕 ——
+ *   真实模型的 K 与 8 位取值范围下不会触发，但"不会触发"不等于"可以不查"）。
+ */
+int onnx_op_matmulinteger(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                          const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    const OnnxT *A, *B, *azp, *bzp;
+    int64_t a2[ONNX_MAXDIM], b2[ONNX_MAXDIM], bshape[ONNX_MAXDIM], odims[ONNX_MAXDIM];
+    int64_t as[ONNX_MAXDIM], bs[ONNX_MAXDIM], cnt[ONNX_MAXDIM];
+    int64_t M, K, K2, N, nb = 0, batches = 1, bi, i, j, k, oi, azn, bzn, arows;
+    int n2a, n2b, vec_a = 0, vec_b = 0;
+    (void)n_out; (void)attrs; (void)n_attr;
+    if (n_in < 2 || n_in > 4)
+        FAILF("MatMulInteger: 需要 2–4 个输入（A, B[, a_zero_point[, b_zero_point]]），得 %d", n_in);
+    A = in[0]; B = in[1];
+    azp = (n_in >= 3) ? in[2] : NULL;
+    if (azp && azp->nelem == 0) azp = NULL;
+    bzp = (n_in >= 4) ? in[3] : NULL;
+    if (bzp && bzp->nelem == 0) bzp = NULL;
+    if (!q_int_ok(A->dtype))
+        FAILF("MatMulInteger: A 必须是整型（int8/uint8/int32），得 dtype=%d", A->dtype);
+    if (!q_int_ok(B->dtype))
+        FAILF("MatMulInteger: B 必须是整型（int8/uint8/int32），得 dtype=%d", B->dtype);
+    if (A->ndim == 0 || B->ndim == 0) FAILF("MatMulInteger: 不支持标量输入");
+    if (A->ndim == 1) { vec_a = 1; n2a = 2; a2[0] = 1; a2[1] = A->dims[0]; }
+    else { n2a = A->ndim; for (i = 0; i < n2a; i++) a2[i] = A->dims[i]; }
+    if (B->ndim == 1) { vec_b = 1; n2b = 2; b2[0] = B->dims[0]; b2[1] = 1; }
+    else { n2b = B->ndim; for (i = 0; i < n2b; i++) b2[i] = B->dims[i]; }
+    M = a2[n2a - 2]; K = a2[n2a - 1];
+    K2 = b2[n2b - 2]; N = b2[n2b - 1];
+    if (K != K2) FAILF("MatMulInteger: 内维不一致（%lld vs %lld）", (long long)K, (long long)K2);
+    if (!onnx_bcast_shape(a2, n2a - 2, b2, n2b - 2, bshape, (int*)&nb))
+        FAILF("MatMulInteger: batch 维不兼容");
+    for (i = 0; i < (int)nb; i++) batches *= bshape[i];
+    arows = 1;
+    for (i = 0; i < n2a - 1; i++) arows *= a2[i];
+    azn = azp ? azp->nelem : 1;
+    bzn = bzp ? bzp->nelem : 1;
+    if (azn != 1 && azn != arows)
+        FAILF("MatMulInteger: a_zero_point 元素数 %lld 既不是 1（逐张量）也不是 %lld（逐行）",
+              (long long)azn, (long long)arows);
+    if (bzn != 1 && bzn != N)
+        FAILF("MatMulInteger: b_zero_point 元素数 %lld 既不是 1（逐张量）也不是 %lld（逐列）",
+              (long long)bzn, (long long)N);
+    if (azp && azp->dtype != A->dtype)
+        FAILF("MatMulInteger: a_zero_point 类型必须与 A 相同（%d ≠ %d）", azp->dtype, A->dtype);
+    if (bzp && bzp->dtype != B->dtype)
+        FAILF("MatMulInteger: b_zero_point 类型必须与 B 相同（%d ≠ %d）", bzp->dtype, B->dtype);
+    oi = 0;
+    for (i = 0; i < (int)nb; i++) odims[oi++] = bshape[i];
+    if (!vec_a) odims[oi++] = M;
+    if (!vec_b) odims[oi++] = N;
+    *out = onnx_arena_new(ar, ONNX_DT_INT32, (int)oi, odims);
+    if (!*out) FAILF("MatMulInteger: 分配失败");
+    onnx_strides(a2, n2a, as);
+    onnx_strides(b2, n2b, bs);
+    for (i = 0; i < (int)nb; i++) {
+        int ai = (n2a - 2) - (int)nb + i, bi2 = (n2b - 2) - (int)nb + i;
+        int64_t sav = (ai < 0 || a2[ai] == 1) ? 0 : as[ai];
+        int64_t sbv = (bi2 < 0 || b2[bi2] == 1) ? 0 : bs[bi2];
+        as[i] = sav; bs[i] = sbv;
+    }
+    for (i = 0; i < (int)nb; i++) cnt[i] = 0;
+    {
+        int64_t ao = 0, bo = 0, outb = 0;
+        for (bi = 0; bi < batches; bi++) {
+            for (i = 0; i < M; i++) {
+                int64_t az = azp ? onnx_t_geti(azp, azn == 1 ? 0 : (bi * M + i) % arows) : 0;
+                for (j = 0; j < N; j++) {
+                    int64_t bz = bzp ? onnx_t_geti(bzp, bzn == 1 ? 0 : j % N) : 0;
+                    int64_t acc = 0;
+                    for (k = 0; k < K; k++)
+                        acc += (onnx_t_geti(A, ao + i * K + k) - az) *
+                               (onnx_t_geti(B, bo + k * N + j) - bz);
+                    if (acc < -2147483648LL || acc > 2147483647LL)
+                        FAILF("MatMulInteger: 累加结果 %lld 超出 int32（K=%lld）",
+                              (long long)acc, (long long)K);
+                    onnx_t_seti(*out, outb + (vec_a ? j : (vec_b ? i : i * N + j)), acc);
+                }
+            }
+            outb += (vec_a ? 1 : M) * (vec_b ? 1 : N);
+            for (j = (int)nb - 1; j >= 0; j--) {
+                cnt[j]++; ao += as[j]; bo += bs[j];
+                if (cnt[j] < bshape[j]) break;
+                cnt[j] = 0;
+                ao -= as[j] * bshape[j]; bo -= bs[j] * bshape[j];
+            }
+        }
+    }
+    return 0;
+}
+
 /* ══════════════════════════ 算子表 ══════════════════════════ */
 
 static const OnnxOpEntry g_ops[] = {
@@ -742,6 +1043,13 @@ static const OnnxOpEntry g_ops[] = {
     { "LayerNormalization", onnx_op_layernorm }, { "Where", onnx_op_where },
     { "ConstantOfShape", onnx_op_constantofshape }, { "Range", onnx_op_range },
     { "Triu", onnx_op_triu },
+    /* M306（S2 · 量化算子）：放在表尾 —— 追加不动既有算子的**执行次数下标**
+     *   （`op_counts` 按本表索引；改顺序会让既有门的 by_op 读数整体位移，
+     *     徒增一次与语义无关的重定基） */
+    { "DequantizeLinear", onnx_op_dequantizelinear },
+    { "QuantizeLinear", onnx_op_quantizelinear },
+    { "DynamicQuantizeLinear", onnx_op_dynamicquantizelinear },
+    { "MatMulInteger", onnx_op_matmulinteger },
 };
 
 int onnx_op_count(void) { return (int)(sizeof(g_ops) / sizeof(g_ops[0])); }

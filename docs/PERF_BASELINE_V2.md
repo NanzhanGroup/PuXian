@@ -374,7 +374,7 @@ M105 / M106 / M107 那三笔收益也全是语言侧的。
 |---|---|---|
 | **S1** | 性能门接 ONNX（**本节**） | ✅ 已落地（M303） |
 | **S5** | 一次性基准机流程（租 → 跑 → 存 → 销毁） | **暂缓**（2026-10-12 用户指示：先做其他） |
-| **S2** | 补 `DequantizeLinear` / `QuantizeLinear` | 待做 |
+| **S2** | 补 `DequantizeLinear` / `QuantizeLinear` | ✅ M306（同轮补 `DynamicQuantizeLinear` / `MatMulInteger` —— 真实 int8 模型需要这三个才跑得起来） |
 | **S3** | MatMul 分块 + B 预转置（**对症 12.3 的 3.58×**） | 待做 |
 | **S4** | RMSNorm / SiLU / GELU → KV cache / RoPE | 待做 |
 
