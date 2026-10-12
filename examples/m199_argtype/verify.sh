@@ -153,8 +153,18 @@ PY
         "[ \$rc != 0 ] && grep -q 'replace__p' '$W/tracks.log'"
     restore_all                                   # 先还原源码
     ./selfhost/rebake_bin.sh --entries=pxi >> "$W/neg_b.log" 2>&1   # 再用**正品源码**重烘回正品
-    chk "[5B] 还原后重烘 pxi 与入库件逐字节一致（重烘确定性自证）" \
-        "cmp -s bootstrap/pxi '$BACK/bootstrap_pxi.bin'"
+    # ⭐ M305 修正：原判据 `cmp -s bootstrap/pxi 备份`（**逐字节**）**跨目录不可达** ——
+    #    实测 `bootstrap/pxi` 内嵌 **5 处构建目录绝对路径**（`<root>/.rtcache/<key>/miniz_t*.c`）
+    #    ⇒ 在 **worktree / 分片**里重烘，路径不同 ⇒ 字节必不同
+    #      （入库件 10095320B/83bc8971 ⇄ worktree 重烘 10095344B/8f3c94ab，差 24B 全是路径）。
+    #    ⇒ 改用 M113 的口径：**源码链指纹**（`PXSRC-<16hex>`）一致 = 「重烘回正品」。
+    chk "[5B] 还原后重烘 pxi 的**源码链指纹**与入库件一致" \
+        "[ \"\$(strings bootstrap/pxi | grep -oE 'PXSRC-[0-9a-f]+' | head -1)\" = \"\$(strings '$BACK/bootstrap_pxi.bin' | grep -oE 'PXSRC-[0-9a-f]+' | head -1)\" ]"
+    # 二次重烘 ⇒ **同目录内**逐字节一致（这才是原判据想证的「重烘确定性」；实测成立）
+    cp -f bootstrap/pxi "$W/pxi_rebake1.bin"
+    ./selfhost/rebake_bin.sh --entries=pxi >> "$W/neg_b.log" 2>&1
+    chk "[5B] 同目录内二次重烘 pxi 逐字节一致（重烘确定性）" \
+        "cmp -s bootstrap/pxi '$W/pxi_rebake1.bin'"
 
     # ── A 动态（编译轨）：split 退回三元兜底 ⇒ [2] 判红 ──
     restore_all; snapshot
