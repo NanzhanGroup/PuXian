@@ -106,7 +106,7 @@ if [ ! -f "$OWN_TSV" ]; then
 else
   ok "本机档存在：$SIG.tsv"
   A=$(grep -m1 '^# machine-sig: ' "$OWN_TSV" | sed 's/^# machine-sig: //'); eq "档 machine-sig" "$SIG" "$A"
-  M=$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')
+  M=$(machine_model)
   A=$(grep -m1 '^# 生成机：' "$OWN_TSV" | grep -cF "$M")
   eq "档记载的 CPU 型号" "1" "$A"
   A=$(grep -m1 '^# 工具链：' "$OWN_TSV" | grep -oE 'px [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}')
