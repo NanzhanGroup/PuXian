@@ -46,7 +46,10 @@ rec() { printf '%s\n' "$(IFS=$'\t'; echo "$*")" >> "$REC"; }
 T0=$(date +%s)
 STARTED=$(date -u +%FT%TZ)
 LA0=$(awk '{print $1" "$2" "$3}' /proc/loadavg)
-GATES0=$(pgrep -fc 'verify\.sh|run_gates\.sh' 2>/dev/null || echo 0)
+# ⚠️ M307（M223 同款形状第 2 次）：`pgrep -fc` **无匹配时本就打印 0**（rc=1）⇒ 旧写的
+#   `|| echo 0` 会得到 "0\n0"，命令替换后是 "0 0" ≠ "0" ⇒ `quiet` **恒判 false**
+#   （报告里恒写「采集窗口存在并发全量门」= 假陈述）。⇒ `| head -1` 收口。
+GATES0=$(pgrep -fc 'verify\.sh|run_gates\.sh' 2>/dev/null | head -1); GATES0=${GATES0:-0}
 
 echo "══ collect_baseline_v2 [$TAG] ══ W=$W REPS=$REPS PIN='$PIN'"
 echo "  started=$STARTED loadavg=$LA0 并发门进程=$GATES0"
@@ -129,9 +132,9 @@ printf '  hot_build = %s s（%d 次预热后单次）\n' "$hb" "$BUILD_WARMUPS"
 
 # ── 7) 环境信息 ───────────────────────────────────────────────
 LA1=$(awk '{print $1" "$2" "$3}' /proc/loadavg)
-GATES1=$(pgrep -fc 'verify\.sh|run_gates\.sh' 2>/dev/null || echo 0)
+GATES1=$(pgrep -fc 'verify\.sh|run_gates\.sh' 2>/dev/null | head -1); GATES1=${GATES1:-0}   # 同上（M307）
 rec env host        "$(uname -n)"
-rec env cpu_model   "$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //; s/ *[0-9]*-Core.*//')"
+rec env cpu_model   "$(. "$DIR/machine_sig.sh"; machine_model | sed 's/ *[0-9]*-Core.*//')"
 rec env nproc       "$(nproc)"
 rec env mem_gib     "$(free -g | awk '/^Mem:/{print $2}')"
 rec env os          "$(grep PRETTY_NAME /etc/os-release | sed 's/.*"\(.*\)".*/\1/; s/ (.*//')"

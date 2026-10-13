@@ -288,7 +288,7 @@ update_baseline() {
     mkdir -p "$BASELINES"
     { echo "# M267 性能回归基线 —— 由 verify.sh --update 生成"
       echo "# machine-sig: $SIG"
-      echo "# 生成机：$(uname -n) · $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //') · $(nproc) 核"
+      echo "# 生成机：$(uname -n) · $(machine_model) · $(nproc) 核"
       echo "# 工具链：$("$PX" --version 2>/dev/null | head -1) · gcc $(gcc -dumpversion 2>/dev/null) · $(date -u +%FT%TZ)"
       echo "# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>"
       echo "# ⚠️ 绝对值只对**同机同工具链**有意义；判据是**相对变化**。刷新前须人工确认。"

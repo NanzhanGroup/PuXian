@@ -97,6 +97,9 @@ def main():
     ap.add_argument("--out-md", default=os.path.join(HERE, "baseline_v2.md"))
     ap.add_argument("--baseline", default=os.path.join(HERE, "baseline.tsv"))
     ap.add_argument("--commit", default="", help="代码版本（缺省取 git HEAD）")
+    ap.add_argument("--machine-sig", default="",
+                    help="机器签名（= 档的文件名 · M305 档机制要求头注含 `# machine-sig:`）"
+                         "；缺省从 raw 的 env.cpu_model 按 machine_sig.sh 同款规则推导")
     args = ap.parse_args()
 
     raw = json.load(open(args.raw, encoding="utf-8"))
@@ -179,8 +182,26 @@ def main():
     nproc = env.get("nproc", "")
     gcc = env.get("gcc", "")
     osv = env.get("os", "")
+    # ── M307：档头注**必须**含 `# machine-sig:` ─────────────────────────
+    #   为什么：M305 的档机制靠它判「选定档是不是本机档 / 是否合成档」；
+    #   而 verify.sh 的 [1] 层硬判据是「头注含 machine-sig **或**明确是合成档」
+    #   ⇒ freeze 不写它，档建出来门**当场判红**（M307 在首台 aarch64 上实测）。
+    #   签名规则与 `machine_sig.sh` 同款（小写 → 去 (r)/(tm)/N-Core/@GHz/cpu 词 →
+    #   非字母数字折叠成 '-'）；**但数据源不同**：那边读 /proc/cpuinfo（本机），
+    #   这边从 raw 的 env.cpu_model 推（档是"别人机器上采的"）。
+    sig = args.machine_sig.strip()
+    if not sig:
+        import re as _re
+        _s = cpu.lower()
+        _s = _re.sub(r"\(r\)|\(tm\)", "", _s)
+        _s = _re.sub(r"[0-9]+-core", "", _s)
+        _s = _re.sub(r"@.*", "", _s)
+        _s = _re.sub(r"\b(cpu|processor)\b", "", _s)
+        _s = _re.sub(r"[^a-z0-9]+", "-", _s).strip("-")
+        sig = _re.sub(r"-+", "-", _s)
     with open(args.baseline, "w", encoding="utf-8") as f:
         f.write("# M267 性能回归基线（v2 固化） —— 由 examples/m267_perf/freeze_baseline_v2.py 生成\n")
+        f.write("# machine-sig: %s\n" % (sig or "unknown"))
         f.write("# 生成机：%s · %s · %s 核 · gcc %s · %s\n" % (host, cpu, nproc, gcc, osv))
         f.write("# 工具链：px %s\n" % px_ver)
         f.write("# 格式：<name> <kind:run|startup|build> <unit> <baseline秒> <说明>\n")
