@@ -184,23 +184,44 @@ grep -q '^### L1 ' "$DOC" || DOCMISS=$((DOCMISS+1))
 chk "[6d] 缺陷文档覆盖 T1–T11 + L1（缺 $DOCMISS 节）" "[ '$DOCMISS' = 0 ]"
 
 # ---------- [7] 上游逐字节对拍（需检出；无则响亮 SKIP）----------
-echo "── [7] 上游逐字节对拍 ──"
-if [ -d "$UPSTREAM/registry" ]; then
-    SAME=0; DIFF=0; EXT=0
+# M307 补：**登记了补丁的包也要对拍** —— 判据是「上游 + 该补丁 == 我方」，**不是「豁免」**
+#   （补丁通道 tools/patches/registry-px/<name>.patch；与 m187 门的「补丁列 ⇔ 补丁文件」双向核对配套）。
+#   这比「无差异」**更严**：任何**未被登记补丁解释**的字节差异仍然判红。
+# ⚠️ 抽成函数是为了**给判据加牙**：NC-E/NC-F 用「篡改过的上游副本」再跑一遍**同一份**比对
+#   （不动仓库、不用备份还原）⇒ 证明 DIFF / PATBAD 两条计数**各自**真的会动。
+upstream_compare() {   # $1=上游根（默认 $UPSTREAM）；置 SAME/DIFF/EXT/PAT/PATBAD + MISSING
+    local UP="${1:-$UPSTREAM}" d n u pf st
+    SAME=0; DIFF=0; EXT=0; PAT=0; PATBAD=0
     for d in "$REG"/*/0.2.0; do
         n="$(basename "$(dirname "$d")")"
-        u="$UPSTREAM/registry/$n/0.2.0"
-        if [ -d "$u" ]; then
-            if diff -rq "$d" "$u" >/dev/null 2>&1; then SAME=$((SAME+1)); else DIFF=$((DIFF+1)); echo "      ✗ $n 与上游不一致"; fi
+        u="$UP/registry/$n/0.2.0"
+        [ -d "$u" ] || continue
+        pf="$ROOT/tools/patches/registry-px/$n.patch"
+        if [ -f "$pf" ]; then
+            PAT=$((PAT+1))
+            st="$W/pat/$n"; rm -rf "$st"; mkdir -p "$st"
+            cp -f "$u"/*.px "$st"/ 2>/dev/null
+            if ( cd "$st" && patch -p0 -s --no-backup-if-mismatch < "$pf" ) >/dev/null 2>&1; then
+                if diff -rq "$d" "$st" >/dev/null 2>&1; then SAME=$((SAME+1)); else DIFF=$((DIFF+1)); MISSING="$MISSING $n(补丁未覆盖全部差异)"; fi
+            else
+                PATBAD=$((PATBAD+1)); MISSING="$MISSING $n(补丁无法应用)"
+            fi
+        else
+            if diff -rq "$d" "$u" >/dev/null 2>&1; then SAME=$((SAME+1)); else DIFF=$((DIFF+1)); MISSING="$MISSING $n(与上游不一致)"; fi
         fi
     done
-    for u in "$UPSTREAM"/registry/*/0.2.0; do
+    for u in "$UP"/registry/*/0.2.0; do
         n="$(basename "$(dirname "$u")")"
-        [ -d "$REG/$n/0.2.0" ] || { EXT=$((EXT+1)); echo "      ✗ 上游有而我方缺：$n"; }
+        [ -d "$REG/$n/0.2.0" ] || { EXT=$((EXT+1)); MISSING="$MISSING $n(上游有而我方缺)"; }
     done
-    echo "    与上游一致 $SAME · 不一致 $DIFF · 上游有而我方缺 $EXT"
-    chk "[7] 0.2.0 与上游逐字节一致（≥120 包 · 无差异 · 无遗漏）" \
-        "[ '$SAME' -ge 120 ] && [ '$DIFF' = 0 ] && [ '$EXT' = 0 ]"
+}
+echo "── [7] 上游逐字节对拍（含补丁通道）──"
+if [ -d "$UPSTREAM/registry" ]; then
+    MISSING=""; upstream_compare "$UPSTREAM"
+    [ -n "$MISSING" ] && echo "    差异项：$MISSING"
+    echo "    与上游一致 $SAME（含补丁 $PAT）· 不一致 $DIFF · 补丁应用失败 $PATBAD · 上游有而我方缺 $EXT"
+    chk "[7] 0.2.0 与上游（含登记补丁）逐字节一致（≥120 包 · 无未解释差异 · 无遗漏）" \
+        "[ '$SAME' -ge 120 ] && [ '$DIFF' = 0 ] && [ '$EXT' = 0 ] && [ '$PATBAD' = 0 ]"
 else
     skipped "[7] 上游逐字节对拍" "无上游检出（$UPSTREAM 不存在）—— 需网络；**不是**静默放过"
 fi
@@ -291,14 +312,33 @@ if [ "$NEG" = 1 ]; then
     else
         echo "  FAIL NC-D 对照档下仍判红（rc=$R5D）⇒ [5e] 的红与扫描面无关"; fail=$((fail+1))
     fi
+    # NC-E / NC-F（M307 新判据的牙）：用**篡改过的上游副本**再跑一遍**同一份**比对
+    #   （不动仓库、不用备份还原 ⇒ 没有「还原是否忠实」这个额外变量）
+    #   NC-E：改一个**未登记补丁**的包（ansi）一个字节 ⇒ DIFF 必须 ≥1
+    #   NC-F：改一个**已登记补丁**的包（mock）的补丁锚点 ⇒ PATBAD 必须 ≥1
+    if [ -d "$UPSTREAM/registry" ]; then
+        UP_T="$W/uptamper"; rm -rf "$UP_T"; mkdir -p "$UP_T"
+        cp -a "$UPSTREAM/registry" "$UP_T/registry"
+        printf '\n# NC-E\n' >> "$UP_T/registry/ansi/0.2.0/ansi.px"
+        sed -i 's/^def mk_server_loop(port, routes, reqlog, max_conns)/def mk_server_loop_NC(port, routes, reqlog, max_conns)/' \
+            "$UP_T/registry/mock/0.2.0/mock.px"
+        MISSING=""; upstream_compare "$UP_T"
+        if [ "$DIFF" -ge 1 ] && [ "$PATBAD" -ge 1 ]; then
+            echo "  PASS NC-E/NC-F 篡改上游 ⇒ DIFF=$DIFF（未登记差异抓到）· PATBAD=$PATBAD（补丁锚点漂移抓到）✓"; pass=$((pass+1))
+        else
+            echo "  FAIL NC-E/NC-F 篡改上游后 DIFF=$DIFF / PATBAD=$PATBAD（两条计数至少一条没牙）"; fail=$((fail+1))
+        fi
+    fi
 else
-    echo "  ⊘ NC-A / NC-B / NC-C / NC-D（--neg-skip）"
+    echo "  ⊘ NC-A / NC-B / NC-C / NC-D / NC-E / NC-F（--neg-skip）"
 fi
 
 # ---------- 覆盖边界（如实登记，不假装覆盖）----------
 cat <<'EOF'
 ── 覆盖边界（如实）──
   · [7] 上游逐字节对拍**需要网络检出**；CI 无网 ⇒ 记 SKIP（本机复核请先 clone 到 $M282_UPSTREAM）。
+    登记了补丁的包按「**上游 + 该补丁** == 我方」对拍（M307）—— **不是**豁免：未被补丁解释的差异照样判红；
+    且补丁应用失败（锚点漂移）单独计数判红（NC-F 用篡改上游证它）。
   · [1] 只对拍**入口文件**的 sha256（与 THIRD_PARTY.md 的口径一致）；多文件包的**辅助文件**
     由「文件数」判据覆盖，逐文件 sha 见 M187 门。
   · 本门**不判**上游用例的通过率（那是 selfhost/run_upstream_tests.sh 的职责，登记在 EXPECTED.tsv，
