@@ -10,6 +10,8 @@
 #   ④ D5：dns_txt TCP 回退（多记录域名）—— 需外网，离线记 SKIP 不计红
 #   ⑤ D7 负控：handler 出错 → **500** + **服务存活**（VM 轨与 C 轨各跑一遍）
 #   ⑥ 门自检负控：把断言值改错必须变红（防门自欺）
+#   ⑦ D7 端口：**区间避开 ephemeral 池 + 先确认空闲再用** —— 门自身竞态
+#      （原 `20000+RANDOM%20000` 落进宿主出站端口池 32768..，偶发 Address already in use ⇒ 假红）
 # 用法：bash examples/m116_builtin_semantics/verify.sh
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -106,19 +108,56 @@ if ! command -v curl >/dev/null 2>&1; then
     skips "无 curl，跳过 D7 端到端"
 else
     mkdir -p /tmp/m116_docroot
+    # ── 端口选择：**两道防线**（修门自身竞态，判据不变）──────────────────
+    #   2026-10-14 · M307 第 5 轮实测：原 `$((20000 + RANDOM % 20000))` 裸选偶发撞占用端口
+    #   ⇒ `px_serve: 绑定端口 … 失败：Address already in use` ⇒ 服务起不来 ⇒ curl 拿 000 记红。
+    #   证据：同一二进制 + 同一环境变量连跑 100 次 ⇒ 98 绿 / 2 红（两红皆此因）；单跑 5/5 绿。
+    #   ① **区间避开宿主 ephemeral 出站端口池**（M288b 同款）：`ip_local_port_range` 实测
+    #      下界 = 32768 ⇒ 原区间 32768..39999 会与**陌生出站连接**抢端口（本机实测占用者：
+    #      v2ray:33847 / ls-server:37079）。上界改为 min(32767, 下界-1)，保底 ≥21000。
+    #   ② **先确认空闲再用**（无 LISTEN、无 TIME_WAIT）⇒ 兜住残余 TOCTOU。
+    #   ⇒ 这是**门自身的竞态**，不是产品回归（与 registry/mock「启动改轮询就绪」同族）。
+    _m116_ephem_lo="$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null || echo 32768)"
+    case "$_m116_ephem_lo" in ''|*[!0-9]*) _m116_ephem_lo=32768 ;; esac
+    _m116_port_hi=$(( _m116_ephem_lo - 1 ))
+    [ "$_m116_port_hi" -gt 32767 ] && _m116_port_hi=32767
+    [ "$_m116_port_hi" -lt 21000 ] && _m116_port_hi=21000
+    _m116_port_span=$(( _m116_port_hi - 20000 + 1 ))
+    _m116_port_free() {  # $1=port ⇒ 0=空闲（无 LISTEN、无 TIME_WAIT）
+        ss -H -ltn "sport = :$1" 2>/dev/null | grep -q . && return 1
+        ss -H -tan "sport = :$1" 2>/dev/null | grep -q . && return 1
+        return 0
+    }
+    _m116_pick_port() {
+        local p n=0
+        while [ "$n" -lt 50 ]; do
+            p=$((20000 + RANDOM % _m116_port_span))
+            _m116_port_free "$p" && { printf '%s\n' "$p"; return 0; }
+            n=$((n+1))
+        done
+        printf '%s\n' "$((20000 + RANDOM % _m116_port_span))"
+    }
     d7_case() {   # $1=标签 $2=产物路径
         local label="$1" bin="$2"
-        local port=$((20000 + RANDOM % 20000))
+        local port; port=$(_m116_pick_port)
         M116_PORT=$port "$bin" > "$TMP/d7.$label.log" 2>&1 &
         local pid=$!
-        sleep 1.5
+        # 轮询就绪（取代盲等 1.5s）：起服务 + 建连都可能有竞态，也会被负载拖慢。
+        #   进程已退（如绑定失败）立即停等，交给下面的断言判红 —— 判据不变。
+        local _i _pre="000"
+        for _i in $(seq 1 40); do
+            kill -0 "$pid" 2>/dev/null || break
+            _pre=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$port/nonexist" 2>/dev/null || echo 000)
+            [ "$_pre" != "000" ] && break
+            sleep 0.25
+        done
         local code body
         code=$(curl -s -o "$TMP/d7.body" -w '%{http_code}' --max-time 5 "http://127.0.0.1:$port/bad" 2>/dev/null || echo 000)
         body=$(head -c 60 "$TMP/d7.body" 2>/dev/null | tr -d '\n')
         local alive
         alive=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$port/nonexist" 2>/dev/null || echo 000)
         kill $pid 2>/dev/null; wait $pid 2>/dev/null
-        if [ "$code" != "500" ]; then bad "$label：出错 handler 返回 $code（应为 500）"; return; fi
+        if [ "$code" != "500" ]; then bad "$label：出错 handler 返回 $code（应为 500）"; sed 's/^/       | /' "$TMP/d7.$label.log" 2>/dev/null | tail -6; return; fi
         if [ "$alive" = "000" ]; then bad "$label：服务在 handler 出错后死亡（应继续可用）"; return; fi
         ok "$label：500 + 服务存活（后续请求 $alive）· body=\"$body\""
     }
