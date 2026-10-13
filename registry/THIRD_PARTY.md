@@ -123,8 +123,8 @@
 | markdown | 0.2.0 | 1 | `6b78667e1358066c` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | metrics | 0.1.0 | 1 | `becfbd9468200c35` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | metrics | 0.2.0 | 1 | `7e2d6c5ed1528180` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
-| mock | 0.1.0 | 1 | `674318e1c79cbddf` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
-| mock | 0.2.0 | 1 | `3056dc3f8e251f2e` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
+| mock | 0.1.0 | 1 | `2fa735aa56e54b16` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | **本地就地更新**（M307：`mk_start_server` 轮询就绪 · 上游同版本未发版） |  |
+| mock | 0.2.0 | 1 | `3cef57731933520d` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | **本地就地更新**（M307：`mk_start_server` 轮询就绪 · 上游同版本未发版） |  |
 | money | 0.1.0 | 1 | `b0a30a180f650257` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | money | 0.2.0 | 1 | `cbc5477110b2ade0` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | mongodb | 0.1.0 | 1 | `530e364f8044bea9` | 文件完整 · 测试需**真实 mongod**（127.0.0.1:27017） | 已存在（内容一致） |  |
