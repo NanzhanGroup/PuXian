@@ -118,8 +118,12 @@ def mk_route_resp(req, routes):
         return mk_build_resp(405, "method not allowed", "text/plain")
     return mk_build_resp(404, "not found", "text/plain")
 # 服务器循环：accept → 读请求 → 记日志 → 回响应；处理满 max_conns 后退出
-def mk_server_loop(port, routes, reqlog, max_conns):
+# ⚠️ M307 补：ready = **启动方传进来的共享 dict**（缺省 null ⇒ 旧行为不变）。
+#   绑定完成（tcp_listen 返回）后立刻置位，让 mk_start_server 能**等**到端口真的在听。
+def mk_server_loop(port, routes, reqlog, max_conns, ready = null):
     var lfd = tcp_listen(port)
+    if ready != null:
+        ready["ok"] = true
     var n = 0
     while n < max_conns:
         var cfd = tcp_accept(lfd)
@@ -133,8 +137,23 @@ def mk_server_loop(port, routes, reqlog, max_conns):
     tcp_close(lfd)
     return true
 # 启动桩服务器（spawn 协程）→ Ok({port, routes})
+# ⚠️ M307 补（**全量门负载下假红**的根因）：原实现「spawn 后立即 return」——
+#   listener 由被 spawn 的协程创建 ⇒ **返回时刻端口可能还没在听**。客户端只能靠自旋重试兜
+#   （upstream-tests/mock_test.px 的 20×20ms），而 mk_request 里的 tcp_connect 失败是
+#   **运行时致命错**（不是可捕获的 Err）⇒ 重试根本来不及 ⇒ 实测（M307 全量门）
+#   mock_test[build] **首跑与确认步都红**（运行时错误 [mk_request 行176]: 连接 127.0.0.1:19080 失败 (111)）。
+#   ⇒ 改为「**轮询就绪**」：等到被 spawn 的协程报「已绑定」再返回（上限 5s）。
+#   ⚠️ 与 M306 补（m183/handover.px 的固定 sleep → 轮询）**同族**：就绪等待不许是「假定已就绪」。
+#   契约不变：仍返回 Ok({port, routes})；max_conns 语义 / 请求日志 / 路由匹配一字未动。
 def mk_start_server(port, routes, reqlog, max_conns = 100):
-    spawn mk_server_loop(port, routes, reqlog, max_conns)
+    var ready = {"ok": false}
+    spawn mk_server_loop(port, routes, reqlog, max_conns, ready)
+    var i = 0
+    while i < 500:
+        if ready["ok"]:
+            break
+        sleep(10)
+        i += 1
     return Ok({"port": port, "routes": len(routes)})
 # ---- 客户端 ----
 # 解析 HTTP 响应文本 → Ok({status, status_text, headers, body}) | Err
