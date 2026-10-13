@@ -7,6 +7,11 @@
 > 原因是**我方语言面收紧**导致上游代码需要跟着改（如 M184 的严格 `int()`），而上游尚未发新版；
 > 此时该包的 sha256 记的是**打过补丁后**的内容（M187 门的「表 ⇔ 磁盘」对拍因此仍然有效）。
 > 上游修复后撤销补丁即可。
+> **当前生效的补丁（M307 起）**：`mock.patch`（`registry/mock/{0.1.0,0.2.0}`）—— 上游同版本 `mk_start_server`
+> 的启动竞态（spawn 后立即 return ⇒ 端口未必在听；而 `mk_request` 的 tcp_connect 失败是运行时致命错，
+> 重试来不及）；同族 = M305/M306 的「就绪等待不许是假定已就绪」。
+> 纪律：本列非空 ⇒ 补丁文件必须在（且每个文件必须至少在一行登记）；**「上游 + 补丁 == 我方」是判据**
+> （m282 门 [7]），不是豁免。
 > 复核：`bash examples/m187_registry_import/verify.sh` 会**重算**下表 sha256 与磁盘对拍（防漂移）。
 
 | 包 | 版本 | 文件数 | 入口 sha256（前 16） | 三轨验证 | 备注 | 补丁 |
@@ -123,8 +128,8 @@
 | markdown | 0.2.0 | 1 | `6b78667e1358066c` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | metrics | 0.1.0 | 1 | `becfbd9468200c35` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | metrics | 0.2.0 | 1 | `7e2d6c5ed1528180` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
-| mock | 0.1.0 | 1 | `2fa735aa56e54b16` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | **本地就地更新**（M307：`mk_start_server` 轮询就绪 · 上游同版本未发版） |  |
-| mock | 0.2.0 | 1 | `3cef57731933520d` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | **本地就地更新**（M307：`mk_start_server` 轮询就绪 · 上游同版本未发版） |  |
+| mock | 0.1.0 | 1 | `2fa735aa56e54b16` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | **本地就地更新**（M307：`mk_start_server` 轮询就绪 · 上游同版本未发版） | 补丁：`mock.patch` |
+| mock | 0.2.0 | 1 | `3cef57731933520d` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | **本地就地更新**（M307：`mk_start_server` 轮询就绪 · 上游同版本未发版） | 补丁：`mock.patch` |
 | money | 0.1.0 | 1 | `b0a30a180f650257` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | money | 0.2.0 | 1 | `cbc5477110b2ade0` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | mongodb | 0.1.0 | 1 | `530e364f8044bea9` | 文件完整 · 测试需**真实 mongod**（127.0.0.1:27017） | 已存在（内容一致） |  |

@@ -91,9 +91,33 @@ chk "[1] $N 包的 sha256/文件数 全部与登记表一致（漂移 0）" "[ $
 chk "[1] passhash 已引入（M189）" "grep -qE '^\\| *passhash *\\|' \"$PROV\""
 chk "[1] 上游已自修 ⇒ 本地补丁**已撤销**（passhash.patch 不存在）" "[ ! -f tools/patches/registry-px/passhash.patch ]"
 chk "[1] 补丁**通道**仍保留（引入器 = M187+M189 补丁逻辑）" "grep -q 'M187' tools/import_registry_px.sh && grep -q 'PATCHDIR=' tools/import_registry_px.sh"
-chk "[1] **全部**包的补丁列为空（纪律①：逐字节照搬 —— M198 起无例外）" "[ \"\$(grep -cE '\\|  \\|\$' \"$PROV\")\" = \"$N\" ]"
-chk "[1] 多文件包已入库（qrcode=4 · mysql=3 · xlsx=2）" "[ \"\$(ls $REG/qrcode/0.1.0/*.px | wc -l)\" = 4 ] && [ \"\$(ls $REG/mysql/0.1.0/*.px | wc -l)\" = 3 ] && [ \"\$(ls $REG/xlsx/0.1.0/*.px | wc -l)\" = 2 ]"
-
+# M307：补丁通道**再次启用**（mock：上游同版本未修的启动竞态；见 tools/patches/registry-px/mock.patch 头注）。
+#   ⇒ 判据由「零例外」**升级**为「例外必须**有据可查 + 双向核对**」——不是放宽，是把两件事都变成可判定。
+# ⚠️ 抽成函数是为了**给判据加牙**（NC-E：对**同一份逻辑**注入一个未登记的补丁文件 ⇒ 必须判红）。
+patch_col_audit() {   # $1=表文件（默认 $PROV） $2=补丁目录（默认 tools/patches/registry-px）
+    local P="${1:-$PROV}" D="${2:-tools/patches/registry-px}"
+    # 登记面 = 表行里「补丁：`x.patch`」列抽出的**名字集合**（只看表行 `^|`，**不看**文件头部的说明文字）
+    NPAT_ROW=$(grep -cE '\| 补丁：`[^`]+\.patch` \|$' "$P")
+    NPAT_EMPTY=$(grep -cE '\|  \|$' "$P")
+    NPAT_LIST="$(grep '^|' "$P" | grep -oE '\| 补丁：`[^`]+\.patch` \|' | grep -oE '`[^`]+\.patch`' | tr -d '`' | sort -u)"
+    NPAT_FILE=$(ls "$D"/*.patch 2>/dev/null | wc -l)
+    NPAT_MISS=0
+    for b in $NPAT_LIST; do
+        [ -f "$D/$b" ] || NPAT_MISS=$((NPAT_MISS+1))
+    done
+    NPAT_UNREG=0
+    for f in "$D"/*.patch; do
+        [ -f "$f" ] || continue
+        b="$(basename "$f")"
+        printf '%s\n' "$NPAT_LIST" | grep -qxF "$b" || NPAT_UNREG=$((NPAT_UNREG+1))
+    done
+    NPAT_ILLEGAL=$((NPAT_UNREG + NPAT_MISS))
+}
+patch_col_audit
+chk "[1] 补丁列 ⇔ 补丁文件 双向一致（登记 $NPAT_ROW 行 · 文件 $NPAT_FILE 个 · 未登记 $NPAT_UNREG · 缺文件 $NPAT_MISS）" \
+    "[ '$NPAT_UNREG' = 0 ] && [ '$NPAT_MISS' = 0 ] && [ '$NPAT_FILE' -ge 1 ]"
+chk "[1] 补丁列 + 空补丁列 == 表行数（守恒 $((NPAT_ROW+NPAT_EMPTY)) == $N）" \
+    "[ $((NPAT_ROW+NPAT_EMPTY)) = $N ]"
 echo "=== [2] 全量：每包 pxpkg 装 + import 解释轨跑通（$N 包）"
 APP="$W/app"; mkdir -p "$APP"; cd "$APP"
 export PX_REGISTRY="$REG"
@@ -219,7 +243,7 @@ if [ "$NEG" = 1 ]; then
     cp -f "$VICTIM" "$BACK/entry.px"; cp -f "$PROV" "$BACK/THIRD_PARTY.md"
     AUX="$(ls $REG/qrcode/0.1.0/*.px | grep -v '/qrcode.px$' | head -1)"
     cp -f "$AUX" "$BACK/aux.px"
-    restore_all() { cp -f "$BACK/entry.px" "$VICTIM"; cp -f "$BACK/THIRD_PARTY.md" "$PROV"; cp -f "$BACK/aux.px" "$AUX"; }
+    restore_all() { cp -f "$BACK/entry.px" "$VICTIM"; cp -f "$BACK/THIRD_PARTY.md" "$PROV"; cp -f "$BACK/aux.px" "$AUX"; rm -f tools/patches/registry-px/zz_nc_bogus.patch; }
     trap 'restore_all' EXIT
     sha_v() { sha256sum "$VICTIM" | cut -c1-16; }
     sha_p() { sha256sum "$PROV" | cut -c1-16; }
@@ -284,6 +308,12 @@ if [ "$NEG" = 1 ]; then
     neg A "! layer1_ok" patch_entry "$VICTIM" "$V0"
     neg B "! layer1_ok" patch_prov  "$PROV"   "$P0"
     neg C "! smoke_ok"  patch_aux   "$AUX"    "$A0"
+    # NC-E（M307 新判据的牙）：造一个**未登记**的补丁文件 ⇒ 同一份审计必须判红（UNREG≥1）
+    patch_bogus()  { mkdir -p tools/patches/registry-px; printf '# NC-E\n' > tools/patches/registry-px/zz_nc_bogus.patch; }
+    rm_bogus()     { rm -f tools/patches/registry-px/zz_nc_bogus.patch; }
+    patch_col_ok() { patch_col_audit; [ "$NPAT_ILLEGAL" = 0 ] && [ "$NPAT_FILE" -ge 1 ]; }
+    neg E "! patch_col_ok" patch_bogus "tools/patches/registry-px/zz_nc_bogus.patch" "MISSING"
+    rm_bogus
     restore_all
     [ "$(sha_v)" = "$V0" ] && [ "$(sha_p)" = "$P0" ] && [ "$(sha_a)" = "$A0" ] || { echo "  FAIL 源未逐字节还原"; fail=$((fail+1)); }
 else
