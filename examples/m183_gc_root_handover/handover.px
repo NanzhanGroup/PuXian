@@ -32,6 +32,19 @@ if ready == false:
 bad = 0
 for i in range(40):
     r = http_request(URL + "/p" + str(i), "GET")
+    # M307 补（全量门实测 1/400 假红）：传输层失败**不是**缺陷 197 的形态。
+    #   197 = 「成功响应上丢头」；而连接不上时 http_request 返回 Err（type=="result"）、
+    #   r.headers 为 null ⇒ 旧判据把「连不上」记成「丢头」。
+    #   实测（M307 全量门 18:27 一档）：10 连跑里 1 次 bad=1，而同门单跑 10/10 绿。
+    #   ⇒ 对「不是成功响应」的那一笔做**有界重试**（500×10ms）；仍然拿不到成功响应才计入 bad
+    #     （服务端真死了照样判红 —— 判据没有退化成「无限等」）。
+    #   判据强度不降：**成功响应**缺 X-M183 / Content-Length ⇒ 立即计入 bad
+    #     （负控 A 恢复缺陷 197 时走的正是这条，仍然必红）。
+    var k = 0
+    while type(r) == "result" and k < 500:
+        sleep(10)
+        r = http_request(URL + "/p" + str(i), "GET")
+        k += 1
     hh = r.headers
     xm = false
     cl = false

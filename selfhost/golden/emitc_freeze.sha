@@ -200,7 +200,7 @@ examples/m181_uninit_read/e7_shadow_outer_frame.px src=bdebd5af97c7327c rc=0 out
 examples/m181_uninit_read/e8_while_zero_iter.px src=bfb5145656964ba0 rc=0 out=d412a8c1a719ff0a8eda7b0e5b4dda3a err=e3b0c44298fc1c14
 examples/m181_uninit_read/ok_side.px src=29bbe34ace1cc562 rc=0 out=62cb3a0adab7402244f491cd55e789ee err=e3b0c44298fc1c14
 examples/m182_hdr_root/probe.px src=a2b74a1bf326d0c8 rc=0 out=6b683650b86a11c08d0b5a478175a630 err=e3b0c44298fc1c14
-examples/m183_gc_root_handover/handover.px src=db7d3f6cd7603433 rc=0 out=f217e91988a35bc1a7e777b0fa2b9742 err=e3b0c44298fc1c14
+examples/m183_gc_root_handover/handover.px src=1d8852162d42ebe9 rc=0 out=fd47905cb0e9e5b1b1ae93ec647ecd4d err=e3b0c44298fc1c14
 examples/m183_gc_root_handover/s3flow.px src=816dca93819ecc65 rc=0 out=360a6e0d6db60a2331d8f3e8b01479f3 err=e3b0c44298fc1c14
 examples/m184_num_fs_strict/listdir_sem.px src=00147d2c30339d69 rc=0 out=8bf79164270dec309e1b51bf9cfb80fc err=e3b0c44298fc1c14
 examples/m184_num_fs_strict/mkdir_sem.px src=e6e0901d452f94ea rc=0 out=7e7e18c2ff6004fb78a043fc2965d896 err=e3b0c44298fc1c14
