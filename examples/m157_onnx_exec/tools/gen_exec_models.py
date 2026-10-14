@@ -471,6 +471,9 @@ def m07_const_range():
     m.op("Add", ["CZ", "RG"], ["SUM"])
     m.op("Triu", ["M3"], ["TU"]) 
     m.op("Triu", ["M3"], ["TU1"], [attr("k", "i", -1)])
+    # M308（S4）：注册名 Triu/Trilu **两名并存** —— 规范名 Trilu 必须也在语料里真的跑过
+    #   （m157 门 ④ 断言「注册表 == 语料执行集合」：注册而未执行 ⇒ 红）。
+    m.op("Trilu", ["M3"], ["TU2"], [attr("k", "i", -1)])
     m.op("Identity", ["X"], ["ID"])
     m.init("sh23", [2], [2, 3], INT64)
     m.op("Expand", ["RG", "sh23"], ["EXP"])
@@ -479,6 +482,7 @@ def m07_const_range():
     m.out("SUM", [2, 3])
     m.out("TU", [3, 3])
     m.out("TU1", [3, 3])
+    m.out("TU2", [3, 3])
     m.out("ID", [1, 3])
     m.out("EXP", [2, 3])
     m.exact("CZ", [7.0] * 6, "ConstantOfShape(value=7) 手算")
@@ -486,6 +490,7 @@ def m07_const_range():
     m.exact("SUM", [7.0, 8.0, 9.0, 7.0, 8.0, 9.0], "CZ + RG 广播手算")
     m.exact("TU", [1.0, 2.0, 3.0, 0.0, 5.0, 6.0, 0.0, 0.0, 9.0], "上三角 k=0")
     m.exact("TU1", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 8.0, 9.0], "上三角 k=-1")
+    m.exact("TU2", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 8.0, 9.0], "上三角 k=-1（**规范名 Trilu**，与 TU1 逐值一致）")
     m.exact("EXP", [0.0, 1.0, 2.0, 0.0, 1.0, 2.0], "expand [3]→[2,3] = 复制两行")
     return m
 

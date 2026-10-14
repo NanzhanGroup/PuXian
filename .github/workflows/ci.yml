@@ -1286,6 +1286,11 @@ jobs:
           bash examples/m306_onnx_quant/verify.sh --neg-skip > /tmp/v_m306.log 2>&1 || { echo "❌ m306 门失败（三方对拍 18 例 · 9 条行为负控 · 算子覆盖 · 静态在位）"; grep -E '^(  ❌|     |        )' /tmp/v_m306.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m306_onnx_quant（逐张量/逐轴 × 就近偶数 × 双端饱和 × fp16/bf16 刻度 · 手算真值↔独立参考↔C · 18/0）PASS"
 
+      - name: m308_onnx_ops（ONNX 推理算子补齐 S4：Gelu/Silu/RMSNormalization/ScatterND/Cos/Sin + Trilu 别名 · M308）
+        run: |
+          bash examples/m308_onnx_ops/verify.sh --neg-skip > /tmp/v_m308.log 2>&1 || { echo "❌ m308 门失败（三条腿：手算真值↔独立参考↔C · 复算腿 · Gelu 两档可判异 · 7 条行为负控 · 算子覆盖 · 静态在位）"; grep -E '^(  ❌|     |        )' /tmp/v_m308.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m308_onnx_ops（3 正例 × 3 条腿 + 7 行为负控 + 算子覆盖 + Trilu 规范名 · 39/0）PASS"
+
       - name: selfwake_guard（禁止自建平行告警/唤醒通道 · 用户令 2026-10-12）
         # 本机侧扫描面（/data/gatevm 的无人值守脚本）在 CI 上不存在 ⇒ 该档记 ℹ️ 跳过，
         # 判据**不因此失效**（J4 规模锚点只锚仓库面）。仓库面在 CI 上有完整牙。

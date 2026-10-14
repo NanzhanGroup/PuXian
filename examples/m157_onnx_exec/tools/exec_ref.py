@@ -788,6 +788,8 @@ OPS = {
                                   n["attrs"]["value"].get("dtype", FLOAT))],
     "Range": lambda env, n: [op_range(env, n)],
     "Triu": lambda env, n: [op_triu(env, n)],
+    # M308（S4）：规范名 Trilu 与 Triu 同义（两份名字都必须能走独立参考）
+    "Trilu": lambda env, n: [op_triu(env, n)],
     # M306（S2）：量化算子
     "DequantizeLinear": lambda env, n: [op_dequantizelinear(env, n)],
     "QuantizeLinear": lambda env, n: [op_quantizelinear(env, n)],

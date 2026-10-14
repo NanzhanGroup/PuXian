@@ -1184,6 +1184,11 @@ static const OnnxOpEntry g_ops[] = {
     { "LayerNormalization", onnx_op_layernorm }, { "Where", onnx_op_where },
     { "ConstantOfShape", onnx_op_constantofshape }, { "Range", onnx_op_range },
     { "Triu", onnx_op_triu },
+    /* M308（S4 · §二.4 命名缺口）：ONNX 规范名是 **Trilu**，本仓历史注册名是 Triu，
+     *   而 onnx_op_find 走精确 strcmp ⇒ 真实模型里的 Trilu 节点会「未实现的算子」。
+     *   **两条都注册**（同一个实现）：旧名不许删（既有 m157 语料与已过检的产物依赖它），
+     *   新名补上规范可达性；m157 语料同步各跑一遍（注册表 == 语料执行集合的硬约束）。 */
+    { "Trilu", onnx_op_triu },
     /* M306（S2 · 量化算子）：放在表尾 —— 追加不动既有算子的**执行次数下标**
      *   （`op_counts` 按本表索引；改顺序会让既有门的 by_op 读数整体位移，
      *     徒增一次与语义无关的重定基） */

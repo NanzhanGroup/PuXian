@@ -1,0 +1,378 @@
+{
+ "e13_s4_ops": {
+  "name": "e13_s4_ops",
+  "opset": 20,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "G1",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "G2",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SI",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "CO",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SN",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "R1",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "R0",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SCND",
+    "dims": [
+     3,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "SC",
+    "dims": [
+     4
+    ],
+    "vals": [
+     1.0,
+     2.0,
+     3.0,
+     4.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "DATA",
+    "dims": [
+     3,
+     4
+    ],
+    "vals": [
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0,
+     7.0,
+     8.0,
+     9.0,
+     10.0,
+     11.0,
+     12.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "IDX",
+    "dims": [
+     2,
+     2
+    ],
+    "vals": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "UPD",
+    "dims": [
+     2
+    ],
+    "vals": [
+     99.0,
+     -7.5
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "Gelu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "G1"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Gelu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "G2"
+    ],
+    "attrs": {
+     "approximate": "tanh"
+    },
+    "name": null
+   },
+   {
+    "op": "Silu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "SI"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Cos",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "CO"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sin",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "SN"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "RMSNormalization",
+    "in": [
+     "X",
+     "SC"
+    ],
+    "out": [
+     "R1"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "RMSNormalization",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "R0"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "ScatterND",
+    "in": [
+     "DATA",
+     "IDX",
+     "UPD"
+    ],
+    "out": [
+     "SCND"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e14_rms_axis_eps": {
+  "name": "e14_rms_axis_eps",
+  "opset": 23,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     2,
+     3,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "R_EPS",
+    "dims": [
+     2,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "R_AX1",
+    "dims": [
+     2,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "R_SC",
+    "dims": [
+     2,
+     3,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "SC",
+    "dims": [
+     4
+    ],
+    "vals": [
+     1.0,
+     2.0,
+     3.0,
+     4.0
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "RMSNormalization",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "R_EPS"
+    ],
+    "attrs": {
+     "epsilon": 0.5
+    },
+    "name": null
+   },
+   {
+    "op": "RMSNormalization",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "R_AX1"
+    ],
+    "attrs": {
+     "axis": 1
+    },
+    "name": null
+   },
+   {
+    "op": "RMSNormalization",
+    "in": [
+     "X",
+     "SC"
+    ],
+    "out": [
+     "R_SC"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e15_trilu_alias": {
+  "name": "e15_trilu_alias",
+  "opset": 20,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     3,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "T",
+    "dims": [
+     3,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [],
+  "nodes": [
+   {
+    "op": "Trilu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "T"
+    ],
+    "attrs": {
+     "k": -1
+    },
+    "name": null
+   }
+  ]
+ }
+}
