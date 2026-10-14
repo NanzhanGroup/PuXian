@@ -374,5 +374,310 @@
     "name": null
    }
   ]
+ },
+ "e16_kv_decode": {
+  "name": "e16_kv_decode",
+  "opset": 20,
+  "inputs": [],
+  "outputs": [
+   {
+    "name": "O_STEP",
+    "dims": [
+     3,
+     2
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "O_ONCE",
+    "dims": [
+     3,
+     2
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "CACHE",
+    "dims": [
+     3,
+     2
+    ],
+    "vals": [
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     0.0,
+     0.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SLOT",
+    "dims": [
+     1,
+     1
+    ],
+    "vals": [
+     2
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "K_NEW",
+    "dims": [
+     1,
+     2
+    ],
+    "vals": [
+     5.0,
+     6.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "K_PAST",
+    "dims": [
+     2,
+     2
+    ],
+    "vals": [
+     1.0,
+     2.0,
+     3.0,
+     4.0
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "ScatterND",
+    "in": [
+     "CACHE",
+     "SLOT",
+     "K_NEW"
+    ],
+    "out": [
+     "O_STEP"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Concat",
+    "in": [
+     "K_PAST",
+     "K_NEW"
+    ],
+    "out": [
+     "O_ONCE"
+    ],
+    "attrs": {
+     "axis": 0
+    },
+    "name": null
+   }
+  ]
+ },
+ "e17_rope": {
+  "name": "e17_rope",
+  "opset": 20,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "COS",
+    "dims": [
+     2,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SIN",
+    "dims": [
+     2,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "GX",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "ROT",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "XC",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RS",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "OUT",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "POS",
+    "dims": [
+     2,
+     1
+    ],
+    "vals": [
+     0.0,
+     1.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "ROT_IDX",
+    "dims": [
+     4
+    ],
+    "vals": [
+     2,
+     3,
+     0,
+     1
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "SIGN",
+    "dims": [
+     4
+    ],
+    "vals": [
+     -1.0,
+     -1.0,
+     1.0,
+     1.0
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "Cos",
+    "in": [
+     "POS"
+    ],
+    "out": [
+     "COS"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sin",
+    "in": [
+     "POS"
+    ],
+    "out": [
+     "SIN"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Gather",
+    "in": [
+     "X",
+     "ROT_IDX"
+    ],
+    "out": [
+     "GX"
+    ],
+    "attrs": {
+     "axis": 1
+    },
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "GX",
+     "SIGN"
+    ],
+    "out": [
+     "ROT"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "X",
+     "COS"
+    ],
+    "out": [
+     "XC"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "ROT",
+     "SIN"
+    ],
+    "out": [
+     "RS"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Add",
+    "in": [
+     "XC",
+     "RS"
+    ],
+    "out": [
+     "OUT"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
  }
 }

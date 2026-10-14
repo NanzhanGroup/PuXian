@@ -11,5 +11,18 @@
  },
  "e15_trilu_alias": {
   "T": "上三角 k=-1（**规范名 Trilu**，与 m157 语料 TU1 逐值一致）"
+ },
+ "e16_kv_decode": {
+  "O_STEP": "ScatterND 写第 2 槽（增量路径）",
+  "O_ONCE": "Concat 全长（**必须与 O_STEP 逐值等价** —— ③d 层直接判这条）"
+ },
+ "e17_rope": {
+  "COS": "cos(0), cos(1)（10 位）",
+  "SIN": "sin(0), sin(1)（10 位）",
+  "GX": "rotate_half 置换 [2,3,0,1]",
+  "ROT": "置换后前半取负",
+  "XC": "x·cos（位置 0/1 广播 · 10 位）",
+  "RS": "rotate_half(x)·sin（位置 0/1 广播 · 10 位）",
+  "OUT": "RoPE：x·cos + rotate_half(x)·sin（位置 0/1，10 位）"
  }
 }

@@ -46,6 +46,7 @@
 | [`HTTP_GZIP_NEGOTIATION.md`](HTTP_GZIP_NEGOTIATION.md) | gzip **内容协商**口径（q 值 / `*` 通配 / token 大小写 / `opts{"gzip": false}` 开关；**一个进程一套配置**） |
 | [`WS_CONN_LIFECYCLE.md`](WS_CONN_LIFECYCLE.md) · [`WS_UPGRADE.md`](WS_UPGRADE.md) | WebSocket 连接生命周期（引用计数 + 延迟释放）· HTTP 请求 → WebSocket **升级接管**（`ws_stream`） |
 | [`ONNX_QUANT.md`](ONNX_QUANT.md) | **ONNX 量化算子口径**（M306 / S2）：4 个算子的精确语义 · 三条统一口径（就近偶数 / 非有限值不落整数转换 / 刻度与算式同源）· 零点形态表 · 覆盖边界（含「未与 onnxruntime 对拍」） |
+| [`ONNX_INFER_OPS.md`](ONNX_INFER_OPS.md) | **ONNX 推理算子口径**（M308 / S4）：`Gelu`/`Silu`/`RMSNormalization`/`ScatterND`/`Cos`/`Sin` + `Trilu` 别名 · 三条口径（两档可判异 / 容差写死 / 响亮优于静默）· 判据在哪（三条腿 + 等价腿 + 6 道负控）· **覆盖边界** · attention 辅助落地程度 |
 
 ### A5 性能与度量口径
 

@@ -146,6 +146,66 @@ def judgment():
     return [m, alias]
 
 
+def rope_kv():
+    """attention 辅助的两条判据模型（M308-PLAN §二.S2：KV cache 布局 / RoPE）。
+
+    `e16_kv_decode` —— **KV cache 增量解码等价性**：预分配 cache 上的「逐步 ScatterND 写入」
+      必须与「一次性 Concat 全长」**逐值等价**（§二.S2 的硬判据）。
+      ⚠️ 这条关系 **exec_ref 表达不了**（它比对的是「图 vs 手算真值」，不是「两个输出互等」）
+      ⇒ 由 `tools/kv_equiv.py` 单独守（门的 ③d 层）；两条腿都在，不互相代偿。
+
+    `e17_rope` —— **RoPE 复合式**：Cos/Sin（本里程碑 S1 新增）+ Gather（rotate_half 置换）
+      + 广播乘加，串成一张真实的旋转位置编码图 —— 证明「补的算子真能组起来跑一个解码步」，
+      而不只是各自孤零零地过一遍。真值手算（10 位），并交由 exec_ref 独立复算双保险。
+    """
+    # ── e16：KV cache 增量解码（O_STEP ⇄ O_ONCE 必须逐值等价）──
+    kv = G.M("e16_kv_decode", opset=20)
+    kv.init("CACHE", [3, 2], [1.0, 2.0, 3.0, 4.0, 0.0, 0.0])   # 预分配 T_max=3，前 2 槽有效
+    kv.init("SLOT", [1, 1], [2], INT64)                        # 本次写入第 2 槽（0 基）
+    kv.init("K_NEW", [1, 2], [5.0, 6.0])                       # 新 token 的 K
+    kv.init("K_PAST", [2, 2], [1.0, 2.0, 3.0, 4.0])            # 已解码部分（全长路径用）
+    kv.op("ScatterND", ["CACHE", "SLOT", "K_NEW"], ["O_STEP"])
+    kv.op("Concat", ["K_PAST", "K_NEW"], ["O_ONCE"], [G.attr("axis", "i", 0)])
+    kv.out("O_STEP", [3, 2])
+    kv.out("O_ONCE", [3, 2])
+    kv.exact("O_STEP", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "ScatterND 写第 2 槽（增量路径）")
+    kv.exact("O_ONCE", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+             "Concat 全长（**必须与 O_STEP 逐值等价** —— ③d 层直接判这条）")
+
+    # ── e17：RoPE 复合式（rotate_half：Gather 置换 + 前半取负）──
+    rp = G.M("e17_rope", opset=20)
+    rp.inp("X", [2, 4], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    rp.init("POS", [2, 1], [0.0, 1.0])                         # 位置（T=2）
+    rp.init("ROT_IDX", [4], [2, 3, 0, 1], INT64)               # rotate_half 的置换
+    rp.init("SIGN", [4], [-1.0, -1.0, 1.0, 1.0])               # 置换后前半取负
+    rp.op("Cos", ["POS"], ["COS"])
+    rp.op("Sin", ["POS"], ["SIN"])
+    rp.op("Gather", ["X", "ROT_IDX"], ["GX"], [G.attr("axis", "i", 1)])
+    rp.op("Mul", ["GX", "SIGN"], ["ROT"])
+    rp.op("Mul", ["X", "COS"], ["XC"])
+    rp.op("Mul", ["ROT", "SIN"], ["RS"])
+    rp.op("Add", ["XC", "RS"], ["OUT"])
+    for nm in ("COS", "SIN"):
+        rp.out(nm, [2, 1])
+    for nm in ("GX", "ROT", "XC", "RS"):
+        rp.out(nm, [2, 4])
+    rp.out("OUT", [2, 4])
+    rp.exact("COS", [1.0, 0.5403023059], "cos(0), cos(1)（10 位）")
+    rp.exact("SIN", [0.0, 0.8414709848], "sin(0), sin(1)（10 位）")
+    rp.exact("GX", [3.0, 4.0, 1.0, 2.0, 7.0, 8.0, 5.0, 6.0], "rotate_half 置换 [2,3,0,1]")
+    rp.exact("ROT", [-3.0, -4.0, 1.0, 2.0, -7.0, -8.0, 5.0, 6.0], "置换后前半取负")
+    rp.exact("XC", [1.0, 2.0, 3.0, 4.0,
+                    2.7015115293, 3.2418138352, 3.7821161411, 4.3224184469],
+             "x·cos（位置 0/1 广播 · 10 位）")
+    rp.exact("RS", [0.0, 0.0, 0.0, 0.0,
+                    -5.8902968937, -6.7317678785, 4.2073549240, 5.0488259088],
+             "rotate_half(x)·sin（位置 0/1 广播 · 10 位）")
+    rp.exact("OUT", [1.0, 2.0, 3.0, 4.0,
+                     -3.1887853643, -3.4899540433, 7.9894710651, 9.3712443558],
+             "RoPE：x·cos + rotate_half(x)·sin（位置 0/1，10 位）")
+    return [kv, rp]
+
+
 def main():
     os.makedirs(MODELS, exist_ok=True)
     os.makedirs(FEEDS, exist_ok=True)
@@ -165,7 +225,8 @@ def main():
     names.append(pos.name)
 
     # ── 本门专有判据模型（属性语义：epsilon / axis / scale）──
-    for m in judgment():
+    # ── + attention 辅助（§二.S2：KV cache 增量解码等价性 / RoPE 复合式）──
+    for m in judgment() + rope_kv():
         open(os.path.join(MODELS, m.name + ".onnx"), "wb").write(m.build())
         graphs[m.name] = m.graph_json()
         json.dump(m.feeds, open(os.path.join(FEEDS, m.name + ".json"), "w"),

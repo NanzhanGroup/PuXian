@@ -106,7 +106,7 @@
 > | **S5** | 一次性基准机流程（租 → 跑 → 存 → 销毁；GPU / ARM 真机） | **暂缓**（2026-10-12 用户指示：先做其他；租机需他亲自操作，他在外面） |
 > | **S2** | 补 `DequantizeLinear` / `QuantizeLinear`（量化算子缺口） | ✅ M306（并顺带补 `DynamicQuantizeLinear` / `MatMulInteger` ⇒ 真实 int8 模型可端到端跑） |
 > | **S3** | MatMul 分块 + B 预转置（对症「跳页 TLB 崩塌」） | 待做 —— ⚠️ **M305 实测：收益预期须下调**（EPYC 崩塌 3.75× ⇒ Xeon 仅 **1.34×**，疑为 EPYC 架构特性；见 §十三.4） |
-> | **S4** | RMSNorm / SiLU / GELU → KV cache / RoPE | 待做 |
+> | **S4** | RMSNorm / SiLU / GELU → KV cache / RoPE | ✅ M308（6 算子 + `Trilu` 规范名别名；**KV cache 增量 ⇄ 全长逐值等价** · RoPE 复合式；口径与覆盖边界见 `docs/ONNX_INFER_OPS.md`） |
 >
 > ⚠️ **定位要说清**：这条线**不是**「用 PuXian 重写模型」（模型主体是**权重=数据**，
 > 用 `.px` 表达它没有意义），而是 **PuXian 写引擎 / 服务 / 调度，模型仍以 ONNX 格式喂进来**。
