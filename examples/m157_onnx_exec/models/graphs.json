@@ -1866,6 +1866,14 @@
     "dtype": 1
    },
    {
+    "name": "TU2",
+    "dims": [
+     3,
+     3
+    ],
+    "dtype": 1
+   },
+   {
     "name": "ID",
     "dims": [
      1,
@@ -2024,6 +2032,19 @@
     ],
     "out": [
      "TU1"
+    ],
+    "attrs": {
+     "k": -1
+    },
+    "name": null
+   },
+   {
+    "op": "Trilu",
+    "in": [
+     "M3"
+    ],
+    "out": [
+     "TU2"
     ],
     "attrs": {
      "k": -1

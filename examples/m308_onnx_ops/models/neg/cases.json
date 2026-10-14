@@ -1,0 +1,37 @@
+[
+ {
+  "name": "n01_scatternd_oob",
+  "why": "下标越界",
+  "op": "ScatterND"
+ },
+ {
+  "name": "n02_scatternd_updates_len",
+  "why": "updates 元素数不符",
+  "op": "ScatterND"
+ },
+ {
+  "name": "n03_scatternd_k_gt_rank",
+  "why": "indices 末维 > data 秩",
+  "op": "ScatterND"
+ },
+ {
+  "name": "n04_scatternd_dtype",
+  "why": "data/updates 类型不符",
+  "op": "ScatterND"
+ },
+ {
+  "name": "n05_gelu_bad_approx",
+  "why": "Gelu approximate 非法",
+  "op": "Gelu"
+ },
+ {
+  "name": "n06_rms_axis_oob",
+  "why": "RMSNormalization axis 越界",
+  "op": "RMSNormalization"
+ },
+ {
+  "name": "n07_rms_scale_len",
+  "why": "scale 元素数不符",
+  "op": "RMSNormalization"
+ }
+]
