@@ -277,6 +277,12 @@ cat <<'TXT'
      · 缺陷 512 修的是「首包无效就丢弃」，**未**度量「噪声包洪泛下的 accept 延迟」
        （deadline 保护不变，但每丢一个包会短暂分配一个 conn 槽再释放）。
      · `quic_migrate`（客户端迁移）路径的同族 fd 处理**未在本门覆盖**（缺陷 504 待修）。
+     · **读数端**在 M307 补（五）改成**有界轮询**（≤8 次）：本门服务端回显后立即
+       `quic_close` + `quic_close_listener` 退出 ⇒ 客户端后续 pump 的 ACK 撞 ICMP
+       port-unreachable ⇒ `recvfrom` 报 `ECONNREFUSED` ⇒ **单发** `quic_recv` 在回显
+       已躺在收队列里时也会返回 ""（服务端 `M296-SEND2-RET 12` 已证数据确已写出）。
+       判据未变（仍要求 `echo2:ping-B`）；**同族未改**：`quic_pump` 的 ICMP 差错路径
+       仍会把「已收数据 + 偶发差错」判成空读 —— 即在本条实如其分地登记（产品侧待议）。
 TXT
 
 echo ""
