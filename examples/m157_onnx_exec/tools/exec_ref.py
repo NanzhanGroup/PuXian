@@ -511,6 +511,69 @@ def op_triu(env, n):
     return T(X["dims"], out, X["dtype"])
 
 
+# ── M308（S4）：推理算子补齐（独立第三份实现，不与 C 侧共享代码） ──
+def gelu(env, n):
+    X = env[n["in"][0]]
+    ap = n["attrs"].get("approximate", "none")
+    if ap == "tanh":
+        c = math.sqrt(2.0 / math.pi)
+        f = lambda x: 0.5 * x * (1.0 + math.tanh(c * (x + 0.044715 * x * x * x)))
+    elif ap == "none":
+        f = lambda x: 0.5 * x * (1.0 + math.erf(x / math.sqrt(2.0)))
+    else:
+        raise ValueError("Gelu approximate=%r（只认 none/tanh）" % ap)
+    return ew([X], f, X["dtype"])
+
+
+def silu(env, n):
+    X = env[n["in"][0]]
+    def f(x):
+        e = math.exp(-abs(x))
+        return x / (1.0 + e) if x > 0 else x * e / (1.0 + e)
+    return ew([X], f, X["dtype"])
+
+
+def op_rmsnorm(env, n):
+    X = env[n["in"][0]]
+    sc = env[n["in"][1]] if len(n["in"]) > 1 and n["in"][1] else None
+    axis = int(n["attrs"].get("axis", -1))
+    eps = float(n["attrs"].get("epsilon", 1e-5))
+    dims, nd = X["dims"], len(X["dims"])
+    if axis < 0:
+        axis += nd
+    outer, inner = prod(dims[:axis]), prod(dims[axis:])
+    sn = len(sc["vals"]) if sc else 0
+    out = [0.0] * len(X["vals"])
+    for o in range(outer):
+        base = o * inner
+        ss = sum(X["vals"][base + i] ** 2 for i in range(inner))
+        inv = 1.0 / math.sqrt(ss / inner + eps)
+        for i in range(inner):
+            v = X["vals"][base + i] * inv
+            if sc is not None:
+                v *= sc["vals"][0 if sn == 1 else i]
+            out[base + i] = v
+    return T(dims, out, FLOAT)
+
+
+def op_scatternd(env, n):
+    data, idx, upd = env[n["in"][0]], env[n["in"][1]], env[n["in"][2]]
+    dims = data["dims"]
+    k = idx["dims"][-1]
+    nupd, sl = prod(idx["dims"][:-1]), prod(dims[k:])
+    out, st = list(data["vals"]), st_of(dims)
+    for u in range(nupd):
+        base = 0
+        for j in range(k):
+            v = int(idx["vals"][u * k + j])
+            if not (0 <= v < dims[j]):
+                raise ValueError("ScatterND 下标越界（第 %d 维取 %d）" % (j, v))
+            base += v * st[j]
+        for s2 in range(sl):
+            out[base + s2] = upd["vals"][u * sl + s2]
+    return T(dims, out, data["dtype"])
+
+
 def unary(fn):
     return lambda env, n: ew([env[n["in"][0]]], lambda x: fn(x), env[n["in"][0]]["dtype"])
 
@@ -730,6 +793,13 @@ OPS = {
     "QuantizeLinear": lambda env, n: [op_quantizelinear(env, n)],
     "DynamicQuantizeLinear": lambda env, n: op_dynamicquantizelinear(env, n),
     "MatMulInteger": lambda env, n: [op_matmulinteger(env, n)],
+    # M308（S4）：推理算子补齐
+    "Gelu": gelu,
+    "Silu": silu,
+    "Cos": unary(math.cos),
+    "Sin": unary(math.sin),
+    "RMSNormalization": lambda env, n: [op_rmsnorm(env, n)],
+    "ScatterND": lambda env, n: [op_scatternd(env, n)],
 }
 
 
