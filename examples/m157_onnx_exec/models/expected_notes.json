@@ -87,5 +87,15 @@
  },
  "e12_dynquant_mmint": {
   "Y": "动态量化激活 × int8 权重 ⇒ int32 累加"
+ },
+ "e13_s4_ops": {
+  "G1": "gelu erf 式 0.5x(1+erf(x/sqrt2)) 手算（10 位）",
+  "G2": "gelu tanh 式 0.5x(1+tanh(sqrt(2/pi)(x+0.044715x^3))) 手算 —— 与 G1 **必须不同**",
+  "SI": "x*sigmoid(x) 手算",
+  "CO": "cos 手算",
+  "SN": "sin 手算",
+  "R0": "RMSNorm(无 scale)：x/sqrt(mean(x^2)+1e-5)，mean=14.25/4",
+  "R1": "RMSNorm * scale[1,2,3,4] 手算",
+  "SCND": "ScatterND：DATA[0,1]=99 · DATA[2,3]=-7.5（逐值精确）"
  }
 }

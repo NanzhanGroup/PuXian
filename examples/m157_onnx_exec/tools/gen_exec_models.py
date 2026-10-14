@@ -91,6 +91,8 @@ def enc_attr(name, kind, value):
             value[0], value[1], value[2], value[3] if len(value) > 3 else FLOAT))
     elif kind == "floats":
         b += packed_f32(7, value)
+    elif kind == "s":                 # M308（S4）：字符串属性（Gelu.approximate）
+        b += s_field(4, value)
     else:
         raise ValueError(kind)
     return b
@@ -642,12 +644,52 @@ def m12_dynquant_mmint():
     return m
 
 
+
+def m13_s4_ops():
+    """M308（S4）：推理算子补齐 —— Gelu（erf/tanh 两档）· Silu · Cos/Sin · RMSNormalization · ScatterND。
+    手算真值取 10 位小数（对拍容差 rtol 1e-5，留足余量）；Gelu 两档**值不相同**（tanh 档与
+    erf 档在 x=-2 处差 ~1e-4）—— 这正是 m308 门负控①要守的那条判据。"""
+    m = M("e13_s4_ops", opset=20)
+    X = [-2.0, -0.5, 1.0, 3.0]
+    m.inp("X", [1, 4], X)
+    m.op("Gelu", ["X"], ["G1"])                                        # erf 精确式（无属性）
+    m.op("Gelu", ["X"], ["G2"], [attr("approximate", "s", "tanh")])    # tanh 近似式
+    m.op("Silu", ["X"], ["SI"])
+    m.op("Cos", ["X"], ["CO"])
+    m.op("Sin", ["X"], ["SN"])
+    m.init("SC", [4], [1.0, 2.0, 3.0, 4.0])
+    m.op("RMSNormalization", ["X", "SC"], ["R1"])
+    m.op("RMSNormalization", ["X"], ["R0"])
+    # ScatterND：KV cache 写入形态（k=2 坐标 · slice=1）—— 逐值精确
+    m.init("DATA", [3, 4], [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]])
+    m.init("IDX", [2, 2], [0, 1, 2, 3], INT64)
+    m.init("UPD", [2], [99.0, -7.5])
+    m.op("ScatterND", ["DATA", "IDX", "UPD"], ["SCND"])
+    for nm in ("G1", "G2", "SI", "CO", "SN", "R1", "R0"):
+        m.out(nm, [1, 4])
+    m.out("SCND", [3, 4])
+    m.exact("G1", [-0.0455002639, -0.1542687694, 0.8413447461, 2.9959503059],
+            "gelu erf 式 0.5x(1+erf(x/sqrt2)) 手算（10 位）")
+    m.exact("G2", [-0.0454023059, -0.1542859902, 0.8411919906, 2.9963626079],
+            "gelu tanh 式 0.5x(1+tanh(sqrt(2/pi)(x+0.044715x^3))) 手算 —— 与 G1 **必须不同**")
+    m.exact("SI", [-0.2384058440, -0.1887703344, 0.7310585786, 2.8577223805], "x*sigmoid(x) 手算")
+    m.exact("CO", [-0.4161468365, 0.8775825619, 0.5403023059, -0.9899924966], "cos 手算")
+    m.exact("SN", [-0.9092974268, -0.4794255386, 0.8414709848, 0.1411200081], "sin 手算")
+    m.exact("R0", [-1.0596243985, -0.2649060996, 0.5298121992, 1.5894365977],
+            "RMSNorm(无 scale)：x/sqrt(mean(x^2)+1e-5)，mean=14.25/4")
+    m.exact("R1", [-1.0596243985, -0.5298121992, 1.5894365977, 6.3577463908],
+            "RMSNorm * scale[1,2,3,4] 手算")
+    m.exact("SCND", [1.0, 99.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, -7.5],
+            "ScatterND：DATA[0,1]=99 · DATA[2,3]=-7.5（逐值精确）")
+    return m
+
+
 def main():
     os.makedirs(MODELS, exist_ok=True)
     os.makedirs(FEEDS, exist_ok=True)
     ms = [m01_eltwise(), m02_matmul(), m03_softmax_reduce(), m04_movement(),
           m05_gelu_funcs(), m06_layernorm(), m07_const_range(), m08_attn(), m09_erf_grid(), m10_gather_rank2(),
-          m11_quant(), m12_dynquant_mmint()]
+          m11_quant(), m12_dynquant_mmint(), m13_s4_ops()]
     nego = os.path.join(MODELS, "neg")
     os.makedirs(nego, exist_ok=True)
     negs = []

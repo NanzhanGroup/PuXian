@@ -197,7 +197,8 @@ ELT2(onnx_op_xor, E_XOR)
 /* ══════════════════════════ 一元算子 ══════════════════════════ */
 
 enum { U_SQRT = 1, U_ERF, U_EXP, U_LOG, U_ABS, U_NEG, U_CEIL, U_FLOOR, U_ROUND,
-       U_RECIP, U_SIGN, U_TANH, U_SIGMOID, U_RELU, U_LEAKY, U_ELU, U_SOFTPLUS, U_NOT };
+       U_RECIP, U_SIGN, U_TANH, U_SIGMOID, U_RELU, U_LEAKY, U_ELU, U_SOFTPLUS, U_NOT,
+       U_COS, U_SIN };
 
 static double round_half_even(double x) {   /* ONNX Round：四舍六入五取偶 */
     double f = floor(x), d = x - f;
@@ -245,6 +246,8 @@ static int unary(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
             case U_LEAKY:   r = x >= 0 ? x : alpha * x; break;
             case U_ELU:     r = x >= 0 ? x : alpha * (exp(x) - 1.0); break;
             case U_SOFTPLUS:r = log1p(exp(-fabs(x))) + (x > 0 ? x : 0); break;
+            case U_COS:     r = cos(x); break;
+            case U_SIN:     r = sin(x); break;
             default: break;
             }
             onnx_t_setf(*out, i, r);
@@ -274,6 +277,8 @@ UN1(onnx_op_tanh, U_TANH, 0.0)
 UN1(onnx_op_sigmoid, U_SIGMOID, 0.0)
 UN1(onnx_op_relu, U_RELU, 0.0)
 UN1(onnx_op_not, U_NOT, 0.0)
+UN1(onnx_op_cos, U_COS, 0.0)
+UN1(onnx_op_sin, U_SIN, 0.0)
 
 int onnx_op_leakyrelu(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
                       const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
@@ -1011,6 +1016,142 @@ int onnx_op_matmulinteger(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int
     return 0;
 }
 
+/* ══════════════════════════ M308（S4）· 推理算子补齐 ══════════════════════════
+ * 补的是「跑一个 transformer 解码步」所缺的那几个：
+ *   Gelu（opset20 · erf/tanh 两档）· Silu · RMSNormalization（opset23）
+ *   · Cos / Sin（RoPE 前置）· ScatterND（KV cache 写入）。
+ * 数值口径（对拍关键，写清楚免得每次重新推）：
+ *   · Gelu 精确档 = 0.5·x·(1+erf(x/√2))（复用 onnx_erf，全程 double）；
+ *     tanh 档 = 0.5·x·(1+tanh(√(2/π)·(x+0.044715·x³)))。
+ *     **两档必须都在场且可判异** —— m308 门的负控①把两档写成同一式，必须判红。
+ *   · Silu 单实现 x·σ(x)：按 x 的符号分支（e=exp(-|x|)），避免大负 x 上 exp(-x) 溢出。
+ *   · RMSNormalization：y = x / sqrt(mean_tail(x²)+eps) · scale —— axis 起的**尾部维**做归一化
+ *     （与 LayerNormalization 同口径）；scale 形状 = X.shape[axis:]（允许标量）。
+ *   · ScatterND：KV cache 写入的唯一手段；**越界/形状不符一律响亮报错**（不静默截断）。
+ */
+int onnx_op_gelu(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                 const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    size_t slen = 0;
+    const char* approx = onnx_attr_s(attrs, n_attr, "approximate", &slen);
+    int use_tanh = 0;
+    int64_t i;
+    (void)n_out;
+    if (n_in < 1) FAILF("Gelu: 需要 1 个输入");
+    if (approx && slen) {
+        if (strncmp(approx, "tanh", 4) == 0) use_tanh = 1;
+        else if (strncmp(approx, "none", 4) == 0) use_tanh = 0;
+        else FAILF("Gelu: approximate 只认 \"none\"/\"tanh\"（收到 %.16s）", approx);
+    }
+    *out = onnx_arena_new(ar, in[0]->dtype, in[0]->ndim, in[0]->dims);
+    if (!*out) FAILF("Gelu: 分配失败");
+    for (i = 0; i < in[0]->nelem; i++) {
+        double x = onnx_t_getf(in[0], i), r;
+        if (use_tanh) {
+            const double c = 0.7978845608028654;   /* sqrt(2/pi) */
+            r = 0.5 * x * (1.0 + tanh(c * (x + 0.044715 * x * x * x)));
+        } else {
+            r = 0.5 * x * (1.0 + onnx_erf(x * 0.7071067811865476));  /* x/sqrt(2) */
+        }
+        onnx_t_setf(*out, i, r);
+    }
+    return 0;
+}
+
+int onnx_op_silu(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                 const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    int64_t i;
+    (void)n_out; (void)attrs; (void)n_attr;
+    if (n_in != 1) FAILF("Silu: 需要 1 个输入");
+    *out = onnx_arena_new(ar, in[0]->dtype, in[0]->ndim, in[0]->dims);
+    if (!*out) FAILF("Silu: 分配失败");
+    for (i = 0; i < in[0]->nelem; i++) {
+        double x = onnx_t_getf(in[0], i), e = exp(-(x < 0 ? -x : x));
+        onnx_t_setf(*out, i, x > 0 ? x / (1.0 + e) : x * e / (1.0 + e));
+    }
+    return 0;
+}
+
+int onnx_op_rmsnorm(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                    const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    int64_t axis = onnx_attr_i(attrs, n_attr, "axis", -1), outer = 1, inner = 1;
+    double eps = onnx_attr_f(attrs, n_attr, "epsilon", 1e-5);
+    int64_t i, o;
+    int nd;
+    (void)n_out;
+    if (n_in < 1) FAILF("RMSNormalization: 需要输入");
+    if (eps < 0.0) FAILF("RMSNormalization: epsilon 不能为负（%g）", eps);
+    nd = in[0]->ndim;
+    if (axis < 0) axis += nd;
+    if (axis < 0 || axis >= nd) FAILF("RMSNormalization: axis 越界");
+    for (i = 0; i < axis; i++) outer *= in[0]->dims[i];
+    for (i = axis; i < nd; i++) inner *= in[0]->dims[i];
+    if (n_in >= 2 && in[1]->nelem != inner && in[1]->nelem != 1)
+        FAILF("RMSNormalization: scale 元素数 %lld 既不是 1 也不是归一化长度 %lld",
+              (long long)in[1]->nelem, (long long)inner);
+    *out = onnx_arena_new(ar, ONNX_DT_FLOAT, nd, in[0]->dims);
+    if (!*out) FAILF("RMSNormalization: 分配失败");
+    for (o = 0; o < outer; o++) {
+        int64_t base = o * inner;
+        double ss = 0.0, inv;
+        for (i = 0; i < inner; i++) {
+            double v = onnx_t_getf(in[0], base + i);
+            ss += v * v;
+        }
+        inv = 1.0 / sqrt(ss / (double)inner + eps);
+        for (i = 0; i < inner; i++) {
+            double v = onnx_t_getf(in[0], base + i) * inv;
+            if (n_in >= 2) v *= onnx_t_getf(in[1], in[1]->nelem == 1 ? 0 : i);
+            onnx_t_setf(*out, base + i, v);
+        }
+    }
+    return 0;
+}
+
+/* ScatterND（opset16）：out = data；out[indices[u]] = updates[u]
+ *   indices: [..., k]（整型），updates: indices.shape[:-1] + data.shape[k:]
+ *   k ≤ rank(data)；坐标按 data 的**前 k 维**解释。 */
+int onnx_op_scatternd(OnnxArena* ar, OnnxT** out, int n_out, OnnxT** in, int n_in,
+                      const OnnxAttr* attrs, int n_attr, char* err, size_t errc) {
+    OnnxT *data, *idx, *upd;
+    int64_t k, nupd = 1, slice = 1, i, u, j;
+    int64_t dst[ONNX_MAXDIM];
+    int64_t es;
+    (void)n_out; (void)attrs; (void)n_attr;
+    if (n_in != 3) FAILF("ScatterND: 需要 3 个输入（data, indices, updates）");
+    data = in[0]; idx = in[1]; upd = in[2];
+    if (!is_int_dt(idx->dtype)) FAILF("ScatterND: indices 必须是整型（收到 dtype=%d）", idx->dtype);
+    if (idx->ndim < 1) FAILF("ScatterND: indices 秩需 ≥1");
+    k = idx->dims[idx->ndim - 1];
+    if (k < 1) FAILF("ScatterND: indices 末维（k）需 ≥1");
+    if (k > data->ndim) FAILF("ScatterND: indices 末维 %lld 超过 data 秩 %d",
+                              (long long)k, data->ndim);
+    for (j = 0; j < idx->ndim - 1; j++) nupd *= idx->dims[j];
+    for (j = k; j < data->ndim; j++) slice *= data->dims[j];
+    if (upd->nelem != nupd * slice)
+        FAILF("ScatterND: updates 元素数 %lld ≠ indices.shape[:-1]×data.shape[k:] = %lld",
+              (long long)upd->nelem, (long long)(nupd * slice));
+    if (data->dtype != upd->dtype)
+        FAILF("ScatterND: data 与 updates 类型不一致（%d ≠ %d）", data->dtype, upd->dtype);
+    es = (int64_t)onnx_t_esize(data->dtype);
+    if (es == 0) FAILF("ScatterND: 不支持的元素类型（dtype=%d）", data->dtype);
+    *out = onnx_arena_new(ar, data->dtype, data->ndim, data->dims);
+    if (!*out) FAILF("ScatterND: 分配失败");
+    memcpy((*out)->data, data->data, data->nbytes);
+    onnx_strides(data->dims, data->ndim, dst);
+    for (u = 0; u < nupd; u++) {
+        int64_t base = 0;
+        for (j = 0; j < k; j++) {
+            int64_t v = onnx_t_geti(idx, u * k + j);
+            if (v < 0 || v >= data->dims[j])
+                FAILF("ScatterND: 下标越界（第 %lld 维取 %lld，合法区间 [0,%lld)）",
+                      (long long)j, (long long)v, (long long)data->dims[j]);
+            base += v * dst[j];
+        }
+        memcpy((*out)->data + base * es, upd->data + u * slice * es, (size_t)(slice * es));
+    }
+    return 0;
+}
+
 /* ══════════════════════════ 算子表 ══════════════════════════ */
 
 static const OnnxOpEntry g_ops[] = {
@@ -1050,6 +1191,13 @@ static const OnnxOpEntry g_ops[] = {
     { "QuantizeLinear", onnx_op_quantizelinear },
     { "DynamicQuantizeLinear", onnx_op_dynamicquantizelinear },
     { "MatMulInteger", onnx_op_matmulinteger },
+    /* M308（S4 · 推理算子补齐）：**同样追加到表尾** —— 不动既有算子的执行次数下标 */
+    { "Gelu", onnx_op_gelu },
+    { "Silu", onnx_op_silu },
+    { "RMSNormalization", onnx_op_rmsnorm },
+    { "ScatterND", onnx_op_scatternd },
+    { "Cos", onnx_op_cos },
+    { "Sin", onnx_op_sin },
 };
 
 int onnx_op_count(void) { return (int)(sizeof(g_ops) / sizeof(g_ops[0])); }
