@@ -1,4 +1,13 @@
 # M296 门 · 语料（客户端）：端口与标签由环境变量给（同一份二进制跑 A / B 两条连接）
+# ── M307 补（五）：读数端**有界轮询**，收口「负载敏感假红」（第 7 轮全量门红）──────
+#   症状：宿主有负载时 [4d]「第二条客户端拿到回显」偶发读到空串（服务端侧
+#         `M296-SEND2-RET 12` 已证回显**确实写出去了**），而同一份二进制**重读一次**就能拿到。
+#   机理（程序外可复现）：本门的服务端在回显后**立即** `quic_close` + `quic_close_listener`
+#         并退出 ⇒ 客户端下一次 pump 里 `ngtcp2_conn_write_pkt` 把 ACK 发往**已关闭**的端口
+#         ⇒ ICMP port-unreachable 回到本 socket ⇒ 之后的 `recvfrom` 报 `ECONNREFUSED`
+#         ⇒ `quic_pump` 返回 -2 ⇒ **单发** `quic_recv` 在「回显包已躺在收队列里」时也返回 ""。
+#   判据不动（仍要求拿到 `echo2:ping-B`）；改的是「怎么读」—— 真客户端是**轮询读**，
+#   单发一次本就不是合法客户端。有界（≤8 次 / 每次 ≤5s），不会无限等。
 import "c/ngtcp2"
 
 extern def quic_connect(ip: str, port: int, alpn: str) -> int
@@ -21,7 +30,14 @@ if c <= 0:
 else:
     print("M296-CLI-" + tag + "-CONNECTED")
     quic_send(c, "ping-" + tag)
-    var r = quic_recv(c, 2048)
+    var r = ""
+    var i = 0
+    while i < 8:
+        r = quic_recv(c, 2048)
+        if r != "":
+            i = 8
+        else:
+            i = i + 1
     print("M296-CLI-" + tag + "-ECHO [" + r + "]")
     quic_close(c)
 print("M296-CLI-" + tag + "-DONE")
