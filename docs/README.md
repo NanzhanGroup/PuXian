@@ -96,7 +96,7 @@
 
 ## C 区 · 历史档案（按里程碑记录，可追溯，不要当现状读）
 
-- `M53_PLAN.md` … `M123_PLAN.md`、`M89_*`、`M90_S*`、`M95_S5_PLAN.md`、`M104_native_prestudy.md` 等 —— **各里程碑的开工计划 / 预研 / 设计文档**。
+- `M53_PLAN.md` … `M123_PLAN.md`、**`M308_PLAN.md`（进行中：ONNX 线 S4）**、`M89_*`、`M90_S*`、`M95_S5_PLAN.md`、`M104_native_prestudy.md` 等 —— **各里程碑的开工计划 / 预研 / 设计文档**。
   它们的「结论」只在**当时**成立；后续里程碑可能已推翻（例：`M104_native_prestudy.md` 时代的 native 名册与裁剪口径与今天不同）。
   要现状 ⇒ 读 A 区 + `CHANGELOG.md` 对应里程碑节。
 - `pxi_native_diff.md` —— M68 前后的解释器 / 编译轨 native 差异分析（该缺口已由 M68 根治，保留供追溯）。
