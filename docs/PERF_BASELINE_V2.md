@@ -376,7 +376,7 @@ M105 / M106 / M107 那三笔收益也全是语言侧的。
 | **S5** | 一次性基准机流程（租 → 跑 → 存 → 销毁） | **暂缓**（2026-10-12 用户指示：先做其他） |
 | **S2** | 补 `DequantizeLinear` / `QuantizeLinear` | ✅ M306（同轮补 `DynamicQuantizeLinear` / `MatMulInteger` —— 真实 int8 模型需要这三个才跑得起来） |
 | **S3** | MatMul 分块 + B 预转置（**对症 12.3 的 3.58×**） | 待做 |
-| **S4** | RMSNorm / SiLU / GELU → KV cache / RoPE | 待做 |
+| **S4** | RMSNorm / SiLU / GELU → KV cache / RoPE | ✅ M308（6 算子 + `Trilu` 规范名别名；**本里程碑明确定「不设绝对性能判据」** ⇒ 本节**未新增** S4 负载，性能门接入移交下一轮；口径与覆盖边界见 `docs/ONNX_INFER_OPS.md`） |
 
 ⚠️ 顺序理由：**没有基准机（S5），S2–S4 的收益都量不准** ——
 这正是 S5 被排在实现类工作**之前**的原因（依据 = 本报告 §2.2 立的规矩：
