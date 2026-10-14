@@ -1,3 +1,55 @@
+## M307 发布小结（v0.2.307 · 2026-10-14）— 三绿 + tag 对齐 + 第 8 轮全量门 213/0 · 随行两台 Intel 基准档入仓
+
+> 发布后收尾（台账 `dy-ops-m307post`，2026-10-14 17:55 挂账）。**结论：发布面全部对齐，无待用户拍板事项。**
+
+### 一 tag 核对（origin == 本地）
+
+| 项 | 值 |
+|---|---|
+| 本地 `v0.2.307`（annotated） | tag 对象 `05f0cb3b` → commit **`8c06e8c`**（`git describe --tags HEAD` = 精确 `v0.2.307`，无 `-N-g` 后缀） |
+| `git ls-remote origin refs/tags/v0.2.307` | `05f0cb3b` ⇒ **同一 tag 对象、同一 commit** |
+| `main` | 本地 == `origin/main` == `8c06e8c`（无 ahead/behind） |
+
+### 二 CI 三绿（commit `8c06e8c`）
+
+| 工作流 | 结果 | run |
+|---|---|---|
+| PuXian CI | success | `38545828442` |
+| PuXian Tag Guard | success | `38545828440` |
+| Release | success | `38545828589` |
+
+（清歌 18:30 独立复验帖时点 CI 仍 `in_progress`，其后已收敛 `success`。）
+清歌侧复验：`sha256sum -c` OK（`d8e42ad3…`）· 包内 `VERSION=0.2.307` · hello+fib(20)+dict 冒烟通过。
+
+### 三 全量门
+
+第 8 轮全量门 **213 门全绿 / 0 红**（9950s）⇒ 裁决 **GREEN**。本里程碑共 5 个补丁提交（补一~补五），
+**全在门/判据侧（零 runtime）**，逐条收口见上节（§一~§六）。
+
+### 四 随行交付：两台 Intel「S5 一次性机」档入仓（M307 遗留）
+
+M307 之后又跑了第二、第三台 S5 租用机（**两台按量机已销毁，数据只在本机**）。本次把两档**连同正确的 raw** 入仓：
+
+| 档 | 机器 | 采集窗口（3 组独立采集取 min） |
+|---|---|---|
+| `baselines/intel-xeon-gold-6462c.tsv` | `iZj6chsaojnjk8brz2q8cfZ` · Xeon Gold 6462C · 8 核 | 2026-10-13T09:53:57Z .. 09:55:08Z |
+| `baselines/intel-xeon-6982p-c.tsv` | `iZj6c9bkxssh8zjro5c3j2Z` · Xeon 6982P-C · 8 核 | 2026-10-13T09:54:00Z .. 09:55:13Z |
+
+- 同批 raw 留证：`examples/m267_perf/raw_baseline_v2.intel-xeon-{gold-6462c,6982p-c}.{json,md}`（3 次独立采集全量）。
+- **值可信度复核**：用 `_s5_incoming` 原始回传重跑 `freeze_baseline_v2.py` ⇒ 档数字与本次入库文件**逐字节一致**
+  （唯一差异是「代码版本」头注，见下）。
+- ⚠️ **头注「代码版本」补齐**：两台档当时在**无 git 的副本**里固化 ⇒ 原为 `?（?）`。本次按**工具链 `px 0.2.306`**
+  （= tag `v0.2.306` = commit `5f5df98`）补齐（与 `neoverse-n2.tsv` 同值）。
+- ⚠️ **「留档错拷」已澄清（不是 `s5_remote_baseline.sh` 的 bug）**：`/data/gatevm/m307-s5-extra/` 里曾有一份
+  `raw_baseline_v2.intel-xeon-*.json`（33662 B），其内容实为 **0.2.17 / EPYC / 2026-10-05 的陈旧残留** ——
+  它等于 `/tmp/s5a|b/examples/m267_perf/raw_baseline_v2.json`（**仓库跟踪件**）⇒ 系**留档时错拷**。
+  脚本回传实际取到的是 `_s5_incoming/` 里的**新鲜**数据（该目录 rep1-3 与合并 raw 均为 Xeon 数据，
+  step 5 冻出的档与之逐字节一致）。本次已改用正确回传（33 333 / 33 303 B）入仓。
+- 崩塌比对照（`onnx_mm1024` GFLOPS ÷ `onnx_mm512`，口径见 §14.4）：**Gold 6462C 0.79×（无崩塌）** ·
+  **6982P-C 1.78×**。⇒ 与「EPYC 3.75× / E5-2682v4 1.34× / N2 1.00×」并列，**「跨页崩塌是 EPYC 架构特性」
+  这一推断出现反例**（6982P-C 上仍显）。⚠️ 两机的 `onnx_mm512` 读数高度一致（0.5245 / 0.5242 s）
+  —— 疑该项被固定开销主导，**比值口径需下一轮复核**（本档只如实留数，不下结论）。
+
 ## M307 补（2026-10-13）— 全量门两处**负载敏感假红**收口（m183 探针 · registry/mock 启动契约）
 
 > 背景：M307 全量门（22:25 结束）红 2 项 —— `m183_gc_root_handover`、`upstream_tests`。

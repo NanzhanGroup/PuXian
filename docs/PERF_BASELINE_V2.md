@@ -574,3 +574,36 @@ aarch64 只在 openEuler 上跑过，el9 只在 x86_64 上跑过。这台机器�
   需同时改 `collect_baseline_v2.sh` / `baseline_v2_json.py` / `freeze_baseline_v2.py` **三处**的 ORDER
   （注意：改 ORDER 会让**旧 raw** 在 `compare` 时报「有采集缺此指标」⇒ 需同步重采或兼容处理）。
 - 本档是**第三档**，也是**第一台 aarch64 档**；合成档机制（无本机档时取各档逐负载 max）未改。
+
+### 14.8 补入第二/第三台 S5 一次性机的档（2026-10-14）
+
+M307（§十四）当时只入了 aarch64 第一档 `neoverse-n2`；其后又跑了**两台 x86_64 一次性机**，
+本次把两档连同**正确的 raw** 一起入库（机器**已销毁**，数据只在本机）：
+
+| 档 | 机器 | 采集窗口（3 组取 min） | raw 留证 |
+|---|---|---|---|
+| `baselines/intel-xeon-gold-6462c.tsv` | `iZj6chsaojnjk8brz2q8cfZ` · Xeon Gold 6462C · 8 核 | 2026-10-13T09:53:57Z..09:55:08Z | `raw_baseline_v2.intel-xeon-gold-6462c.json` |
+| `baselines/intel-xeon-6982p-c.tsv` | `iZj6c9bkxssh8zjro5c3j2Z` · Xeon 6982P-C · 8 核 | 2026-10-13T09:54:00Z..09:55:13Z | `raw_baseline_v2.intel-xeon-6982p-c.json` |
+
+- 工具链 `px 0.2.306`（= tag `v0.2.306` = commit `5f5df98`）；口径指纹与既有三档一致（`5d39d21c…`）。
+- 「代码版本」头注：两台档原在**无 git 的副本**里固化 ⇒ 为 `?（?）`，本次按工具链 commit `5f5df98` 补齐。
+- **复核**：以 `_s5_incoming` 原始回传重跑 `freeze_baseline_v2.py` ⇒ 档数字逐字节一致。
+
+**跨页崩塌比（补两个数据点）**：`onnx_mm1024` GFLOPS ÷ `onnx_mm512`（口径 §14.4）
+
+| 机器 | 512³ GFLOPS | 1024³ GFLOPS | 崩塌比 |
+|---|---|---|---|
+| EPYC 7K62 | 1.103 | 0.294 | 3.75× |
+| Xeon E5-2682 v4 | 0.649 | 0.483 | 1.34× |
+| Neoverse-N2 | 1.437 | 1.442 | 1.00× |
+| Xeon Gold 6462C | 0.512 | 0.648 | **0.79×**（无崩塌） |
+| Xeon 6982P-C | 0.512 | 0.287 | **1.78×** |
+
+⇒ §14.4 的推断「崩塌**很可能是 EPYC 的架构特性**」**出现反例**：6982P-C 上仍有 1.78× 崩塌。
+⚠️ 但两机的 `onnx_mm512` 读数几乎相同（0.5245 / 0.5242 s，GFLOPS 同为 0.512）——
+疑 512³ 档被**固定开销**（模型/内核准备）主导 ⇒ **比值口径需复核**；本档只如实留数，不下定论。
+
+**留档错拷的澄清（非脚本 bug）**：`/data/gatevm/m307-s5-extra/` 里的
+`raw_baseline_v2.intel-xeon-*.json`（33 662 B）内容其实是**旧 EPYC/0.2.17/2026-10-05 残留**
+（= 仓库跟踪件 `/tmp/s5a|b/examples/m267_perf/raw_baseline_v2.json`）⇒ 属**留档时错拷**。
+`s5_remote_baseline.sh` 的回传取件路径**无问题**（实际取到 `_s5_incoming/` 的新鲜数据）。
