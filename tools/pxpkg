@@ -8,6 +8,8 @@
 #   pxpkg install [--locked]            按 px.toml 安装 + 写/校验 px.pkg.lock
 #   pxpkg list                          列出依赖与安装状态
 #   pxpkg remove <name>                 移除依赖
+#   pxpkg sync [--base URL] [--registry DIR] [--dry-run] [--force]
+#                                       同步远程 registry（W1 · docs/PXPKG_SYNC_PLAN.md）
 # 环境变量：
 #   PX_REGISTRY    registry 目录（结构 <name>/<version>/<name>.px），semver 范围依赖需要
 #   在应用目录内运行（或 PXPKG_DIR 指定）
@@ -67,6 +69,11 @@ case "$CMD" in
     remove)
         [ $# -ge 1 ] || { echo "用法: pxpkg remove <name>" >&2; exit 1; }
         run_px remove "$1" ;;
+    sync)
+        # M309 候选 C3 · W1：registry 在线分发客户端（实现在 tools/pxpkg_sync.sh）
+        #   ⚠️ 不回退 PX_REGISTRY：本子命令要写的是**本地缓存 registry**，
+        #   不是包内那份只读 registry（回退会把目标指错 —— 见文件头 ① 的注释）。
+        exec "$PKG_HOME/tools/pxpkg_sync.sh" "$@" ;;
     --version|-v)
         echo "pxpkg 0.1.0 (普贤 PuXian · M45 registry 版本化)" ;;
     help|--help|-h)
@@ -80,11 +87,15 @@ pxpkg —— PuXian 包管理器（M45）
   pxpkg list                      列出依赖与安装状态
   pxpkg remove <name>             移除依赖
   pxpkg --version                 输出版本号
+  pxpkg sync [--base URL]        同步远程 registry 到本地（幂等 · 原子 · 落盘即验）
+            [--registry DIR]     落地目录（默认 $HOME/.pxpkg/registry）
+            [--dry-run|--force]
 
 环境变量:
   PX_REGISTRY  registry 目录（结构 <name>/<version>/<name>.px），semver 范围依赖需要
 
 示例:
+  pxpkg sync --registry ~/.pxpkg/registry   # 一条 URL 拿全量 registry（W1）
   PX_REGISTRY=/path/registry pxpkg add mylib@^1.2.0
   PX_REGISTRY=/path/registry pxpkg install
   PX_REGISTRY=/path/registry pxpkg install --locked
