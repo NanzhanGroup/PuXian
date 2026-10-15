@@ -12,6 +12,10 @@
 #   ⑥ 门自检负控：把断言值改错必须变红（防门自欺）
 #   ⑦ D7 端口：**区间避开 ephemeral 池 + 先确认空闲再用** —— 门自身竞态
 #      （原 `20000+RANDOM%20000` 落进宿主出站端口池 32768..，偶发 Address already in use ⇒ 假红）
+#   ⑧ D7 就绪轮询：**取码必须归一化**（2026-10-15 · M308 第 1 轮复跑实测）——
+#      $(curl … || echo 000) 在**连接失败**时得到 **000000** ⇒ != "000" 恒真 ⇒
+#      第一次轮询就 break（等于没等就绪）⇒ /bad 撞在 listen 之前 ⇒ 假红（负载越高越必红）。
+#      ⇒ 改 _m116_http（失败只可能是 000）+ 真等到有响应（≤30s）+ 绑定失败换端口重试（≤3 次）。
 # 用法：bash examples/m116_builtin_semantics/verify.sh
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -137,26 +141,57 @@ else
         done
         printf '%s\n' "$((20000 + RANDOM % _m116_port_span))"
     }
+    # ── HTTP 取码（**必须归一化**：连接失败只能有一种写法 `000`）─────────────
+    #   2026-10-15 · M308 第 1 轮静默复跑实测真因（**门自身缺陷**，非产品回归）：
+    #   原写法 $(curl … -w '%{http_code}' … || echo 000) 在**连接失败**时，
+    #   curl 自己已把 000 打到 stdout 且退出码非零 ⇒ || echo 000 再补一个 ⇒
+    #   捕获值 = **000000**（本机实测复现）。就绪轮询的 [ "$_pre" != "000" ] 因此
+    #   **恒真** ⇒ 第一次轮询（此刻服务还没 listen）就 break ⇒ 等于**没等就绪** ⇒
+    #   /bad 撞在 bind/listen 之前 ⇒ 拿 000000 ⇒ 判红。负载越高越必红（本轮 loadavg 6~9）。
+    #   ⇒ 取码统一走 _m116_http；判据（code=500 / alive≠000）一字不改。
+    _m116_http() {   # $1=超时秒 $2=url [$3=body 落盘] ⇒ 打印 http_code（失败=000）
+        local c
+        if [ -n "${3:-}" ]; then
+            c=$(curl -s -o "$3" -w '%{http_code}' --max-time "$1" "$2" 2>/dev/null)
+        else
+            c=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$1" "$2" 2>/dev/null)
+        fi
+        case "$c" in ''|*[!0-9]*) c=000 ;; esac
+        printf '%s' "$c"
+    }
     d7_case() {   # $1=标签 $2=产物路径
-        local label="$1" bin="$2"
-        local port; port=$(_m116_pick_port)
-        M116_PORT=$port "$bin" > "$TMP/d7.$label.log" 2>&1 &
-        local pid=$!
-        # 轮询就绪（取代盲等 1.5s）：起服务 + 建连都可能有竞态，也会被负载拖慢。
-        #   进程已退（如绑定失败）立即停等，交给下面的断言判红 —— 判据不变。
-        local _i _pre="000"
-        for _i in $(seq 1 40); do
-            kill -0 "$pid" 2>/dev/null || break
-            _pre=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$port/nonexist" 2>/dev/null || echo 000)
-            [ "$_pre" != "000" ] && break
-            sleep 0.25
+        local label="$1" bin="$2" attempt=1
+        local port pid _i _pre code body alive
+        while :; do
+            port=$(_m116_pick_port)
+            M116_PORT=$port "$bin" > "$TMP/d7.$label.log" 2>&1 &
+            pid=$!
+            # 轮询就绪（**真等**）：进程活着就一直等到有响应，最长 60×0.5s = 30s；
+            #   进程已退（如绑定失败）立即停等，交给下面的断言 / 端口重试处置。
+            _pre=000
+            for _i in $(seq 1 60); do
+                kill -0 "$pid" 2>/dev/null || break
+                _pre=$(_m116_http 2 "http://127.0.0.1:$port/nonexist")
+                [ "$_pre" != "000" ] && break
+                sleep 0.5
+            done
+            # 端口竞态重试（**只兜门自身的资源竞态**，判据一字不改）：
+            #   进程起不来 **且** 日志指认绑定失败 ⇒ 换端口再来（至多 3 次）。
+            if [ "$_pre" = "000" ] && ! kill -0 "$pid" 2>/dev/null \
+               && grep -qE '绑定端口|Address already in use' "$TMP/d7.$label.log" 2>/dev/null; then
+                kill $pid 2>/dev/null; wait $pid 2>/dev/null
+                if [ "$attempt" -lt 3 ]; then
+                    attempt=$((attempt+1))
+                    echo "  ↻ $label：端口 $port 绑定失败 ⇒ 换端口重试（第 $attempt 次）"
+                    continue
+                fi
+            fi
+            code=$(_m116_http 5 "http://127.0.0.1:$port/bad" "$TMP/d7.body")
+            body=$(head -c 60 "$TMP/d7.body" 2>/dev/null | tr -d '\n')
+            alive=$(_m116_http 5 "http://127.0.0.1:$port/nonexist")
+            kill $pid 2>/dev/null; wait $pid 2>/dev/null
+            break
         done
-        local code body
-        code=$(curl -s -o "$TMP/d7.body" -w '%{http_code}' --max-time 5 "http://127.0.0.1:$port/bad" 2>/dev/null || echo 000)
-        body=$(head -c 60 "$TMP/d7.body" 2>/dev/null | tr -d '\n')
-        local alive
-        alive=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$port/nonexist" 2>/dev/null || echo 000)
-        kill $pid 2>/dev/null; wait $pid 2>/dev/null
         if [ "$code" != "500" ]; then bad "$label：出错 handler 返回 $code（应为 500）"; sed 's/^/       | /' "$TMP/d7.$label.log" 2>/dev/null | tail -6; return; fi
         if [ "$alive" = "000" ]; then bad "$label：服务在 handler 出错后死亡（应继续可用）"; return; fi
         ok "$label：500 + 服务存活（后续请求 $alive）· body=\"$body\""
