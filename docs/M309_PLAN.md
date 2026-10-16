@@ -166,6 +166,18 @@ W1 复核证据（`/data/app/ws/data/notes/M309_W1_VERIFY.md`）：真对端 `ht
 3. `PuXian CI` / `Tag Guard` / `Release` **三绿** ⇒ `packaging/make_tag.sh --milestone 309 --push`（main + tag 一次推）。
 4. 发布物独立复核（下载解包 · 架构卫生 · 本轮改动是否真进了发布物）。
 
+**阶段 D · 收口记录（2026-10-17 · 东月）**：
+
+| 步 | 实际处置 |
+|---|---|
+| **D1 重烘入库件** | **无需重烘**（C1 只动 `shard_run.sh` + 文档，C3 只动 `tools/pxpkg*` + 门 ⇒ `runtime/*.c` 零改动）；仍实测确认：发布档全量门里「版本字面量 ⇄ 自举基准 ⇄ 入库件 三方一致」步**绿** |
+| **D2 全量门** | **发布档（分片 · 新默认口径 4 路 × `SHARD_JOBS=2` + 绑核 · LPT 回灌档A 实测负载）：绿 215 / 红 0 · 墙钟 5145s ≤ 5400s（1.37×）**；逐门裁决 rc=0（红 0 · 缺失 0 · 多余 6 = 期望集 · 状态/rc 不一致 0）⇒ 单一出处 `M309_AB_VERDICT.md` §八／`M309_R1_FINAL_RESULT.md` |
+| **D3 三绿 → 发版** | `packaging/tag_guard.sh --ref HEAD` **rc=0** ⇒ `packaging/make_tag.sh --milestone 309 --push` **rc=0** ⇒ annotated **`v0.2.309`** → commit `08e681f`（main + tag 一次推）；run：CI `38947238605` · Tag Guard `38947238604` · Release `38947240108`（明细见 `CHANGELOG.md` M309 发布小结） |
+| **D4 发布物独立复核** | **通过** —— 4 件资产（主包 73,558,254 B · 引导包 22,926,966 B）· sha256 **独立复算**与发布方一致 · 引导包 `check_pkg_arch.sh --arch aarch64` **判红 0**（141 ELF）· `bootstrap/` 12 件全 aarch64 全静态 · **包内 `tools/pxpkg_sync.sh` / `tools/pxpkg` 与 HEAD 逐字节相同**（本轮改动真进了发布物）⇒ 单一出处 `M309_AB_VERDICT.md` **§九** |
+
+⚠️ 阶段 D 之后**仍开放**（不许当绿）：① m183 / m208 的 GC 压力时序边缘 ⇒ **M310 单独立项**；② 第二条腿「压缩总工作量」（主候选 devbuild 4 路重复建）⇒ **未启动**。
+
+
 ---
 
 ## 四、判据红线

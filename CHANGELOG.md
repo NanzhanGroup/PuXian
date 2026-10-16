@@ -1,3 +1,81 @@
+## M309 发布小结（v0.2.309 · 2026-10-17）— 三绿 + tag 对齐 + 发布档全量门 215/0 · 墙钟 5145s
+
+> M309 = **C1 全量门瘦身**（A/B 判定**成立**）+ **C3 `pxpkg sync` 收尾**（用户 2026-10-16 11:33 拍板）。
+> 单一出处：`/data/app/ws/data/notes/proto/M309_AB_VERDICT.md`（§八 发布验收 · §九 发布物复核）·
+> `docs/M309_PLAN.md` §三 阶段D 收口记录 · `docs/GATE_ISOLATION.md` §十/§十一。
+
+### 一 tag 核对（origin == 本地）
+
+| 项 | 值 |
+|---|---|
+| 本地 `v0.2.309`（annotated） | tag 对象 `43a99df` → commit **`08e681f`**（`git describe --tags HEAD` = 精确 `v0.2.309`，无 `-N-g` 后缀） |
+| `git ls-remote origin refs/tags/v0.2.309` | `43a99df` ⇒ **同一 tag 对象、同一 commit** |
+| `main` | 本地 == `origin/main` == `08e681f`；push 输出 `f111165..08e681f  main -> main` + `* [new tag]  v0.2.309`（**main 与 tag 同一次推**） |
+
+> ⚠️ **读法提醒**：`git rev-parse v0.2.309` 给的是**tag 对象的 SHA**（`43a99df`），与 `HEAD`（`08e681f`）
+> 不同是**正常**的；比对要用 `git rev-parse v0.2.309^{commit}` 或 `git log -1 v0.2.309`。
+
+### 二 CI 三绿（commit `08e681f`）
+
+| 工作流 | 结果 | run |
+|---|---|---|
+| PuXian CI | success | `38947238605` |
+| PuXian Tag Guard | success | `38947238604` |
+| Release | success | `38947240108` |
+
+Release 资产 **4 件**（`draft=False` · `prerelease=False` · `published_at 2026-10-16T18:28:22Z` = CST 02:28）：
+`puxian-0.2.309-08e681f3.tar.gz`（73,558,254 B）· `puxian-bootstrap-aarch64-v0.2.309.tar.gz`（22,926,966 B）
++ 同名 `.sha256` + `sha256sums.txt`。判决落盘 `/tmp/gatevm/m309_ci_verdict.txt`（`verdict=GREEN`）。
+
+### 三 发布档全量门（`shard_run.sh` 新默认口径）—— **通过** ✅
+
+口径：4 路 × `SHARD_JOBS=2` + 按 N 自动绑核 · LPT 用**档A 实测负载**回灌 · 分片 worktree 钉在 `08e681f`。
+
+| 项 | 值 |
+|---|---|
+| 起止 | 2026-10-17 00:54:34 → 02:20:19 |
+| **墙钟** | **5145s（85 min）** —— 判据 **≤5400s 达成（1.37×）**；对照老分片档（不夹 JOBS）7080s（118 min） |
+| 分片自报 | shard1 50 / shard2 44 / shard3 62 / shard4 49 · quiet 10 ⇒ **绿 215 / 红 0** |
+| 逐门裁决 | `shard_verdict.py` rc=0 ⇒ 红门 **0** · 缺失 **0** · 多余 **6=期望集** · 状态/rc 不一致 **0** ⇒ `SHARD-VERDICT-GREEN` |
+
+- 老分片档的两红门（`m244` / `m302`）已按 §二/§三 定性为**结构性冲突**并**登记入 quiet**（判据一条未放松）。
+- 档A' 的分片侧亦 213/0，但 quiet 档偶发 2 红（m183/m208）；**发布档连 quiet 档也 10/0 全绿**
+  ⇒ 佐证 §七.3 归因（GC 压力门**时序边缘**，与编排并行度无关），**不改变**开放项登记。
+
+### 四 发布物**独立复核**（下载解包 · 不只信 CI）—— **通过** ✅
+
+| 项 | 实测 |
+|---|---|
+| sha256 | 主包 / 引导包均与发布方 `sha256sums.txt` / `.sha256` **独立复算逐字符一致**（`sha256sum -c` rc=0） |
+| 引导包架构卫生 | `selfhost/check_pkg_arch.sh --arch aarch64` ⇒ ELF 141 · 豁免 0 · **判红 0**；`bootstrap/` 12 件全 aarch64 全静态（`NEEDED=0`） |
+| ⭐ 本轮改动**真进发布物** | 包内 `tools/pxpkg_sync.sh` / `tools/pxpkg` 与仓库 HEAD **逐字节相同**（`diff -q` ⇒ SAME）· 包内 `VERSION` = `0.2.309` ⇒ C3 的 W1 客户端确在发布物里 |
+
+> ⚠️ **读法提醒（防后人误判）**：把主包**全树**喂给 `check_pkg_arch.sh --arch x86_64` 会刷出 **353 条判红** ——
+> ① 工具侧 `norm_arch` 不认 `readelf` 打的 `Advanced Micro Devices X86-64`（**归一化缺口**）；
+> ② 主包**按设计**带 `runtime/third_party/` 跨平台构建输入（架构卫生只对**引导包**收紧）。
+> ⇒ **主包复核口径 = 关键可执行件逐件**，不是全树门。
+
+### 五 本里程碑提交（4 个）
+
+`725ae29`（C3 W1：`pxpkg sync` 客户端 —— 远程 registry 同步 · 幂等/原子/落盘即验）
+→ `74d2e80`（W1 补正：`archive_sha256` hex 校验长度/字符集**分两条**）
+→ `8ced3f7`（C3 W4：契约夹门 `examples/m309_pxpkg_sync/` **37/0** + 注册 + `docs/M309_PLAN.md`）
+→ `08e681f`（C1 阶段B 收口：`shard_run.sh` **默认**夹门内并行度〔退路 `SHARD_NO_CLAMP=1`〕+
+`docs/GATE_ISOLATION.md` §十/§十一 + `packaging/chain/shard_accel.sh`〔B3 发布侧入口〕+
+`quiet_needed.txt`/`net_needed.txt` 行内注释解析修复）。
+
+### 六 仍开放（**不许当绿**）
+
+1. **m183 / m208 的 GC 压力时序边缘**：m183 判据②「STRESS ×10 连跑 10/10 OK」实测有 1/10 量级 `HANDOVER FAIL`；
+   m208 压力档有 `LIVECHK 读到已回收对象` / `R1003 迭代期间容器长度变化` 两形态。**判据一条没放松**；
+   单跑 ×3 全绿只证「偶发」⇒ 建议 **M310 单独立项**（×100 连跑 + `PX_GC_TRACE`）。
+2. **第二条腿「压缩总工作量」未启动**：主候选 = devbuild 产物 **4 路重复建**（只读共享 + 按需复制），
+   其余候选见 `M309_AB_VERDICT.md` §五。
+3. **F1**（`version.json` 无逐文件清单）⇒ 等晨曦一句话（我方推荐「清单并入归档」，**不阻塞**）；
+   **S3**（MatMul 分块）⇒ 等机器名（用户 10-15 已指示「机器名的事暂时不做」）。
+
+---
+
 ## M308 发布小结（v0.2.308 · 2026-10-15）— 三绿 + tag 对齐 + 第 2 轮静默全量门 214/0
 
 > 发布后收尾（台账 `dy-ops-m308post`，2026-10-15 17:16 挂账、18:09 升 ESCALATED）。**结论：发布面全部对齐，无待用户拍板事项。**
