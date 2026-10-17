@@ -161,7 +161,7 @@ reps_of() {
     case "$1" in
       onnx_mm1024) echo 2 ;;   # 单次 ≈4.4 s（本机档）⇒ 2 轮即够（M303 实测口径）
       onnx_mm512)  echo 3 ;;   # 单次 ≈2.1 s ⇒ 3 轮
-      onnx_*)      echo "$REPS" ;;   # M310_W2：新负载单次 0.1–0.5 s ⇒ 默认 REPS
+      onnx_*)      echo 3 ;;          # M310_W2：新负载单次 1–2.5 s（内层 repeat 摊薄短时抖动）⇒ 3 轮
       *)           echo "$REPS" ;;
     esac
 }

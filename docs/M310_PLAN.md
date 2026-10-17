@@ -279,16 +279,16 @@ m208 门回归：**PASS=13 / FAIL=0**（`--neg-skip`，日志 `/tmp/m310/b1_m208
 
 | 模型 | 覆盖算子 | 大小 | 内层 reps | 本机单次测量 |
 |---|---|---|---|---|
-| `onnx_quant.onnx` | QuantizeLinear/DequantizeLinear/DynamicQuantizeLinear/MatMulInteger | 0.44 MiB | 5 | **0.5085 s** |
-| `onnx_mlp.onnx` | MatMul + RMSNormalization + Gelu + MatMul + Silu（decoder FFN 一步） | 4.04 MiB | 8 | **0.4355 s** |
-| `onnx_kv.onnx` | ScatterND（KV cache 写入） | 0.08 MiB | 1200 | **0.1346 s** |
-| `onnx_rope.onnx` | Cos + Sin | 0.13 MiB | 80 | **0.2370 s** |
-| `onnx_trilu.onnx` | Trilu | 1.00 MiB | 150 | **0.3128 s** |
+| `onnx_quant.onnx` | QuantizeLinear/DequantizeLinear/DynamicQuantizeLinear/MatMulInteger | 0.44 MiB | 15 | **1.3670 s** |
+| `onnx_mlp.onnx` | MatMul + RMSNormalization + Gelu + MatMul + Silu（decoder FFN 一步） | 4.04 MiB | 25 | **1.3508 s** |
+| `onnx_kv.onnx` | ScatterND（KV cache 写入） | 0.08 MiB | 6000 | **0.6244 s** |
+| `onnx_rope.onnx` | Cos + Sin | 0.13 MiB | 500 | **1.3212 s** |
+| `onnx_trilu.onnx` | Trilu | 1.00 MiB | 800 | **1.4123 s** |
 
 - 驱动 `src/onnx_{quant,mlp,kv,rope,trilu}.px`：输出 `OK <nbytes>` 固定锚点（证明模型真解析/图真执行）；
-  内层 reps 把单次测量抬到 **0.13–0.31 s**（W2 目标 0.1–0.5 s 档）。
+  内层 reps 把单次测量抬到 **0.6–1.4 s**（摊薄本机 ±20–30% 的短时抖动；W0-④ 预算内）。
 - **幂等自证**：同种子生成两遍，7 个模型 sha256 **逐一相同**（`IDEMPOTENT-OK`）。
-- 成本：5 负载 × 默认 REPS 5 ≈ **7 s**（远低于 W0-④ 的 60 s 预算）。
+- 成本：5 负载 × 3 轮 ≈ **18 s**（远低于 W0-④ 的 60 s 预算；门总时长见 6.6）。
 
 ### 6.4 W3 · 档更新策略（**决策 ②：显式登记保守上界**）
 
@@ -306,7 +306,7 @@ m208 门回归：**PASS=13 / FAIL=0**（`--neg-skip`，日志 `/tmp/m310/b1_m208
 ### 6.5 W4 · 门适配
 
 - `ONNX_LOADS` / 模型文件名**从清单派生**（`onnx_model_of()`），删除 `reps_of` 与 `measure_one`
-  的两处硬编码；新负载 `reps_of` 走默认 `REPS`。
+  的两处硬编码；新负载 `reps_of` = 3（单次 0.6–1.4 s，`min-of-3`；见 6.3）。
 - `--list`：**17 行**（10 双轨 + 7 ONNX 单轨，含 5 个新负载）。
 - 静态自证新增：清单可解析（列数/模型后缀/不重名）· 清单负载**全部登记进选定档**
   （否则点名「永不测量」）。

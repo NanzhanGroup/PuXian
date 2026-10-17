@@ -1,6 +1,6 @@
 # m267_perf/src/onnx_mlp.px —— 端到端一步（MatMul + RMSNormalization + Gelu + MatMul + Silu · decoder FFN · T=16 D=512 H=1024）（M310 · 丙2 W2）
 # ---------------------------------------------------------------
-# 为什么内部跑 8 次：
+# 为什么内部跑 25 次：
 #   W0-④ 门时长预算：单次测量落在 0.1–0.5 s 档（≈默认 REPS ×5 ⇒ 每负载 0.5–2.5 s，
 #   5 个新负载合计 ≤10 s，远低于 900 s 门预算）；外层 time_run 再取 REPS 轮最小值（抗偶发）。
 #
@@ -13,7 +13,7 @@ let a = args()
 if len(a) < 2:
     print("用法: onnx_mlp <model.onnx> [reps]\n")
     exit(2)
-var reps = 8
+var reps = 25
 if len(a) >= 3:
     reps = int(a[2])
 let m = onnx_model_open(a[1])
