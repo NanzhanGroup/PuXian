@@ -289,6 +289,10 @@ m208 门回归：**PASS=13 / FAIL=0**（`--neg-skip`，日志 `/tmp/m310/b1_m208
   内层 reps 把单次测量抬到 **0.6–1.4 s**（摊薄本机 ±20–30% 的短时抖动；W0-④ 预算内）。
 - **幂等自证**：同种子生成两遍，7 个模型 sha256 **逐一相同**（`IDEMPOTENT-OK`）。
 - 成本：5 负载 × 3 轮 ≈ **18 s**（远低于 W0-④ 的 60 s 预算；门总时长见 6.6）。
+- ⚠️ **本机抖动实测 ±20–40%**（虚拟化宿主，短负载尤甚）：`onnx_mm512` 同 HEAD 两次实测
+  0.947× / 1.191×；`onnx_trilu` 基线 1.4123 s、复测 1.61–2.11 s。⇒ 新负载偶尔出 ⚠️（>1.25×）
+  但 **fail 2.0× 仍未被噪声击穿**；判据不因噪声放宽（不改 WARN/FAIL 全局阈值）。
+  这条如实登记为**已知环境边缘**，与甲1 的 GC 压力边缘同类处理（观测方法 = 重复实测取 min）。
 
 ### 6.4 W3 · 档更新策略（**决策 ②：显式登记保守上界**）
 
@@ -319,10 +323,31 @@ m208 门回归：**PASS=13 / FAIL=0**（`--neg-skip`，日志 `/tmp/m310/b1_m208
   `.github/workflows/ci.yml` 新增同名步骤（`if: always()`，失败时 `GHA_ANNOTATION_FAIL=1`）。
 - `check_gate_registry.sh` **rc=0**（GATE-REGISTRY-OK）· `check_spec_consistency.sh`
   **64 通过 / 0 失败**（SPEC-CONSISTENCY-OK）· `check_gate_paths.sh` 绿（220 门，无开发机绝对路径）。
-- 门总时长：`m267_perf` 由 104 s → ___ s（含 17 负载 + 6 道负控）；新门 `onnx_load_coverage` ≈ ___ s。
-- 门数：215 → **216**。
+- 门总时长：`m267_perf` 由 104 s → **144 s**（+40 s：5 个新负载 × 3 轮 ≈ 18 s + 模型生成/构建 ≈ 12 s +
+  抖动余量）；新门 `onnx_load_coverage` **<1 s**。预算 900 s ⇒ 余量充足。
+- 门数：215 → **216**（`run_gates.sh --list` 实测 216）。
 
 ### 6.7 待办（不冒充完成）
 
 - 提交后由 PuXian CI 实测：`m267_perf` 在**合成档**上 17 负载是否 0 假红（W3 唯一判据）。
 - 本轮最终 HEAD 的发布档全量门（216 门）与 tag 见阶段 D 收口记录。
+
+---
+
+## 七、同形状站点排查（只登记，不改 —— 红线「先证再改」）
+
+甲1 修复的判据是「**从根面消失到重新入栈之间不得存在安全点**」。按此判据静态扫全仓
+`px_root_push_keep(a); PX_KEEP(b);` 两段式（两值都刚从表/栈移交、都只被 C 局部持有），
+命中一处**同形状**候选：
+
+| 站点点位 | 上下文 | 判定 |
+|---|---|---|
+| `runtime.c:26542` `px_pxpend_take(fd,&sreq,&sresp,...)` → `:26555 px_root_push_keep(sreq); PX_KEEP(sresp);` | px_serve stage==2 续处理（route/vhost 拆段完成投回） | **同形状、未复现**：`px_pxpend_take` 在同一临界区内把表项 `stage=0` 并清 `req/resp`，出口 `gc_unblock_stop` 是协作式安全点 ⇒ 结构上存在「两值仅 C 局部持有」窗口 |
+
+**为什么本轮不改**：
+1. 该路径**没有复现证据**（pxserve 需多线程 + 并发 GC 压力才能触发；现有 m208/pxserve 门未观测到）；
+2. 红线「只改已定位站点点位」「先证再改」—— 甲1 的站点有 4/100 LIVECHK + 29/400 X1 现场，这一处只有静态同构；
+3. 修法已现成（`px_root_push_keep2(sreq, sresp)` 一行），下轮先造复现（`PX_GC_STRESS` + pxserve 并发压测 + `PX_GC_LIVECHK`），
+   再按同一反向判据（LIVECHK 0/N）落改。
+
+**下轮入口**：`examples/m208_vm_c_local_roots` 的协程语料 + `px_serve` 多 worker 压测（s2c_pxserve 已有起服脚本）。
