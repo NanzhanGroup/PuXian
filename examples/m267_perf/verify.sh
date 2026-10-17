@@ -69,7 +69,18 @@ NEG_ONLY="${M267_NEG_ONLY-fib28_vm mixed_vm onnx_mm512}"
 #    C 代码里，两轨跑的是同一个 onnx_exec_run ⇒ vm/c 对照对本类负载无意义）。
 #    它们在**选定档**里的 kind 是 `onnx`，因此 [1] 层"vm/c 成对登记"那条判据
 #    （只筛 kind==run）不会误伤它们。
-ONNX_LOADS="onnx_mm512 onnx_mm1024"
+# ⭐ M310_W2_MARK（丙2 W2）：ONNX 负载清单 = **单一事实源**（`onnx_loads.tsv`）。
+#   为什么改（W0-① 实测）：原先负载名在 `reps_of` 与 `measure_one` **两处硬编码**，
+#   模型文件名又各写一遍 ⇒ 加一个算子要改三处 + 档；漏一处就是「账本里静默少一项」。
+#   现在：清单给 <负载名> <模型文件> <覆盖算子> <说明>，本脚本从清单派生：
+#     · ONNX_LOADS（构建 / 身份自检 / 静态自证的遍历面）
+#     · 每个负载的模型文件名（measure_one 的派发）
+#   ⚠️ 清单 ≠ 可选装饰：check_load_coverage.sh 双向核对「注册表 ⇄ 清单 ⇄ 源码」。
+ONNX_MANIFEST="$DIR/onnx_loads.tsv"
+onnx_manifest_rows() { grep -v '^[[:space:]]*#' "$ONNX_MANIFEST" 2>/dev/null | grep -v '^[[:space:]]*$'; }
+ONNX_LOADS="$(onnx_manifest_rows | awk '{print $1}' | tr '\n' ' ')"
+ONNX_LOADS="${ONNX_LOADS% }"
+onnx_model_of() { onnx_manifest_rows | awk -v n="$1" '$1==n{print $2; exit}'; }
 MODELS_DIR="${M267_MODELS:-$W/models}"
 
 # ── 负控期间的「基线还原护栏」（M213 教训：门被中途杀掉会留下负控残留）──
@@ -148,8 +159,9 @@ command -v taskset >/dev/null 2>&1 && PIN="taskset -c 3"
 #   纯语言负载沿用全局 REPS（默认 5）。
 reps_of() {
     case "$1" in
-      onnx_mm1024) echo 2 ;;
-      onnx_mm512)  echo 3 ;;
+      onnx_mm1024) echo 2 ;;   # 单次 ≈4.4 s（本机档）⇒ 2 轮即够（M303 实测口径）
+      onnx_mm512)  echo 3 ;;   # 单次 ≈2.1 s ⇒ 3 轮
+      onnx_*)      echo "$REPS" ;;   # M310_W2：新负载单次 0.1–0.5 s ⇒ 默认 REPS
       *)           echo "$REPS" ;;
     esac
 }
@@ -222,12 +234,11 @@ measure_one() { # $1=name $2=kind
           *)    echo "-1"; return 1 ;;
         esac ;;
       onnx)
-        # ONNX 负载：单轨，需把**模型路径**作为参数传给负载程序
-        case "$n" in
-          onnx_mm512)  time_run "$(reps_of "$n")" "$W/onnx/build/onnx_mm512"  "$MODELS_DIR/onnx_mm512.onnx" ;;
-          onnx_mm1024) time_run "$(reps_of "$n")" "$W/onnx/build/onnx_mm1024" "$MODELS_DIR/onnx_mm1024.onnx" ;;
-          *)           echo "-1"; return 1 ;;
-        esac ;;
+        # ONNX 负载：单轨，需把**模型路径**作为参数传给负载程序。
+        # M310_W2：**按清单派发**（模型文件名来自 onnx_loads.tsv，不再逐个硬编码）。
+        local _mdl; _mdl="$(onnx_model_of "$n")"
+        if [ -z "$_mdl" ]; then echo "-1"; return 1; fi
+        time_run "$(reps_of "$n")" "$W/onnx/build/$n" "$MODELS_DIR/$_mdl" ;;
       startup)
         local s e
         s=$(date +%s.%N); for _ in $(seq 200); do "$W/empty/build/empty" >/dev/null 2>&1; done; e=$(date +%s.%N)
@@ -401,6 +412,18 @@ for f in $LOADS $ONNX_LOADS; do
 done
 [ -f "$DIR/tools/gen_perf_models.py" ] && ok "ONNX 模型生成器存在（tools/gen_perf_models.py）" \
     || bad "缺 ONNX 模型生成器 tools/gen_perf_models.py"
+# ⭐ M310_W2：**负载清单在位且可解析**（单一事实源；三列非空、负载名不重复）
+if [ -f "$ONNX_MANIFEST" ]; then
+    _badrows=$(onnx_manifest_rows | awk 'NF<3 || $2 !~ /\.onnx$/ {print $1}' | tr '\n' ' ')
+    _dup=$(onnx_manifest_rows | awk '{print $1}' | sort | uniq -d | tr '\n' ' ')
+    if [ -z "$_badrows" ] && [ -z "$_dup" ]; then
+        ok "ONNX 负载清单可解析（$(onnx_manifest_rows | wc -l) 行 · onnx_loads.tsv）"
+    else
+        bad "ONNX 负载清单有坏行/重名：坏行=[$_badrows] 重名=[$_dup]"
+    fi
+else
+    bad "缺 ONNX 负载清单 examples/m267_perf/onnx_loads.tsv（W2 单一事实源）"
+fi
 # ⭐ M305：**档位机制在位**（防“档目录被删/头注掉字段 ⇒ 门无声走错档”）
 [ -f "$DIR/machine_sig.sh" ] && ok "机器签名实现存在（machine_sig.sh · 单一实现）" || bad "缺 machine_sig.sh"
 _nbtsv=$(ls "$BASELINES"/*.tsv 2>/dev/null | wc -l)
@@ -414,8 +437,17 @@ else
 fi
 # ONNX 负载必须以 kind=onnx 登记 —— 若误登成 run，[1] 下面那条"vm/c 成对"判据会误伤它们
 nb_onnx=$(read_baseline | awk '$2=="onnx"' | wc -l)
-[ "$nb_onnx" -ge 2 ] && ok "ONNX 负载登记 $nb_onnx 行（kind=onnx，下限 2）" \
-    || bad "ONNX 负载登记 $nb_onnx 行（应 ≥2；kind 必须写 onnx）"
+_nman=$(onnx_manifest_rows | wc -l)
+[ "$nb_onnx" -ge "$_nman" ] && [ "$nb_onnx" -ge 2 ] && ok "ONNX 负载登记 $nb_onnx 行（清单 $_nman 个 · kind=onnx）" \
+    || bad "ONNX 负载登记 $nb_onnx 行 / 清单 $_nman 个（登记数必须 ≥ 清单数；kind 必须写 onnx）"
+# ⭐ M310_W4：清单里的每个负载**必须在选定档里有一行** —— 否则它永不进测量面（W0-① 的病）。
+#    合成档（CI）从 5 个档取 max ⇒ 任一档缺行都会让该负载在合成档里消失。
+_missbase=""
+for n in $ONNX_LOADS; do
+    read_baseline | grep -qE "^$n[[:space:]]" || _missbase="$_missbase $n"
+done
+if [ -z "$_missbase" ]; then ok "清单负载全部登记进选定档（$BASE_LABEL 的测量面覆盖 $ONNX_LOADS）"
+else bad "清单负载未登记进选定档（**永不测量**）：$_missbase"; fi
 nb2=$(read_baseline | wc -l)
 [ "$nb2" -ge 4 ] && ok "基线表 $nb2 行（下限 4）" || bad "基线表只有 $nb2 行（下限 4）"
 # 每条 run 负载必须有 vm 与 c 两行（防"只登记一半"）
@@ -471,7 +503,8 @@ info "   ⇒ 跨机跑（如 CI runner）时上限判据自动宽松（跨机比
 info "   当前档：$BASE_LABEL"
 info "C 轨只取 fib28_c/while_sum_c 作比值锚（全谱见 docs/PERF_BASELINE_V2.md §五）"
 info "本门**不覆盖** px run（解释轨）面 —— 那是 M268 的活；字符串 += O(n²) 是 M270"
-info "ONNX 负载只覆盖 **MatMul**（512³ 常规区 + 1024³ 跨页崩塌区）；Conv / RMSNorm / RoPE / KV-cache **不在面内**（M303 §五 S4）"
+info "ONNX 负载：MatMul（512³ 常规区 + 1024³ 跨页崩塌区）+ M310 接入的 5 族（量化 / decoder FFN 一步 / ScatterND KV 写入 / Cos+Sin / Trilu）"
+info "  ⚠️ Conv / 多线程 GEMM / GPU 后端**仍不在面内**（M303 §五 S4/S5）"
 info "ONNX 负载是**单轨**（vm 与 c 跑的是同一份 runtime C 实现 onnx_exec_run）⇒ 只登记一行，无 vm/c 对照"
 info "ONNX 模型**不入库**（512³ 2 MiB / 1024³ 8 MiB）：由 tools/gen_perf_models.py **每次生成**到 work 目录（刻意不缓存）"
 info "ONNX 负载测的是**单线程内核**：多线程 GEMM / GPU 后端不在面内（M303 §五 S5 另立基准机流程）"

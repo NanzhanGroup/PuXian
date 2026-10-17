@@ -1,0 +1,23 @@
+# M310 · 丙2 W2 —— ONNX 性能负载清单（**单一事实源**）
+#
+# 格式：<负载名> <模型文件> <覆盖算子（逗号分隔）> <说明>
+#
+# 为什么要有这张表（W0-① 实测缺口）：
+#   门的主判据只遍历**选定档的行**（read_baseline）；而模型文件名 / reps / 构建派发
+#   原先在 verify.sh 里**两处硬编码**（reps_of 与 measure_one）⇒ 加一个算子要改
+#   生成器 + 脚本两处 + 档，任何一处漏掉都是「账本里静默少一项」。
+#   ⇒ 本表把「负载名 ⇄ 模型文件名 ⇄ 覆盖算子」收成一处；verify.sh 从本表派生
+#     ONNX_LOADS 与模型路径，check_load_coverage.sh 用它做**双向核对**（W1/W5）。
+#
+# 覆盖算子的口径：该负载的图里**真被执行过**的算子（m308 门用 by_op 并集守同一件事）。
+# M306/M308 新增的 11 个算子必须全部出现在这里（缺一个 ⇒ check_load_coverage 判红）。
+#
+# 段位与成本（本机档实测见 docs/M310_PLAN.md §六）：
+#   小规模 + 内层 repeat ⇒ 单次测量 0.1–0.5 s（门槛 <0.5s 档），不挤占门时长预算。
+onnx_mm512  onnx_mm512.onnx   MatMul                                                         ONNX MatMul 512³ —— 常规内核区（M303）
+onnx_mm1024 onnx_mm1024.onnx  MatMul                                                         ONNX MatMul 1024³ —— 跨页崩塌探针（M303 · 路线 S3 的靶子）
+onnx_quant  onnx_quant.onnx   QuantizeLinear,DequantizeLinear,DynamicQuantizeLinear,MatMulInteger 量化族（M306 · S2）
+onnx_mlp    onnx_mlp.onnx     MatMul,RMSNormalization,Gelu,Silu                             端到端一步：decoder FFN（M308 · S4）
+onnx_kv     onnx_kv.onnx      ScatterND                                                      KV cache 增量写入（M308 · S4）
+onnx_rope   onnx_rope.onnx    Cos,Sin                                                        RoPE 前置（M308 · S4）
+onnx_trilu  onnx_trilu.onnx   Trilu                                                          Trilu 规范名（M308 · S4；历史名 Triu 同一实现）

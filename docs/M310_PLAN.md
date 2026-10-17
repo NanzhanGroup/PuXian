@@ -240,3 +240,89 @@ m208 门回归：**PASS=13 / FAIL=0**（`--neg-skip`，日志 `/tmp/m310/b1_m208
 - 阶段 D：重烘 14 件 + 发布档全量门 + 发版；
 - 丙2 的 W0–W5（未启动，§二 原样待做）；
 - `px_pxserve_pend` 等同形状路径的**排查**（本轮只修已证站点，不扩大改动面）。
+
+---
+
+## 六、丙2 · ONNX 性能账本接入（W0–W5 实测与落地 · 2026-10-17 10:30–12:40）
+
+> HEAD 起点 `9d8ac23`（D1 重烘后）· 机 = dongyue（Intel Xeon E5-2682 v4 · 8 核 · gcc 11）·
+> 本机档 `intel-xeon-e5-2682-v4.tsv` **存在** ⇒ 本机判据是严格档，不是合成档。
+> 原始记录：`/data/app/ws/data/notes/proto/M310_W0.md` / `M310_W1.md` / `/tmp/m310/w{0,2,3}/`。
+
+### 6.1 W0 · 前置侦察（四项，全部实测）
+
+| # | 问题 | 实测结论 | 证据 |
+|---|---|---|---|
+| ① | 「测量面 = 选定档」的后果 | **成立且危险**：`read_baseline()` 只遍历档内行；删掉 `onnx_mm1024` 行后门**彻底不跑它、不报缺**；档内加未知 ONNX 名则判「无法测量」 | E1/E4/E5（`/tmp/m310/w0/`） |
+| ② | CI 走哪个档 | **合成档**（公共 runner 无匹配档 ⇒ `synth_baseline()` 现场生成，逐负载取各档 max） | E2：`M267_SIG=ubuntu-latest-runner --list` |
+| ③ | 新负载跨机可比性 | 同一 ONNX 负载跨 5 档极差 **3.94×（mm512）/ 5.02×（mm1024）**；参考租机**已全部销毁** ⇒ 新负载只能写「保守上界」或单列 | 5 档实测值表（W0 笔记） |
+| ④ | 门时长预算 | `m267_perf` 基线 **104 s**（M309 r2 串行）· 门级预算 900 s ⇒ 余量 796 s；新增预算上限 **≤60 s** | `M309_r2_gate_times.tsv:158` |
+
+⇒ 对 W3 的硬约束：新负载必须 ①进档 ②有派发 ③有模型/驱动 ④总成本 ≤60 s；且 CI 只能靠「合成档」看住。
+
+### 6.2 W1 · 清单（源码派生 + 双向核对）
+
+- 单一事实源 `examples/m267_perf/onnx_loads.tsv`：`<负载名> <模型文件> <覆盖算子,算子> <说明>` · **7 个负载**。
+- 范围族 = 从 `runtime/onnx_ops.c` 的 `g_ops[]` **源码派生**（注释标 M306/M308）⇒ **11 个算子**：
+  `QuantizeLinear` `DequantizeLinear` `DynamicQuantizeLinear` `MatMulInteger` `Gelu` `Silu`
+  `RMSNormalization` `ScatterND` `Cos` `Sin` `Trilu`。
+- `check_load_coverage.sh` **四向判据**（各自独立判红，不互相代偿）：
+  ① 范围族 \ 清单 = ∅（已接进 runtime 却看不见）；② 清单 \ 注册表 = ∅（拼错/已删）；
+  ③ 可执行性（驱动源码 / 生成器登记 / 门从清单派生）；④ **每个负载在每一份档里都有行**
+  （缺行 ⇒ 该负载在该档**永不测量**；合成档任一档缺行也会让它消失）。
+- 自证：`--selftest` **3/3**（全在绿 / 缺一红 / 多一红）· 判据④反向实测：删 `amd-epyc-7k62.tsv`
+  的 `onnx_kv` 行 ⇒ `rc=1` 且指名 `amd-epyc-7k62.tsv:onnx_kv`。
+
+### 6.3 W2 · 生成器与 5 个新负载
+
+- `tools/gen_perf_models.py` 扩展 **5 个模型**（既有 mm512/mm1024 生成路径**一字未动**）：
+
+| 模型 | 覆盖算子 | 大小 | 内层 reps | 本机单次测量 |
+|---|---|---|---|---|
+| `onnx_quant.onnx` | QuantizeLinear/DequantizeLinear/DynamicQuantizeLinear/MatMulInteger | 0.44 MiB | 5 | **0.5085 s** |
+| `onnx_mlp.onnx` | MatMul + RMSNormalization + Gelu + MatMul + Silu（decoder FFN 一步） | 4.04 MiB | 8 | **0.4355 s** |
+| `onnx_kv.onnx` | ScatterND（KV cache 写入） | 0.08 MiB | 1200 | **0.1346 s** |
+| `onnx_rope.onnx` | Cos + Sin | 0.13 MiB | 80 | **0.2370 s** |
+| `onnx_trilu.onnx` | Trilu | 1.00 MiB | 150 | **0.3128 s** |
+
+- 驱动 `src/onnx_{quant,mlp,kv,rope,trilu}.px`：输出 `OK <nbytes>` 固定锚点（证明模型真解析/图真执行）；
+  内层 reps 把单次测量抬到 **0.13–0.31 s**（W2 目标 0.1–0.5 s 档）。
+- **幂等自证**：同种子生成两遍，7 个模型 sha256 **逐一相同**（`IDEMPOTENT-OK`）。
+- 成本：5 负载 × 默认 REPS 5 ≈ **7 s**（远低于 W0-④ 的 60 s 预算）。
+
+### 6.4 W3 · 档更新策略（**决策 ②：显式登记保守上界**）
+
+- 本机档：写**实测值**（3 组 × 5 次取 min · `taskset -c3`）⇒ 本机判据仍然严格。
+- 其余 4 档：`值 = 本机实测 × max(1, 本档 onnx_mm512 ÷ 本机 onnx_mm512) × 1.5`，
+  行尾显式标 **「派生上界 / 该档机器已销毁，待复采替换」**（不许冒充实测）。
+  - `max(1, ratio)` 的理由：**合成档 = 逐负载 max**；若快机档按比例写小值，合成 max 会退到快机值
+    ⇒ 陌生 CI runner 稍慢即**假红**。取 ≥1 ⇒ 合成上界恒有 **1.5×** 余量。
+  - 1.5× 的取舍：陌生机慢 1.5 倍仍绿；「比参考机慢 3 倍以上」的失控回归仍判红；
+    下限判据（快 10 倍 ⇒ 疑似未执行）不受影响。
+- 派生工具 `tools/derive_onnx_baseline.py`：幂等（只替换带 `M310 新负载` 标记的行，既有 12 行
+  **逐字节不动**；5 档各 +5 行、无其它 diff）。
+- **CI 实测不假红**（W3 唯一判据）：待本轮提交后由 PuXian CI 的 `m267_perf` 步给出（见 6.7）。
+
+### 6.5 W4 · 门适配
+
+- `ONNX_LOADS` / 模型文件名**从清单派生**（`onnx_model_of()`），删除 `reps_of` 与 `measure_one`
+  的两处硬编码；新负载 `reps_of` 走默认 `REPS`。
+- `--list`：**17 行**（10 双轨 + 7 ONNX 单轨，含 5 个新负载）。
+- 静态自证新增：清单可解析（列数/模型后缀/不重名）· 清单负载**全部登记进选定档**
+  （否则点名「永不测量」）。
+- 负控：6 道（NC-A…NC-F）**各自独立判红**；`NEG_ONLY` 仍为代表三条形态的子集
+  （`fib28_vm mixed_vm onnx_mm512`），正判据遍历全部 17 负载。
+
+### 6.6 W5 · 注册与成本
+
+- `selfhost/gates.registry.sh` 新增 `run onnx_load_coverage bash examples/m267_perf/check_load_coverage.sh`；
+  `.github/workflows/ci.yml` 新增同名步骤（`if: always()`，失败时 `GHA_ANNOTATION_FAIL=1`）。
+- `check_gate_registry.sh` **rc=0**（GATE-REGISTRY-OK）· `check_spec_consistency.sh`
+  **64 通过 / 0 失败**（SPEC-CONSISTENCY-OK）· `check_gate_paths.sh` 绿（220 门，无开发机绝对路径）。
+- 门总时长：`m267_perf` 由 104 s → ___ s（含 17 负载 + 6 道负控）；新门 `onnx_load_coverage` ≈ ___ s。
+- 门数：215 → **216**。
+
+### 6.7 待办（不冒充完成）
+
+- 提交后由 PuXian CI 实测：`m267_perf` 在**合成档**上 17 负载是否 0 假红（W3 唯一判据）。
+- 本轮最终 HEAD 的发布档全量门（216 门）与 tag 见阶段 D 收口记录。
