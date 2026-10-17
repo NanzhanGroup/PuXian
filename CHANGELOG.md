@@ -1,3 +1,60 @@
+## M310 发布小结（v0.2.310 · 2026-10-18）— 三绿 + 发布档全量门 216/0 · 墙钟 5296s · D5 全绿
+
+> M310 = **甲1（GC 边缘：成功响应丢头的唯一必要条件）** + **丙2（ONNX 新算子族接性能账本）**。
+> 单一出处：`docs/M310_PLAN.md`（§五 甲1 · §六 丙2 · §七 同形状站点 · **§八 阶段D 收口**）·
+> `data/notes/proto/M310_D2_FULL_RESULT.md` · `M310_R2_FINAL_RESULT.md` · `M310_D5_RELEASE_VERIFY.md`。
+
+### 一 tag 核对（origin == 本地）
+
+| 项 | 值 |
+|---|---|
+| 本地 `v0.2.310`（annotated） | tag 对象 **`adb7b56`** → commit **`ccceb39`**（`git rev-parse v0.2.310^{commit}` 实测） |
+| `git ls-remote origin refs/tags/v0.2.310` | `adb7b56` ⇒ **同一 tag 对象、同一 commit** |
+| `main` | 本地 == `origin/main` == **`ccceb39`**；`packaging/make_tag.sh --milestone 310 --push` rc=0（命名自证 `^v[0-9]+\.[0-9]+\.[0-9]+$`） |
+
+> 读法提醒同 M309：`git rev-parse v0.2.310` 给的是 tag 对象 SHA，比对 commit 要用 `^{commit}`。
+
+### 二 CI 三绿（commit `ccceb39`）
+
+| 工作流 | 结果 | run |
+|---|---|---|
+| PuXian CI | success（7/7） | `39004446489` |
+| PuXian Tag Guard | success | `39006746238`（另有 push 触发 `39004446606` success） |
+| Release | success | `39058492412` |
+
+Release 资产 **4 件**（`draft=False` · `prerelease=False` · `published_at 2026-10-17T18:36:34Z` = CST 02:36）：
+`puxian-0.2.310-ccceb39c.tar.gz`（73,558,747 B）· `puxian-bootstrap-aarch64-v0.2.310.tar.gz`（22,932,194 B）
++ 引导包 `.sha256` + `sha256sums.txt`。
+
+### 三 发布档全量门（分片 · 216 门）—— **通过** ✅
+
+| 项 | 值 |
+|---|---|
+| 口径 | `shard_run.sh` M309 新默认（4 路 LPT × `SHARD_JOBS=2` + 绑核） |
+| 覆盖 | **216 / 216**（绿 216 · 红 0 · 缺失 0 · 多余 0 · 状态/rc 不一致 0） |
+| 逐门裁决 | `shard_verdict.py` rc=0 · **SHARD-VERDICT-GREEN** |
+| 墙钟 | 01:01:56 → 02:30:12 = **5296s（88 min）** ≤ 5400s 判据 ✅ |
+| 分片自报 | shard1 47 · shard2 60 · shard3 51 · shard4 48 + quiet 10 = 216 · 各 rc=0 |
+
+### 四 唯一红门（D2 串行门）据实登记
+
+- D2 串行全量门 `upstream_tests` = **rc=124 撞 900s 默认超时（902s）**，非判据失败；
+- 空闲机单跑复核 **963s · 失败 0 · rc=0**；R2 分片对该门设 `GATE_TIMEOUT_upstream_tests=1800`（余量 87%）⇒ R2 中该门 **绿**。
+- 判据**一条未放宽**：串行 900s 默认值保持、R2 仅按门登记超时。
+
+### 五 D5 发布物独立复核 —— **全绿**
+
+- sha256 **独立复算**与发布方一致（主包 `f5e83cc3…`；引导包 sidecar `0519f648…`）；
+- `VERSION=0.2.310` 与 tag 一致 · 可执行件齐（`tools/pxpkg` `tools/pxpkg_sync.sh` `tools/pxc` `bootstrap/pxc`）；
+- 引导包 `check_pkg_arch.sh --arch aarch64` **判红 0**（141 ELF · 静态库 4 · INFO 356）；
+- **本轮改动真进包**：包内 `tools/pxpkg` / `tools/pxpkg_sync.sh` 与 HEAD 逐字节相同；`runtime/` 含 `px_root_push_keep2` 锚点。
+- 补记：`verify_m310_release.sh` 资产匹配正则原用整行尾锚（`assets.txt` 每行含 url/size ⇒ 永远匹配不到）已修正，**判据未动**。
+
+### 六 本轮遗留（不冒充完成）
+
+1. `runtime.c:26542` `px_pxserve_pend` **同形状站点**：静态同构、无复现证据 ⇒ 只登记不改（红线「先证再改」），下轮先造复现。
+2. 第二条腿「压缩总工作量」（devbuild 4 路重复建）**未启动**。
+
 ## M309 发布小结（v0.2.309 · 2026-10-17）— 三绿 + tag 对齐 + 发布档全量门 215/0 · 墙钟 5145s
 
 > M309 = **C1 全量门瘦身**（A/B 判定**成立**）+ **C3 `pxpkg sync` 收尾**（用户 2026-10-16 11:33 拍板）。
