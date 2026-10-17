@@ -3093,6 +3093,60 @@ void px_root_push_keep(LXValue v) {
     gc_unblock_stop(&old);
 }
 
+// M310（缺陷 197 残余窗口）：**双值原子登记** —— 两个值在同一个暂停屏蔽临界区内入根栈。
+//   病灶（实测 4/100 LIVECHK + 29/400 X1，见 docs/M310_PLAN.md §五）：
+//     http_pend_take() 把 req/resp 从挂起表（GC 根面）摘掉后，出口 gc_unblock_stop 是
+//     **协作式安全点**；而调用方 px_root_push_keep(fr); PX_KEEP(fs); 也是两次临界区
+//     ⇒ 两个窗口里总有一个值「已出表、尚未入根栈」⇒ 并发 GC 暂停本线程时按快照 root_n
+//     标记 ⇒ 漏根 ⇒ 误回收（读数静默错值 / 写坏空闲链表）。
+//   判据：**从根面消失到重新入栈之间不得存在安全点**。本函数即该判据的可复用实现。
+static void px_root_keep_locked(LXValue v) {
+    if (px_value_is_obj(v)) {
+        if (g_gc_livechk && g_uaf_rec && v.as.obj) {   // M208 诊断：窗口判定
+            const UafRec* rr = &g_uaf_rec[uaf_idx(v.as.obj)];
+            if (rr->slot == (const void*)v.as.obj && rr->freed) {
+                char bb[192];
+                int nn = snprintf(bb, sizeof(bb),
+                    "[PX_GC_DBG] **登记时该对象已被回收** %p ⇒ 病灶在「构造 → 登记」窗口内\n",
+                    (void*)v.as.obj);
+                if (nn > 0) (void)write(2, bb, (size_t)nn);
+            }
+        }
+        if (g_px_trunc_pending >= 0) {
+            int fbase = g_px_root_marks_n > 0 ? g_px_root_marks[g_px_root_marks_n - 1] : 0;
+            int t = g_px_trunc_pending;
+            if (t < fbase) t = fbase;
+            if (t < g_px_roots_n) g_px_roots_n = t;
+            g_px_trunc_pending = -1;
+        }
+        if (g_px_roots_n >= g_px_roots_cap) {
+            int nc = g_px_roots_cap ? g_px_roots_cap * 2 : 64;
+            g_px_roots = (LXValue*)xrealloc(g_px_roots, sizeof(LXValue) * (size_t)nc);
+            g_px_roots_cap = nc;
+        }
+        g_px_roots[g_px_roots_n++] = v;
+        if (g_px_roots_n > g_px_roots_peak) g_px_roots_peak = g_px_roots_n;
+    }
+}
+
+// 双值原子登记：开一个作用域（一次 marks 条目，配一次 px_root_pop），两个值同临界区入栈。
+void px_root_push_keep2(LXValue a, LXValue b) {
+    sigset_t old;
+    gc_block_stop(&old);
+    if (g_px_root_marks_n >= g_px_root_marks_cap) {
+        int nc = g_px_root_marks_cap ? g_px_root_marks_cap * 2 : 16;
+        g_px_root_marks = (int*)xrealloc(g_px_root_marks, sizeof(int) * (size_t)nc);
+        g_px_root_marks_cap = nc;
+    }
+    int rbase = g_px_roots_n;
+    if (g_px_trunc_pending >= 0 && g_px_trunc_pending < rbase) rbase = g_px_trunc_pending;
+    g_px_root_marks[g_px_root_marks_n++] = rbase;
+    if (g_px_root_marks_n > g_px_root_marks_peak) g_px_root_marks_peak = g_px_root_marks_n;
+    px_root_keep_locked(a);
+    px_root_keep_locked(b);
+    gc_unblock_stop(&old);
+}
+
 // 作用域结束：弹回 px_root_push 时的深度（与 push 严格配对）。
 void px_root_pop(void) {
     sigset_t old;
@@ -19768,7 +19822,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             LXValue fr = px_null(), fs = px_null();
             int fh = 0, fc = 0;
             if (http_pend_take(fd, &fr, &fs, &fh, &fc)) {
-                px_root_push_keep(fr);   PX_KEEP(fs);
+                // M310：fr/fs 已在 http_pend_take 的临界区内**原子**入根栈（见该函数注释）
                 int act = http_send_resp(fd, fr, fs, fh, fc, px_conn_pend_len(fd) > 0);
                 px_root_pop();
                 if (act == 0 || act == 1) return px_null();   // close / 已交还 IDLE
@@ -20491,6 +20545,10 @@ static int http_pend_take(int fd, LXValue* req, LXValue* resp, int* method_head,
         *method_head = p->method_head; *client_close = p->client_close;
         p->active = 0; p->stage = 0; p->fd = -1;
         p->req.type = PX_NULL; p->resp.type = PX_NULL;
+        // M310（缺陷 197 残余窗口）：表项已摘（根面消失）、两值只在出参 C 局部里，
+        //   而本函数出口就是协作式安全点 ⇒ 必须**在同一临界区内**原子入根栈；
+        //   调用方（http_conn_worker）负责配对的一次 px_root_pop()。
+        px_root_push_keep2(*req, *resp);
         got = 1;
     }
     gc_unblock_stop(&old);
