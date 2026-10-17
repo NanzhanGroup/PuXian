@@ -1049,7 +1049,14 @@ jobs:
         run: |
           bash examples/m267_perf/verify.sh > /tmp/v_m267.log 2>&1 || { echo "❌ m267_perf 性能门失败（相对**选定档**退化 > 2.0x，或快于 0.1x ⇒ 负载疑似未真执行；CI runner 无本机档 ⇒ 走「各档 max」合成档）"; grep -E '^(  [❌⚠️]|  [a-z0-9_]+ +[0-9.]+ +[0-9.]+)' /tmp/v_m267.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^── M267|^  ✅ 8/8|^  ✅ 每条' /tmp/v_m267.log | tail -4 || true
-          echo "✅ m267_perf（12 负载 = 10 双轨 + 2 ONNX 单轨 · min-of-N · 身份自检 10/10 · 档位：本机档或无档时「各档 max」合成档）PASS"
+          echo "✅ m267_perf（17 负载 = 10 双轨 + 7 ONNX 单轨 · 清单 onnx_loads.tsv 派生 · min-of-N · 档位：本机档或无档时「各档 max」合成档）PASS"
+
+      - name: onnx_load_coverage（ONNX 负载清单 ⇄ 算子注册表 双向核对 · M310 丙2）
+        if: always()
+        run: |
+          bash examples/m267_perf/check_load_coverage.sh > /tmp/v_onnx_cov.log 2>&1 || { echo "❌ ONNX 负载覆盖判红（已接进 runtime 的算子未进性能账本 / 清单写了不存在的算子 / 清单负载不可执行）"; grep -E '  ❌' /tmp/v_onnx_cov.log | head -10; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^══ ONNX|^  ✅' /tmp/v_onnx_cov.log | tail -6
+          echo "✅ onnx_load_coverage（范围族全员覆盖 · 清单可解析 · 清单可执行）PASS"
 
       - name: spec_consistency（性能基线口径 ⇄ 实现 · 机器核对 · M305 补注册）
         if: always()

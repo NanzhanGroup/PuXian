@@ -256,8 +256,11 @@ PATCH_C='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
 import re
 pat=re.compile(r"^[ \t]*if \(g_px_trunc_pending >= 0\) \{\n(?:[ \t]*int fbase[^\n]*\n)(?:[ \t]*int t = g_px_trunc_pending;\n)(?:[ \t]*if \(t < fbase\)[^\n]*\n)(?:[ \t]*if \(t < g_px_roots_n\)[^\n]*\n)(?:[ \t]*g_px_trunc_pending = -1;\n)[ \t]*\}\n", re.M)
 n=len(pat.findall(s))
-assert n==2, "anchor C 出现 %d 次（应 2 处：px_root_push_keep 内联 + px_root_keep 本体）" % n
-open(p,"w",encoding="utf-8").write(pat.sub("", s)); print("PATCH-C-OK (2 处)")'
+# M310：新增 px_root_push_keep2 时把 keep 体抽成 px_root_keep_locked（同一语义的第三份内联）
+#   ⇒ 「待收缩应用」块从 2 处变 3 处。负控 C 的语义是**去掉这个应用**（恢复根栈泄漏），
+#   三处必须**全去**才有意义；数量断言保留（防锚点漂移后静默只打掉一处）。
+assert n==3, "anchor C 出现 %d 次（应 3 处：px_root_push_keep 内联 + px_root_keep 本体 + M310 px_root_keep_locked）" % n
+open(p,"w",encoding="utf-8").write(pat.sub("", s)); print("PATCH-C-OK (3 处)")'
 
 PATCH_D='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
 n1="""        LXValue env = px_dict();\n        px_root_push_keep(env);   // 紧跟创建（中间不得插入任何可能分配的调用）\n"""

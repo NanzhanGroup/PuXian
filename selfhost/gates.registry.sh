@@ -999,6 +999,11 @@ step "M267 · 性能回归门（清歌提案 P0-1 —— 首个**性能判据**�
 #   （examples/m89_perf/bench_vm_vs_c.sh）都静默烂了 8 个月（两条命令都走 VM 轨）而无人知晓。
 #   判据 = 相对基线的 x倍（不报绝对秒）· 两轮确认 · 产物身份自检（C 轨含 fn_* / VM 轨不含）。
 run m267_perf bash examples/m267_perf/verify.sh
+# M310（丙2 W5）：ONNX 负载清单 ⇄ 算子注册表 **双向核对**（W1 建 · W5 注册）。
+#   缺口（W0-① 实测）：测量面 = 选定档的行 ⇒ 注册表新增算子而负载表忘了跟，
+#   账本里**静默少一项**，没有任何门看得见。本门把「缺一个即判红」变成判据：
+#   ① 范围族（源码派生 M306/M308）⊆ 清单覆盖 ② 清单覆盖 ⊆ 注册表 ③ 清单可执行（驱动/生成器/门从清单派生）。
+run onnx_load_coverage bash examples/m267_perf/check_load_coverage.sh
 # M305 · 性能基线口径 ⇄ 实现 的机器核对（M266 建，M305 补注册 —— 此前从未被任何运行器跑过）
 run spec_consistency bash examples/m267_perf/check_spec_consistency.sh
 step "M269 · GC 根登记「覆盖强度」台账（清歌提案 P0-2 —— 「还有多少地方看不清」）"
