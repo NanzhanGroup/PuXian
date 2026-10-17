@@ -351,3 +351,20 @@ m208 门回归：**PASS=13 / FAIL=0**（`--neg-skip`，日志 `/tmp/m310/b1_m208
    再按同一反向判据（LIVECHK 0/N）落改。
 
 **下轮入口**：`examples/m208_vm_c_local_roots` 的协程语料 + `px_serve` 多 worker 压测（s2c_pxserve 已有起服脚本）。
+
+---
+
+## 八、阶段 D · 收口记录（2026-10-18 · 东月）
+
+| 步 | 实际处置 |
+|---|---|
+| **D1 重烘** | 甲1 改了 `runtime/*.c`（`px_root_push_keep` 边缘）⇒ **重烘 14 件**，入库件 `9d8ac23`；发布档全量门里「版本字面量 ⇄ 自举基准 ⇄ 入库件 三方一致」步**绿** |
+| **D2 串行全量门** | 分段跑（段1 12:56→16:11 · 135 门 0 红；段2 21:48→23:24 · 81 门）⇒ **216/216 覆盖 · 红 1 · 合计 17453s**；唯一红门 `upstream_tests` = rc=124 撞 900s 默认超时（902s），空闲机单跑 **963s · 失败 0 · rc=0** ⇒ 判为超时口径问题（**判据不放宽**）· 证据 `M310_D2_FULL_RESULT.md` |
+| **D3 三绿 → 发版** | CI `39004446489` success 7/7 · Tag Guard `39006746238` success ⇒ `make_tag.sh --milestone 310 --push` rc=0 ⇒ annotated **`v0.2.310`**（对象 `adb7b56`）→ commit `ccceb39`；Release `39058492412` success |
+| **D4 发布档全量门（分片）** | **216/216 · 绿 216 · 红 0 · 墙钟 5296s ≤ 5400s**；逐门裁决 rc=0（红 0 · 缺失 0 · 多余 0 · 状态/rc 不一致 0）= SHARD-VERDICT-GREEN；LPT 基线为本轮 D2 实测 `/tmp/m310/d2_baseline_verified.tsv`（216 门 · `upstream_tests` 记 964s 单跑值）· 单一出处 `M310_R2_FINAL_RESULT.md` |
+| **D5 发布物独立复核** | **全绿** —— 4 件资产 · 主包 sha256 独立复算一致（`f5e83cc3…`）· 引导包 sidecar 一致（`0519f648…`）· `VERSION=0.2.310` · 引导包 `check_pkg_arch --arch aarch64` 判红 0（141 ELF）· 包内 `tools/pxpkg`/`tools/pxpkg_sync.sh` 与 HEAD 逐字节同 · `runtime/` 含 `px_root_push_keep2` 锚点 ⇒ `M310_D5_RELEASE_VERIFY.md` |
+
+⚠️ 阶段 D 之后**仍开放**（不许当绿）：
+1. **§七 同形状站点**（`runtime.c:26542` `px_pxserve_pend`）：静态同构但**无复现证据** ⇒ 只登记不改；下轮先造复现（`PX_GC_STRESS` + pxserve 多 worker + `PX_GC_LIVECHK`），再按甲1 同一反向判据落改。
+2. 第二条腿「压缩总工作量」（主候选 devbuild 4 路重复建）⇒ **未启动**。
+3. `verify_m310_release.sh` 资产匹配正则已修（工具 bug，非判据），后续里程碑复用前先看该脚本备份与本节补记。
