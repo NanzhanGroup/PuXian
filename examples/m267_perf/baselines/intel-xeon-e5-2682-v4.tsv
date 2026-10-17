@@ -22,8 +22,8 @@ startup_exec   startup  s      0.003342   空程序连跑 200 次 / 200（进程
 hot_build      build    s      1.0572     px build 热缓存（空程序，含自动裁剪）
 onnx_mm512     onnx     s      2.0675     ONNX MatMul 512³ ×5 —— 常规内核区（无跨页崩塌）
 onnx_mm1024    onnx     s      4.4471     ONNX MatMul 1024³ ×1 —— 跨页崩塌探针（本机慢 1.34× · EPYC 档为 3.75× · 路线 S3 的靶子）
-onnx_quant     onnx     s      0.5085     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
-onnx_mlp       onnx     s      0.4355     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
-onnx_kv        onnx     s      0.1346     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
-onnx_rope      onnx     s      0.2370     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
-onnx_trilu     onnx     s      0.3128     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
+onnx_quant     onnx     s      1.3670     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
+onnx_mlp       onnx     s      1.3508     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
+onnx_kv        onnx     s      0.6244     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
+onnx_rope      onnx     s      1.3212     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
+onnx_trilu     onnx     s      1.4123     M310 新负载 · 本机实测（3 组 × 5 次 min · taskset -c3）
