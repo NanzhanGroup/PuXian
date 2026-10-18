@@ -1047,9 +1047,26 @@ step "shell 契约守卫（sh 调用脚本 / bashism × shebang · M251s1 · 缺
 #     「含 bashism 但 shebang 非 bash」，在本机就能查出 CI/dash 才会发作的问题。
 #     判据 A 有豁免：同行含 `# sh-call-ok: <理由>`；自带 5 条自证（含"违规清零必须绿"）。
 run shell_contract bash selfhost/check_shell_contract.sh
-step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
+step "M311 · 门超时口径（注册源声明 ⇄ 实测基线 · 缺陷 532）"
+#   来历（M310 D2 段2 实测）：`upstream_tests` 真实耗时 963s（空闲）/902s（4 路分片），
+#   而运行器默认上限 900s ⇒ **串行权威档一跑就 rc=124**（那一轮全量门唯一红）。更糟的是
+#   「本门该给 1800s」这份知识此前**只在宿主侧 `/data/gatevm/shard_run.sh` 的两行硬编码**里
+#   —— 仓里既没有记录、也没有任何判据看得见「某门已经贴到上限」（与 M243 的「三份门清单」同族）。
+#   本门判据：P1 悬空声明（写了名字但没这扇门 = 静默无效）· P2 **实测 ≥80% 生效上限**
+#   （含走默认档的门 —— 这才是缺陷 532 的正面判据）· P3 声明裕度 <1.5× 实测 · P5 规模锚点
+#   + **提取器 1:1 对拍**（源码里的 gate_timeout 行数 ⇄ 解析出的条数）。
+#   门自带 9 条自证，其中 S8 是**动态**的：假注册源声明 2s ⇒ 真被 run_gates.sh 执行（rc=124）。
+run gate_timeouts bash selfhost/check_gate_timeouts.sh
+step "M190 · 上游 registry-px 真实用例回归（238 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
+#
+#   ⭐ M311（缺陷 532）· **按门超时也必须在这里声明**（唯一事实源）：
+#     本门实测 963s（空闲）/ 902s（4 路分片），而默认上限 900s ⇒ 串行权威档必撞
+#     （M310 D2 段2 rc=124）。此前只有宿主侧 `/data/gatevm/shard_run.sh` 硬写 1800 兜着
+#     ⇒ 同一件事实有两份真相，且**仓里那份缺失**。现在：1800 = 1.87× 实测（≥1.5× 裕度），
+#     守卫 `selfhost/check_gate_timeouts.sh` 用基线逐门盯裕度。
+gate_timeout upstream_tests 1800
 run upstream_tests bash selfhost/run_upstream_tests.sh
 # ── M287s2：上游回归的「失败确认步 / FLAKE」自证 ─────────────────────────
 #   动机（实测）：上游 `mock_test` 的桩服务器 `mk_start_server` = `spawn mk_server_loop(...)`

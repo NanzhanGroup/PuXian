@@ -21,11 +21,24 @@
 #
 # 环境变量：GATE_TSV（计时输出）· GATE_TIMEOUT_DEFAULT · GATE_TIMEOUT_<门名>
 #           GATE_ONLY / GATE_SKIP / GATE_FAIL_FAST（与同名参数等价，便于 CI）
+#
 #           GATE_JOBS —— **门内并行度**（M244）：
 #             默认 = 本机核数；`GATE_JOBS=1` = 强制串行（**判据用**：与并行档对拍）；
 #             非法值（非整数 / <1）⇒ **响亮 rc=2**，绝不静默回退。
 #             为什么不并「门之间」：53 个门的负控会**改源码**（`runtime.c` / `selfhost/*.px`），
 #             门间并行必然互相踩（M191 立 PID 锁正是为此）。门内并行与那条护栏**正交**。
+#
+# 按门超时（M311 · 缺陷 532）：**声明在注册源里**（`gate_timeout <门名> <秒>`，写在同名
+#   `run` 行之前），本文件只负责机制。三层优先级（高→低）：
+#     ① 环境变量 `GATE_TIMEOUT_<门名>`（临时排障）
+#     ② **注册源声明** `gate_timeout`（**唯一事实源** —— 串行档 / 分片档 / D2 都读它）
+#     ③ `GATE_TIMEOUT_DEFAULT`（兜底）
+#   ⇒ 为什么搬进注册源：`upstream_tests` 真实耗时 963s（空闲）/ 902s（分片）而默认上限 900s，
+#     这份知识此前**只在宿主侧 `/data/gatevm/shard_run.sh` 的两行硬编码**里 ⇒ 任何人跑
+#     **串行权威档**必撞 900s 判红（M310 D2 实测 rc=124）。与 M243 修的「三份门清单」同族：
+#     **第二份真相**。守卫 `selfhost/check_gate_timeouts.sh` 用实测基线盯「裕度是否够」。
+#   配额告警：某门用掉 ≥80% 生效上限 ⇒ 运行期 `⚠️` + 汇总点名（**不因此判红**）。
+#     目的：下一个「即将顶穿」的门在**当次全量门**里就被看见，而不是等它某天超时。
 # ============================================================
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,7 +69,7 @@ while [ $# -gt 0 ]; do
         --skip)        shift; GATE_SKIP="${1:-}" ;;
         --list)        GATE_LIST=1 ;;
         --fail-fast)   GATE_FAIL_FAST=1 ;;
-        -h|--help)     sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)     sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "未知参数: $1（--help 看用法）"; exit 2 ;;
     esac
     shift
@@ -66,6 +79,28 @@ done
 _in_list() { case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
 
 step() { [ "$GATE_LIST" = 1 ] && return 0; echo ""; echo "══ $* ══"; }
+
+# ── M311（缺陷 532）：**注册源声明式按门超时** ──────────────────────
+#   注册源里写 `gate_timeout <门名> <秒>`（必须在该门 `run` 行**之前** —— sourced 线性求值）。
+#   本函数**只记录**，取值在 run() 里按三层优先级解析；`--list` 走到这里也只会记录、无输出。
+#   ⚠️ 声明非法（缺参 / 非正整数 / 同名两值）⇒ **响亮 rc=2**：注册源是唯一事实源，
+#      写错了不能静默退回默认值（否则又一个「以为声明了、其实没有」）。
+declare -A GATE_TMO_DECL=()
+QUOTA_WARN=()      # 形如 "门名 elapsed/cap pct%"（汇总用）
+gate_timeout() {   # $1=门名 $2=秒
+    local n="${1:-}" s="${2:-}"
+    if [ -z "$n" ] || [ -z "$s" ]; then
+        echo "❌ gate_timeout 用法：gate_timeout <门名> <秒>" >&2; exit 2
+    fi
+    case "$s" in
+        ''|*[!0-9]*) echo "❌ gate_timeout $n：秒数必须是正整数（给的是「$s」）" >&2; exit 2 ;;
+    esac
+    [ "$s" -ge 1 ] || { echo "❌ gate_timeout $n：秒数必须 ≥1" >&2; exit 2; }
+    if [ -n "${GATE_TMO_DECL[$n]:-}" ] && [ "${GATE_TMO_DECL[$n]}" != "$s" ]; then
+        echo "❌ gate_timeout $n：同名重复声明且值不同（${GATE_TMO_DECL[$n]} vs $s）" >&2; exit 2
+    fi
+    GATE_TMO_DECL["$n"]="$s"
+}
 
 # ── M221（第 100 轮）：逐门计时 + 每门独立 timeout ──────────────
 #   为什么：CI「工具自测」步实测 23/40+/37 分钟（上限 45），而**整步只有一个 timeout**、
@@ -94,19 +129,31 @@ run() {  # $1=名 $2..=命令
         printf '%s\tSKIP\t0\t-\n' "$name" >> "$GATE_TSV"; SKIPPED=$((SKIPPED+1)); return 0
     fi
     local t0=$SECONDS
+    # ── M311：三层优先级（env > 注册源声明 > 默认）—— 记住来源，红的时候能读出真因 ──
     local tmo_var="GATE_TIMEOUT_${name}"
-    local tmo="${!tmo_var:-$GATE_TIMEOUT_DEFAULT}"
+    local tmo="$GATE_TIMEOUT_DEFAULT" tmo_src="默认"
+    if [ -n "${GATE_TMO_DECL[$name]:-}" ]; then tmo="${GATE_TMO_DECL[$name]}"; tmo_src="注册源"; fi
+    if [ -n "${!tmo_var:-}" ]; then tmo="${!tmo_var}"; tmo_src="env"; fi
     if timeout -k 20 "$tmo" "$@" > "/tmp/gate_$name.log" 2>&1; then
         local el=$((SECONDS-t0))
         if _gate_adjudicate_ok_rc "$name" "$el"; then
             printf '%s\tOK\t%d\t-\n' "$name" "$el" >> "$GATE_TSV"
             echo "✅ $name（${el}s）"
+            # M311：**配额告警**（用掉 ≥80% 生效上限）—— 不判红，只点名。
+            #   理由（M274 缺陷 480 的口径）：一个「贴到上限」的门迟早偶发判红，
+            #   而那时你会以为是产品坏了。要在它还没红的时候就看见。
+            if [ "$tmo" -gt 0 ] && [ $(( el * 100 )) -ge $(( tmo * 80 )) ]; then
+                local pct=$(( el * 100 / tmo ))
+                QUOTA_WARN+=("$name ${el}/${tmo}s ${pct}% · 来源 $tmo_src")
+                echo "⚠️ $name 配额告警：${el}s / 上限 ${tmo}s（${pct}% · 来源 $tmo_src）"
+                echo "     ⇒ 裕度不足 1.25×；口径与处理见 docs/GATE_TIMEOUTS.md（判红由 check_gate_timeouts 负责）"
+            fi
         fi
     else
         local rc=$?; local el=$((SECONDS-t0))
         printf '%s\tFAIL\t%d\t%d\n' "$name" "$el" "$rc" >> "$GATE_TSV"
         if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
-            echo "⏱  $name（**超时**：${el}s ≥ 上限 ${tmo}s，rc=$rc）"
+            echo "⏱  $name（**超时**：${el}s ≥ 上限 ${tmo}s · 来源 ${tmo_src}，rc=$rc）"
         else
             echo "❌ $name（rc=$rc, ${el}s）"
         fi
@@ -155,6 +202,12 @@ gate_summary() {
         echo "══ 汇总：失败 $FAIL 项（总耗时 $((SECONDS-GATE_ALL0))s）══"
     fi
     echo "   逐门时序（name<TAB>状态<TAB>秒<TAB>rc）：$GATE_TSV"
+    # M311：**配额告警汇总**（≥80% 上限的门 —— 下一个顶穿的就是它们）
+    if [ "${#QUOTA_WARN[@]}" -gt 0 ]; then
+        echo "   ⚠️ 配额告警 ${#QUOTA_WARN[@]} 门（用掉 ≥80% 生效上限）："
+        local q
+        for q in "${QUOTA_WARN[@]}"; do echo "      · $q"; done
+    fi
     # M222 补（第 100 轮）：**devbuild 复用台账** —— 产物指纹短路到底省了多少？
     #   台账由 devbuild.sh 追加（DEVB_STATS 可覆盖），这里只汇总，**不参与判据**。
     if [ -f "${DEVB_STATS:-/tmp/devbuild_stats.tsv}" ]; then

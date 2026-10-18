@@ -208,6 +208,15 @@ jobs:
         run: |
           bash selfhost/check_shell_contract.sh --self-test
           bash selfhost/check_shell_contract.sh
+      - name: 门超时口径守卫（声明 ⇄ 实测基线 · M311 · 缺陷 532）
+        #   来历（M310 D2 段2）：`upstream_tests` 实测 963s 而默认上限 900s ⇒ 串行权威档 rc=124
+        #   （那一轮全量门唯一红）；而「该门该给 1800s」此前只在宿主侧 shard_run.sh 的硬编码里。
+        #   判据：P1 悬空声明 · P2 实测 ≥80% 生效上限 · P3 声明裕度 <1.5× · P5 规模锚点
+        #   + 提取器 1:1 对拍；自带 9 条自证（含**动态**：假声明真被 run_gates.sh 采用）。
+        #   ⚠️ 默认档 = 自证 + 真判（同 check_gate_paths / check_shell_contract 口径）。
+        run: |
+          bash selfhost/check_gate_timeouts.sh --self-test
+          bash selfhost/check_gate_timeouts.sh
       - name: 版本字面量 ⇄ 自举基准 ⇄ 入库件 三方一致（M250 · 缺陷 435）
         #   实证（CI run #484 · bdf7090）：M249 的版本递增改了 `selfhost/compiler.px` 的
         #   `PXC_VER`，而 `selfhost/golden/compiler.c` / `compiler.bc.dump` 是**老版本**烘出的
