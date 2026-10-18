@@ -36,6 +36,8 @@
 | [`NEW_GATE_CHECKLIST.md`](NEW_GATE_CHECKLIST.md) | **新建「门」的落盘检查清单**（M247）：生成器 / 复用与 import / 性能 / **负控** / 判据 / 注册六类必查项 + 已被守卫机械化的条目 | 写门的人；**改 `examples/*/verify.sh` 前先过一遍** |
 | [`GATE_ASSERTIONS.md`](GATE_ASSERTIONS.md) | **门层判据守卫口径**（M285）：① 负控**打桩锚点在位**（`sed` 找不到 `OLD` 会静默失效）② 判据串**在场**（凭空捏造的判据串）③ 三条**刻意不看**（散文文档 / 反向断言 / 同文件打桩后状态） | 写门 / 改门的人 |
 | [`GATE_ISOLATION.md`](GATE_ISOLATION.md) | **门间隔离**（M264）：共用固定 `/tmp` 路径的白名单制 —— 门与门之间不得互踩 | 并行跑门 / 加新门的人 |
+| [`GATE_TIMEOUTS.md`](GATE_TIMEOUTS.md) | **门超时口径**（M311 · 缺陷 532）：声明写在注册源（`gate_timeout <门> <秒>`）· 三层优先级 · 配额告警（≥80% 不判红）· 守卫 P1/P2/P3/P5 · 实测基线怎么刷新 | **加/改门的人**；遇到「某门偶发超时」先看这里 |
+| [`GATE_COST_BREAKDOWN.md`](GATE_COST_BREAKDOWN.md) | **全量门成本模型**（M311 · B）：分片档实测分解（最长分片 + quiet 段）· **两个被否证的假设**（重复建产物 2.4% · 调平上限 6.5%）· 剩余杠杆与实验协议 | 想「压缩全量门时间」的人（**先跑 `packaging/chain/gate_cost_report.py`**） |
 
 ### A4 协议与连接口径
 

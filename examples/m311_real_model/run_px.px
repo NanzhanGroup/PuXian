@@ -1,0 +1,24 @@
+# M311 · C3 真模型探针 —— 固定输入 ⇒ 打印 last_hidden_state 的 hex（逐字节可对拍）
+# ⚠️ 模型路径**必须**经 env 注入（不许写死）：换机器/换模型时不改代码。
+let model = env("M311_MODEL")
+if model == null:
+    print("MODEL-ENV-MISSING")
+    exit(8)
+let m = onnx_model_open(model)
+if m["ok"] != true:
+    print("MODEL-OPEN-FAIL " + str(m["error"]))
+    exit(9)
+let r = onnx_run(m["id"], {
+  "input_ids": {"dims": [1, 4], "dtype": "int64", "i64": [101, 2023, 1029, 102]},
+  "attention_mask": {"dims": [1, 4], "dtype": "int64", "i64": [1, 1, 1, 1]},
+  "token_type_ids": {"dims": [1, 4], "dtype": "int64", "i64": [0, 0, 0, 0]}
+})
+if r["ok"] != true:
+    print("MODEL-RUN-FAIL " + str(r["error"]))
+    exit(9)
+let o = r["outputs"]["last_hidden_state"]
+print("DIMS " + str(o["dims"]))
+print("NBYTES " + str(o["nbytes"]))
+print("HEX " + bytes_to_hex(o["data"]))
+let ops = sorted(r["stats"]["by_op"].keys())
+print("OPS " + str(ops))
