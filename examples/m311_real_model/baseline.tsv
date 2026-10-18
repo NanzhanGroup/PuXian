@@ -1,0 +1,18 @@
+# M311 · C3 数值基线（**生成物，不许手改**）
+#
+# 口径：同一台机器（本机，Rocky 9 / glibc 2.34）、同一模型
+#   /data/app/ws/models/embed/model.onnx（102,407,793 字节 · onnx.quantize 产出的 int8 bge）
+#   · 同一输入（input_ids=[101,2023,1029,102] · attention_mask 全 1 · token_type_ids 全 0）
+#   · onnxruntime 1.19.2（/opt/fw）· 单线程（intra/inter = 1）· 图优化 ORT_ENABLE_ALL
+#   · PuXian = 入库件 tools/px 现编的 C 轨产物
+# 用途：只判「**不许更差**」（各 +25%），**不声称等价** —— 见缺陷 533 与门头说明。
+# 刷新时机：换了模型 / 换了 onnxruntime 版本 / 量化路径有意的语义变更（三选一才刷，并在此写清）。
+#
+# 实测（2026-10-18 14:20，M311 · C3）：
+#   max_abs_err 0.4773615 · mean_abs_err 0.0660374 · corr 0.9747 · 尺度比 1.0120（**C 轨**产物，门里的口径）
+#   ⚠️ 同一输入走 tools/px run（VM 轨）得 corr 0.9752 / 尺度比 0.9952 —— 两轨浮点路径不同，属预期。
+#   判别实验（seq=1，注意力退化）：max 0.1356 / mean 0.0316 / corr 0.9901
+#   ⇒ 病灶在**共享路径**（量化矩阵乘族），不在注意力/掩码。
+#   onnxruntime 自证稳定：优化级 all ⇄ none 的差异仅 1.4e-6（max）⇒ 上面的偏差不是它的噪声。
+max_abs_err	0.4773615
+mean_abs_err	0.0660374

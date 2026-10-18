@@ -339,6 +339,53 @@ jobs:
             exit 1
           fi
           echo "✅ 已上传 $PKG（并列主包资产）"
+          # ── M311 · C1：把 aarch64 包**并入** sha256sums.txt（统一校验清单）────────
+          #   为什么：`make_release.sh` 只把主包写进清单，aarch64 包只有 sidecar
+          #   ⇒ 下载者用「一个清单核全部资产」时核不到它（M310 D5 实测；
+          #     packaging/check_release_assets.sh 对**已发布的 M310 资产**实测判红）。
+          #   口径：清单是**唯一权威**；sidecar 保留向后兼容，两者不许矛盾（A3 判据守）。
+          #   幂等：先剔除同名旧行再追加（重跑/重定基不会产生重复或旧哈希）。
+          SD="$RUNNER_TEMP/sums"; mkdir -p "$SD"
+          if gh release download "$TAG" -p sha256sums.txt -D "$SD" --repo "$GITHUB_REPOSITORY"; then
+            HASH="$(sha256sum "$PKG" | awk '{print $1}')"
+            # ⚠️ 写回**同名文件**再 upload（不用 `file#name` 语法：gh release upload 对它的支持
+            #    随版本而异，发布链里不赌这个）
+            awk -v n="$PKG" '$2 != n' "$SD/sha256sums.txt" > "$SD/sums.tmp" || true
+            printf '%s  %s\n' "$HASH" "$PKG" >> "$SD/sums.tmp"
+            mv "$SD/sums.tmp" "$SD/sha256sums.txt"
+            cat "$SD/sha256sums.txt"
+            gh release upload "$TAG" "$SD/sha256sums.txt" --clobber --repo "$GITHUB_REPOSITORY"
+            echo "✅ 已把 aarch64 包并入 sha256sums.txt（$HASH）"
+          else
+            echo "::error::下载 sha256sums.txt 失败（tag=$TAG）—— 清单不全会让校验面出现缺口"
+            exit 1
+          fi
+
+  # ============================================================
+  # M311 · C2 —— 发布资产 ⇄ 校验清单 **双向核对**（发布链的最后一关）
+  # ------------------------------------------------------------
+  # 为什么单独一个 job：C1 只保证「我们写进去了」，本 job 保证「**从 Release 上取回来的**
+  #   资产集合与清单完全对得上」—— 即判据作用在**已发布物**上，而不是本地工作目录。
+  # 判据见 packaging/check_release_assets.sh（A1 每个 tarball 在清单且哈希一致 ·
+  #   A2 清单无悬空条目 · A3 sidecar ⇄ 清单不许矛盾 · A4 aarch64 包必须在 · A5 规模锚点）。
+  # ============================================================
+  assets-verify:
+    needs: [release, bootstrap-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: 核对发布资产与校验清单（双向）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          D="$RUNNER_TEMP/assets"; mkdir -p "$D"
+          gh release download "$TAG" -D "$D" --repo "$GITHUB_REPOSITORY"
+          ls -l "$D"
+          bash packaging/check_release_assets.sh "$D" "$TAG"
 
   # ============================================================
   # rpm —— 构建签名 RPM 仓库并发布到 GitHub Pages（M73 dnf + M77 el7 yum）

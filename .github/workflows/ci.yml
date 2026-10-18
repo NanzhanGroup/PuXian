@@ -1314,6 +1314,20 @@ jobs:
           bash examples/m309_pxpkg_sync/verify.sh > /tmp/v_m309.log 2>&1 || { echo "❌ m309 门失败（静态 9 · 正控 9 · 原子性 10 · 边界 4 · 判据自证 2）"; grep -E '^(  ❌|     |        )' /tmp/v_m309.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m309_pxpkg_sync（首次同步/幂等/dry-run 零副作用 · 10 条原子性负控目标逐字节不动 · NC-A/NC-B 判据自证 · 37/0）PASS"
 
+      - name: m311_real_model（真模型端到端 ⇄ onnxruntime · M311 · C3）
+        # CI 无真模型（102MB 生产件）与 onnxruntime ⇒ 数值面**响亮 SKIP**（打印原因），
+        # 静态层仍跑；权威覆盖在本地全量门（`M311_REQUIRE_ORT=1`，**只**本地设）。
+        # 不许把 SKIP 当绿：本门在 SKIP 档会明确打印「没有数值结论」并输出 M311-REALMODEL-SKIP。
+        run: |
+          bash examples/m311_real_model/verify.sh > /tmp/v_m311.log 2>&1 || { echo "❌ m311_real_model 门失败"; grep -E '^(  ❌|     |        )' /tmp/v_m311.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          tail -4 /tmp/v_m311.log
+
+      - name: release_assets（发布资产 ⇄ 校验清单 双向核对自证 · M311 · C1/C2）
+        # 判据本体在 release.yml 的 assets-verify job（作用在**已发布物**上）；
+        # 这里跑它的 5 条离线自证（S1 完整 · S2 清单漏资产 · S3 哈希不符 · S4 sidecar 矛盾 · S5 缺 aarch64 包）。
+        run: |
+          bash packaging/check_release_assets.sh --self-test
+
       - name: selfwake_guard（禁止自建平行告警/唤醒通道 · 用户令 2026-10-12）
         # 本机侧扫描面（/data/gatevm 的无人值守脚本）在 CI 上不存在 ⇒ 该档记 ℹ️ 跳过，
         # 判据**不因此失效**（J4 规模锚点只锚仓库面）。仓库面在 CI 上有完整牙。
