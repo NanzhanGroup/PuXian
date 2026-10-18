@@ -77,6 +77,18 @@ A4 aarch64 包必须在 · A5 规模锚点）。
 - 注册：`gate_timeouts` / `m311_real_model` / `release_assets` 三门进 `gates.registry.sh` + `ci.yml`
   （双向一致守卫绿 · `--list` **219 门**）。
 
+### 五 验收实测（串行权威档全量门 · 2026-10-18）
+
+**`selfhost/run_gates.sh` 全量 = 219 门 / 0 红 / 9526s**（16:14 → 18:53，HEAD `680f892`）。
+逐门时序 `/tmp/m311/full/times.tsv`（219 行，与 `--list` 逐名一致）；摘要 `M311_FULLGATE_RESULT.md`。
+
+- `upstream_tests` **OK 903s**（声明 1800 上限的 **50.2%**，未触发 ≥80% 配额告警）—— M310 那条
+  rc=124 的**唯一红门**在本轮**不复现**；口径入仓后串行权威档与分片档同源。
+- 新增三门全绿：`gate_timeouts` 15s · `m311_real_model` 16s · `release_assets` 1s。
+- devbuild 台账 重建 11665 / 复用 5456；无门贴到上限。
+- 判据未放松：219 门全跑（无 `--only`、无 SKIP），仅 `upstream_tests` 按注册源声明 1800（资源上限）。
+- 发布档（4 路分片）同轮并行复跑，墙钟与逐门裁决见 `M311_R2_FINAL_RESULT.md`。
+
 ## M310 发布小结（v0.2.310 · 2026-10-18）— 三绿 + 发布档全量门 216/0 · 墙钟 5296s · D5 全绿
 
 > M310 = **甲1（GC 边缘：成功响应丢头的唯一必要条件）** + **丙2（ONNX 新算子族接性能账本）**。
