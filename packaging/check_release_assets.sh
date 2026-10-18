@@ -120,7 +120,9 @@ while IFS= read -r line; do
 done < "$SUMS"
 
 # A4 aarch64 引导包必须存在
-if find "$DIR" -maxdepth 1 -name 'puxian-bootstrap-aarch64-*.tar.gz' | grep -q .; then
+#   ⚠️ 不用 `find … | grep -q` 形态（M283 P3 判据：pipefail 下可因 SIGPIPE 恒假）；
+#      `-print -quit` 找到第一个就停，天然有界。
+if [ -n "$(find "$DIR" -maxdepth 1 -name 'puxian-bootstrap-aarch64-*.tar.gz' -print -quit)" ]; then
     ok "aarch64 引导包在位（M277：它曾长期没进镜像而无人知）"
 else
     bad "缺 aarch64 引导包（puxian-bootstrap-aarch64-*.tar.gz）"
