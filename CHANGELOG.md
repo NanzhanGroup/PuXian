@@ -1,3 +1,87 @@
+## M312 —— GC 暂停信号 / 互斥锁「解除顺序」（缺陷 535）+ `PX_GC_STATS` 可观测项（第 183 轮）
+
+**一句话**：**`gc_unblock_stop()` 写在 `pthread_mutex_unlock()` 之前** —— 反序留下「仍持锁却已恢复信号」的窗口，
+pending 的 `SIG_GC_STOP` 恰在此刻递达 ⇒ 线程**持着锁进暂停** ⇒ GC executor 在 `*_gc_mark()` 里等这把锁，
+整条服务被按住到秒级（靠被暂停线程 6s 兜底才恢复）。
+
+### 一 来历与定性（晨曦 2026-10-18 生产报障）
+
+Mahesvara 8 并发 keep-alive：多数轮 1742 rps / p95 7.5ms，**偶发轮 18.5 rps / p95 12822ms / max 12933ms**。
+晨曦现场取证把方向指向「`gc_register` 争锁 + `gc_stop_handler` 握手」；**本轮实测推翻了那个判断**：
+
+| 证据 | 读数 | 结论 |
+|---|---|---|
+| GC 整轮耗时 | `total=12146ms` | 慢的是某一轮 GC |
+| 分段 `lock / stop / sweep` | `0.0 / 0.7 / 1.9 ms` | **不在等 g_gc_mu、不在握手** |
+| mark 细分 | `hash=0.5 globals=0.1 self=0.1 threads=0.1 **coro=12142**` | 在 coro 段 |
+| coro 三拆 | `coro=0.0 **http_pend=12142.5** pxserve_pend=0.0` | 在 `http_pend_gc_mark()` |
+| 函数内细分 | `**wait_lock=12214ms** scan=0.0ms cap=256 active=5` | **纯等锁** |
+
+⇒ 真因不是「GC 太慢」，也不是「争锁」，而是**一把本不该被持有 12 秒的锁**。
+
+### 二 修法（35 处 · 同一协议）
+
+**正确顺序：`lock → block ... unlock → unblock`**（先放锁、再解除信号屏蔽）。
+
+| 锁 | 位置 | 处数 |
+|---|---|---|
+| `g_hpend_mu` | `http_pend_put/take/clear/gc_mark` · `http_handler_done` | 5 |
+| `g_pxpend_mu` | `px_pxpend_*` · `px_pxserve_pend_gc_mark` | 13 |
+| `g_gc_mu` | 对象操作热路径 | 12 |
+| `g_globals_mu` | 全局表读写（rwlock） | 10 |
+
+### 三 实测（本机最小复现装置 · 8 并发 keep-alive · `PX_GC_THRESHOLD=5000`）
+
+```
+修前：secs=12  rps=10.3  p95=12136ms  max=12169ms      （另两轮 12147 / 12154ms）
+修后：secs=6   rps=611–755  p95=16–24ms  max=22–61ms   （4 轮 · 0 次 >100ms 的 GC）
+负控 A（只撤回 g_hpend_mu 5 处）：max 6085 / 12147 / 12154ms ⇒ 判据有牙
+```
+
+### 四 观测项 `PX_GC_STATS`（晨曦期望第 2 条）
+
+```
+PX_GC_STATS=1                启用
+PX_GC_SLOW_MS=<ms>           单轮 ≥ 该值即即时打一行（默认 100；0=关）
+PX_GC_STATS_INTERVAL=<s>     周期性汇总（默认 0=仅退出时；服务端长期运行必须设）
+```
+
+输出（前缀 `[px-gc-stats]`，全部走 `write(2)` 不碰 stdio，理由同 `gc_debug`）：
+
+```
+[px-gc-stats] slow #29 total=12130.9ms lock=0.0 stop=0.4 mark=12126.6 sweep=1.6 resume=2.3 live=847 freed=4312 thr=3 marked=847 precise=1 mksub_ms hash=0.1 globals=0.1 self=0.1 threads=0.1 coro=12126.2
+[px-gc-stats]   corosub_ms coro=0.0 http_pend=12126.0 pxserve_pend=0.0 coros=3
+[px-gc-stats]   hpend wait_lock=12214.0ms scan=0.0ms cap=256 active=5
+[px-gc-stats] === dump why=interval runs=29 skips=0 empty=0 slow=1 ===
+[px-gc-stats] pause_ms p50=2.0 p95=4.0 p99=8.0 max=8192.0 n=29
+[px-gc-stats] phase_ms lock=0.0 stop=21.9 mark=12156.6 sweep=40.5 resume=21.6
+[px-gc-stats] reg_lock n=93467 wait_total_ms=564.4 max_ms=13.8 p50_ms=0.000 p95_ms=0.000 p99_ms=0.000 (samples=93467)
+```
+
+⚠️ 分位数由**对数桶直方图**近似（误差 ≤1 个桶边界），不是精确排序统计 —— 已在文档写明。
+
+### 五 守卫与门
+
+- **`selfhost/check_gc_lock_order.py`**：扫全仓 `unblock → unlock` 反序，**9 条自证**（含注释/字面量/判据自伤）。
+- **`examples/m312_gc_lock_order/`**（`M312-VERIFY-OK`）：静态（反序 0 + 三入口顺序 + 判据自伤）·
+  动态（3 轮 8 并发：最差 max < 2000ms 且 0 次 >100ms GC）· **负控 A**（忠实撤回 5 处 ⇒ 必须复现 ≥5000ms）·
+  **负控 B**（判据自伤）· 覆盖边界。
+- **`docs/GC_STOP_PROTOCOL.md`**：协议、反序陷阱、GC 标记期锁清单、写新代码检查清单、覆盖边界。
+
+### 六 覆盖边界（如实）
+
+- `g_pinned_mu`（`gc_mark_pinned`）与 `g_globals_mu` 的 STW 前获取路径**未纳入**本轮修正面（前者登记下一轮）。
+- 只覆盖 C 运行时；`.px` 层自建锁不在面内；C 轨/单线程路径无 STW，本协议不适用（但保持同序书写）。
+- 动态层用 `PX_GC_THRESHOLD=5000` 放大 GC 频率；**默认阈值下复现概率低**（这正是它长期未被发现的原因）。
+
+### 七 纪律
+
+- **观测先行**：没有分段计时，晨曦的 129 线程栈会把所有人引向「争锁」，而真正的等锁发生在一个没人看的
+  `http_pend_gc_mark()` 上。**「先量后改」本轮再次证明是唯一正确的顺序。**
+- 判据自证又一次抓到自己的 bug：`body()` 按函数名搜到的是**前向声明**（`static void f(void);`），
+  取到的是下一个函数的尾巴 ⇒ `unlock=-1` 判红。**函数体定位必须带 ` {`。**
+- 门在跑时不动仓库（M191/M213 纪律）。
+
 ## M311（2026-10-18 · 第 181 轮）— 门超时口径入仓 · 真模型端到端 · 全量门成本模型（A+C+B）
 
 > **令源**：用户 2026-10-18「A+C+B，按顺序做，都立项在 M311 里面。」
