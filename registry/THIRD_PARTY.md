@@ -10,6 +10,9 @@
 > **当前生效的补丁（M307 起）**：`mock.patch`（`registry/mock/{0.1.0,0.2.0}`）—— 上游同版本 `mk_start_server`
 > 的启动竞态（spawn 后立即 return ⇒ 端口未必在听；而 `mk_request` 的 tcp_connect 失败是运行时致命错，
 > 重试来不及）；同族 = M305/M306 的「就绪等待不许是假定已就绪」。
+> **M313 新增**：`mysql.patch`（`registry/mysql/{0.1.0,0.2.0}`）—— 上游同版本驱动的握手偏移（536）、
+> CONNECT_WITH_DB 位（537）、读无界（538）、IO 出错不留半连接（540）；半山真 MariaDB 实测
+> Bad handshake 的根因全在上游代码里，上游未发版 ⇒ 走补丁通道（详见 `docs/MYSQL_DRIVER.md`）。
 > 纪律：本列非空 ⇒ 补丁文件必须在（且每个文件必须至少在一行登记）；**「上游 + 补丁 == 我方」是判据**
 > （m282 门 [7]），不是豁免。
 > 复核：`bash examples/m187_registry_import/verify.sh` 会**重算**下表 sha256 与磁盘对拍（防漂移）。
@@ -138,8 +141,8 @@
 | mqtt | 0.2.0 | 1 | `f3b50e3684fc5f11` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | msgpack | 0.1.0 | 1 | `152ea2b5b642509a` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | msgpack | 0.2.0 | 1 | `815f7bcc9c18a634` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
-| mysql | 0.1.0 | 3 | `d9ba075ee36833dd` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | 已存在（内容一致） |  |
-| mysql | 0.2.0 | 3 | `95113e7e93fff83b` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | 新引入 |  |
+| mysql | 0.1.0 | 3 | `ea5d7890def654ef` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | **本地就地更新**（M313：握手偏移 / CONNECT_WITH_DB / 读超时 / IO 错即关连接 · 上游同版本未发版） | 补丁：`mysql.patch` |
+| mysql | 0.2.0 | 3 | `11bd1b114ac0c1ef` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | **本地就地更新**（M313：同上四处 · 随 0.1.0 同口径） | 补丁：`mysql.patch` |
 | nanoid | 0.1.0 | 1 | `2439558272e9c6b0` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | nanoid | 0.2.0 | 1 | `aa59a66d907b50ea` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | natsort | 0.1.0 | 1 | `7272ac004a76b6c0` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |

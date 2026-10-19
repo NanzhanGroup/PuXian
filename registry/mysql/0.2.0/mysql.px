@@ -428,28 +428,22 @@ def mysql_close(conn):
 # ---- 0.2.0 新增：ping / select_db / begin / commit / rollback ----
 # mysql_ping — COM_PING(0x0e)，保活
 def mysql_ping(conn):
-    var ck = my_conn_check(conn)
-    if ck.is_err():
-        return ck
     var rq = my_send_packet(conn["fd"], 0, bytes(chr(14)))
     if rq.is_err():
-        return my_conn_bad(conn, "ping send: " + rq.err())
+        return Err("mysql: ping send: " + rq.err())
     var r = mysql_read_result(conn["fd"])
     if r.is_err():
-        return my_conn_bad(conn, r.err())
+        return r
     return Ok(true)
 # mysql_select_db — COM_INIT_DB(0x02)，切换数据库
 def mysql_select_db(conn, dbname):
-    var ck = my_conn_check(conn)
-    if ck.is_err():
-        return ck
     var body = bytes_concat(bytes(chr(2)), bytes(dbname))
     var rq = my_send_packet(conn["fd"], 0, body)
     if rq.is_err():
-        return my_conn_bad(conn, "select_db send: " + rq.err())
+        return Err("mysql: select_db send: " + rq.err())
     var r = mysql_read_result(conn["fd"])
     if r.is_err():
-        return my_conn_bad(conn, r.err())
+        return r
     conn.set("db", dbname)
     return Ok(true)
 # mysql_begin — 开始事务
