@@ -1,0 +1,50 @@
+# ============================================================
+# examples/m313_accept_nodelay/cli.px —— 裸 TCP 客户端（配合 srv.px）
+# ------------------------------------------------------------
+# 作用：连上去发一条请求、把响应读完，并输出「响应头 → 响应体」的到达间隔（**仅信息项**）。
+#   ⚠️ 该间隔在**本机回环**上通常为 0ms，不能当硬判据（见 srv.px 头部说明）。
+# 用法：./cli <port>
+# 输出：`GAP_MS=<毫秒>` · `CLI-BODY=<收到的体字节数>` · `CLI-DONE`
+# ============================================================
+def main():
+    var a = args()
+    var port = int(a[1])
+    var c = tcp_connect_ex("127.0.0.1", port, {"timeout_ms": 2000})
+    if not c["ok"]:
+        print("CLI-CONNECT-FAIL " + c["err"])
+        exit(1)
+    var fd = c["fd"]
+    var req = "GET /x HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    var s = tcp_send_ex(fd, bytes(req))
+    if not s["ok"]:
+        tcp_close(fd)
+        print("CLI-SEND-FAIL")
+        exit(1)
+    var buf = ""
+    var t_hdr = 0
+    var gap = -1
+    var i = 0
+    while i < 200:
+        var r = tcp_recv_ex(fd, 65536)
+        var now = now_ms()
+        if not r["ok"] or r["eof"] or r["timeout"]:
+            break
+        var d = r["data"]
+        if type(d) != "string":
+            d = bytes_to_str(d)
+        buf = buf + d
+        var p = buf.find("\r\n\r\n")
+        if p >= 0 and t_hdr == 0:
+            t_hdr = now
+        if p >= 0 and len(buf) > p + 4 and t_hdr != 0:
+            gap = now - t_hdr
+            break
+        i += 1
+    tcp_close(fd)
+    print("GAP_MS=" + str(gap))
+    var hp = buf.find("\r\n\r\n")
+    var blen = 0
+    if hp >= 0:
+        blen = len(buf) - (hp + 4)
+    print("CLI-BODY=" + str(blen))
+    print("CLI-DONE")

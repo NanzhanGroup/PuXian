@@ -81,6 +81,8 @@ for f in "$D020" "$D010"; do
   chk "[1.5] $tag 只在给了库名时置位（want_db）" "$(grep -c 'want_db' "$code")" "2"
   chk "[1.6] $tag 建连后设读超时（tcp_opt + read_timeout_ms）" "$(grep -c 'tcp_opt(fd, {"read_timeout_ms"' "$code")" "1"
   chk "[1.7] $tag 形参与文档一致（dbname/opts 有默认值）" "$(grep -c 'def mysql_connect(host, port, user, password, dbname = "", opts = null)' "$code")" "1"
+  chk "[1.7b] $tag IO 出错即关连接（my_conn_bad）" "$(grep -c 'def my_conn_bad(conn, what)' "$code")" "1"
+  chk "[1.7c] $tag 已关闭连接再用 ⇒ 响亮拒绝（already closed）" "$(grep -c 'connection already closed' "$code")" "1"
 done
 L020="$(wc -l < "$D020")"; L010="$(wc -l < "$D010")"
 if [ "$L020" -ge 400 ] && [ "$L010" -ge 360 ]; then ok "[1.8] 规模锚点（0.2.0=$L020 行 ≥400 · 0.1.0=$L010 行 ≥360）"; else bad "[1.8] 规模锚点：0.2.0=$L020 / 0.1.0=$L010"; fi
@@ -171,7 +173,20 @@ else
 fi
 stop_mock
 
-# ── [6][7][8] 负控 ───────────────────────────────────────────
+# ── [5b] 查询超时 ⇒ 连接关闭（不留半连接态）───────────────
+echo "── [5b] 查询超时 ⇒ 连接**关闭**（半山点：不能留半连接态）"
+P=$(port_new); LOG="$W/mock_qa.log"
+if run_mock "$P" silent_after "$LOG"; then
+  OUT="$("$P020" "$P" qtimeout 2>&1)"; RC=$?
+  echo "     $OUT"
+  chk "[5b.1] 退出码（已被关连接 ⇒ 0）" "$RC" "0"
+  echo "$OUT" | grep -q 'i/o timeout' && ok "[5b.2] 首次查询原因是 i/o timeout" || bad "[5b.2] 原因不是 i/o timeout"
+  echo "$OUT" | grep -q 'PROBE-NO-HALF-OPEN' && ok "[5b.3] 超时后连接已关闭，二次查询立即 Err（不留半连接）" || bad "[5b.3] 半连接态仍在：$OUT"
+else
+  bad "[5b.0] silent_after mock 未就绪（端口 $P）"
+fi
+stop_mock
+# ── [6][7][8] 负控（改的是 W 里的驱动副本，仓库零写入）─────────
 neg_drv() { # $1=name, $2=python patch 表达式文件
   local d="$W/drv_$1"; mk_driver_copy "$ROOT/registry/mysql/0.2.0" "$d"
   python3 - "$d/mysql.px" "$1" <<'PY'

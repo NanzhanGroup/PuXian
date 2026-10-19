@@ -15,8 +15,9 @@
 #     COM_PING ⇒ OK · COM_QUIT ⇒ 退出
 #
 # 用法：./mock_mysql <port> <mode>
-#   mode = ok      正常握手 + 应答
-#   mode = silent  接受连接后**什么都不发**（用于验证客户端读超时有界，不再永久阻塞）
+#   mode = ok           正常握手 + 应答
+#   mode = silent       接受连接后**什么都不发**（用于验证客户端**握手期**读超时有界）
+#   mode = silent_after 握手正常，但**查询不回**（用于验证查询超时后**不留半连接**）
 # ============================================================
 var MK_USER = "pxuser"
 var MK_PASS = "px_secret_456"
@@ -221,6 +222,12 @@ def main():
             break
         if cmd == 3:
             var sql = bytes_to_str(bytes_slice(p, 1, bytes_len(p)))
+            # silent_after：只应答握手后的 USE，之后的查询一律**不回**（用来验客户端读超时 + 不留半连接）
+            if mode == "silent_after" and sql.find("USE ") != 0:
+                print("MOCK-QUERY-SILENT sql=" + sql)
+                flush()
+                sleep(30000)
+                break
             var aff = 0
             if sql == "SELECT 1":
                 aff = 7

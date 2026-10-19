@@ -1,13 +1,14 @@
-## M313 —— mysql 驱动：握手偏移 / 能力位 / 读无界（缺陷 536 / 537 / 538）（第 184 轮）
+## M313 —— mysql 驱动三处握手缺陷 + 读无界 + 不留半连接 + 服务端 accept 漏设 TCP_NODELAY（缺陷 536–540）（第 184 轮）
 
-**一句话**：三条**互相独立**的协议层错误叠在同一段握手里 —— 偏移多跳一字节、`CONNECT_WITH_DB` 用错常量、
-读**无超时**；前两条造成 `Bad handshake`（服务器视角），第三条让客户端**永久阻塞**（不返回、不报错、不超时）。
-而 `registry/mysql` 此前**没有任何动态门**（上游用例要真实 MariaDB，CI 恒 SKIP）⇒ 三者长期无人看守。
+**一句话**：本轮收两条独立报障 —— ① 半山的 **mysql 驱动三处握手缺陷**（`Bad handshake` + 永久阻塞），
+② 晨曦的 **服务端 accept 漏设 `TCP_NODELAY`**（每条 keep-alive 响应多出约 40ms）。
+两件的共同形状都是「**同一条语义只做了一半**」：修前者的教训是「偏移约定只在一处对」，
+后者是「出站设了 NODELAY、入站漏着」。
 
-### 一 来历与定性（半山 2026-10-19 生产报障，附补丁 `mysql-0.2.0-fix.patch`）
+### 一 来历与定性①（半山 2026-10-19 生产报障，附补丁 `mysql-0.2.0-fix.patch`）
 
 环境 `px 0.2.311 / MySQL 5.7.44-log / mysql_native_password / utf8mb4`：
-`mysql_connect()` **永久阻塞**，同时服务器错误日志出现 `Bad handshake`。
+`mysql_connect()` **永久阻塞**（不返回、不报错、不超时），同时服务器错误日志出现 `Bad handshake`。
 
 | # | 病灶 | 现场读数 |
 |---|---|---|
@@ -15,9 +16,10 @@
 | **537** | `CONNECT_WITH_DB` 误用 `0x00000800`（那是 `CLIENT_IGNORE_SPACE`，正确值 `0x00000008`） | payload 末尾塞了库名、标志位却没置 ⇒ 服务器按「多余字节」处理 |
 | **538** | `my_recv_n()` → `tcp_recv_ex()` **无超时** | 协议不匹配 / 网络抖动 / 半开连接 ⇒ 调用线程**永久挂死** |
 
-⚠️ **三条是叠加的**：只修 536 或只修 537，握手仍被拒 —— 所以本轮的判据必须**三条一起**证明。
+⚠️ **三条是叠加的**：只修 536 或只修 537，握手仍被拒 —— 所以判据必须**三条一起**证明。
+⚠️ 而 `registry/mysql` 此前**没有任何动态门**（上游 `mysql_test.px` 要真实 MariaDB，CI 恒 SKIP）。
 
-### 二 修法
+### 二 修法①
 
 ```px
 soff = ver[1]                                    # 536：不再 +1
@@ -40,10 +42,18 @@ tcp_opt(fd, {"read_timeout_ms": rtmo, "write_timeout_ms": wtmo})   # 538
 ⇒ 修前**永不超时**、修后默认 5s。长查询请显式传 `{"read_timeout_ms": 60000}`。
 取舍：**超时是响亮的（`Err("… i/o timeout")`），挂死是静默的** —— 本仓一贯「响亮优于静默」。
 
+**缺陷 540（半山指出 · 同轮收口）：IO 出错 ⇒ 关闭连接，不留半连接态。**
+修前只返回 `Err` 而把 fd 留在 `conn` 里 —— 超时/EOF 之后协议**已错位**（读到半个包），
+调用方再拿这根 fd 发命令只会**读到错位数据**（比报错更难查）。
+修法：新增 `my_conn_bad()`（关 fd + 置 `conn["fd"] = -1`）与 `my_conn_check()`；
+`mysql_query` / `mysql_stmt_*` / `mysql_query_params` / `mysql_ping` / `mysql_select_db` 的
+每条 IO 失败路径都走它；`mysql_close` 对已关闭连接直接 `Ok(true)`（**防 double close 命中别人复用的 fd 号**）。
+与 Go `database/sql` 的处置一致：IO 错误 ⇒ 该连接作废。
+
 **同轮一并修（文档与实现不一致）**：文档写 `mysql_connect(host, port, user, password[, dbname][, opts])`
 而实现是 6 个必填参数（`R1005 缺少参数`）⇒ 补默认值 `dbname = ""` / `opts = null`。
 
-### 三 门 `examples/m313_mysql_driver/`（**37 通过 / 0 失败**）
+### 三 门① `examples/m313_mysql_driver/`（**44 通过 / 0 失败** · CI 档 38/0）
 
 ⭐ **用普贤自己写的 mock MySQL 服务端**（`mock_mysql.px`，不引入任何外部依赖）——
 把握手**真正跑起来**，并**逐字段**校验：能力位 / 用户名 / 库名 / 插件名 /
@@ -51,31 +61,56 @@ tcp_opt(fd, {"read_timeout_ms": rtmo, "write_timeout_ms": wtmo})   # 538
 
 | 层 | 判据 | 实测 |
 |---|---|---|
-| [1] | 静态：两版本三处修复齐备 + 读超时已设 + 形参默认值 + 规模锚点 + **两版本形态逐行一致** | 17 条 |
+| [1] | 静态：两版本三处修复齐备 + 读超时已设 + 形参默认值 + **IO 出错即关连接** + 规模锚点 + **两版本形态逐行一致** | 19 条 |
 | [3] | 0.2.0 端到端：握手 + token 对拍 + `USE` + `SELECT` | `PROBE-OK` · `affected=7` |
 | [4] | 0.1.0 同形态（同一份代码 ⇒ 必须一起修） | `PROBE-OK` |
 | [5] | 读超时有界：服务端只 accept **不发字节** | **501ms** 返回 `i/o timeout`（判据 <5000ms） |
+| [5b] | **查询**超时 ⇒ 连接关闭（半山点：不留半连接） | 403ms 后 `Err(… i/o timeout (connection closed))`；二次查询 `Err(connection already closed)` |
 | [6] | **负控 A**：忠实撤回 `soff = ver[1]` | 必须 `Err`，原因指到 `auth token 不符（nonce 错位）` |
 | [7] | **负控 B**：忠实撤回能力位 | 必须 `Err`，原因指到 `IGNORE_SPACE(0x800)` |
 | [8] | **负控 C**：去掉 `tcp_opt` 读超时 | 超时档必须**挂住**（`timeout 5` 判 rc=124） |
 | [9] | 覆盖边界（结果集 / COM_STMT_* / caching_sha2 full auth 不在面内） | 如实 |
 
-⚠️ 负控 A/B/C **各自独立判红**，且都**指到具体字段**（不是「连接失败」这种指不到根因的文案）。
+### 四 来历与定性② + 修法（缺陷 539 · 晨曦证据包）
 
-### 四 文档
+**同一个语义只做了一半**：`tcp_connect_ex` 从 M149 就给**出站**连接设了 `TCP_NODELAY`（对齐 Go `net.Dial`），
+而**入站 `accept` 这一侧一直漏着**。
 
-- 新增 `docs/MYSQL_DRIVER.md`：三处缺陷的**可推广教训**（「返回偏移」的两种约定 / 常量误用 /
-  读无界）· 超时语义表 · `caching_sha2` **只支持 fast auth**（full auth 需 TLS/RSA）·
-  mock 门的判据层次 · 覆盖边界。
-- `docs/README.md` A4 节登记。
+后果（晨曦生产实测）：`px_serve` 的响应是「先写头、再写体」两次 `write` ⇒ 第二次小写被 **Nagle** 压住，
+等第一次写的 ACK；对端延迟 ACK（典型 40ms）⇒ **每条 keep-alive 响应多出 40.6ms**、单连接 **23.5 rps**；
+补三行后 **gap 0.02ms / 1042–1622 rps**。他们已经漏过一次（每次 `dnf upgrade puxian` 都要手工重打）。
 
-### 五 未做（登记，不在本轮范围）
+修法：`px_io_accept()` 在 accept 成功后**统一** `setsockopt(TCP_NODELAY, 1)`（失败不致命 —— 非 TCP/受限）。
+同轮把 `http_serve_unix` 里**唯一一处裸 `accept()`**（AF_UNIX，自己写了一遍 EINTR 重试）改走同一入口 ——
+「同一语义的第二份实现」正是这类漏设的温床（M191/M203/M230 同族）。
+
+门 `examples/m313_accept_nodelay/`（**13 通过 / 0 失败** · CI 档 10/0）：
+
+| 层 | 判据 |
+|---|---|
+| [1] | 静态：`px_io_set_nodelay` **函数体**里设 NODELAY · accept 成功分支调用它 · 调用点 ≥5 · **无裸 accept 旁路** |
+| [3] | 动态：accept 后 `tcp_opt(cfd, {})` 回读 `nodelay` == **true**（getsockopt 生效值） |
+| [5] | 负控：忠实撤回 `setsockopt` + 重建 ⇒ 必须 **false**（实测通过） |
+
+⚠️ **判据为什么不量 40ms**：Nagle + 延迟 ACK 只在**真实网络/特定对端**显形 ——
+**本机回环 ACK 是即时的**（实测：有无 NODELAY，回环 gap 恒 **0ms**）⇒ 量墙钟会买到**假绿**。
+所以主判据用**可判定的状态位**，时间间隔只作**信息项**打印。
+
+### 五 文档
+
+- 新增 `docs/MYSQL_DRIVER.md`：三处缺陷的**可推广教训**（「返回偏移」的两种约定 / 常量误用 / 读无界）·
+  超时语义表 · **IO 出错即关连接** · `caching_sha2` **只支持 fast auth**（full auth 需 TLS/RSA）· 覆盖边界。
+- 新增 `docs/TCP_NODELAY.md`：为什么 accept 要显式设 · 40ms 的成因 · **判据为什么用状态位而不是墙钟** ·
+  写新服务端时的检查清单。
+- `docs/README.md` A4 节各登记一行。
+
+### 六 未做（登记，不在本轮范围）
 
 - **sqlite3 FTS5**：半山实测默认 `sqlite3.o` 未编 FTS5（`no such module: fts5`），
-  自编加 `-DSQLITE_ENABLE_FTS5` 后正常。本仓 `sqlite3.o` 是**预置三架构构建输入**
-  （x86-64 / aarch64 / Windows COFF）⇒ 改宏 = 三个二进制重编 + 体积与架构卫生复核，
-  不属「驱动缺陷」范围，登记为后续候选。
-
+  自编加 `-DSQLITE_ENABLE_FTS5` 后正常（22643 行 COUNT、短语 MATCH 均通过）。
+  本仓 `sqlite3.o` 是**预置三架构构建输入**（x86-64 / aarch64 / Windows COFF）
+  ⇒ 改宏 = 三个二进制重编 + 体积与架构卫生复核，不属「驱动缺陷」范围，登记为后续候选
+  （已回信半山：若要优先做，回一句即可）。
 
 ## M312 —— GC 暂停信号 / 互斥锁「解除顺序」（缺陷 535）+ `PX_GC_STATS` 可观测项（第 183 轮）
 

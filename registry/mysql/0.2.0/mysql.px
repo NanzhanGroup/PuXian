@@ -330,42 +330,92 @@ def mysql_finish_connect(fd, aseq, host, port, user, dbname, plugin):
     return Ok({"fd": fd, "seq": aseq, "host": host, "port": port,
                "user": user, "dbname": dbname, "plugin": plugin})
 
+# ---- M313（半山）：IO 出错 ⇒ **关闭连接并标记**，不留半连接态 ----
+#   为什么：超时 / EOF 之后协议已错位（读到半个包），继续复用该连接只会**读错位数据**
+#   （与 Go database/sql 的处置一致：IO 错误 ⇒ 该连接作废、下次重连）。
+#   ⚠️ 不能只返回 Err —— 那样调用方会拿着一根「看似正常、实已错位」的 fd 继续用。
+def my_conn_bad(conn, what):
+    var fd = conn["fd"]
+    if type(fd) == "int" and fd >= 0:
+        tcp_close(fd)
+        conn["fd"] = -1
+    # 内部错误本身已带 "mysql: " 前缀时不再叠一层（否则会出现 "mysql: mysql: …"）
+    if what.find("mysql: ") == 0:
+        return Err(what + " (connection closed)")
+    return Err("mysql: " + what + " (connection closed)")
+
+def my_conn_check(conn):
+    if type(conn["fd"]) != "int" or conn["fd"] < 0:
+        return Err("mysql: connection already closed")
+    return Ok(true)
+
 def mysql_query(conn, sql):
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
     var payload = bytes_concat(bytes(chr(3)), bytes(sql))
     # MySQL 协议：每个新命令序列号从 0 开始（不回接上次会话 seq）
     var r = my_send_packet(conn["fd"], 0, payload)
     if r.is_err():
-        return Err("mysql: query send: " + str(r.unwrap()))
-    return mysql_read_result(conn["fd"])
+        return my_conn_bad(conn, "query send: " + str(r.unwrap()))
+    var res = mysql_read_result(conn["fd"])
+    if res.is_err():
+        return my_conn_bad(conn, res.err())
+    return res
 
 # ---- 公开 API：预处理语句（参数化查询）----
 def mysql_stmt_prepare(conn, sql):
-    return my_stmt_prepare(conn["fd"], sql)
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
+    var r = my_stmt_prepare(conn["fd"], sql)
+    if r.is_err():
+        return my_conn_bad(conn, r.err())
+    return r
 
 def mysql_stmt_execute(conn, stmt, params):
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
     if len(params) != stmt["nparams"]:
         return Err("mysql: param count mismatch, need " + str(stmt["nparams"]) + " got " + str(len(params)))
-    return my_stmt_execute(conn["fd"], stmt, params)
+    var r = my_stmt_execute(conn["fd"], stmt, params)
+    if r.is_err():
+        return my_conn_bad(conn, r.err())
+    return r
 
 def mysql_stmt_close(conn, stmt):
-    return my_stmt_close(conn["fd"], stmt)
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
+    var r = my_stmt_close(conn["fd"], stmt)
+    if r.is_err():
+        return my_conn_bad(conn, r.err())
+    return r
 
 # 一步式参数化查询：prepare → execute → close（无论成败都关闭 statement）
 def mysql_query_params(conn, sql, params):
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
     var prep = my_stmt_prepare(conn["fd"], sql)
     if prep.is_err():
-        return Err(prep.err())
+        return my_conn_bad(conn, prep.err())
     var stmt = prep.unwrap()
     if len(params) != stmt["nparams"]:
         return Err("mysql: param count mismatch, need " + str(stmt["nparams"]) + " got " + str(len(params)))
     var ex = my_stmt_execute(conn["fd"], stmt, params)
     var cl = my_stmt_close(conn["fd"], stmt)
     if ex.is_err():
-        return Err(ex.err())
+        return my_conn_bad(conn, ex.err())
     return ex
 
 # ---- 公开 API：关闭 ----
 def mysql_close(conn):
+    # M313：已被 my_conn_bad 关掉的连接，再 close 一次会 double close
+    #   （可能命中别的线程刚复用的 fd 号）⇒ 这里按标记直接返回。
+    if type(conn["fd"]) != "int" or conn["fd"] < 0:
+        return Ok(true)
     # COM_QUIT (0x01)
     # COM_QUIT 尽力而为，忽略发送错误
     var rq = my_send_packet(conn["fd"], 0, bytes(chr(1)))
@@ -378,22 +428,28 @@ def mysql_close(conn):
 # ---- 0.2.0 新增：ping / select_db / begin / commit / rollback ----
 # mysql_ping — COM_PING(0x0e)，保活
 def mysql_ping(conn):
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
     var rq = my_send_packet(conn["fd"], 0, bytes(chr(14)))
     if rq.is_err():
-        return Err("mysql: ping send: " + rq.err())
+        return my_conn_bad(conn, "ping send: " + rq.err())
     var r = mysql_read_result(conn["fd"])
     if r.is_err():
-        return r
+        return my_conn_bad(conn, r.err())
     return Ok(true)
 # mysql_select_db — COM_INIT_DB(0x02)，切换数据库
 def mysql_select_db(conn, dbname):
+    var ck = my_conn_check(conn)
+    if ck.is_err():
+        return ck
     var body = bytes_concat(bytes(chr(2)), bytes(dbname))
     var rq = my_send_packet(conn["fd"], 0, body)
     if rq.is_err():
-        return Err("mysql: select_db send: " + rq.err())
+        return my_conn_bad(conn, "select_db send: " + rq.err())
     var r = mysql_read_result(conn["fd"])
     if r.is_err():
-        return r
+        return my_conn_bad(conn, r.err())
     conn.set("db", dbname)
     return Ok(true)
 # mysql_begin — 开始事务

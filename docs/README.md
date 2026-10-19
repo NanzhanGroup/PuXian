@@ -47,7 +47,8 @@
 | [`HTTP3_STANCE.md`](HTTP3_STANCE.md) | HTTP/3 立场与**能力自证**（`native_symbols()` 让「有没有某能力」可查询） |
 | [`HTTP_GZIP_NEGOTIATION.md`](HTTP_GZIP_NEGOTIATION.md) | gzip **内容协商**口径（q 值 / `*` 通配 / token 大小写 / `opts{"gzip": false}` 开关；**一个进程一套配置**） |
 | [`WS_CONN_LIFECYCLE.md`](WS_CONN_LIFECYCLE.md) · [`WS_UPGRADE.md`](WS_UPGRADE.md) | WebSocket 连接生命周期（引用计数 + 延迟释放）· HTTP 请求 → WebSocket **升级接管**（`ws_stream`） |
-| [`MYSQL_DRIVER.md`](MYSQL_DRIVER.md) | **MySQL 驱动协议口径**（M313）：握手偏移约定 · `CONNECT_WITH_DB=0x8`（不是 `0x800`）· **读超时语义**（`timeout_ms` 同时是读写上限、`read_timeout_ms` 可覆盖、0=无限）· `caching_sha2` 只支持 fast auth · mock 服务端门 |
+| [`MYSQL_DRIVER.md`](MYSQL_DRIVER.md) | **MySQL 驱动协议口径**（M313）：握手偏移约定 · `CONNECT_WITH_DB=0x8`（不是 `0x800`）· **读超时语义**（`timeout_ms` 同时是读写上限、`read_timeout_ms` 可覆盖、0=无限）· IO 出错即关连接（不留半连接）· `caching_sha2` 只支持 fast auth · mock 服务端门 |
+| [`TCP_NODELAY.md`](TCP_NODELAY.md) | **服务端 socket 口径**（M313 · 缺陷 539）：accept 必须显式设 `TCP_NODELAY`（Linux 不继承）· 否则「头/体两次 write」撞 Nagle + 延迟 ACK ⇒ 每条 keep-alive +40ms · 判据为什么用**状态位**而不是墙钟（回环恒 0ms = 假绿） |
 | [`ONNX_QUANT.md`](ONNX_QUANT.md) | **ONNX 量化算子口径**（M306 / S2）：4 个算子的精确语义 · 三条统一口径（就近偶数 / 非有限值不落整数转换 / 刻度与算式同源）· 零点形态表 · 覆盖边界（含「未与 onnxruntime 对拍」） |
 | [`ONNX_INFER_OPS.md`](ONNX_INFER_OPS.md) | **ONNX 推理算子口径**（M308 / S4）：`Gelu`/`Silu`/`RMSNormalization`/`ScatterND`/`Cos`/`Sin` + `Trilu` 别名 · 三条口径（两档可判异 / 容差写死 / 响亮优于静默）· 判据在哪（三条腿 + 等价腿 + 6 道负控）· **覆盖边界** · attention 辅助落地程度 |
 
