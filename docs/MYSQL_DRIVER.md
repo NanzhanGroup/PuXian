@@ -107,6 +107,11 @@ tcp_opt(fd, {"read_timeout_ms": rtmo, "write_timeout_ms": wtmo})
 
 - 结果集（列定义 + 行）只由上游 `mysql_test.px` 覆盖（需真实 MariaDB，CI 上 SKIP）⇒ 不在本门面内。
 - 参数化语句（`COM_STMT_*`）同前。
+- **0.2.0 尾段新增 API**（`mysql_ping` / `mysql_select_db` / `begin` / `commit` / `rollback`）：
+  已按 M313 四处修复同口径改好（握手 / 能力位 / 读超时全在公共段）；但「IO 出错即关连接」
+  （缺陷 540）只覆盖 `query` / `stmt` 面 —— 尾段 API 的守卫需要**按版本寻址的补丁通道**
+  （`mysql.patch` 必须同时对 0.1.0 可打，而 0.1.0 无这些函数）⇒ 登记 **M314 待办**，
+  本门面内不覆盖（半山实测的故障路径是 `query`）。
 - mock 复刻的是**协议形态**，不依赖具体服务端版本（现场是 5.7.44）。
 
 ## 六 相关建议（未做，登记）
