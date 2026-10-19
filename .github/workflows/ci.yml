@@ -1341,6 +1341,14 @@ jobs:
           bash examples/m313_mysql_driver/verify.sh --neg-skip > /tmp/v_m313.log 2>&1 || { echo "❌ m313_mysql_driver 门失败（握手 / token 对拍 / 读超时）"; grep -E '^(  ❌|     |        )' /tmp/v_m313.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           tail -3 /tmp/v_m313.log
 
+      - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
+        # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
+        #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
+        # 负控（撤回 setsockopt 后重建 runtime）要 2-3 分钟 ⇒ CI 用 --neg-skip。
+        run: |
+          bash examples/m313_accept_nodelay/verify.sh --neg-skip > /tmp/v_m313n.log 2>&1 || { echo "❌ m313_accept_nodelay 门失败（状态位 / 旁路 / 调用点）"; grep -E '^(  ❌|     |      )' /tmp/v_m313n.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          tail -3 /tmp/v_m313n.log
+
       - name: release_assets（发布资产 ⇄ 校验清单 双向核对自证 · M311 · C1/C2）
         # 判据本体在 release.yml 的 assets-verify job（作用在**已发布物**上）；
         # 这里跑它的 5 条离线自证（S1 完整 · S2 清单漏资产 · S3 哈希不符 · S4 sidecar 矛盾 · S5 缺 aarch64 包）。

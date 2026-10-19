@@ -5,6 +5,8 @@
 #   mode = ok       正常握手 + 一条 SELECT 1（期望 affected=7）
 #   mode = timeout  对「只接受连接、不发任何字节」的服务端发起连接，
 #                   期望**读超时有界返回 Err**（修前是永久阻塞）
+#   mode = qtimeout 握手正常、查询不回 ⇒ 期望查询超时后**连接被关闭**，
+#                   且再用该 conn 发查询 ⇒ 立即 Err（**不留半连接态**）
 # 判据只用**产品自带输出**：驱动返回的 Ok/Err 与其中的字段，不依赖任何插桩。
 # ============================================================
 import "../../registry/mysql/0.2.0/mysql.px"
@@ -22,6 +24,27 @@ def main():
             print("PROBE-TIMEOUT-ERR elapsed_ms=" + str(el) + " msg=" + str(r.err()))
             return
         print("PROBE-TIMEOUT-UNEXPECTED-OK elapsed_ms=" + str(el))
+        exit(1)
+    if mode == "qtimeout":
+        var cq = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 3000, "read_timeout_ms": 400})
+        if cq.is_err():
+            print("PROBE-CONNECT-ERR " + str(cq.err()))
+            exit(1)
+        var connq = cq.unwrap()
+        var t1 = now_ms()
+        var q1 = mysql_query(connq, "SELECT 1")
+        var el1 = now_ms() - t1
+        if q1.is_ok():
+            print("PROBE-QTIMEOUT-UNEXPECTED-OK elapsed_ms=" + str(el1))
+            exit(1)
+        print("PROBE-QTIMEOUT-ERR elapsed_ms=" + str(el1) + " msg=" + str(q1.err()))
+        var q2 = mysql_query(connq, "SELECT 1")
+        print("PROBE-SECOND " + str(q2))
+        var _c2 = mysql_close(connq)
+        if q2.is_err() and str(q2.err()).find("already closed") >= 0:
+            print("PROBE-NO-HALF-OPEN")
+            return
+        print("PROBE-HALF-OPEN-REMAINS")
         exit(1)
     var c = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 3000})
     if c.is_err():

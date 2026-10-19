@@ -1631,4 +1631,11 @@ run m312_gc_lock_order bash examples/m312_gc_lock_order/verify.sh --neg-skip
 #   本门用**普贤自写的 mock MySQL 服务端**真正跑握手，并逐字段校验（能力位/token/多余字节）。
 #   3 道负控各自独立判红；CI 用 --neg-skip（要重建 3 次探针）。
 run m313_mysql_driver bash examples/m313_mysql_driver/verify.sh
+# ── M313：accept 侧 TCP_NODELAY（缺陷 539 · 晨曦证据包）──
+#   根因：`tcp_connect_ex` 从 M149 就给**出站**连接设了 NODELAY（对齐 Go），
+#   而**入站 accept 一直漏着** ⇒ px_serve 的「响应头 + 体两次 write」撞 Nagle +
+#   对端延迟 ACK ⇒ 每条 keep-alive 响应多出约 40ms（晨曦生产实测 40.6ms → 0.02ms）。
+#   判据用**可判定的状态位**（accept 后 tcp_opt 回读 nodelay），不量回环 40ms（回环恒 0ms = 假绿）。
+#   负控要重建 runtime ⇒ CI 用 --neg-skip。
+run m313_accept_nodelay bash examples/m313_accept_nodelay/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test

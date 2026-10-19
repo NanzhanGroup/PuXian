@@ -1,0 +1,37 @@
+# ============================================================
+# examples/m313_accept_nodelay/srv.px —— 裸 TCP 服务端：报告「accept 出的 socket 是否 NODELAY」
+# ------------------------------------------------------------
+# 为什么这样测（而不是量 40ms）：
+#   Nagle + 延迟 ACK 的 40ms 只在**真实网络/特定对端**上显形；**本机回环上 ACK 是即时的**
+#   ⇒ 用量墙钟会在 CI/本机得到「假绿」（我方实测：回环 gap 恒 0ms，有无 NODELAY 都一样）。
+#   ⭐ 所以主判据改用**可判定的状态位**：accept 之后 `tcp_opt(cfd, {})` 回读 `nodelay` ——
+#      它就是 `getsockopt(TCP_NODELAY)` 的**生效值**（tcp_opt 会回读，不靠「相信」）。
+#      而 `tcp_accept` 与 `px_serve` / `ws_serve` / `sse_serve` 共用**同一个** `px_io_accept`
+#      （静态判据 [1.2] 守这条），所以这里测到的就是全部服务端路径。
+#
+# 用法：./srv <port>
+# 输出：`SRV-READY` · `ACCEPT-NODELAY=<1|0>` · `SRV-DONE`
+# ============================================================
+def m313_body():
+    return bytes("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+def main():
+    var a = args()
+    var port = int(a[1])
+    var lfd = tcp_listen(port)
+    print("SRV-READY")
+    flush()
+    var cfd = tcp_accept(lfd)
+    if type(cfd) != "int" or cfd < 0:
+        print("SRV-ACCEPT-FAIL")
+        return
+    var o = tcp_opt(cfd, {})
+    print("ACCEPT-NODELAY=" + str(o["nodelay"]))
+    flush()
+    # 一个极简响应（头 / 体**两次写**）：供客户端做「间隔」观察（仅信息项，不作硬判据）
+    var _r = tcp_recv_ex(cfd, 4096)
+    var _h = tcp_send_ex(cfd, bytes("HTTP/1.1 200 OK\r\nContent-Length: 50\r\nConnection: close\r\n\r\n"))
+    var _b = tcp_send_ex(cfd, m313_body())
+    sleep(100)
+    tcp_close(cfd)
+    tcp_close(lfd)
+    print("SRV-DONE")

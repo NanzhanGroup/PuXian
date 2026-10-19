@@ -61,6 +61,20 @@ tcp_opt(fd, {"read_timeout_ms": rtmo, "write_timeout_ms": wtmo})
 长查询（大聚合 / 大结果集）请显式传 `{"read_timeout_ms": 60000}`。
 超时是**响亮**的（`Err("… i/o timeout")`），而挂死是**静默**的 —— 这是本仓「响亮优于静默」的一贯取舍。
 
+### 附 · IO 出错即关连接（缺陷 540 · 不留半连接态）
+
+超时 / EOF 之后协议**已错位**（读到半个包）。修前驱动只返回 `Err` 而把 fd 留在 `conn` 里
+⇒ 调用方再拿这根 fd 发命令，只会**读到错位数据**（比报错更难查）。
+
+现行口径（与 Go `database/sql` 一致）：
+
+| 场景 | 行为 |
+|---|---|
+| 任何 IO 错误（send/recv/超时/EOF） | **关闭 fd** + `conn["fd"] = -1`，Err 末尾带 `(connection closed)` |
+| 在已关闭的 conn 上再操作 | 立即 `Err("mysql: connection already closed")`（不碰 fd） |
+| `mysql_close(已关闭)` | `Ok(true)`（**防 double close 命中别人复用的 fd 号**） |
+
+
 ### 附 · 形参与文档一致（同轮修）
 
 文档写 `mysql_connect(host, port, user, password[, dbname][, opts])`，而实现是 6 个必填参数

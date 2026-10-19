@@ -147,8 +147,23 @@ ssize_t px_io_recvfrom(int fd, void* buf, size_t n, int flags, struct sockaddr* 
 ssize_t px_io_sendto(int fd, const void* buf, size_t n, int flags, const struct sockaddr* sa, socklen_t sl) {
     for (;;) { ssize_t r = sendto(fd, buf, n, flags, sa, sl); if (r >= 0 || errno != EINTR) return r; }
 }
+// M313（晨曦实测 · 缺陷 539）：accept 出的 socket **必须显式设 TCP_NODELAY**。
+//   Linux **不**把该选项从监听 socket 继承下来；不设则服务端「响应头 + 响应体两次 write」
+//   撞 Nagle + 对端延迟 ACK ⇒ **每条 keep-alive 响应多出约 40ms**
+//   （晨曦生产实测：hdr→body gap 40.6ms / 单连接 23.5 rps；设了之后 0.02ms / 1042–1622 rps）。
+//   `tcp_connect_ex` 早在 M149 就给**出站**连接设了 NODELAY（对齐 Go net.Dial），
+//   而**入站 accept 这一侧一直漏着** —— 同一条语义只做了一半（M191/M203/M230 同族）。
+//   口径与 Go 一致：`net.TCPConn` 默认 `NoDelay=true`。
+static void px_io_set_nodelay(int fd) {
+    int on = 1;
+    (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));  // 失败不致命（非 TCP / 受限）
+}
 int px_io_accept(int fd, struct sockaddr* sa, socklen_t* sl) {
-    for (;;) { int r = accept(fd, sa, sl); if (r >= 0 || errno != EINTR) return r; }
+    for (;;) {
+        int r = accept(fd, sa, sl);
+        if (r >= 0) { px_io_set_nodelay(r); return r; }
+        if (errno != EINTR) return r;
+    }
 }
 int px_io_connect(int fd, const struct sockaddr* sa, socklen_t sl) {
     if (connect(fd, sa, sl) == 0) return 0;
@@ -21400,12 +21415,15 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
         px_error("http_serve_unix: listen 失败");
     }
     // M88-S2：接入连接线程池（保留 unix 版 accept 错误容忍语义）
+    // M313：改走 `px_io_accept`（与其它四个 accept 点**同一个**入口）——
+    //   ① EINTR 重试由它统一处理（原来这里自己写了一遍，属同一语义的第二份实现）；
+    //   ② 它会对 accept 出的 fd 设 TCP_NODELAY（AF_UNIX 上 setsockopt 失败被忽略，无副作用）——
+    //      保证「有人日后把 unix 监听换成 TCP」时不会悄悄漏掉这个选项。
     fserve_ensure();
     for (;;) {
-        int cfd = accept(sfd, NULL, NULL);
+        int cfd = px_io_accept(sfd, NULL, NULL);
         if (cfd < 0) {
-            // accept 循环错误容忍：EINTR 重试；EMFILE/ENFILE 等短暂让出避免忙循环
-            if (errno == EINTR) continue;
+            // accept 循环错误容忍：EINTR 已由 px_io_accept 处理；EMFILE/ENFILE 等短暂让出避免忙循环
             px_io_sleep_ms(50);   // M256（缺陷 456）：accept 错误退避
             continue;
         }
