@@ -1624,4 +1624,11 @@ run selfwake_guard bash selfhost/check_no_selfwake.sh
 # ═══════════════════════════════════════════════════════════════════════════
 run m311_real_model bash examples/m311_real_model/verify.sh
 run m312_gc_lock_order bash examples/m312_gc_lock_order/verify.sh --neg-skip
+# ── M313（第 184 轮 · 第 185 轮起沿用）：mysql 驱动三处握手缺陷 + 读无界（缺陷 536–538）──
+#   来历：半山 2026-10-19 报障「连 MySQL 5.7 永久阻塞 + 服务器日志 Bad handshake」，附补丁。
+#   ① soff = ver[1] + 1（my_cstr_at 已返回终止符之后的偏移）② CONNECT_WITH_DB 误用 0x800
+#   ③ my_recv_n → tcp_recv_ex 无超时（worker 永久挂死）。
+#   本门用**普贤自写的 mock MySQL 服务端**真正跑握手，并逐字段校验（能力位/token/多余字节）。
+#   3 道负控各自独立判红；CI 用 --neg-skip（要重建 3 次探针）。
+run m313_mysql_driver bash examples/m313_mysql_driver/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test

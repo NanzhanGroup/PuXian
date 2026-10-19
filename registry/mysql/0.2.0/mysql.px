@@ -29,7 +29,7 @@ import "stmt.px"
 
 # ---- 内部：连接与握手 ----
 # 返回 Ok(conn dict{fd, host, port, user, dbname, seq}) | Err
-def mysql_connect(host, port, user, password, dbname, opts):
+def mysql_connect(host, port, user, password, dbname = "", opts = null):
     var timeout_ms = 5000
     if type(opts) == "dict" and opts.has("timeout_ms"):
         timeout_ms = opts["timeout_ms"]
@@ -37,6 +37,20 @@ def mysql_connect(host, port, user, password, dbname, opts):
     if not c["ok"]:
         return Err("mysql: connect " + host + ":" + str(port) + " failed: " + c["err"])
     var fd = c["fd"]
+    # M313（半山实测）：给连接设读写超时 —— 修前 my_recv_n → tcp_recv_ex **无界**，
+    #   协议不匹配 / 网络抖动都会让调用线程永久阻塞（放进 Web 服务就是一个 worker 挂死）。
+    #   口径与 registry/netprobe 一致：timeout_ms 同时作为读写超时上限；
+    #   read_timeout_ms / write_timeout_ms 可单独覆盖（0 = 无限，恢复旧行为）。
+    var rtmo = timeout_ms
+    var wtmo = timeout_ms
+    if type(opts) == "dict" and opts.has("read_timeout_ms"):
+        rtmo = opts["read_timeout_ms"]
+    if type(opts) == "dict" and opts.has("write_timeout_ms"):
+        wtmo = opts["write_timeout_ms"]
+    var tmo_res = tcp_opt(fd, {"read_timeout_ms": rtmo, "write_timeout_ms": wtmo})
+    if type(tmo_res) == "dict" and tmo_res.has("ok") and not tmo_res["ok"]:
+        tcp_close(fd)
+        return Err("mysql: set socket timeout failed: " + tmo_res["err"])
     # 等待 HandshakeV10
     var pkt = my_read_packet(fd)
     if pkt[3] != "":
@@ -52,7 +66,10 @@ def mysql_connect(host, port, user, password, dbname, opts):
     # server version: 以 0 结尾（auth-plugin-data-part-1 前的 \0）；兼容 5.x/8.x
     var soff = 1
     var ver = my_cstr_at(hs, soff)
-    soff = ver[1] + 1
+    # M313（半山实测）：my_cstr_at 返回的是**终止符之后**的偏移 ⇒ 不能再 +1。
+    #   修前多跳一字节 ⇒ connection id / nonce / capability 全段错位
+    #   （nonce 只读到 8/20 字节、capability 读成 0x15C12DFF 而非 0xC203FFFF）⇒ Bad handshake。
+    soff = ver[1]
     # connection id (4)
     soff += 4
     # auth-plugin-data-part-1 (8)
@@ -99,8 +116,14 @@ def mysql_connect(host, port, user, password, dbname, opts):
         if pi < bytes_len(hs) and pi > pstart:
             plugin = bytes_to_str(bytes_slice(hs, pstart, pi))
     # 构造 HandshakeResponse41
-    var cap41 = 0x00000200 | 0x00008000 | 0x00000800 | 0x00080000 | 0x00002000 | 0x00000001
-    # CLIENT_PROTOCOL_41 | SECURE_CONNECTION | CONNECT_WITH_DB | PLUGIN_AUTH | TRANSACTIONS
+    # M313（半山实测）：CONNECT_WITH_DB = **0x00000008**（0x00000800 是 CLIENT_IGNORE_SPACE）。
+    #   修前标志位写错却又在 payload 末尾塞了库名 ⇒ 服务器按「多余字节」判 Bad handshake。
+    #   且只在真的给了 dbname 时才置位（dbname 为空不该发库名）。
+    var want_db = dbname != ""
+    var cap41 = 0x00000200 | 0x00008000 | 0x00080000 | 0x00002000 | 0x00000001
+    # CLIENT_PROTOCOL_41 | SECURE_CONNECTION | PLUGIN_AUTH | TRANSACTIONS
+    if want_db:
+        cap41 = cap41 | 0x00000008
     var payload = bytes("")
     # capability flags (4)
     payload = bytes_concat(payload, my_u32(cap41))
@@ -123,7 +146,7 @@ def mysql_connect(host, port, user, password, dbname, opts):
     var token = tok[0]
     payload = bytes_concat(payload, bytes(chr(bytes_len(token))))
     payload = bytes_concat(payload, token)
-    if cap41 & 0x00000800 != 0:
+    if cap41 & 0x00000008 != 0:
         payload = bytes_concat(payload, bytes(dbname + chr(0)))
     payload = bytes_concat(payload, bytes(plugin + chr(0)))
     var seq2 = seq + 1

@@ -1,0 +1,240 @@
+# ============================================================
+# examples/m313_mysql_driver/mock_mysql.px —— 最小 MySQL 5.7 服务端（**本仓自建**）
+# ------------------------------------------------------------
+# 为什么需要它：registry/mysql 的驱动**从来没有被任何门动态覆盖过** ——
+#   上游 `nginx/../mysql_test.px` 需要真实 MariaDB（CI 上恒 SKIP），
+#   而 M313 要修的三处缺陷（握手偏移 +1 / CONNECT_WITH_DB 位错 / 读无界）
+#   **全部只在真实握手时显形**。按本仓纪律「不引入新依赖」⇒ 用普贤自己写 mock。
+#
+# 契约（严格按 MySQL Protocol :: HandshakeResponse41）：
+#   · 发 HandshakeV10（协议 10 / server version / conn id / nonce 20 / 插件名）
+#   · 读客户端响应并**逐字段校验**：capability 位、用户名、库名、插件名、
+#     20 字节 auth token（按 mysql_native_password 算式独立算一遍对拍）、**有无多余字节**
+#   · 全对 ⇒ OK；任一不符 ⇒ ERR 包（错误信息直接写明哪一项不符）
+#   · 之后按命令循环：COM_QUERY（"USE …" ⇒ affected 0；"SELECT 1" ⇒ affected 7）·
+#     COM_PING ⇒ OK · COM_QUIT ⇒ 退出
+#
+# 用法：./mock_mysql <port> <mode>
+#   mode = ok      正常握手 + 应答
+#   mode = silent  接受连接后**什么都不发**（用于验证客户端读超时有界，不再永久阻塞）
+# ============================================================
+var MK_USER = "pxuser"
+var MK_PASS = "px_secret_456"
+var MK_DB = "pxtest"
+var MK_PLUGIN = "mysql_native_password"
+var MK_NONCE1 = bytes("ABCDEFGH")
+var MK_NONCE2 = bytes("IJKLMNOPQRST")
+def mk_u16le(n):
+    return bytes_concat(byte(n & 0xFF), byte((n >> 8) & 0xFF))
+def mk_u32le(n):
+    var b = byte(n & 0xFF)
+    b = bytes_concat(b, byte((n >> 8) & 0xFF))
+    b = bytes_concat(b, byte((n >> 16) & 0xFF))
+    b = bytes_concat(b, byte((n >> 24) & 0xFF))
+    return b
+def mk_u32_at(b, off):
+    return bytes_get(b, off) | (bytes_get(b, off + 1) << 8) | (bytes_get(b, off + 2) << 16) | (bytes_get(b, off + 3) << 24)
+def mk_cstr(s):
+    return bytes_concat(bytes(s), byte(0))
+def mk_zeros(n):
+    var b = bytes("")
+    var i = 0
+    while i < n:
+        b = bytes_concat(b, byte(0))
+        i += 1
+    return b
+def mk_cstr_at(b, off):
+    var i = off
+    while i < bytes_len(b):
+        if bytes_get(b, i) == 0:
+            return [bytes_to_str(bytes_slice(b, off, i)), i + 1]
+        i += 1
+    return [bytes_to_str(bytes_slice(b, off, bytes_len(b))), bytes_len(b)]
+def mk_pkt(seq, payload):
+    var b = mk_u32le(bytes_len(payload) & 0xFFFFFF)
+    b = bytes_slice(b, 0, 3)
+    b = bytes_concat(b, byte(seq & 0xFF))
+    return bytes_concat(b, payload)
+def mk_send(fd, seq, payload):
+    var r = tcp_send_ex(fd, mk_pkt(seq, payload))
+    if not r["ok"]:
+        return r["err"]
+    return ""
+def mk_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var r = tcp_recv_ex(fd, n - bytes_len(buf))
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "eof"]
+        if r["timeout"]:
+            return [buf, "timeout"]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return [buf, ""]
+def mk_read_packet(fd):
+    var h = mk_recv_n(fd, 4)
+    if h[1] != "":
+        return [bytes(""), 0, h[1]]
+    var plen = bytes_get(h[0], 0) | (bytes_get(h[0], 1) << 8) | (bytes_get(h[0], 2) << 16)
+    var seq = bytes_get(h[0], 3)
+    var body = mk_recv_n(fd, plen)
+    if body[1] != "":
+        return [bytes(""), seq, body[1]]
+    return [body[0], seq, ""]
+def mk_ok(affected, seq):
+    var p = byte(0)
+    p = bytes_concat(p, byte(affected & 0xFF))
+    p = bytes_concat(p, byte(0))
+    p = bytes_concat(p, mk_u16le(2))
+    p = bytes_concat(p, mk_u16le(0))
+    return mk_pkt(seq, p)
+def mk_err(code, msg, seq):
+    var p = byte(255)
+    p = bytes_concat(p, mk_u16le(code))
+    p = bytes_concat(p, bytes("#42000"))
+    p = bytes_concat(p, bytes(msg))
+    return mk_pkt(seq, p)
+# mysql_native_password 的 token = SHA1(pw) XOR SHA1(nonce + SHA1(SHA1(pw)))
+def mk_expected_token(password, nonce):
+    var s1 = sha1_bytes(bytes(password))
+    var s2 = sha1_bytes(s1)
+    var si = sha1_bytes(bytes_concat(nonce, s2))
+    var out = bytes("")
+    var i = 0
+    while i < 20:
+        out = bytes_concat(out, byte(bytes_get(s1, i) ^ bytes_get(si, i)))
+        i += 1
+    return out
+def mk_handshake_payload():
+    # 服务端 capability：PROTOCOL_41(0x0200) | SECURE_CONNECTION(0x8000)
+    #                   | TRANSACTIONS(0x2000) | CONNECT_WITH_DB(0x0008)；高位 PLUGIN_AUTH(bit19 ⇒ 0x0008)
+    var cap_low = 0x0200 | 0x8000 | 0x2000 | 0x0008
+    var cap_high = 0x0008
+    var p = byte(10)
+    p = bytes_concat(p, mk_cstr("5.7.44-mock"))
+    p = bytes_concat(p, mk_u32le(42))
+    p = bytes_concat(p, MK_NONCE1)
+    p = bytes_concat(p, byte(0))
+    p = bytes_concat(p, mk_u16le(cap_low))
+    p = bytes_concat(p, byte(45))
+    p = bytes_concat(p, mk_u16le(2))
+    p = bytes_concat(p, mk_u16le(cap_high))
+    p = bytes_concat(p, byte(21))
+    p = bytes_concat(p, mk_zeros(10))
+    p = bytes_concat(p, MK_NONCE2)
+    p = bytes_concat(p, byte(0))
+    p = bytes_concat(p, mk_cstr(MK_PLUGIN))
+    return p
+# 校验客户端 HandshakeResponse41；返回 "" 表示通过，否则返回**指到具体字段**的原因
+def mk_check_response(payload):
+    if bytes_len(payload) < 32:
+        return "响应太短（" + str(bytes_len(payload)) + " 字节）"
+    var caps = mk_u32_at(payload, 0)
+    if caps & 0x00000800 != 0:
+        return "capability 里 IGNORE_SPACE(0x800) 被置位"
+    if caps & 0x00000008 == 0:
+        return "capability 里 CONNECT_WITH_DB(0x8) 未置位（caps=0x" + bytes_to_hex(mk_u32le(caps)) + "）"
+    var off = 4 + 4 + 1 + 23
+    var u = mk_cstr_at(payload, off)
+    if u[0] != MK_USER:
+        return "用户名不符（读到 " + u[0] + "）"
+    off = u[1]
+    var alen = bytes_get(payload, off)
+    off += 1
+    var token = bytes_slice(payload, off, off + alen)
+    off += alen
+    var db = ""
+    if caps & 0x00000008 != 0:
+        var d = mk_cstr_at(payload, off)
+        db = d[0]
+        off = d[1]
+    var plugin = ""
+    if caps & 0x00080000 != 0:
+        var pg = mk_cstr_at(payload, off)
+        plugin = pg[0]
+        off = pg[1]
+    if db != MK_DB:
+        return "库名不符（读到 " + db + "）"
+    if plugin != MK_PLUGIN:
+        return "插件名不符（读到 " + plugin + "）"
+    if off != bytes_len(payload):
+        return "响应尾部有多余 " + str(bytes_len(payload) - off) + " 字节（库名/标志位不一致）"
+    if alen != 20:
+        return "auth token 长度 " + str(alen) + "（应为 20）"
+    var expected = mk_expected_token(MK_PASS, bytes_concat(MK_NONCE1, MK_NONCE2))
+    if bytes_to_hex(token) != bytes_to_hex(expected):
+        return "auth token 不符（nonce 解析错位 ⇒ 口令散列对不上）"
+    return ""
+def main():
+    var a = args()
+    var port = int(a[1])
+    var mode = "ok"
+    if len(a) > 2:
+        mode = a[2]
+    var lfd = tcp_listen(port)
+    print("MOCK-READY port=" + str(port) + " mode=" + mode)
+    flush()
+    var fd = tcp_accept(lfd)
+    if mode == "silent":
+        # 接受连接后**什么都不发**：客户端必须靠自己的读超时返回，而不是永久挂住
+        # ⚠️ sleep 的单位是**毫秒**（M128 实测更正；写成 sleep(30) = 30ms 会立刻 EOF，
+        #    那样验的是「对端关闭」而不是「读超时」—— 判据会假绿）
+        sleep(30000)
+        tcp_close(fd)
+        tcp_close(lfd)
+        print("MOCK-SILENT-DONE")
+        return
+    var hs = mk_handshake_payload()
+    var e0 = mk_send(fd, 0, hs)
+    if e0 != "":
+        print("MOCK-FAIL 握手发送失败: " + e0)
+        exit(2)
+    var rp = mk_read_packet(fd)
+    if rp[2] != "":
+        print("MOCK-FAIL 读客户端响应失败: " + rp[2])
+        exit(2)
+    var why = mk_check_response(rp[0])
+    if why != "":
+        print("MOCK-REJECT " + why)
+        flush()
+        var _ = tcp_send_ex(fd, mk_err(1045, "bad handshake: " + why, rp[1] + 1))
+        tcp_close(fd)
+        tcp_close(lfd)
+        exit(0)
+    print("MOCK-HANDSHAKE-OK")
+    flush()
+    var _ok = tcp_send_ex(fd, mk_ok(0, rp[1] + 1))
+    var queried = 0
+    while true:
+        var c = mk_read_packet(fd)
+        if c[2] != "":
+            break
+        var p = c[0]
+        if bytes_len(p) == 0:
+            break
+        var cmd = bytes_get(p, 0)
+        if cmd == 1:
+            break
+        if cmd == 3:
+            var sql = bytes_to_str(bytes_slice(p, 1, bytes_len(p)))
+            var aff = 0
+            if sql == "SELECT 1":
+                aff = 7
+                queried = 1
+            var _s = tcp_send_ex(fd, mk_ok(aff, 1))
+            print("MOCK-QUERY sql=" + sql + " affected=" + str(aff))
+            flush()
+        elif cmd == 14:
+            var _p = tcp_send_ex(fd, mk_ok(0, 1))
+        else:
+            var _u = tcp_send_ex(fd, mk_err(1047, "unsupported command", 1))
+    tcp_close(fd)
+    tcp_close(lfd)
+    if queried == 1:
+        print("MOCK-DONE queries=1")
+    else:
+        print("MOCK-DONE queries=0")
