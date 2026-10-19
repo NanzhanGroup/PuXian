@@ -633,11 +633,23 @@ void px_coro_dbg_refs(const void* obj) {
     px_gc_unblock_stop_sig(&old);
 }
 
+// M312-C（诊断）：上一轮 GC 标记时看到的存活协程数与总帧数。
+//   为什么放在这里而不是新写一个遍历：本函数**已经**持 g_coro_mu 走完整条链，
+//   顺带计数零额外锁、零额外遍历（新写遍历会引入 GC 期间的 g_coro_mu 二次获取）。
+static int g_coro_dbg_n = 0;
+static long long g_coro_dbg_frames = 0;
+int px_coro_count(void) { return g_coro_dbg_n; }
+long long px_coro_frames(void) { return g_coro_dbg_frames; }
+
 void px_coro_gc_mark_roots(void) {
     sigset_t old;
     px_gc_block_stop_sig(&old);
     pthread_mutex_lock(&g_coro_mu);
+    int _dbg_n = 0;
+    long long _dbg_f = 0;
     for (PxCoro* c = g_all; c; c = c->all_next) {
+        _dbg_n++;
+        if (c->vm.nframes > 0) _dbg_f += c->vm.nframes;
         if (c->args && c->nargs > 0) px_gc_mark_slots(c->args, c->nargs);
         if (c->vm.nframes > 0) px_vm_gc_mark_state(&c->vm);
         // M96-S2：offload 任务根面（fn/args 提交后只读任意时刻标；result 仅 done 后
@@ -649,6 +661,8 @@ void px_coro_gc_mark_roots(void) {
             if (t->done) px_gc_mark_slots(&t->result, 1);
         }
     }
+    g_coro_dbg_n = _dbg_n;
+    g_coro_dbg_frames = _dbg_f;
     pthread_mutex_unlock(&g_coro_mu);
     px_gc_unblock_stop_sig(&old);
 }
