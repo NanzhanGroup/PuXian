@@ -1525,6 +1525,48 @@ static volatile int g_gc_pending = 0;
 static int g_gc_force_inline = 0;   // 调试/对拍：PX_GC_INLINE=1 强制请求热路径内联（还原 B1 前行为，验证 A/B）
 static int g_gc_env_inited = 0;
 static int g_gc_debug = 0;
+
+// ==================== M312：GC 可观测性（PX_GC_STATS） ====================
+// 来历（晨曦 2026-10-18 生产报障 m18df8eb6a34c3d513e4e1d50）：Mahesvara 8 并发 keep-alive
+//   压测多数轮 1742 rps / p95 7.5ms，偶发轮 18.5 rps / **p95 12822ms / max 12933ms**；
+//   现场 129 线程阻塞在 gc_register 的互斥锁、1 线程在 px_gc_collect、futex 占 96.4% syscall。
+// 判据：**先能量化，再谈优化**。修前只有 PX_GC_DEBUG=1（每轮一行、无分位、无等锁统计、
+//   且与被暂停线程的 stdio 有历史死锁风险）——「偶发一次 12.8s」与「每秒一次 10ms」
+//   在读日志时无法区分。
+// 开关（默认全关；关闭时热路径只多一次可预测分支，不取时钟）：
+//   PX_GC_STATS=1              启用统计
+//   PX_GC_SLOW_MS=<ms>         单轮 ≥ 该值即**即时**打一行（默认 100；0=关闭即时行）
+//   PX_GC_STATS_INTERVAL=<s>   周期性汇总（默认 0=仅进程退出时）；服务端长期运行必须用它，
+//                              否则进程不退出就永远看不到数字
+// 输出固定前缀 `[px-gc-stats]`（脚本/门可直接 grep）；全部走 write(2) 不碰 stdio
+//   （理由同 gc_debug：持 g_gc_mu 时 fprintf 会与「被暂停在 printf 里的线程」死锁）。
+// ⚠️ 分位数由**对数桶直方图**近似（桶宽爬升，误差 ≤1 个桶边界），不是精确排序统计。
+#define GCS_HIST_N 16
+static int g_gc_stats_on = 0;
+static long long g_gc_slow_ms = 100;
+static int g_gc_stats_interval_s = 0;
+static long long g_gcs_runs = 0;        /* 完整跑完的轮次 */
+static long long g_gcs_skips = 0;       /* 握手超时降级跳过 */
+static long long g_gcs_empty = 0;       /* 空表早退 */
+static long long g_gcs_slow_runs = 0;   /* 超 PX_GC_SLOW_MS 的轮次 */
+static long long g_gcs_reg_n = 0;       /* 统计期内分配（gc_register）次数 */
+static long long g_gcs_lockwait_n = 0;  /* 等锁采样次数 */
+static long long g_gcs_lockwait_us = 0; /* 等锁累计微秒 */
+static long long g_gcs_lockwait_max_us = 0;
+static long long g_gcs_phase_us[5];     /* 0=lock 1=stop 2=mark 3=sweep 4=resume */
+static long long g_gcs_hist_total[GCS_HIST_N];
+static long long g_gcs_hist_lock[GCS_HIST_N];
+static long long g_gcs_next_dump_ms = 0;
+static long long g_gcs_mksub[8];   /* M312-B/C：mark 细分 hash/globals/self/threads/coro 段(5=coro 6=http_pend 7=pxserve_pend) */
+static int g_gcs_last_coros = -1;  /* M312-C：px_coro_count（-1=未取） */
+static long long g_gcs_hp_wait = 0, g_gcs_hp_scan = 0;  /* M312-D：http_pend 等锁/扫描（us） */
+static int g_gcs_hp_cap = 0, g_gcs_hp_act = 0;
+static int g_gcs_last_marked = 0;
+static int g_gcs_last_precise = 0;
+static long long gc_mono_us(void);
+static void gcs_dump(const char* why);
+static void gcs_maybe_periodic(void);
+static void gcs_atexit_dump(void) { if (g_gc_stats_on) gcs_dump("exit"); }
 // 分配统计（可观测性）：`PX_GC_ALLOC_STATS=1` ⇒ 进程退出时按类型打印分配计数。
 //   为什么要有：本轮（缺陷 145）的判据本身就是「分配率」，没有分配率数字就只能靠时间
 //   （受机器负载影响、不可复现）。计数完全确定（同一源码 + 同一实现 ⇒ 同一数字），
@@ -1791,6 +1833,19 @@ static void gc_init_env(void) {
     const char* gt = getenv("PX_GC_TRACE");
     if (gt && gt[0] == '1') g_gc_trace = 1;
     if (g_gc_debug) atexit(px_root_peak_dump);   // M170：退出打印根登记栈峰值
+    // M312：GC 可观测性（见顶部 g_gc_stats_on 注释）
+    {
+        const char* gs = getenv("PX_GC_STATS");
+        if (gs && gs[0] == '1') {
+            g_gc_stats_on = 1;
+            const char* sm = getenv("PX_GC_SLOW_MS");
+            if (sm) g_gc_slow_ms = atoll(sm);
+            const char* iv = getenv("PX_GC_STATS_INTERVAL");
+            if (iv && atoi(iv) > 0) g_gc_stats_interval_s = atoi(iv);
+            g_gcs_next_dump_ms = gc_mono_us() / 1000 + (long long)g_gc_stats_interval_s * 1000;
+            atexit(gcs_atexit_dump);
+        }
+    }
     // M88-S1：PX_MAX_THREADS 可配槽上限（夹取 [64, 4096]）；线程表一次性按上限分配。
     // 此后 g_threads/g_thread_cap 恒定，无扩容/指针移动（并发安全见 §594 注释）。
     const char* mt = getenv("PX_MAX_THREADS");
@@ -1810,6 +1865,136 @@ static long long gc_mono_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static long long gc_mono_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+// 对数桶上界（微秒）。最后一桶 = 其余（>16384ms）。
+static const long long g_gcs_bounds[GCS_HIST_N] = {
+    1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000,
+    256000, 512000, 1024000, 2048000, 4096000, 8192000, 16384000,
+    (long long)0x7fffffffffffffffLL
+};
+
+static void gcs_hist_add(long long* h, long long us) {
+    int i = 0;
+    while (i < GCS_HIST_N - 1 && us >= g_gcs_bounds[i]) i++;
+    __atomic_fetch_add(&h[i], 1, __ATOMIC_RELAXED);
+}
+
+// 分位数（近似）：返回命中桶的**下界**（us）。n<=0 ⇒ -1。
+static long long gcs_quantile(const long long* h, double q) {
+    long long n = 0, acc = 0;
+    int i;
+    for (i = 0; i < GCS_HIST_N; i++) n += __atomic_load_n(&h[i], __ATOMIC_RELAXED);
+    if (n <= 0) return -1;
+    long long want = (long long)((double)n * q);
+    if (want < 1) want = 1;
+    for (i = 0; i < GCS_HIST_N; i++) {
+        acc += __atomic_load_n(&h[i], __ATOMIC_RELAXED);
+        if (acc >= want) return (i == 0) ? 0 : g_gcs_bounds[i - 1];
+    }
+    return g_gcs_bounds[GCS_HIST_N - 2];
+}
+
+static int gcs_put(char* b, int n, int cap, const char* fmt, ...) {
+    if (n >= cap - 1) return n;
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vsnprintf(b + n, (size_t)(cap - n), fmt, ap);
+    va_end(ap);
+    if (r < 0) return n;
+    n += r;
+    if (n > cap - 2) n = cap - 2;
+    return n;
+}
+
+// 汇总输出。调用者须保证「不持 stdio 锁」——本函数只用 write(2)。
+static void gcs_dump(const char* why) {
+    char b[2048];
+    int n = 0;
+    long long runs  = __atomic_load_n(&g_gcs_runs, __ATOMIC_RELAXED);
+    long long skips = __atomic_load_n(&g_gcs_skips, __ATOMIC_RELAXED);
+    long long empty = __atomic_load_n(&g_gcs_empty, __ATOMIC_RELAXED);
+    long long slowr = __atomic_load_n(&g_gcs_slow_runs, __ATOMIC_RELAXED);
+    long long regn  = __atomic_load_n(&g_gcs_reg_n, __ATOMIC_RELAXED);
+    long long lwn   = __atomic_load_n(&g_gcs_lockwait_n, __ATOMIC_RELAXED);
+    long long lwu   = __atomic_load_n(&g_gcs_lockwait_us, __ATOMIC_RELAXED);
+    long long lwm   = __atomic_load_n(&g_gcs_lockwait_max_us, __ATOMIC_RELAXED);
+    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] === dump why=%s runs=%lld skips=%lld empty=%lld slow=%lld ===\n",
+                why, runs, skips, empty, slowr);
+    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] rss_obj_live=%d\n", g_obj_count);
+    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] pause_ms p50=%.1f p95=%.1f p99=%.1f max=%.1f n=%lld\n",
+                gcs_quantile(g_gcs_hist_total, 0.50) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 0.50) / 1000.0,
+                gcs_quantile(g_gcs_hist_total, 0.95) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 0.95) / 1000.0,
+                gcs_quantile(g_gcs_hist_total, 0.99) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 0.99) / 1000.0,
+                gcs_quantile(g_gcs_hist_total, 1.00) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 1.00) / 1000.0,
+                runs);
+    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] phase_ms lock=%.1f stop=%.1f mark=%.1f sweep=%.1f resume=%.1f\n",
+                __atomic_load_n(&g_gcs_phase_us[0], __ATOMIC_RELAXED) / 1000.0,
+                __atomic_load_n(&g_gcs_phase_us[1], __ATOMIC_RELAXED) / 1000.0,
+                __atomic_load_n(&g_gcs_phase_us[2], __ATOMIC_RELAXED) / 1000.0,
+                __atomic_load_n(&g_gcs_phase_us[3], __ATOMIC_RELAXED) / 1000.0,
+                __atomic_load_n(&g_gcs_phase_us[4], __ATOMIC_RELAXED) / 1000.0);
+    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] reg_lock n=%lld wait_total_ms=%.1f max_ms=%.1f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f (samples=%lld)\n",
+                regn, lwu / 1000.0, lwm / 1000.0,
+                gcs_quantile(g_gcs_hist_lock, 0.50) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_lock, 0.50) / 1000.0,
+                gcs_quantile(g_gcs_hist_lock, 0.95) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_lock, 0.95) / 1000.0,
+                gcs_quantile(g_gcs_hist_lock, 0.99) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_lock, 0.99) / 1000.0,
+                lwn);
+    (void)write(2, b, (size_t)n);
+}
+
+static void gcs_maybe_periodic(void) {
+    if (!g_gc_stats_on || g_gc_stats_interval_s <= 0) return;
+    long long now = gc_mono_ms();
+    long long old = __atomic_load_n(&g_gcs_next_dump_ms, __ATOMIC_RELAXED);
+    if (now < old) return;
+    if (!__sync_bool_compare_and_swap(&g_gcs_next_dump_ms, old, now + (long long)g_gc_stats_interval_s * 1000)) return;
+    gcs_dump("interval");
+}
+
+// 单轮上报。ph_* 单位微秒；live/freed/nthreads 为该轮结束时的读数。
+static void gcs_report_run(long long total_us, long long ph_lock, long long ph_stop,
+                           long long ph_mark, long long ph_sweep, long long ph_resume,
+                           int live, int freed, int nthreads, int skipped, int empty) {
+    if (!g_gc_stats_on) return;
+    if (skipped) { __atomic_fetch_add(&g_gcs_skips, 1, __ATOMIC_RELAXED); return; }
+    if (empty)   { __atomic_fetch_add(&g_gcs_empty, 1, __ATOMIC_RELAXED); return; }
+    __atomic_fetch_add(&g_gcs_runs, 1, __ATOMIC_RELAXED);
+    gcs_hist_add(g_gcs_hist_total, total_us);
+    __atomic_fetch_add(&g_gcs_phase_us[0], ph_lock, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_gcs_phase_us[1], ph_stop, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_gcs_phase_us[2], ph_mark, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_gcs_phase_us[3], ph_sweep, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_gcs_phase_us[4], ph_resume, __ATOMIC_RELAXED);
+    if (g_gc_slow_ms > 0 && total_us >= g_gc_slow_ms * 1000) {
+        long long sr = __atomic_fetch_add(&g_gcs_slow_runs, 1, __ATOMIC_RELAXED) + 1;
+        // 即时行：定位「这 12.8s 花在哪一段」的唯一手段（晨曦现场只有线程栈，没有分段）。
+        char b[512];
+        int n = 0;
+        n = gcs_put(b, n, (int)sizeof(b),
+                    "[px-gc-stats] slow #%lld total=%.1fms lock=%.1f stop=%.1f mark=%.1f sweep=%.1f resume=%.1f live=%d freed=%d thr=%d marked=%d precise=%d mksub_ms hash=%.1f globals=%.1f self=%.1f threads=%.1f coro=%.1f\n",
+                    sr, total_us / 1000.0, ph_lock / 1000.0, ph_stop / 1000.0,
+                    ph_mark / 1000.0, ph_sweep / 1000.0, ph_resume / 1000.0,
+                    live, freed, nthreads, g_gcs_last_marked, g_gcs_last_precise,
+                    g_gcs_mksub[0] / 1000.0, g_gcs_mksub[1] / 1000.0,
+                    g_gcs_mksub[2] / 1000.0, g_gcs_mksub[3] / 1000.0,
+                    g_gcs_mksub[4] / 1000.0);
+        n = gcs_put(b, n, (int)sizeof(b),
+                    "[px-gc-stats]   corosub_ms coro=%.1f http_pend=%.1f pxserve_pend=%.1f coros=%d\n",
+                    g_gcs_mksub[5] / 1000.0, g_gcs_mksub[6] / 1000.0,
+                    g_gcs_mksub[7] / 1000.0, g_gcs_last_coros);
+        n = gcs_put(b, n, (int)sizeof(b),
+                    "[px-gc-stats]   hpend wait_lock=%.1fms scan=%.1fms cap=%d active=%d\n",
+                    g_gcs_hp_wait / 1000.0, g_gcs_hp_scan / 1000.0,
+                    g_gcs_hp_cap, g_gcs_hp_act);
+        (void)write(2, b, (size_t)n);
+    }
 }
 
 // 请求间/空闲安全点回收：服务模式把 GC 延迟到此处执行（worker 处理完一请求空闲时、
@@ -2674,6 +2859,7 @@ static void gc_trace_check_freed(LXObject* o) {
 //   判据：若**有**帧槽仍指向它 ⇒ 该帧未被标记（根面漏扫）；若**无**任何帧槽指向它
 //   ⇒ 它只活在某个 C 局部 / abuf / 桥内临时变量里（漏 PX_KEEP）。
 extern void px_coro_dbg_refs(const void* obj) __attribute__((weak));   // coro.c 提供
+extern int px_coro_count(void) __attribute__((weak));   // M312-C：存活协程数（诊断）
 // 帧槽扫描实现在 vm.c（PxVmState/PxFrame 只在那里可见；runtime.c 不包含 vm.h）
 extern void px_vm_dbg_scan_refs(const char* tag, void* vst, const void* obj);
 extern void px_vm_dbg_dump_exec(void);
@@ -2745,8 +2931,12 @@ void px_gc_collect(void) {
     // → 卡死/5 秒空转）。先拿锁再屏蔽：等锁期间不屏蔽（可被其他 GC 正常暂停），
     // 持锁后屏蔽（防自打断）。出口统一 gc_unblock_stop。
     long long t0 = gc_mono_ms();   // ISSUE28-B1：GC 耗时观测
+    long long _gcs_t0 = g_gc_stats_on ? gc_mono_us() : 0;   // M312：分段计时基准
+    long long _gcs_lock = 0, _gcs_stop = 0, _gcs_mark = 0, _gcs_sweep = 0;  // M312
+    int _gcs_live = 0, _gcs_freed = 0, _gcs_thr = 0;                        // M312
     sigset_t gc_old;
     pthread_mutex_lock(&g_gc_mu);
+    if (g_gc_stats_on) _gcs_lock = gc_mono_us() - _gcs_t0;   // M312：等锁（被别的 collect 占着）
     gc_block_stop(&gc_old);
     g_gc_executor = pthread_self();   // 标记我是 GC 执行者（handler 自检防自打断）
     g_gc_pending = 0;                 // ISSUE28-B1：任一回收路径（内联/gc()/安全点）清除延迟标记
@@ -2755,6 +2945,7 @@ void px_gc_collect(void) {
         pthread_mutex_unlock(&g_gc_mu);
         g_gc_executor = 0;
         gc_unblock_stop(&gc_old);
+        if (g_gc_stats_on) gcs_report_run(gc_mono_us() - _gcs_t0, _gcs_lock, 0, 0, 0, 0, 0, 0, 0, 0, 1);
         return;
     }
 
@@ -2822,6 +3013,7 @@ void px_gc_collect(void) {
                 pthread_mutex_unlock(&g_gc_mu);
                 g_gc_executor = 0;
                 gc_unblock_stop(&gc_old);
+                if (g_gc_stats_on) gcs_report_run(gc_mono_us() - _gcs_t0, _gcs_lock, 0, 0, 0, 0, 0, 0, 0, 1, 0);
                 return;
             }
             // M22：重发间隔加小延时，避免对长时间屏蔽信号的线程狂轰信号（实时信号排队 →
@@ -2831,12 +3023,16 @@ void px_gc_collect(void) {
             int pc = g_paused_count;
             px_futex_wait(&g_paused_count, pc, 200);   // 200us
         }
+        if (g_gc_stats_on) _gcs_stop = gc_mono_us() - _gcs_t0 - _gcs_lock;   // M312：握手
+        long long _gcs_mk0 = g_gc_stats_on ? gc_mono_us() : 0;                // M312-B：mark 细分基准
+        if (g_gc_stats_on) _gcs_thr = g_paused_count;   // M312-C：暂停线程数（此处才代表 STW 规模）
         // 3) 标记
         GCHash set;
         gc_hash_init(&set, (size_t)g_obj_count * 2);
         for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
         g_gc_marked = 0;
         if (g_gc_debug) (void)write(2, "[mk] hash\n", 10);
+        if (g_gc_stats_on) g_gcs_mksub[0] = gc_mono_us() - _gcs_mk0;
         // 根1：全局表（M55：GC 于暂停线程前已持 g_globals_mu，此处独占扫描，
         // 防读到 px_set/get_global 半写对象；扫完立即释放，供恢复后的线程使用）
         for (int i = 0; i < g_len; i++) {
@@ -2844,6 +3040,7 @@ void px_gc_collect(void) {
         }
         pthread_rwlock_unlock(&g_globals_mu);
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
+        if (g_gc_stats_on) g_gcs_mksub[1] = gc_mono_us() - _gcs_mk0 - g_gcs_mksub[0];
         gc_mark_pinned(&set);   // M153：常量池/短串池化对象（永久根）
         // 根2：本线程（GC 执行者）暂存根
         if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
@@ -2863,6 +3060,7 @@ void px_gc_collect(void) {
         if (px_vm_gc_mark) px_vm_gc_mark();
         // 根3c：M92 precise —— executor 自身 TLS 登记根栈
         if (g_gc_precise && g_px_roots_n > 0) px_gc_mark_slots(g_px_roots, g_px_roots_n);
+        if (g_gc_stats_on) g_gcs_mksub[2] = gc_mono_us() - _gcs_mk0 - g_gcs_mksub[0] - g_gcs_mksub[1];
         // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根 + VM 帧槽（跨线程）
         //      M92 precise：暂停线程跳过保守栈/寄存器扫描，改标其 TLS 登记根栈快照。
         for (int i = 0; i < g_thread_cap; i++) {
@@ -2878,13 +3076,33 @@ void px_gc_collect(void) {
             if (ti->vm_state && px_vm_gc_mark_state) px_vm_gc_mark_state(ti->vm_state);
             if (g_gc_debug) { char dbg[64]; int dn = snprintf(dbg, sizeof(dbg), "[mk] scanned tid=%lx\n", (unsigned long)ti->tid); (void)write(2, dbg, (size_t)dn); }
         }
+        if (g_gc_stats_on) g_gcs_mksub[3] = gc_mono_us() - _gcs_mk0 - g_gcs_mksub[0] - g_gcs_mksub[1] - g_gcs_mksub[2];
         // 根4b：M93-S2 帧协程根面 —— 全部存活协程（就绪参数副本 + 运行/阻塞中帧槽）。
         //   运行中协程 vm 已由所属 worker 的 ti->vm_state 覆盖（重复标无害）；
         //   就绪队列协程的 args 副本仅本表可达 → 必须补标（漏标 = worker 取到 UAF）。
-        if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
-        http_pend_gc_mark();   // M95-S2：http 挂起连接 req/resp 补标
-        px_pxserve_pend_gc_mark();   // M98-S2a：px_serve 挂起连接 req/resp 补标
+        {
+            long long _t1 = g_gc_stats_on ? gc_mono_us() : 0;
+            if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
+            long long _t2 = g_gc_stats_on ? gc_mono_us() : 0;
+            http_pend_gc_mark();   // M95-S2：http 挂起连接 req/resp 补标
+            long long _t3 = g_gc_stats_on ? gc_mono_us() : 0;
+            px_pxserve_pend_gc_mark();   // M98-S2a：px_serve 挂起连接 req/resp 补标
+            if (g_gc_stats_on) {
+                long long _t4 = gc_mono_us();
+                g_gcs_mksub[5] = _t2 - _t1;
+                g_gcs_mksub[6] = _t3 - _t2;
+                g_gcs_mksub[7] = _t4 - _t3;
+                if (px_coro_count) g_gcs_last_coros = px_coro_count();
+            }
+        }
         g_gc_cur_set = NULL;
+        if (g_gc_stats_on) {
+            long long _mke = gc_mono_us();
+            g_gcs_mksub[4] = _mke - _gcs_mk0 - g_gcs_mksub[0] - g_gcs_mksub[1] - g_gcs_mksub[2] - g_gcs_mksub[3];
+            g_gcs_last_marked = (int)g_gc_marked;
+            g_gcs_last_precise = g_gc_precise;
+            _gcs_mark = _mke - _gcs_t0 - _gcs_lock - _gcs_stop;   // M312：标记
+        }
         // 4) sweep
         if (g_gc_debug) { char dbg[128]; int dn = snprintf(dbg, sizeof(dbg), "[mk] 暂停+标记+扫栈耗时%lldms\n", gc_mono_ms() - t0); (void)write(2, dbg, (size_t)dn); }
         if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[mk] sweep count=%d\n", g_obj_count); (void)write(2, dbg, (size_t)dn); }
@@ -2914,6 +3132,10 @@ void px_gc_collect(void) {
         gc_hash_free(&set);
         // ISSUE28-B2：sweep 后归还完全空闲 slab 页给 OS（仍 STW，无并发分配，安全）
         slab_reclaim_empty();
+        if (g_gc_stats_on) {   // M312：sweep 段（含 slab 归还）+ 存活/回收读数
+            _gcs_sweep = gc_mono_us() - _gcs_t0 - _gcs_lock - _gcs_stop - _gcs_mark;
+            _gcs_live = g_obj_count; _gcs_freed = freed; _gcs_thr = g_paused_count;
+        }
         // 5) 本轮结束：epoch++ 唤醒所有暂停线程；清除进行中标志；等待其全部恢复
         g_gc_epoch++;
         g_gc_stop_in_progress = 0;
@@ -2939,6 +3161,13 @@ void px_gc_collect(void) {
         pthread_mutex_unlock(&g_gc_mu);
         g_gc_executor = 0;
         gc_unblock_stop(&gc_old);
+        if (g_gc_stats_on) {
+            long long tu = gc_mono_us() - _gcs_t0;
+            long long rs = tu - _gcs_lock - _gcs_stop - _gcs_mark - _gcs_sweep;
+            gcs_report_run(tu, _gcs_lock, _gcs_stop, _gcs_mark, _gcs_sweep, rs,
+                           _gcs_live, _gcs_freed, _gcs_thr, 0, 0);
+            gcs_maybe_periodic();
+        }
         return;
     }
 
@@ -2971,6 +3200,7 @@ void px_gc_collect(void) {
     http_pend_gc_mark();   // M95-S2：同上（单线程 GC 路径兜底）
     px_pxserve_pend_gc_mark();   // M98-S2a：同上（单线程 GC 路径兜底）
     g_gc_cur_set = NULL;
+    if (g_gc_stats_on) _gcs_mark = gc_mono_us() - _gcs_t0 - _gcs_lock;   // M312：标记（单线程无握手）
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
     for (int i = 0; i < g_obj_count; i++) {
@@ -3005,10 +3235,17 @@ void px_gc_collect(void) {
     gc_debug("collect #%d: 标记 %lld/%d 回收 %d 存活 %d 跳过 %d 耗时%lldms", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_gc_skips, gc_mono_ms() - t0);
     gc_hash_free(&set);
     // ISSUE28-B2：sweep 后归还完全空闲 slab 页给 OS（单线程路径，无并发分配）
+    if (g_gc_stats_on) { _gcs_live = g_obj_count; _gcs_freed = freed; }   // M312
     slab_reclaim_empty();
     pthread_mutex_unlock(&g_gc_mu);
     g_gc_executor = 0;
     gc_unblock_stop(&gc_old);
+    if (g_gc_stats_on) {   // M312：单线程路径（ph_stop 恒 0）
+        long long tu = gc_mono_us() - _gcs_t0;
+        long long sw = tu - _gcs_lock - _gcs_mark;
+        gcs_report_run(tu, _gcs_lock, 0, _gcs_mark, sw, 0, _gcs_live, _gcs_freed, 0, 0, 0);
+        gcs_maybe_periodic();
+    }
 }
 
 // ---- M92 精确 GC：precise/conservative 模式 + native 桥根登记 API ----
@@ -3341,7 +3578,19 @@ static void gc_register(LXObject* o, long long est) {
         spare = (LXObject**)m128_alloc(sizeof(LXObject*) * (size_t)ncap, "gc_objs_grow");
         spare_cap = ncap;
     }
+    long long _gcs_t0 = 0;
+    if (g_gc_stats_on) _gcs_t0 = gc_mono_us();   // M312：等锁时长（晨曦现场 129 线程就堵在这里）
     pthread_mutex_lock(&g_gc_mu);
+    if (g_gc_stats_on) {
+        long long _dt = gc_mono_us() - _gcs_t0;
+        __atomic_fetch_add(&g_gcs_reg_n, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&g_gcs_lockwait_n, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&g_gcs_lockwait_us, _dt, __ATOMIC_RELAXED);
+        long long _m = __atomic_load_n(&g_gcs_lockwait_max_us, __ATOMIC_RELAXED);
+        while (_dt > _m && !__sync_bool_compare_and_swap(&g_gcs_lockwait_max_us, _m, _dt))
+            _m = __atomic_load_n(&g_gcs_lockwait_max_us, __ATOMIC_RELAXED);
+        gcs_hist_add(g_gcs_hist_lock, _dt);
+    }
     if (!g_gc_env_inited) gc_init_env();
     o->gc_mark = 0;   // 关键：xmalloc 未清零，gc_mark 垃圾值=1 会导致 DFS 跳过该节点（子对象漏标）
     o->is_mmap = 0;   // M57-S2：同上，is_mmap 垃圾值=1 会导致 sweep 误对普通 data 走 munmap
@@ -3378,6 +3627,7 @@ static void gc_register(LXObject* o, long long est) {
     int deferrable = (g_active_threads > 0) && !g_gc_force_inline;   // 服务/并发模式：存在请求间安全点（PX_GC_INLINE=1 对拍强制内联）
     pthread_mutex_unlock(&g_gc_mu);
     if (spare) xfree(spare);   // M128：备料未用（提交时发现无需扩容）⇒ 锁外释放（从未发布 ⇒ 安全）
+    if (g_gc_stats_interval_s > 0) gcs_maybe_periodic();   // M312：服务端不退出时的周期汇总
     if (need) {
         // ISSUE28-B1：多线程服务模式（spawn/连接池活跃）把 GC 延迟到安全点（worker 空闲/
         // 池循环顶），避免全量 STW 落在请求热路径；对象数超过 阈值×4 硬上限仍强制内联
@@ -5430,8 +5680,8 @@ void px_index_set(LXValue obj, LXValue idx, LXValue val) {
         pthread_mutex_lock(&g_gc_mu);
         gc_block_stop(&old);
         obj.as.obj->as.list.items[i] = val;
-        gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_gc_mu);
+        gc_unblock_stop(&old);
         return;
     }
     if (obj.type == PX_DICT) {
@@ -5479,8 +5729,8 @@ void px_field_set(LXValue obj, const char* name, LXValue val) {
                 pthread_mutex_lock(&g_gc_mu);
                 gc_block_stop(&old);
                 o->as.struct_inst.fvals[i] = val;
-                gc_unblock_stop(&old);
                 pthread_mutex_unlock(&g_gc_mu);
+                gc_unblock_stop(&old);
                 return;
             }
         }
@@ -5507,8 +5757,8 @@ static void px_list_push_locked(LXValue list, LXValue val) {
         o->as.list.items = xrealloc(o->as.list.items, sizeof(LXValue) * o->as.list.cap);
     }
     o->as.list.items[o->as.list.len++] = val;
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_gc_mu);
+    gc_unblock_stop(&old);
 }
 
 
@@ -5625,8 +5875,8 @@ void px_list_push(LXValue list, LXValue val) {
         if (len < o->as.list.cap) {          // 仍有空槽：直接追加
             o->as.list.items[len] = val;
             o->as.list.len = len + 1;
-            gc_unblock_stop(&old);
             pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
             if (spare) xfree(spare);         // 备货未用：锁外释放（从未发布 ⇒ 安全）
             return;
         }
@@ -5639,12 +5889,12 @@ void px_list_push(LXValue list, LXValue val) {
             o->as.list.len = len + 1;
             spare = NULL;
             if (oldbuf) xfree(oldbuf);       // 旧数组：锁内释放（同 xrealloc 语义）
-            gc_unblock_stop(&old);
             pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
             return;
         }
-        gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_gc_mu);
+        gc_unblock_stop(&old);
         if (spare) { xfree(spare); spare = NULL; spare_cap = 0; }   // 备货不足 ⇒ 丢弃重来
         retry++;
     }
@@ -5659,8 +5909,8 @@ static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) {
             o->as.dict.vals[i] = val;
-            gc_unblock_stop(&old);
             pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
             return;
         }
     }
@@ -5672,8 +5922,8 @@ static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
     o->as.dict.keys[o->as.dict.len] = xstrdup(key);
     o->as.dict.vals[o->as.dict.len] = val;
     o->as.dict.len++;
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_gc_mu);
+    gc_unblock_stop(&old);
 }
 
 void px_dict_set(LXValue dict, const char* key, LXValue val) {
@@ -5726,24 +5976,24 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
         }
         if (idx >= 0 && idx < len) {         // 命中已有键：只改值（零分配）
             o->as.dict.vals[idx] = val;
-            gc_unblock_stop(&old);
             pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
             if (spare_keys) xfree(spare_keys);
             if (spare_vals) xfree(spare_vals);
             if (spare_key) xfree(spare_key);
             return;
         }
         if (!spare_key) {                    // 键缺失但还没备键副本 ⇒ 解锁备货后重来（不改对象状态）
-            gc_unblock_stop(&old);
             pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
             absent = 1; absent_len = len;
             retry++;
             continue;
         }
         if (len >= o->as.dict.cap) {          // 需要更大的数组：发布备货（只换指针）
             if (!spare_keys || spare_cap <= len) {   // 备货不足 ⇒ 解锁重来
-                gc_unblock_stop(&old);
                 pthread_mutex_unlock(&g_gc_mu);
+                gc_unblock_stop(&old);
                 if (spare_keys) xfree(spare_keys);
                 if (spare_vals) xfree(spare_vals);
                 spare_keys = NULL; spare_vals = NULL; spare_cap = 0;
@@ -5767,8 +6017,8 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
         o->as.dict.vals[len] = val;
         o->as.dict.len = len + 1;
         spare_key = NULL;
-        gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_gc_mu);
+        gc_unblock_stop(&old);
         return;
     }
 }
@@ -6327,8 +6577,8 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             m = g_vals[mslot];
             m_found = true;
         }
-        gc_unblock_stop(&old);
         pthread_rwlock_unlock(&g_globals_mu);
+        gc_unblock_stop(&old);
         if (m_found) {
             LXValue* argv = xmalloc(sizeof(LXValue) * (nargs + 1));
             argv[0] = obj; // self
@@ -6375,8 +6625,8 @@ int px_global_resolve_stable(const char* name) {
     pthread_rwlock_rdlock(&g_globals_mu);
     gc_block_stop(&old);
     int gi = g_hash_find(name, g_name_hash(name));
-    gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
+    gc_unblock_stop(&old);
     if (gi >= 0) { g_ng_memo[cs].nm = name; g_ng_memo[cs].gi = gi; }
     return gi;
 }
@@ -6387,8 +6637,8 @@ LXValue px_global_at(int gi) {
     pthread_rwlock_rdlock(&g_globals_mu);
     gc_block_stop(&old);
     LXValue v = g_vals[gi];
-    gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
+    gc_unblock_stop(&old);
     return v;
 }
 
@@ -6402,12 +6652,12 @@ LXValue px_get_global(const char* name) {    // M55/P0（issue#2）：与 px_set
     int gi = g_hash_find(name, g_name_hash(name));
     if (gi >= 0) {
         LXValue v = g_vals[gi];
-        gc_unblock_stop(&old);
         pthread_rwlock_unlock(&g_globals_mu);
+        gc_unblock_stop(&old);
         return v;
     }
-    gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
+    gc_unblock_stop(&old);
     px_error("R1001: 未定义变量: '%s'", name);
     return px_null();
 }
@@ -6425,16 +6675,16 @@ bool px_global_native(const char* name, LXValue* out) {
     int gi = g_hash_find(name, g_name_hash(name));
     if (gi >= 0) {
         LXValue v = g_vals[gi];
-        gc_unblock_stop(&old);
         pthread_rwlock_unlock(&g_globals_mu);
+        gc_unblock_stop(&old);
         if (v.type == PX_NATIVE) {
             if (out) *out = v;
             return true;
         }
         return false;   // 名存在但非内置函数（用户变量/常量/结构体等）
     }
-    gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
+    gc_unblock_stop(&old);
     return false;
 }
 
@@ -6470,13 +6720,13 @@ void px_set_global(const char* name, LXValue v) {
     int gi = g_hash_find(name, hv);
     if (gi >= 0) {
         g_vals[gi] = v;
-        gc_unblock_stop(&old);
         pthread_rwlock_unlock(&g_globals_mu);
+        gc_unblock_stop(&old);
         return;
     }
     if (g_len >= GLOBAL_CAP) {
-        gc_unblock_stop(&old);
         pthread_rwlock_unlock(&g_globals_mu);
+        gc_unblock_stop(&old);
         px_error("全局表溢出");
         return;
     }
@@ -6486,8 +6736,8 @@ void px_set_global(const char* name, LXValue v) {
     g_len++;
     // M201：登记「可作为全局调用的 native 名」（数据源 = native_symbols()）
     if (v.type == PX_NATIVE) native_reg_record(g_keys[g_len - 1]);
-    gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
+    gc_unblock_stop(&old);
 }
 
 // ==================== 内置函数 ====================
@@ -20528,8 +20778,12 @@ static int http_pend_put(int fd, LXValue req, int method_head, int client_close)
             ok = 1;
         }
     }
-    gc_unblock_stop(&old);
+    // M312（缺陷 535）：**先放锁、再解除信号屏蔽**。
+    //   反序（unblock → unlock）会留下「仍持锁却已恢复信号」的窗口：pending 的
+    //   SIG_GC_STOP 恰在此刻递达 ⇒ 线程**持着本锁**进暂停 ⇒ GC executor 在
+    //   http_pend_gc_mark 等这把锁（实测 12214ms，靠被暂停线程 6s 兜底才恢复）。
     pthread_mutex_unlock(&g_hpend_mu);
+    gc_unblock_stop(&old);
     return ok;
 }
 
@@ -20551,8 +20805,12 @@ static int http_pend_take(int fd, LXValue* req, LXValue* resp, int* method_head,
         px_root_push_keep2(*req, *resp);
         got = 1;
     }
-    gc_unblock_stop(&old);
+    // M312（缺陷 535）：**先放锁、再解除信号屏蔽**。
+    //   反序（unblock → unlock）会留下「仍持锁却已恢复信号」的窗口：pending 的
+    //   SIG_GC_STOP 恰在此刻递达 ⇒ 线程**持着本锁**进暂停 ⇒ GC executor 在
+    //   http_pend_gc_mark 等这把锁（实测 12214ms，靠被暂停线程 6s 兜底才恢复）。
     pthread_mutex_unlock(&g_hpend_mu);
+    gc_unblock_stop(&old);
     return got;
 }
 
@@ -20566,26 +20824,37 @@ static void http_pend_clear(int fd) {
         p->active = 0; p->stage = 0; p->fd = -1;
         p->req.type = PX_NULL; p->resp.type = PX_NULL;
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_hpend_mu);
+    gc_unblock_stop(&old);
 }
 
 // GC 标记期补标挂起项 req/resp（gc executor 单线程标记期调用；持 g_hpend_mu）
 static void http_pend_gc_mark(void) {
+    long long _t0 = g_gc_stats_on ? gc_mono_us() : 0;   // M312-D：区分「等锁」与「扫描」
     sigset_t old;
     pthread_mutex_lock(&g_hpend_mu);
+    long long _t1 = g_gc_stats_on ? gc_mono_us() : 0;
     gc_block_stop(&old);   // executor 本已自屏蔽（幂等）；写者临界区同屏蔽 → 无持锁被暂停
+    int _nact = 0;
     if (g_hpend) {
         for (int i = 0; i < g_hpend_cap; i++) {
             HttpPend* p = &g_hpend[i];
             if (p->active) {
+                _nact++;
                 if (p->req.type != PX_NULL) px_gc_mark_slots(&p->req, 1);
                 if (p->resp.type != PX_NULL) px_gc_mark_slots(&p->resp, 1);
             }
         }
     }
-    gc_unblock_stop(&old);
+    if (g_gc_stats_on) {
+        long long _t2 = gc_mono_us();
+        g_gcs_hp_wait = _t1 - _t0;
+        g_gcs_hp_scan = _t2 - _t1;
+        g_gcs_hp_cap = g_hpend_cap;
+        g_gcs_hp_act = _nact;
+    }
     pthread_mutex_unlock(&g_hpend_mu);
+    gc_unblock_stop(&old);
 }
 
 // handler 帧协程完成回调（coro worker 线程执行；ret = handler 顶层返回值）。
@@ -20610,8 +20879,12 @@ static void http_handler_done(void* ud, LXValue ret) {
         p->stage = 2;
         push = 1;
     }
-    gc_unblock_stop(&old);
+    // M312（缺陷 535）：**先放锁、再解除信号屏蔽**。
+    //   反序（unblock → unlock）会留下「仍持锁却已恢复信号」的窗口：pending 的
+    //   SIG_GC_STOP 恰在此刻递达 ⇒ 线程**持着本锁**进暂停 ⇒ GC executor 在
+    //   http_pend_gc_mark 等这把锁（实测 12214ms，靠被暂停线程 6s 兜底才恢复）。
     pthread_mutex_unlock(&g_hpend_mu);
+    gc_unblock_stop(&old);
     if (push) fserve_push(fd, FSERVE_KIND_HTTP);   // 续处理：响应写 + keep-alive
     px_root_pop();
 }
@@ -25874,8 +26147,8 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
         else if (e && e->conn) { /* 续处理：连接/会话复用 */ }
         else e = NULL;
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     if (!e) return NULL;
     if (!create) return e;
     // 新建：堆化连接 + TLS 握手（锁外）
@@ -25895,15 +26168,15 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
     //   ⇒ 手里这个 `e` 是**野指针**（读它崩；写它 = 静默堆破坏）。
     e = px_pxpend_ctx(fd);
     if (!e) {   // 极端情形：表已改变且本 fd 已不在范围 ⇒ 丢弃新建
-        gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_pxpend_mu);
+        gc_unblock_stop(&old);
         px_conn_owner_free(c);
         if (out_fd_closed) *out_fd_closed = 1;
         return NULL;
     }
     if (e->active) {   // 防御：槽被占（理论不达，fd 唯一在途）→ 弃新建
-        gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_pxpend_mu);
+        gc_unblock_stop(&old);
         px_conn_owner_free(c);   // M235：close + 对象释放（有使用者在读则延后）
         if (out_fd_closed) *out_fd_closed = 1;
         return NULL;
@@ -25917,8 +26190,8 @@ static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
     e->mw_handler.type = PX_NULL; e->mw_params.type = PX_NULL;
     for (int j = 0; j < 32; j++) e->mw_chain[j].type = PX_NULL;
     __sync_fetch_and_add(&g_px_inflight, 1);
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     return e;
 }
 
@@ -25953,8 +26226,8 @@ static PxConn* px_pxpend_detach_conn(int fd) {
         e->req.type = PX_NULL; e->resp.type = PX_NULL;
         __sync_fetch_and_sub(&g_px_inflight, 1);
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     if (tmp[0]) unlink(tmp);
     return c;
 }
@@ -25994,8 +26267,8 @@ static void px_pxpend_close(int fd) {
         e->req.type = PX_NULL; e->resp.type = PX_NULL;
         __sync_fetch_and_sub(&g_px_inflight, 1);
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     // M99：前置摘除事件循环上下文（防事件循环继续照看将关 fd / fd 复用串扰；detach 不 close，
     //   由 px_conn_close 负责 close。worker 处理中 ACTIVE 关闭 / 事件循环 tick/断开分支均走本函数
     //   ——detach 幂等：FREE 时无操作）
@@ -26033,8 +26306,8 @@ static void px_pxpend_set_tmp(int fd, const char* path) {
     if (e && e->active && e->stage == 1) {
         snprintf(e->tmp_path, sizeof(e->tmp_path), "%s", path);
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
 }
 
 // 取完成项（stage==2 → 置 stage=0 返回 1，req/resp/kind/vroot/标志移交调用方；否则 0）
@@ -26057,8 +26330,8 @@ static int px_pxpend_take(int fd, LXValue* req, LXValue* resp, int* method_head,
         e->req.type = PX_NULL; e->resp.type = PX_NULL;
         got = 1;
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     return got;
 }
 
@@ -26085,8 +26358,8 @@ void px_pxserve_pend_gc_mark(void) {
             }
         }
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
 }
 
 // route handler 帧协程完成回调（coro worker 线程执行；ret = handler 顶层返回值）。
@@ -26126,8 +26399,8 @@ static void px_serve_route_done(void* ud, LXValue ret) {
         push = 1;
         if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     if (tmp[0]) unlink(tmp);
     if (push) {
         if (g_px_stop) px_pxpend_close(fd);   // 关闭期：池 worker 已退出 → 直接收尾
@@ -26169,8 +26442,8 @@ int px_pxserve_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue* harg
         e->resp.type = PX_NULL;
         ok = 1;
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     if (!ok) return 0;
     px_coro_spawn_ex(handler.as.obj->as.func.ctx, hargs, nargs,
                      px_serve_route_done, (void*)(intptr_t)fd);
@@ -26244,8 +26517,8 @@ static void px_serve_mw_done(void* ud, LXValue ret) {
             if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
         }
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     if (cont) {
         // 续段 spawn（fn/fargs 已拷出锁；PX_KEEP 保活到 spawn memcpy 完成）
         PX_KEEP(fn);
@@ -26302,8 +26575,8 @@ int px_pxserve_mw_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue pa
         e->resp.type = PX_NULL;
         ok = 1;
     }
-    gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    gc_unblock_stop(&old);
     if (!ok) return 0;
     LXValue fargs[1];
     fargs[0] = req;

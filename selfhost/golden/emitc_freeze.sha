@@ -291,6 +291,7 @@ examples/m302_stdlib_surface3/drv.px src=44cc52c23e1afe84 rc=0 out=8948b3b68119f
 examples/m306_onnx_quant/quant_exec.px src=ac8fbf1ea1ad5371 rc=0 out=21c84ddae46c2529d5e4e83bb5cfe38f err=e3b0c44298fc1c14
 examples/m308_onnx_ops/onnx_exec.px src=880931d77d6c137b rc=0 out=84cac4be8f4b0d4e9c2676ea033d4a46 err=e3b0c44298fc1c14
 examples/m311_real_model/run_px.px src=11e6b74d4d06130c rc=0 out=35c06d2b95c53a9ee016a1dd1f04bf9e err=e3b0c44298fc1c14
+examples/m312_gc_lock_order/srv.px src=4d72d32f6e4969e6 rc=0 out=b6d3e6e310462461f307062a43817851 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

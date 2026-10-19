@@ -1615,5 +1615,13 @@ run selfwake_guard bash selfhost/check_no_selfwake.sh
 #   本门跑 `packaging/check_release_assets.sh --self-test`（5 条自证，含 4 种负控形态）；
 #   真正的**已发布物**核对在 release.yml 的 `assets-verify` job（判据作用在取回来的资产上）。
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# M312（第 183 轮 · 缺陷 535）：GC 暂停信号 / 互斥锁「解除顺序」
+#   反序（gc_unblock_stop → pthread_mutex_unlock）留下「仍持锁却已恢复信号」窗口，
+#   pending 的 SIG_GC_STOP 恰在此刻递达 ⇒ 线程持锁进暂停 ⇒ GC 在 *_gc_mark() 里等锁
+#   （实测 12214ms；晨曦生产 p95 12822ms）。修法 = 35 处统一改正序。
+#   CI 用 --neg-skip（负控 A 需 devbuild 重建，约 3 分钟）。
+# ═══════════════════════════════════════════════════════════════════════════
 run m311_real_model bash examples/m311_real_model/verify.sh
+run m312_gc_lock_order bash examples/m312_gc_lock_order/verify.sh --neg-skip
 run release_assets bash packaging/check_release_assets.sh --self-test

@@ -1,0 +1,20 @@
+# M312 复现服务端：http_serve(port, handler)
+#   模拟 Mahesvara 形态的「每请求分配一批对象」——让 GC 在压测期间持续触发。
+#   用法：srv.px <port> [每请求分配条数]
+let a = args()
+let port = int(a[1])
+var npart = 100
+if len(a) > 2:
+    npart = int(a[2])
+
+def handler(req):
+    let parts = []
+    var i = 0
+    while i < npart:
+        parts.append("k" + str(i) + "=v" + str(i * i))
+        i += 1
+    let body = join("&", parts)
+    return {"status": 200, "body": body, "headers": {"Content-Type": "text/plain"}}
+
+print("M312-SRV-READY port=" + str(port) + " npart=" + str(npart))
+http_serve(port, handler)
