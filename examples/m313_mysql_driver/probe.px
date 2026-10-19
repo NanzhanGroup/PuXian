@@ -1,0 +1,43 @@
+# ============================================================
+# examples/m313_mysql_driver/probe.px —— mysql 驱动客户端探针（配合 mock_mysql.px）
+# ------------------------------------------------------------
+# 用法：./probe <port> <mode>
+#   mode = ok       正常握手 + 一条 SELECT 1（期望 affected=7）
+#   mode = timeout  对「只接受连接、不发任何字节」的服务端发起连接，
+#                   期望**读超时有界返回 Err**（修前是永久阻塞）
+# 判据只用**产品自带输出**：驱动返回的 Ok/Err 与其中的字段，不依赖任何插桩。
+# ============================================================
+import "../../registry/mysql/0.2.0/mysql.px"
+def main():
+    var a = args()
+    var port = int(a[1])
+    var mode = "ok"
+    if len(a) > 2:
+        mode = a[2]
+    if mode == "timeout":
+        var t0 = now_ms()
+        var r = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 500})
+        var el = now_ms() - t0
+        if r.is_err():
+            print("PROBE-TIMEOUT-ERR elapsed_ms=" + str(el) + " msg=" + str(r.err()))
+            return
+        print("PROBE-TIMEOUT-UNEXPECTED-OK elapsed_ms=" + str(el))
+        exit(1)
+    var c = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 3000})
+    if c.is_err():
+        print("PROBE-CONNECT-ERR " + str(c.err()))
+        exit(1)
+    var conn = c.unwrap()
+    print("PROBE-CONNECT user=" + str(conn["user"]) + " db=" + str(conn["dbname"]) + " plugin=" + str(conn["plugin"]))
+    var q = mysql_query(conn, "SELECT 1")
+    if q.is_err():
+        print("PROBE-QUERY-ERR " + str(q.err()))
+        mysql_close(conn)
+        exit(1)
+    var res = q.unwrap()
+    print("PROBE-QUERY affected=" + str(res["affected"]) + " rows=" + str(len(res["rows"])))
+    var _ = mysql_close(conn)
+    if res["affected"] != 7:
+        print("PROBE-BAD-AFFECTED " + str(res["affected"]))
+        exit(1)
+    print("PROBE-OK")

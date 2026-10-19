@@ -1331,6 +1331,16 @@ jobs:
           bash examples/m312_gc_lock_order/verify.sh --neg-skip > /tmp/v_m312.log 2>&1 || { echo "❌ m312_gc_lock_order 门失败（反序扫描 / 三入口顺序 / 3 轮压测）"; grep -E '^(  ❌|     |        )' /tmp/v_m312.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           tail -3 /tmp/v_m312.log
 
+      - name: m313_mysql_driver（mysql 驱动握手 / 能力位 / 读无界 · M313 · 缺陷 536–538）
+        # 判据：用普贤自写的 mock MySQL 服务端真跑握手，逐字段校验（能力位 / 用户名 / 库名 /
+        #       20 字节 auth token 独立复算 / 尾部无多余字节）⇒ 0.2.0 与 0.1.0 都必须 PROBE-OK；
+        #       读超时有界（服务端只 accept 不发字节 ⇒ <5000ms 返回 i/o timeout）。
+        # 负控 A/B/C（撤回偏移 / 撤回能力位 / 去掉读超时）各要重建一次探针 ⇒ CI 用 --neg-skip；
+        # 权威档在本机全量门（不带 --neg-skip）。
+        run: |
+          bash examples/m313_mysql_driver/verify.sh --neg-skip > /tmp/v_m313.log 2>&1 || { echo "❌ m313_mysql_driver 门失败（握手 / token 对拍 / 读超时）"; grep -E '^(  ❌|     |        )' /tmp/v_m313.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          tail -3 /tmp/v_m313.log
+
       - name: release_assets（发布资产 ⇄ 校验清单 双向核对自证 · M311 · C1/C2）
         # 判据本体在 release.yml 的 assets-verify job（作用在**已发布物**上）；
         # 这里跑它的 5 条离线自证（S1 完整 · S2 清单漏资产 · S3 哈希不符 · S4 sidecar 矛盾 · S5 缺 aarch64 包）。
