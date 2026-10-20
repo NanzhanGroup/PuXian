@@ -8,7 +8,28 @@ cd "$(dirname "$0")"
 PX=../../tools/px
 LOG=/tmp/m131_build.log
 FAIL=0
-PORT=19871
+PORT="${M131_GATE_PORT:-19871}"
+# 端口卫生（M314 全量门实测）：固定 19871 曾被遗留的 mock_mysql 占住，
+# VM 轨一路收 MySQL 握手包 ⇒ 门假红。占用时改用空闲端口，绝不量别人的服务。
+if python3 - "$PORT" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket(); s.settimeout(0.3)
+try:
+    s.connect(("127.0.0.1", int(sys.argv[1]))); sys.exit(0)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+then
+    _BUSY="$PORT"
+    PORT=$(python3 - <<'PY2'
+import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PY2
+)
+    echo "  ⚠ 端口 $_BUSY 已被占用 ⇒ 改用空闲端口 $PORT（脏测量防护）"
+fi
 
 cat > /tmp/m131_probe.py <<'PY'
 import socket, sys, time

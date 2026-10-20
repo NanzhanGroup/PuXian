@@ -46,6 +46,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 W="${M312_GATE_W:-$(mktemp -d /tmp/m312_gate.XXXXXX)}"
+mkdir -p "$W"
 NEG_SKIP=0
 for a in "$@"; do [ "$a" = "--neg-skip" ] && NEG_SKIP=1; done
 
@@ -56,7 +57,14 @@ chk() { if [ "$2" = "$3" ]; then ok "$1（$2）"; else bad "$1：期望 $3，实
 num() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 
 TGT="$ROOT/runtime/runtime.c"
-PORT="${M312_GATE_PORT:-19937}"
+pick_port() { python3 - <<'PYPORT'
+import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PYPORT
+}
+# 默认随机空闲端口：固定 19937 一旦被上次遗留的 build/srv 占住，本轮会量到
+# 「旧进程」的延迟（M314 全量门实测：假红 —— 甚至可能量到上一轮负控的残留体）
+PORT="${M312_GATE_PORT:-$(pick_port)}"
 THRESH_MAX_MS="${M312_MAX_MS:-2000}"     # 修后实测 35–60ms；修前 6085–12154ms
 NEG_MIN_MS="${M312_NEG_MS:-5000}"        # 负控必须超过它（6s 兜底的下沿）
 
@@ -75,8 +83,12 @@ else
 fi
 python3 "$ROOT/selfhost/check_gc_lock_order.py" > "$W/repo.log" 2>&1
 REPO_RC=$?
-VIOL=$(sed -n 's/.*反序违例 \([0-9]*\) 处.*/\1/p' "$W/repo.log" | head -1)
-chk "[1b] 全仓反序违例" "$(num "$VIOL")" "0"
+VIOL=$(sed -n 's/.*反序违例 \([0-9]*\) 处.*/\1/p' "$W/repo.log" 2>/dev/null | head -1)
+if [ -s "$W/repo.log" ]; then
+  chk "[1b] 全仓反序违例" "$(num "$VIOL")" "0"
+else
+  bad "[1b] 守卫输出缺失 ⇒ 不能判绿"
+fi
 [ "$REPO_RC" -eq 0 ] && ok "[1c] 守卫 rc=0" || bad "[1c] 守卫 rc=$REPO_RC：$(head -3 "$W/repo.log" | tr '\n' ' ')"
 
 # 判据自伤（负控 B 的前半）：把解锁规则换掉 ⇒ 自证必须失败
@@ -121,8 +133,12 @@ print(('OK' if (u >= 0 and g >= 0 and u < g) else 'BAD') + ' px_gc_collect (unlo
 if not (u >= 0 and g >= 0 and u < g): bad += 1
 print('ORDERBAD=%d' % bad)
 PY
-OB=$(sed -n 's/.*ORDERBAD=\([0-9]*\).*/\1/p' "$W/order.txt" | head -1)
-chk "[2a] 三个入口顺序违例" "$(num "$OB")" "0"
+OB=$(sed -n 's/.*ORDERBAD=\([0-9]*\).*/\1/p' "$W/order.txt" 2>/dev/null | head -1)
+if [ -s "$W/order.txt" ]; then
+  chk "[2a] 三个入口顺序违例" "$(num "$OB")" "0"
+else
+  bad "[2a] 顺序核对输出缺失 ⇒ 不能判绿"
+fi
 grep -q '^OK .*http_pend_gc_mark' "$W/order.txt" && ok "[2b] http_pend_gc_mark 正序" || bad "[2b] http_pend_gc_mark 顺序不对"
 grep -q '^OK .*px_pxserve_pend_gc_mark' "$W/order.txt" && ok "[2c] px_pxserve_pend_gc_mark 正序" || bad "[2c] px_pxserve_pend_gc_mark 顺序不对"
 
@@ -133,11 +149,14 @@ cp -f "$HERE/load.py" "$W/load.py"
 ( cd "$W" && "$ROOT/tools/px" build srv.px > "$W/build.log" 2>&1 )
 if [ -x "$W/build/srv" ]; then ok "[3a] 构建成功"; else bad "[3a] 构建失败：$(tail -3 "$W/build.log" | tr '\n' ' ')"; fi
 
+SRV_PID=""
 start_srv() {
-  ( cd "$W" && PX_GC_STATS=1 PX_GC_SLOW_MS=100 PX_GC_THRESHOLD=5000 PX_GC_STATS_INTERVAL=0 \
-      nohup ./build/srv "$PORT" 200 > "$W/srv.out" 2> "$W/srv.err" & )
+  ( cd "$W" && exec env PX_GC_STATS=1 PX_GC_SLOW_MS=100 PX_GC_THRESHOLD=5000 PX_GC_STATS_INTERVAL=0 \
+      ./build/srv "$PORT" 200 > "$W/srv.out" 2> "$W/srv.err" ) &
+  SRV_PID=$!
   local i=0
   while [ "$i" -lt 60 ]; do
+    kill -0 "$SRV_PID" 2>/dev/null || return 1
     if python3 - "$PORT" <<'PY' 2>/dev/null
 import socket, sys
 s = socket.socket(); s.settimeout(0.3)
@@ -148,18 +167,48 @@ except Exception:
 finally:
     s.close()
 PY
-    then return 0; fi
+    then
+      # 必须确认监听者就是刚起的这只 PID（端口被别人占着 ⇒ 旧实现会「假就绪」）
+      if command -v ss >/dev/null 2>&1; then
+        ss -lntp 2>/dev/null | grep -q "pid=$SRV_PID," && return 0
+      else
+        return 0
+      fi
+    fi
     sleep 0.2; i=$((i + 1))
   done
   return 1
 }
 stop_srv() {
-  ps -eo pid,args | awk -v p=" $PORT " '$0 ~ /build\/srv/ && index($0, p) {print $1}' | while read -r x; do kill "$x" 2>/dev/null; done
-  sleep 0.5
+  [ -n "${SRV_PID:-}" ] || { sleep 0.2; return 0; }
+  kill "$SRV_PID" 2>/dev/null
+  local i=0
+  while [ "$i" -lt 30 ] && kill -0 "$SRV_PID" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  kill -9 "$SRV_PID" 2>/dev/null
+  wait "$SRV_PID" 2>/dev/null
+  SRV_PID=""
 }
 
 stop_srv
-if [ -x "$W/build/srv" ] && start_srv; then ok "[3b] 强就绪：端口真在监听"; else bad "[3b] 服务未就绪"; fi
+port_busy() { python3 - "$PORT" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket(); s.settimeout(0.3)
+try:
+    s.connect(("127.0.0.1", int(sys.argv[1]))); sys.exit(0)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+if port_busy; then
+  # 只清本门自己的遗留 build/srv；清不掉 ⇒ 本门拒绝出判据（脏测量比红更坏）
+  ps -eo pid,args | awk -v p=" $PORT " '$0 ~ /build\/srv/ && index($0, p) {print $1}' | while read -r x; do kill -9 "$x" 2>/dev/null; done
+  sleep 0.5
+fi
+DIRTY=0
+if port_busy; then bad "[3c] 端口 $PORT 被非本门进程占用 ⇒ 拒绝测量（不拿别人的延迟充数）"; DIRTY=1; fi
+if [ "$DIRTY" = 0 ] && [ -x "$W/build/srv" ] && start_srv; then ok "[3b] 强就绪：端口真在监听（pid=$SRV_PID）"; else bad "[3b] 服务未就绪"; fi
 
 # ── [4] 动态主判据 ──────────────────────────────────────────
 echo "── [4] 动态：3 轮 × 8 并发 keep-alive"
@@ -167,7 +216,7 @@ run_load() {   # $1 = 输出文件
   timeout 40 python3 "$W/load.py" 127.0.0.1 "$PORT" 8 6 > "$1" 2>&1
 }
 WORST=0; SLOWCNT=0
-if [ -x "$W/build/srv" ]; then
+if [ "$DIRTY" = 0 ] && [ -x "$W/build/srv" ]; then
   for r in 1 2 3; do
     : > "$W/srv.err"
     run_load "$W/load.$r.txt"
@@ -179,12 +228,19 @@ if [ -x "$W/build/srv" ]; then
     echo "     第 $r 轮：$(tail -1 "$W/load.$r.txt")  slow>$((100))ms=$SC"
   done
 fi
-if [ "$WORST" -lt "$THRESH_MAX_MS" ]; then
-  ok "[4a] 3 轮最差 max=${WORST}ms < ${THRESH_MAX_MS}ms"
+MEASURED=1
+if [ "${DIRTY:-0}" != 0 ] || [ ! -x "$W/build/srv" ] || [ "$WORST" -le 0 ]; then MEASURED=0; fi
+if [ "$MEASURED" = 0 ]; then
+  bad "[4a] 动态负载未真正跑起来（port_dirty/未构建/max=0）⇒ 不能判绿"
+  bad "[4b] 未测量 ⇒ 不能判绿"
 else
-  bad "[4a] 3 轮最差 max=${WORST}ms >= ${THRESH_MAX_MS}ms（复现了长停顿）"
+  if [ "$WORST" -lt "$THRESH_MAX_MS" ]; then
+    ok "[4a] 3 轮最差 max=${WORST}ms < ${THRESH_MAX_MS}ms"
+  else
+    bad "[4a] 3 轮最差 max=${WORST}ms >= ${THRESH_MAX_MS}ms（复现了长停顿）"
+  fi
+  chk "[4b] 3 轮 >100ms 的 GC 轮次合计" "$SLOWCNT" "0"
 fi
-chk "[4b] 3 轮 >100ms 的 GC 轮次合计" "$SLOWCNT" "0"
 
 # ── [5] 负控 A：撤回 http_pend 5 处顺序 ⇒ 必须复现 ───────────
 echo "── [5] 负控 A（忠实撤回 g_hpend_mu 5 处顺序）"

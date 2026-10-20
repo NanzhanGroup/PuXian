@@ -294,8 +294,8 @@ examples/m311_real_model/run_px.px src=11e6b74d4d06130c rc=0 out=35c06d2b95c53a9
 examples/m312_gc_lock_order/srv.px src=4d72d32f6e4969e6 rc=0 out=b6d3e6e310462461f307062a43817851 err=e3b0c44298fc1c14
 examples/m313_accept_nodelay/cli.px src=0ecba51d9f3b49e3 rc=0 out=8b4dc375eb9398d00f532ee7f9a35838 err=e3b0c44298fc1c14
 examples/m313_accept_nodelay/srv.px src=6e0d512b606b732a rc=0 out=b87d11c1b043c37e8fe5664b71b628ef err=e3b0c44298fc1c14
-examples/m313_mysql_driver/mock_mysql.px src=4dd7e9fd5164ada6 rc=0 out=06371cfe184a1352da670899aaddee21 err=e3b0c44298fc1c14
-examples/m313_mysql_driver/probe.px src=08f1998e9fe5a5a3 rc=0 out=336707b52c97242202c0477e8bafd265 err=e3b0c44298fc1c14
+examples/m313_mysql_driver/mock_mysql.px src=0745809551ea63f6 rc=0 out=d26ad6fef5ea615d327ecea7e7127b65 err=e3b0c44298fc1c14
+examples/m313_mysql_driver/probe.px src=bae9bd0b2174be24 rc=0 out=331c90795d532513b4dad8641272e346 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
