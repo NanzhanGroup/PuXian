@@ -1350,6 +1350,14 @@ jobs:
           bash examples/m314_mysql_err_conn/verify.sh --neg-skip > /tmp/v_m314.log 2>&1 || { echo "❌ m314_mysql_err_conn 门失败（ERR 包保连接 / 致命码废连接）"; grep -E '^(  ❌|     |      )' /tmp/v_m314.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           tail -3 /tmp/v_m314.log
 
+      - name: Python 数值栈 — m315 装置可复现的硬前提（numpy/onnx 钉版本）
+        # 门内 [1] 重跑生成器要 onnx、[2] 数值对拍要 numpy。版本必须与装置生成时一致：
+        # numpy 影响 float32 舍入、onnx 影响 protobuf 序列化 ⇒ 换版本会让「装置漂移」假红。
+        # 缺模块时门会**判红**（不 SKIP）—— 主判据缺工具等于没有判据。
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check 'numpy==2.0.2' 'onnx==1.19.1'
+          python3 -c 'import numpy, onnx; print("numpy", numpy.__version__, "onnx", onnx.__version__)'
+
       - name: m315_onnx_ort_kernel（MatMulInteger 真值方向：规范 ⇄ PuXian ⇄ onnxruntime · M315 · 缺陷 533 收尾）
         # 立论：把第三方实现当真值，会把正确的实现记成缺陷（缺陷 533 就是这么来的）。
         # 判据：① 装置可复现（重跑生成器逐字节比对 · 防手改装置）
