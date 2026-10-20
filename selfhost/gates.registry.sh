@@ -1644,4 +1644,10 @@ run m313_accept_nodelay bash examples/m313_accept_nodelay/verify.sh
 #   本门复用 m313 的 mock 服务端，验「ERR 包保连接 / 致命码废连接 / ping 超时关连接」。
 #   负控 A 撤回分流 ⇒ 必须复现半山报障形态；负控 B 让致命码表失效 ⇒ 1053 不得再关。
 run m314_mysql_err_conn bash examples/m314_mysql_err_conn/verify.sh
+# ── M315：MatMulInteger(u8s8) 的**真值方向**（缺陷 533 收尾）──
+#   M311 拿 onnxruntime 当真值，把 ORT kernel 的 0.477 误差记成我们的数值缺陷；
+#   M314 侦察钉死偏差全在 ORT 侧（PuXian ⇄ 绕开该 kernel 的等价子图 = 5e-6）。
+#   本门守三件：① 装置可复现（重跑生成器逐字节比对）② **PuXian ⇄ 规范真值逐位一致**
+#   （CI 上就能跑，不需要 onnxruntime）③ ORT ⇄ 规范的**双向登记**（true 的哪天不偏离了就判红）。
+run m315_onnx_ort_kernel bash examples/m315_onnx_ort_kernel/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test

@@ -1,0 +1,196 @@
+{
+ "op": "MatMulInteger",
+ "dtype_pair": "u8s8",
+ "truth_source": "ONNX 规范定义，逐元素整数累加（gen_devices.py::ref_manual）",
+ "devices": [
+  {
+   "name": "mmi_k3_ortbad",
+   "K": 3,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 114,
+   "b_zero_point": 0,
+   "A_has_gt127": true,
+   "note": "⭐ 实测确定触发 ORT 偏差（错 [0,3] 一个元素 · 差 660 · 跨 session 10/10 稳定）",
+   "expect_ort_diverge": true,
+   "A_hex": "bc9801d94a41",
+   "B_hex": "24e2019beb39cba15e5287f4",
+   "truth": [
+    [
+     -8756,
+     -9320,
+     11733,
+     -9728
+    ],
+    [
+     -58,
+     -9388,
+     8152,
+     -6015
+    ]
+   ]
+  },
+  {
+   "name": "mmi_k3_hi",
+   "K": 3,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 114,
+   "b_zero_point": 0,
+   "A_has_gt127": true,
+   "note": "生产形态 · A 含 >127 · K=3（本数据**不触发** ORT 偏差 —— 证明它是数据依赖的）",
+   "expect_ort_diverge": null,
+   "A_hex": "bc9801d94a41",
+   "B_hex": "01fe03fcfb06f90809f60bf4",
+   "truth": [
+    [
+     -1133,
+     1210,
+     -1287,
+     1364
+    ],
+    [
+     -138,
+     44,
+     50,
+     -144
+    ]
+   ]
+  },
+  {
+   "name": "mmi_k3_lo",
+   "K": 3,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 114,
+   "b_zero_point": 0,
+   "A_has_gt127": false,
+   "note": "对照：A 全 ≤127 · K=3",
+   "expect_ort_diverge": false,
+   "A_hex": "283401114a41",
+   "B_hex": "01fe03fcfb06f90809f60bf4",
+   "truth": [
+    [
+     -781,
+     906,
+     -1031,
+     1156
+    ],
+    [
+     -338,
+     444,
+     -550,
+     656
+    ]
+   ]
+  },
+  {
+   "name": "mmi_k8_hi",
+   "K": 8,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 114,
+   "b_zero_point": 0,
+   "A_has_gt127": true,
+   "note": "A 含 >127 · K=8（本数据不触发）",
+   "expect_ort_diverge": null,
+   "A_hex": "c8c9cacbcccdcecfff80818283848586",
+   "B_hex": "01fe03fcfb06f90809f60bf40df20ff0ef12ed1415ea17e8e71ae51c1de21fe0",
+   "truth": [
+    [
+     2378,
+     -2556,
+     2734,
+     -2912
+    ],
+    [
+     608,
+     -768,
+     928,
+     -1088
+    ]
+   ]
+  },
+  {
+   "name": "mmi_k8_lo",
+   "K": 8,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 114,
+   "b_zero_point": 0,
+   "A_has_gt127": false,
+   "note": "对照：A 全 ≤127 · K=8",
+   "expect_ort_diverge": false,
+   "A_hex": "6465666768696a6b7f00010203040506",
+   "B_hex": "01fe03fcfb06f90809f60bf40df20ff0ef12ed1415ea17e8e71ae51c1de21fe0",
+   "truth": [
+    [
+     -222,
+     244,
+     -266,
+     288
+    ],
+    [
+     -2720,
+     2816,
+     -2912,
+     3008
+    ]
+   ]
+  },
+  {
+   "name": "mmi_k16_hi",
+   "K": 16,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 128,
+   "b_zero_point": -7,
+   "A_has_gt127": true,
+   "note": "A 含 >127 · K=16 · a_zp=128 b_zp=-7（本数据**触发** ORT 偏差）",
+   "expect_ort_diverge": true,
+   "A_hex": "82838485868788898a8b8c8d8e8f9091fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0",
+   "B_hex": "8386898c8a8d90939194979a989b9ea19fa2a5a8a6a9acafadb0b3b6b4b7babdbbbec1c4c2c5c8cbc9cccfd2d0d3d6d9d7dadde0dee1e4e7e5e8ebeeeceff2f5",
+   "truth": [
+    [
+     -7576,
+     -7120,
+     -6664,
+     -6208
+    ],
+    [
+     -127616,
+     -121880,
+     -116144,
+     -110408
+    ]
+   ]
+  },
+  {
+   "name": "mmi_k1_hi",
+   "K": 1,
+   "M": 2,
+   "N": 4,
+   "a_zero_point": 100,
+   "b_zero_point": 0,
+   "A_has_gt127": true,
+   "note": "边界：K=1（ORT 正确 —— 单元素无向量化路径）",
+   "expect_ort_diverge": false,
+   "A_hex": "c8ff",
+   "B_hex": "8386898c",
+   "truth": [
+    [
+     -12500,
+     -12200,
+     -11900,
+     -11600
+    ],
+    [
+     -19375,
+     -18910,
+     -18445,
+     -17980
+    ]
+   ]
+  }
+ ]
+}

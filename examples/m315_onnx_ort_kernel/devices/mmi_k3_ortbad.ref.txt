@@ -1,0 +1,2 @@
+OUT Y dtype=int32 shape=[2, 4]
+HEX ccddffff98dbffffd52d000000daffffc6ffffff54dbffffd81f000081e8ffff

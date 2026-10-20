@@ -1,0 +1,2 @@
+IN A dtype=uint8 shape=[2, 1] hex=c8ff
+IN B dtype=int8 shape=[1, 4] hex=8386898c

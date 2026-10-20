@@ -1,0 +1,2 @@
+IN A dtype=uint8 shape=[2, 16] hex=82838485868788898a8b8c8d8e8f9091fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0
+IN B dtype=int8 shape=[16, 4] hex=8386898c8a8d90939194979a989b9ea19fa2a5a8a6a9acafadb0b3b6b4b7babdbbbec1c4c2c5c8cbc9cccfd2d0d3d6d9d7dadde0dee1e4e7e5e8ebeeeceff2f5

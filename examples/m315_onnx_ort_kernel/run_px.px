@@ -1,0 +1,31 @@
+# M315 · MatMulInteger 装置执行器（一个装置一次运行，全部参数经 env 注入 —— 不写死任何路径/数据）
+#   输入：M315_MODEL / M315_A_HEX / M315_B_HEX / M315_M / M315_K / M315_N
+#   输出：DIMS ... / HEX <int32 小端>
+# 为什么要 env 注入：门要跑 6 个装置，把数据写进源码就得生成 6 份探针（易漂移）；
+#   同时「不写死绝对路径」是 M311 立的规矩（换机器不静默测错对象）。
+let mp = env("M315_MODEL")
+let ah = env("M315_A_HEX")
+let bh = env("M315_B_HEX")
+let em = env("M315_M")
+let ek = env("M315_K")
+let en = env("M315_N")
+if mp == null or ah == null or bh == null or em == null or ek == null or en == null:
+    print("ENV-MISSING")
+    exit(8)
+let M = int(em)
+let K = int(ek)
+let N = int(en)
+let m = onnx_model_open(mp)
+if m["ok"] != true:
+    print("OPEN-FAIL " + str(m["error"]))
+    exit(9)
+let r = onnx_run(m["id"], {
+  "A": {"dims": [M, K], "dtype": "uint8", "data": hex_to_bytes(ah)},
+  "B": {"dims": [K, N], "dtype": "int8", "data": hex_to_bytes(bh)}
+})
+if r["ok"] != true:
+    print("RUN-FAIL " + str(r["error"]))
+    exit(9)
+let o = r["outputs"]["Y"]
+print("DIMS " + str(o["dims"]))
+print("HEX " + bytes_to_hex(o["data"]))
