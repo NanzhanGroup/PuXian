@@ -271,7 +271,7 @@ raw_tcp() {   # $1=case ⇒ 设置 RAW_HEX / RAW_RC(0=ok)
     if ! grep -q 'M316-CLI-OK' "$clilog"; then
         bad "[raw/$c] 客户端未成功（$(tail -1 "$clilog")）"; return
     fi
-    RAW_PORT="127.0.0.1:$P"
+    RAW_ADDR="127.0.0.1:$P"
     RAW_RC=0
 }
 
@@ -280,7 +280,7 @@ echo "── [3] 动态（TCP 面 · bi_http_request）"
 for c in none host_and_ua host_lower host_empty ua_only post_ct; do
     raw_tcp "$c"
     if [ "$RAW_RC" != 0 ]; then continue; fi
-    if python3 "$HERE/hdrjudge.py" "$RAW_HEX" "tcp:$c" "$RAW_PORT" > "$W/judge.$c.log" 2>&1; then
+    if python3 "$HERE/hdrjudge.py" "$RAW_HEX" "tcp:$c" "$RAW_ADDR" > "$W/judge.$c.log" 2>&1; then
         ok "[3/$c] Host/UA 各恰 1 条且值正确"
     else
         bad "[3/$c] 判据红：$(grep -E 'FAIL' "$W/judge.$c.log" | head -3 | tr '\n' ' ')"
@@ -390,7 +390,7 @@ h = bytes.fromhex(sys.argv[1]).decode('latin-1').split('\r\n\r\n')[0].split('\r\
 print(sum(1 for l in h if l.split(':')[0].strip().lower() == 'host'))
 " "$RAW_HEX")
             chk "[6.3] 撤回档下 Host 条数 = 2（= 复现缺陷 550）" "$CNT" "2"
-            if python3 "$HERE/hdrjudge.py" "$RAW_HEX" "tcp:host_and_ua" "$RAW_PORT" > "$W/neg_judge.log" 2>&1; then
+            if python3 "$HERE/hdrjudge.py" "$RAW_HEX" "tcp:host_and_ua" "$RAW_ADDR" > "$W/neg_judge.log" 2>&1; then
                 bad "[6.4] 撤回档下判据竟然绿了（判据没牙）"
             else
                 ok "[6.4] 撤回档下判据判红（判据有牙）"
@@ -410,7 +410,7 @@ print(sum(1 for l in h if l.split(':')[0].strip().lower() == 'host'))
     done
     # 还原后必须回到绿（否则说明还原不彻底，后续门会看到坏态）
     raw_tcp host_and_ua
-    if [ "$RAW_RC" = 0 ] && python3 "$HERE/hdrjudge.py" "$RAW_HEX" "tcp:host_and_ua" "$RAW_PORT" > "$W/back_judge.log" 2>&1; then
+    if [ "$RAW_RC" = 0 ] && python3 "$HERE/hdrjudge.py" "$RAW_HEX" "tcp:host_and_ua" "$RAW_ADDR" > "$W/back_judge.log" 2>&1; then
         ok "[6.6] 还原后恢复到绿（修复态可复现）"
     else
         bad "[6.6] 还原后仍红 —— 还原不彻底"
