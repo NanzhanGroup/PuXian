@@ -1650,4 +1650,10 @@ run m314_mysql_err_conn bash examples/m314_mysql_err_conn/verify.sh
 #   本门守三件：① 装置可复现（重跑生成器逐字节比对）② **PuXian ⇄ 规范真值逐位一致**
 #   （CI 上就能跑，不需要 onnxruntime）③ ORT ⇄ 规范的**双向登记**（true 的哪天不偏离了就判红）。
 run m315_onnx_ort_kernel bash examples/m315_onnx_ort_kernel/verify.sh
+# ── M316：HTTP 客户端把 Host / User-Agent **发了两遍**（缺陷 550）──
+#   晨曦生产实证：反代把调用方 Host 带进 headers，运行时又补一条内部 Host ⇒ 两条 Host
+#   ⇒ nginx / Go 反代直接 400（被误当成「后端故障」），连接池复用率归零。
+#   缺陷面三处（bi_http_request · bi_http_unix · sse_cli_connect_slot 的 Host 漏判）；
+#   判据只看**线上字节**（原始请求头 hex），负控撤回 ⇒ 双 Host 必须复现。
+run m316_http_dup_host bash examples/m316_http_dup_host/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test

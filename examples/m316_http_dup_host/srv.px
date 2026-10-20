@@ -1,0 +1,56 @@
+# M316 门 · 语料（服务端）：把收到的**原始请求字节**按十六进制吐出来
+# ------------------------------------------------------------
+# 为什么输出 hex 而不是文本：判据要看「Host 头恰好几条」，而文本里的 \r\n
+#   在日志/终端/管道里会被改写或吞掉 ⇒ hex 是唯一**无损**的观察面。
+# 为什么要累积读：TCP 是字节流，一次 read 不保证拿到完整请求头（M276 实测过）。
+
+var PORT = 19531
+let _p = env("M316_PORT")
+if _p != null:
+    if _p != "":
+        PORT = int(_p)
+
+# 接受多少条连接（默认 1；门按 case 逐条起服务，确定性最好）
+var N = 1
+let _n = env("M316_N")
+if _n != null:
+    if _n != "":
+        N = int(_n)
+
+# 读到 \r\n\r\n 为止，返回十六进制串（"0d0a0d0a" = 空行）
+def read_head_hex(c):
+    var hx = ""
+    var rounds = 0
+    while rounds < 400:
+        let b = read(c, 4096)
+        if type(b) != "bytes":
+            break
+        let bn = bytes_len(b)
+        if bn == 0:
+            break
+        hx = hx + bytes_to_hex(b)
+        if contains(hx, "0d0a0d0a"):
+            break
+        rounds += 1
+    return hx
+
+let lst = tcp_listen(PORT)
+if lst <= 0:
+    print("M316-SRV-FAIL listen")
+    exit(1)
+print("M316-SRV-READY " + str(PORT))
+
+var i = 0
+while i < N:
+    let c = tcp_accept(lst)
+    if c <= 0:
+        print("M316-SRV-ACCEPT-FAIL")
+        exit(1)
+    let hx = read_head_hex(c)
+    print("M316-RAW " + str(i) + " " + hx)
+    write(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+    close(c)
+    i += 1
+
+print("M316-SRV-DONE")
+close(lst)

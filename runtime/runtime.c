@@ -17668,16 +17668,85 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
 
 // M84-S1（Issue 23）：extra_headers（"K: V\r\n" 逐行拼接）中是否已含指定头名——行首匹配、
 // 大小写不敏感（避免 strcasestr 子串误伤 "X-Content-Type" 之类）；用于 CT/CL 判定解耦。
-static int px_extra_hdr_has(const char* extra_headers, const char* name) {
+// M316（缺陷 550）：取「逐行拼接的请求头块」（"K: V\r\n"）里指定头名的值。
+//   返回：1 = 存在且值非空（值去首尾空白后写入 out）
+//         2 = 存在但值为空/全空白
+//         0 = 不存在
+//   为什么必须区分 1 与 2：调用方写 `Host: `（空值）时**不能**因此发出一个空 Host
+//   —— HTTP/1.1 要求 Host 非空，发空的比不发更糟 ⇒ 视作「未提供」，仍用运行时内部值。
+//   配对语义（与 strncasecmp 一致）：头名大小写不敏感、必须顶着冒号（`X-Content-Type`
+//   不会被当成 `Content-Type`）。
+static int px_hdr_val(const char* headers, const char* name, char* out, size_t cap) {
+    if (out && cap) out[0] = 0;
+    if (!headers || !*headers) return 0;
     size_t nl = strlen(name);
-    const char* p = extra_headers;
+    const char* p = headers;
     while (*p) {
-        if (strncasecmp(p, name, nl) == 0 && p[nl] == ':') return 1;
+        if (strncasecmp(p, name, nl) == 0 && p[nl] == ':') {
+            const char* v = p + nl + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            const char* e = v;
+            while (*e && *e != '\r' && *e != '\n') e++;
+            while (e > v && (e[-1] == ' ' || e[-1] == '\t')) e--;
+            size_t len = (size_t)(e - v);
+            if (len == 0) return 2;
+            if (out && cap) {
+                size_t n = len < cap - 1 ? len : cap - 1;
+                memcpy(out, v, n); out[n] = 0;
+            }
+            return 1;
+        }
         const char* eol = strstr(p, "\r\n");
         if (!eol) break;
         p = eol + 2;
     }
     return 0;
+}
+
+static int px_extra_hdr_has(const char* extra_headers, const char* name) {
+    // M316：与 px_hdr_val 共用一份判定（存在即真，含空值 —— 保持 M84-S1 的既有语义，
+    //   即「调用方写了 Content-Type: （空）⇒ 不补默认 CT」）。
+    return px_hdr_val(extra_headers, name, NULL, 0) != 0;
+}
+
+// M316（缺陷 550 · 第二步）：把调用方请求头块逐行拷进 dst，**丢弃「运行时自管头 + 值全空白」的行**。
+//   为什么剔除整行而不只是「不发内部头」：`Host: ` 空值本身在协议上就是脏数据
+//   （HTTP/1.1 的 Host 必须非空；空 Host 能让严格服务端直接 400）——与「发两条 Host」
+//   是同一个后果。值非空的行一律原样保留（那是调用方意图）。
+//   自管清单 = 运行时自己会按需补发的那几个头；Connection 刻意不在内（不动连接池语义）。
+//   返回写入字节数；dst 不足即停止拷贝（保守截断，绝不越界）。
+static int px_hdr_copy_clean(const char* src, char* dst, size_t cap) {
+    static const char* OWNED[] = { "Host", "User-Agent", "Content-Type", "Content-Length", "Transfer-Encoding" };
+    const int nowned = (int)(sizeof(OWNED) / sizeof(OWNED[0]));
+    if (!src || !*src || cap == 0) return 0;
+    int off = 0;
+    const char* p = src;
+    while (*p) {
+        const char* eol = strstr(p, "\r\n");
+        size_t linelen = eol ? (size_t)(eol - p) + 2 : strlen(p);
+        int drop = 0;
+        for (int i = 0; i < nowned; i++) {
+            size_t nl = strlen(OWNED[i]);
+            if (strncasecmp(p, OWNED[i], nl) == 0 && p[nl] == ':' && linelen > nl + 1) {
+                const char* v = p + nl + 1;
+                const char* e = p + linelen;
+                while (v < e && (*v == ' ' || *v == '\t')) v++;
+                const char* t = v;
+                while (t < e && *t != '\r' && *t != '\n') t++;
+                while (t > v && (t[-1] == ' ' || t[-1] == '\t')) t--;
+                if (t == v) drop = 1;
+                break;
+            }
+        }
+        if (!drop) {
+            if (off + (int)linelen >= (int)cap) break;
+            memcpy(dst + off, p, linelen);
+            off += (int)linelen;
+        }
+        if (!eol) break;
+        p = eol + 2;
+    }
+    return off;
 }
 
 // http_request(url, method, body?, headers?) → dict{status, headers, body}
@@ -17775,10 +17844,25 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     char key[300];
     snprintf(key, sizeof(key), "%s:%d", host, port);
     char req[16384];
-    int rlen = snprintf(req, sizeof(req),
-        "%s %s HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: keep-alive\r\n",
-        method, req_target, host, port);
-    if (extra_headers[0]) { memcpy(req + rlen, extra_headers, strlen(extra_headers)); rlen += (int)strlen(extra_headers); }
+    // M316（缺陷 550）：Host / User-Agent 也按「调用方自备则不重复发」处理。
+    //   修前只有 Content-Type / Content-Length 走 px_extra_hdr_has，Host 与 UA 是无条件写
+    //   ⇒ 调用方在 headers 里带 Host（虚拟主机 / 反代场景）就得到**两条 Host**
+    //   ⇒ 严格的服务端直接 400（晨曦生产实证：/api/reg/ 7 次、/.well-known/… 5 次被当成
+    //   「后端故障」），且连接池复用率归零。
+    //   空值语义见 px_hdr_val：`Host: ` 视作未提供（不发空 Host）。
+    int rlen;
+    {
+        char hv[512];
+        if (px_hdr_val(extra_headers, "Host", hv, sizeof(hv)) == 1)
+            rlen = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\n", method, req_target);
+        else
+            rlen = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s:%d\r\n", method, req_target, host, port);
+    }
+    if (px_hdr_val(extra_headers, "User-Agent", NULL, 0) != 1)
+        rlen += snprintf(req + rlen, sizeof(req) - rlen, "User-Agent: PuXian/0.1\r\n");
+    rlen += snprintf(req + rlen, sizeof(req) - rlen, "Connection: keep-alive\r\n");
+    // M316：净化拷贝（丢弃自管头的空值行 + 带边界）
+    if (extra_headers[0]) rlen += px_hdr_copy_clean(extra_headers, req + rlen, sizeof(req) - (size_t)rlen);
     if (body) {
         // M84-S1（Issue 23）：CT 与 CL 判定解耦——调用方已带 Content-Type 则不再补默认表单头
         // （修复带 CT 无 CL → 双 Content-Type，腾讯云等严服务端拒收）；默认 urlencoded 仅
@@ -17987,10 +18071,20 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     char req[16384];
-    int rlen = snprintf(req, sizeof(req),
-        "%s %s HTTP/1.1\r\nHost: localhost\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n",
-        method, url_path);
-    if (extra_headers[0]) { memcpy(req + rlen, extra_headers, strlen(extra_headers)); rlen += (int)strlen(extra_headers); }
+    // M316（缺陷 550）：同 bi_http_request —— 调用方自备非空 Host / User-Agent 时不重复发
+    int rlen;
+    {
+        char hv[512];
+        if (px_hdr_val(extra_headers, "Host", hv, sizeof(hv)) == 1)
+            rlen = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\n", method, url_path);
+        else
+            rlen = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: localhost\r\n", method, url_path);
+    }
+    if (px_hdr_val(extra_headers, "User-Agent", NULL, 0) != 1)
+        rlen += snprintf(req + rlen, sizeof(req) - rlen, "User-Agent: PuXian/0.1\r\n");
+    rlen += snprintf(req + rlen, sizeof(req) - rlen, "Connection: close\r\n");
+    // M316：净化拷贝（同 bi_http_request）
+    if (extra_headers[0]) rlen += px_hdr_copy_clean(extra_headers, req + rlen, sizeof(req) - (size_t)rlen);
     if (body) {
         // M84-S1（Issue 23）：同 bi_http_request——CT 与 CL 解耦，单头语义（http_unix 客户端）
         if (!px_extra_hdr_has(extra_headers, "Content-Type"))
@@ -22742,19 +22836,8 @@ static const char* sse_hdr_get(const char* hstr, const char* name, int* len) {
 //   用途：调用方自己要发 User-Agent/Accept/Cache-Control/Connection 时，运行时不再重复发一条
 //   （重复头在真实上游上是脏数据；Go 的 Header.Set 语义是"覆盖"）。
 static int sse_req_hdr_has(int slot, const char* name) {
-    const char* h = g_sse_clients[slot].req_headers;
-    if (!h || !*h) return 0;
-    int nl = (int)strlen(name);
-    const char* p = h;
-    while (*p) {
-        const char* eol = strstr(p, "\r\n");
-        const char* end = eol ? eol : (p + strlen(p));
-        const char* colon = (const char*)memchr(p, ':', (size_t)(end - p));
-        if (colon && (int)(colon - p) == nl && strncasecmp(p, name, (size_t)nl) == 0) return 1;
-        if (!eol) break;
-        p = eol + 2;
-    }
-    return 0;
+    // M316：改走 px_hdr_val（一条语义一份实现；行为等价 —— 存在即真，含空值）
+    return px_hdr_val(g_sse_clients[slot].req_headers, name, NULL, 0) != 0;
 }
 
 // M137：把 pending（已按 chunked/identity 解码）拷进失败响应体缓冲（二进制安全）
@@ -22905,7 +22988,16 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     else if (has_port) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
     else snprintf(hosthdr, sizeof(hosthdr), "%s", host);
     const char* method = (g_sse_clients[slot].method[0] != 0) ? g_sse_clients[slot].method : "GET";
-    int rl = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, hosthdr);
+    // M316（缺陷 550）：M137 只把「按需发」做在 User-Agent/Accept/Connection/Cache-Control 上，
+    //   Host 是无条件写 ⇒ 同族（调用方给 Host 就得到两条）。这里补上。
+    int rl;
+    {
+        char hval[512];
+        if (px_hdr_val(g_sse_clients[slot].req_headers, "Host", hval, sizeof(hval)) == 1)
+            rl = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\n", method, path);
+        else
+            rl = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, hosthdr);
+    }
     // M137：默认头**按需**发 —— 调用方（opts.headers）自备同名头时不再重复发一条。
     if (!sse_req_hdr_has(slot, "User-Agent"))
         rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "User-Agent: PuXian/0.1\r\n");
@@ -22916,9 +23008,8 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     if (!sse_req_hdr_has(slot, "Cache-Control"))
         rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Cache-Control: no-cache\r\n");
     if (g_sse_clients[slot].req_headers && rl > 0 && rl < (int)sizeof(req)) {
-        int need = (int)strlen(g_sse_clients[slot].req_headers);
-        if (rl + need < (int)sizeof(req))
-            rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "%s", g_sse_clients[slot].req_headers);
+        // M316：净化拷贝（丢弃自管头空值行 + 带边界；修前是 snprintf "%s" 整块追加）
+        rl += px_hdr_copy_clean(g_sse_clients[slot].req_headers, req + rl, sizeof(req) - (size_t)rl);
     }
     if (last_event_id && *last_event_id) {
         rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Last-Event-ID: %s\r\n", last_event_id);
