@@ -13,6 +13,9 @@
 > **M313 新增**：`mysql.patch`（`registry/mysql/{0.1.0,0.2.0}`）—— 上游同版本驱动的握手偏移（536）、
 > CONNECT_WITH_DB 位（537）、读无界（538）、IO 出错不留半连接（540）；半山真 MariaDB 实测
 > Bad handshake 的根因全在上游代码里，上游未发版 ⇒ 走补丁通道（详见 `docs/MYSQL_DRIVER.md`）。
+> **M314 补**：`mysql.patch` 扩到 proto.px（ERR 包 ⇄ IO 错的分类原语）+ `my_conn_bad` 分流（缺陷 541）；
+> 另加 **`mysql@0.2.0.patch`**（仅 0.2.0 · ping / select_db 失败路径收口 · 缺陷 542）——
+> 按版本寻址（`<name>@<ver>.patch`），因为 0.1.0 没有这两个 API，打进通用补丁会锚点失配。
 > 纪律：本列非空 ⇒ 补丁文件必须在（且每个文件必须至少在一行登记）；**「上游 + 补丁 == 我方」是判据**
 > （m282 门 [7]），不是豁免。
 > 复核：`bash examples/m187_registry_import/verify.sh` 会**重算**下表 sha256 与磁盘对拍（防漂移）。
@@ -141,8 +144,8 @@
 | mqtt | 0.2.0 | 1 | `f3b50e3684fc5f11` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | msgpack | 0.1.0 | 1 | `152ea2b5b642509a` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | msgpack | 0.2.0 | 1 | `815f7bcc9c18a634` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
-| mysql | 0.1.0 | 3 | `ea5d7890def654ef` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | **本地就地更新**（M313：握手偏移 / CONNECT_WITH_DB / 读超时 / IO 错即关连接 · 上游同版本未发版） | 补丁：`mysql.patch` |
-| mysql | 0.2.0 | 3 | `11bd1b114ac0c1ef` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | **本地就地更新**（M313：同上四处 · 随 0.1.0 同口径） | 补丁：`mysql.patch` |
+| mysql | 0.1.0 | 3 | `b2a199c1ce323024` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | **本地就地更新**（M313：握手偏移 / CONNECT_WITH_DB / 读超时 / IO 错即关连接 · M314：服务器 ERR 包不废连接 · 上游同版本未发版） | 补丁：`mysql.patch` |
+| mysql | 0.2.0 | 3 | `8385b6011a7fe328` | 文件完整 · 测试需**真实服务端**（PG13 / MariaDB） | **本地就地更新**（M313：同上四处 · M314：ERR 包分流 + ping/select_db 失败路径收口） | 补丁：`mysql.patch`,`mysql@0.2.0.patch` |
 | nanoid | 0.1.0 | 1 | `2439558272e9c6b0` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | nanoid | 0.2.0 | 1 | `aa59a66d907b50ea` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 新引入 |  |
 | natsort | 0.1.0 | 1 | `7272ac004a76b6c0` | **双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |

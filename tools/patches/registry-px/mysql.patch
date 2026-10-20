@@ -1,5 +1,5 @@
 # ============================================================
-# 本地补丁：registry/mysql/{0.1.0,0.2.0}/mysql.px（MySQL 客户端驱动）
+# 本地补丁：registry/mysql/{0.1.0,0.2.0}/mysql.px + proto.px（MySQL 客户端驱动）
 # ------------------------------------------------------------
 # 为什么有这个补丁（M313，第 184 轮 · 缺陷 536/537/538/540）：
 #   半山 2026-10-19 总线实测「真 MariaDB 无法建连（Bad handshake）+ 协议错位后
@@ -13,16 +13,27 @@
 #            write_timeout_ms 可单独覆盖，0 = 无限，恢复旧行为）；
 #     540  IO 出错后继续复用「协议已错位」的 fd ⇒ 新增 my_conn_bad / my_conn_check，
 #          query / stmt 面对 IO 错即刻关连接并标记（不留半连接态）。
-#   上游同版本尚未修 ⇒ 走 M189 补丁通道（tools/patches/registry-px/<name>.patch）。
-#   实测：mock 服务端门 44/0（CI 档 38/0），三道负控各自判红。
 #
-# 补丁为两版本共用的同一份差异（0.1.0 与 0.2.0 的这些函数逐字节同形）；
-# 0.2.0 尾段新增 API（ping / select_db / begin / commit / rollback）未包含——
-# 它们与 0.1.0 无对应锚点，打进同一 patch 会让 0.1.0 打不上（M314 待办：
-# 补丁通道按版本寻址后，再给 0.2.0 尾段 API 补「IO 错即关」）。
+# M314（第 185 轮 · 缺陷 541/542）—— 半山 2026-10-20 总线【缺陷提单】：
+#     541  服务器 **ERR 包 ≠ IO 错**：一条写错的 SQL（1046/1054/1062…）服务器回
+#          ERR 包（包完整、seq 对齐、连接健康），M313 却把它也 tcp_close ⇒
+#          「一条错 SQL 废掉整条连接」，应用必须自己重连兜底。
+#          修法：my_conn_bad 先分流 —— my_err_is_server(what) 且码不在致命表
+#          ⇒ 只返回 Err、**保留连接**；致命码（1053/1927/3169/4031/2006/2013）仍关。
+#          分类原语放在 proto.px：MY_ERR_PREFIX（唯一来源）/ my_err_is_server /
+#          my_err_code / my_err_fatal。
+#     542  mysql_ping / mysql_select_db 的**失败路径**只 return Err、既不关连接
+#          也不置 fd=-1 ⇒ my_conn_check 仍判「健康」，调用方拿一根已错位的 fd
+#          继续用（比原 bug 更难查）⇒ 两处收口到 my_conn_bad。
 #
-# 上游修复后撤销本补丁即可（删本文件 + 跑一次
-# tools/import_registry_px.sh --src <检出> --apply，THIRD_PARTY.md 的补丁列会自己空掉）。
+# 补丁分两份（M314：按版本寻址 —— <name>.patch 打全部版本，<name>@<ver>.patch 只打该版本）：
+#   mysql.patch          两版本共用（def 默认参 / 读超时 / soff / CONNECT_WITH_DB /
+#                        my_conn_bad 分流 / proto.px 的错误分类原语）
+#   mysql@0.2.0.patch    仅 0.2.0（ping / select_db 收口 —— 0.1.0 没有这两个 API，
+#                        打进同一份会让 0.1.0 的锚点失配）
+#
+# 上游修复后撤销本补丁即可（删这两个文件 + 跑一次
+#   tools/import_registry_px.sh --src <检出> --apply，THIRD_PARTY.md 的补丁列会自己空掉）。
 # ============================================================
 --- mysql.px
 +++ mysql.px
@@ -94,7 +105,7 @@
          payload = bytes_concat(payload, bytes(dbname + chr(0)))
      payload = bytes_concat(payload, bytes(plugin + chr(0)))
      var seq2 = seq + 1
-@@ -307,42 +330,92 @@
+@@ -307,42 +330,101 @@
      return Ok({"fd": fd, "seq": aseq, "host": host, "port": port,
                 "user": user, "dbname": dbname, "plugin": plugin})
  
@@ -102,7 +113,16 @@
 +#   为什么：超时 / EOF 之后协议已错位（读到半个包），继续复用该连接只会**读错位数据**
 +#   （与 Go database/sql 的处置一致：IO 错误 ⇒ 该连接作废、下次重连）。
 +#   ⚠️ 不能只返回 Err —— 那样调用方会拿着一根「看似正常、实已错位」的 fd 继续用。
++#
++# ---- M314（半山）：**服务器 ERR 包 ≠ IO 错** ----
++#   一条写错的 SQL（1046 表不存在 / 1054 未知列 / 1062 重复键 …）服务器会回一个
++#   ERR 包：包完整、seq 对齐、**连接健康**，只是本条语句失败 ⇒ 修前无差别地把它
++#   也 tcp_close，等于「一条错 SQL 废掉整条连接」（应用必须自己重连兜底）。
++#   分流判据：my_err_is_server(what) 且码不在致命表 ⇒ 只返回 Err、连接保留。
++#   致命码（1053/1927/3169/4031/2006/2013）仍关 —— 那些码表示「这条连接不能再用」。
 +def my_conn_bad(conn, what):
++    if my_err_is_server(what) and not my_err_fatal(my_err_code(what)):
++        return Err(what)
 +    var fd = conn["fd"]
 +    if type(fd) == "int" and fd >= 0:
 +        tcp_close(fd)
@@ -194,3 +214,70 @@
      # COM_QUIT (0x01)
      # COM_QUIT 尽力而为，忽略发送错误
      var rq = my_send_packet(conn["fd"], 0, bytes(chr(1)))
+--- proto.px
++++ proto.px
+@@ -6,6 +6,11 @@
+ # 语言缺陷规避：同 mysql.px 头部说明。
+ # ============================================================
+ 
++# M314：服务器 ERR 包消息的固定前缀（**全文件唯一来源**）
++#   声明在文件顶部：my_err_message 与 my_err_is_server 都读它，
++#   避免「先读后声明」（缺陷 193）。
++var MY_ERR_PREFIX = "mysql err "
++
+ # ---- 内部：字节/字符串小工具 ----
+ # MySQL wire protocol：数字一律小端。
+ # 编码：int_to_bytes(v, n, "little") 双模式可靠（已实测）
+@@ -132,7 +137,51 @@
+         off += 1
+         off += 5
+     var msg = bytes_to_str(bytes_slice(payload, off, bytes_len(payload)))
+-    return "mysql err " + str(code) + ": " + msg
++    return MY_ERR_PREFIX + str(code) + ": " + msg
++
++# ---- M314（半山）：区分「服务器 ERR 包」与「IO 错」----
++#   服务器 ERR 包 = **本条语句**失败：包完整、seq 对齐、连接健康 ⇒ 保留连接；
++#   IO 错 = 流已错位（读到半个包）⇒ 必须废连接。
++#   判据只认本文件自己造的固定前缀（**唯一来源**）—— 格式若变，只改这一处，
++#   门里的静态判据会「格式串 ⇄ 前缀」对拍，改了不同步就判红。
++
++def my_err_is_server(msg):
++    if type(msg) != "string":
++        return false
++    return msg.find(MY_ERR_PREFIX) == 0
++
++# "mysql err <code>: <msg>" → code；不是服务器 ERR 包 ⇒ -1
++def my_err_code(msg):
++    if not my_err_is_server(msg):
++        return -1
++    var b = bytes(msg)
++    var i = len(MY_ERR_PREFIX)
++    var n = 0
++    var got = 0
++    while i < bytes_len(b):
++        var c = bytes_get(b, i)
++        if c < 48 or c > 57:
++            break
++        n = n * 10 + (c - 48)
++        got += 1
++        i += 1
++    if got == 0:
++        return -1
++    return n
++
++# 致命码：服务器明确表示「这条连接不能再用」（其余码 ⇒ 连接仍可复用）
++def my_err_fatal(code):
++    # 1053 ER_SERVER_SHUTDOWN             服务器正在关闭
++    # 1927 ER_CONNECTION_KILLED           KILL <id> 掉
++    # 3169 ER_SESSION_WAS_KILLED          会话被 KILL（8.0）
++    # 4031 ER_CLIENT_INTERACTION_TIMEOUT  服务端空闲超时已断开（8.0.24+）
++    if code == 1053 or code == 1927 or code == 3169 or code == 4031:
++        return true
++    # 2006/2013 是**客户端**错误码（正常不会以 ERR 包下发），
++    # 但 ProxySQL 一类中间件会 ⇒ 一并按致命处理
++    if code == 2006 or code == 2013:
++        return true
++    return false
+ 
+ # OK 包解析 → 命令影响行数等
+ def my_ok_result(payload):

@@ -96,10 +96,12 @@ chk "[1] 补丁**通道**仍保留（引入器 = M187+M189 补丁逻辑）" "gre
 # ⚠️ 抽成函数是为了**给判据加牙**（NC-E：对**同一份逻辑**注入一个未登记的补丁文件 ⇒ 必须判红）。
 patch_col_audit() {   # $1=表文件（默认 $PROV） $2=补丁目录（默认 tools/patches/registry-px）
     local P="${1:-$PROV}" D="${2:-tools/patches/registry-px}"
-    # 登记面 = 表行里「补丁：`x.patch`」列抽出的**名字集合**（只看表行 `^|`，**不看**文件头部的说明文字）
-    NPAT_ROW=$(grep -cE '\| 补丁：`[^`]+\.patch` \|$' "$P")
+    # 登记面 = 表行「补丁：…」列抽出的**名字集合**（只看表行 `^|`，**不看**文件头部的说明文字）
+    # ⚠️ M314：一个包可以有**多个**补丁（按版本寻址：`mysql.patch,mysql@0.2.0.patch`）
+    #   ⇒ 行的形状判据放宽为「补丁列以 .patch 结尾」，名字抽取仍逐个反引号取。
+    NPAT_ROW=$(grep -cE '\| 补丁：.*\.patch` \|$' "$P")
     NPAT_EMPTY=$(grep -cE '\|  \|$' "$P")
-    NPAT_LIST="$(grep '^|' "$P" | grep -oE '\| 补丁：`[^`]+\.patch` \|' | grep -oE '`[^`]+\.patch`' | tr -d '`' | sort -u)"
+    NPAT_LIST="$(grep '^|' "$P" | grep -oE '\| 补丁：[^|]*\.patch` \|' | grep -oE '`[^`]+\.patch`' | tr -d '`' | sort -u)"
     NPAT_FILE=$(ls "$D"/*.patch 2>/dev/null | wc -l)
     NPAT_MISS=0
     for b in $NPAT_LIST; do

@@ -334,7 +334,16 @@ def mysql_finish_connect(fd, aseq, host, port, user, dbname, plugin):
 #   为什么：超时 / EOF 之后协议已错位（读到半个包），继续复用该连接只会**读错位数据**
 #   （与 Go database/sql 的处置一致：IO 错误 ⇒ 该连接作废、下次重连）。
 #   ⚠️ 不能只返回 Err —— 那样调用方会拿着一根「看似正常、实已错位」的 fd 继续用。
+#
+# ---- M314（半山）：**服务器 ERR 包 ≠ IO 错** ----
+#   一条写错的 SQL（1046 表不存在 / 1054 未知列 / 1062 重复键 …）服务器会回一个
+#   ERR 包：包完整、seq 对齐、**连接健康**，只是本条语句失败 ⇒ 修前无差别地把它
+#   也 tcp_close，等于「一条错 SQL 废掉整条连接」（应用必须自己重连兜底）。
+#   分流判据：my_err_is_server(what) 且码不在致命表 ⇒ 只返回 Err、连接保留。
+#   致命码（1053/1927/3169/4031/2006/2013）仍关 —— 那些码表示「这条连接不能再用」。
 def my_conn_bad(conn, what):
+    if my_err_is_server(what) and not my_err_fatal(my_err_code(what)):
+        return Err(what)
     var fd = conn["fd"]
     if type(fd) == "int" and fd >= 0:
         tcp_close(fd)

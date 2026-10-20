@@ -9,6 +9,13 @@
 # 用法：
 #   watch_chain.sh <里程碑号> <门日志> --pid <门PID> [--times t.tsv]
 #                  [--runner run_gates.sh] [--no-push] [--dry]
+#                  [--tier auto|serial|shard] [--tier-base REF] [--tier-stamp FILE] [--overdue-days N]
+# 档位（M314 · 用户令 A）：
+#   auto（默认）⇒ 交 `packaging/chain/pick_gate_tier.sh` 从 git 语义面派生：
+#       runtime/*.c|h ∪ selfhost/*.px ∪ tools/*.px 命中 ⇒ SERIAL；否则 SHARD。
+#   SERIAL 且 GREEN ⇒ 写时间戳（--tier-stamp，默认 /tmp/.puxian_last_serial_gate.stamp），
+#       `--overdue-days N` 据此做周期性复核（距上次串行档超 N 天 ⇒ 强制 SERIAL）。
+#   ⚠️ 判定失败 ⇒ **按 SERIAL 跑**（宁可慢，不可漏）。
 # 行为：
 #   GREEN        ⇒ resolve-topic m<N> · make_tag --milestone N --push（默认）· p0
 #   RED          ⇒ p1 m<N>-red（挂 p1 即**唤醒**东月 —— 见下方 v2/v3 说明）
@@ -38,20 +45,50 @@ N="${1:-}"; LOG="${2:-}"
 [ -n "$N" ] && [ -n "$LOG" ] || {
     echo "用法：watch_chain.sh <里程碑号> <门日志> --pid <门PID> [--times t.tsv]" >&2
     echo "      [--runner run_gates.sh] [--no-push] [--dry]" >&2
+    echo "      [--tier auto|serial|shard] [--tier-base REF] [--tier-stamp FILE] [--overdue-days N]" >&2
     exit 4
 }
 shift 2
 PID=""; TIMES=""; RUNNER="selfhost/run_gates.sh"; TAGPUSH=1; DRY=0
+# M314（用户令 A）：档位 —— 语义面改动（runtime/*.c|h · selfhost/*.px · tools/*.px）⇒ SERIAL，
+#   否则 SHARD（分片档 + 逐门对拍）。判定交给 pick_gate_tier.sh（唯一判据来源）。
+TIERMODE="auto"; TIER_STAMP="${TIER_STAMP:-/tmp/.puxian_last_serial_gate.stamp}"
+TIER_OVERDUE_DAYS="${TIER_OVERDUE_DAYS:-0}"; TIER_BASE="${TIER_BASE:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --pid)     PID="${2:-}"; shift 2 ;;
         --times)   TIMES="${2:-}"; shift 2 ;;
         --runner)  RUNNER="${2:-}"; shift 2 ;;
+        --tier)    TIERMODE="${2:-auto}"; shift 2 ;;
+        --tier-stamp) TIER_STAMP="${2:-}"; shift 2 ;;
+        --overdue-days) TIER_OVERDUE_DAYS="${2:-0}"; shift 2 ;;
+        --tier-base) TIER_BASE="${2:-}"; shift 2 ;;
         --no-push) TAGPUSH=0; shift ;;
         --dry)     DRY=1; shift ;;
         *) echo "未知参数: $1" >&2; exit 4 ;;
     esac
 done
+
+# ── ① 档位（M314 · 用户令 A · 2026-10-19）───────────────────────────
+#   用户原话：「常规发布走分片档（~98min），串行权威档只在改了 runtime/编译器的轮次跑一次」。
+#   判据不是「里程碑序号」，而是**改没改语义面**（pick_gate_tier.sh 从 git diff 派生）。
+#   ⚠️ 判定失败 ⇒ **按 SERIAL 跑**（宁可慢，不可漏）；这是唯一允许的保守回落方向。
+TIER=""; TIER_REASON=""
+case "$TIERMODE" in
+    serial) TIER="SERIAL"; TIER_REASON="人工指定（--tier serial）" ;;
+    shard)  TIER="SHARD";  TIER_REASON="人工指定（--tier shard）" ;;
+    auto)
+        if TOUT="$(bash packaging/chain/pick_gate_tier.sh --base "$TIER_BASE" --overdue-days "$TIER_OVERDUE_DAYS" --stamp "$TIER_STAMP" 2>/dev/null)"; then
+            TIER="$(printf '%s\n' "$TOUT" | awk -F= '/^GATE-TIER=/{print $2; exit}')"
+            TIER_REASON="$(printf '%s\n' "$TOUT" | awk '/^GATE-REASON=/{sub(/^GATE-REASON=/,""); print; exit}')"
+        else
+            TIER="SERIAL"; TIER_REASON="档位判定失败（pick_gate_tier rc≠0）⇒ 保守取 SERIAL"
+        fi
+        ;;
+    *) echo "未知 --tier 值：$TIERMODE（auto|serial|shard）" >&2; exit 4 ;;
+esac
+[ -n "$TIER" ] || { TIER="SERIAL"; TIER_REASON="档位为空 ⇒ 保守取 SERIAL"; }
+printf '档位：%s（%s）\n' "$TIER" "$TIER_REASON"
 
 N_BIN="$(command -v dy-notify.sh 2>/dev/null || true)"
 [ -n "$N_BIN" ] || N_BIN="$(command -v /usr/local/sbin/dy-notify.sh 2>/dev/null || true)"
@@ -148,6 +185,10 @@ VERD="$(printf '%s\n' "$OUT" | awk '/^VERDICT=/{sub(/^VERDICT=/,""); print; exit
 case "$VERD" in
 GREEN)
     notify resolve-topic "m$N"
+    # M314：串行权威档跑完 ⇒ 记时间戳（pick_gate_tier 的 --overdue-days 靠它判周期性复核）
+    if [ "$TIER" = "SERIAL" ]; then
+        if [ "$DRY" = 1 ]; then printf '   [dry] date +%%s > %s\n' "$TIER_STAMP"; else date +%s > "$TIER_STAMP" 2>/dev/null || true; fi
+    fi
     if [ "$TAGPUSH" = 1 ]; then
         if [ "$DRY" = 1 ]; then
             printf '   [dry] make_tag --milestone %s --push\n' "$N"
@@ -157,7 +198,7 @@ GREEN)
             }
         fi
     fi
-    notify p0 "M$N 全量门绿 · 已推 main + tag v0.2.$N" "裁决：$VERD（多路一致）"
+    notify p0 "M$N 全量门绿 · 已推 main + tag v0.2.$N" "裁决：$VERD（多路一致）· 档位：$TIER（$TIER_REASON）"
     ;;
 RED)
     RL="$(printf '%s\n' "$OUT" | awk '/^  红门：/{sub(/^  红门：/,""); print}')"

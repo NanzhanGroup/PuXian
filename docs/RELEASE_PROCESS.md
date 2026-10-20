@@ -364,6 +364,44 @@ GH_TOKEN=$(cat /data/pat.md) packaging/release_reconcile.sh --limit 12 --rerun  
 - 豁免表过期判据：若某条豁免的 tag **就是最新的版本 tag** ⇒ 判 `STALE-IGNORE`（最新必须有发布）
 - 门：`examples/m278_release_reconcile/verify.sh`（离线自证 30/0 + 静态判据 + 负控）
 
+## 全量门档位：SERIAL / SHARD（M314 · 用户令 A）
+
+> 用户令（2026-10-19）：「常规发布走分片档（~98min），串行权威档只在**改了 runtime / 编译器**
+> 的轮次跑一次做周期性复核。」
+
+**判据由代码派生，不靠人工记忆**（`packaging/chain/pick_gate_tier.sh`）：
+
+| 语义面 | 命中 ⇒ | 未命中 ⇒ |
+|---|---|---|
+| `runtime/*.c` `runtime/*.h` · `selfhost/*.px` · `tools/*.px` | **SERIAL**（逐门权威档） | **SHARD**（分片档 + 逐门对拍） |
+
+```bash
+bash packaging/chain/pick_gate_tier.sh              # 输出 GATE-TIER / GATE-REASON / GATE-HITS
+bash packaging/chain/pick_gate_tier.sh --self-test  # 自证 7/0（含 3 个历史区间 + 非法 ref rc=3）
+```
+
+**为什么语义面只算这三处**：`runtime/*.c` 决定运行时语义；`selfhost/*.px` 是编译器/解释器本体；
+`tools/*.px` 是 `px` CLI 的行为（`px build` 本身在三轨对拍链上）。改门、改打包、改文档、
+改 `registry/*.px`（库）都**不**改变这三者的语义 ⇒ 分片档 + 逐门对拍足以保证判据强度不降。
+
+**纪律四条**：
+1. **判定失败 ⇒ SERIAL**（宁可慢，不可漏）—— 这是唯一允许的保守回落方向；
+   取不到 ref 时 `pick_gate_tier.sh` 回 **rc=3** 且 `GATE-TIER=` 为空，**绝不静默选档**。
+2. 走 SHARD 的轮次**必须**与串行基线逐门对拍（`shard_verdict.py`；红门/缺失/多余/状态不一致
+   任一非零即 RED）。对拍结论要留档。
+3. `watch_chain.sh --tier auto`（默认）会把档位写进 p0 通知；**SERIAL 且 GREEN** 时写时间戳
+   `/tmp/.puxian_last_serial_gate.stamp`。
+4. `--overdue-days N`：距上次串行档超 N 天 ⇒ **强制 SERIAL**（周期性复核兜底；
+   默认 0 = 关闭，建议发布链传 14）。
+
+**实测对照**（说明这条规则省了什么）：
+- `v0.2.310..v0.2.311`（M311 只改门/工具/registry/打包）⇒ SHARD：串行档实测 9526s ≈ 2.6h ⇒ 分片档 ≈ 98min
+- `v0.2.311..v0.2.312`（M312 改 `runtime.c`+`coro.c`）⇒ SERIAL
+- `v0.2.312..v0.2.313`（M313 改 `runtime_conn.c`）⇒ SERIAL
+
+⚠️ **分片档不保证 98 分钟**：M311 实测 5896s（超 5400s 判据 9.2%，已定位到单次扰动）。
+常态轮次 ≈ 98min，大改动轮次 100min 上下 —— **不为凑时间放宽判据**（红线）。
+
 ## 发布前核对清单
 
 - [ ] `main` 已含待发代码并推送（工作区干净）
@@ -372,6 +410,8 @@ GH_TOKEN=$(cat /data/pat.md) packaging/release_reconcile.sh --limit 12 --rerun  
 - [ ] 本地先跑一次 `tools/make_release.sh` 确认冒烟全 PASS（避免 workflow 白跑）
 - [ ] 本地全量门无红：`./selfhost/run_gates.sh`（本地含负控；旧名 `m116_gates.sh` 仍可用 = 兼容转发）
       · 迭代期可用 `--only <门名表>` / `--fail-fast` 快速验回归（**发布前必须跑全量**）
+      · **档位**（M314）：先跑 `packaging/chain/pick_gate_tier.sh` —— 语义面命中 ⇒ SERIAL（串行权威档）；
+        未命中 ⇒ SHARD（分片档，**必须**与串行基线逐门对拍）。判定失败 ⇒ 按 SERIAL 跑。
 - [ ] CHANGELOG 已记录本版变更（含每轮缺陷编号与验证证据）
 - [ ] 打 tag 前 `git log --oneline <上一tag>..HEAD` 确认入版范围符合预期
 - [ ] 打完 tag 后：**CI / Release / Tag Guard 三个 run 全绿**，且 Release 资产齐全

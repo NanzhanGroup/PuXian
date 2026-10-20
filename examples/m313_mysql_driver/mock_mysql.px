@@ -17,7 +17,9 @@
 # 用法：./mock_mysql <port> <mode>
 #   mode = ok           正常握手 + 应答
 #   mode = silent       接受连接后**什么都不发**（用于验证客户端**握手期**读超时有界）
-#   mode = silent_after 握手正常，但**查询不回**（用于验证查询超时后**不留半连接**）
+#   mode = silent_after 握手正常，但**查询与心跳都不回**（验证查询/ping 超时后**不留半连接**）
+#   mode = errcase      握手正常；"SELECT bad" ⇒ ERR 1054（连接健康）、"SELECT fatal" ⇒ ERR 1053
+#                       （连接作废）、"SELECT ok1"/"SELECT ok2" ⇒ OK（M314：验 ERR 包不废连接）
 # ============================================================
 var MK_USER = "pxuser"
 var MK_PASS = "px_secret_456"
@@ -222,21 +224,50 @@ def main():
             break
         if cmd == 3:
             var sql = bytes_to_str(bytes_slice(p, 1, bytes_len(p)))
-            # silent_after：只应答握手后的 USE，之后的查询一律**不回**（用来验客户端读超时 + 不留半连接）
+            # silent_after：只应答握手后的 USE，之后的查询/心跳一律**不回**
+            #   （用来验客户端读超时 + 不留半连接）
             if mode == "silent_after" and sql.find("USE ") != 0:
                 print("MOCK-QUERY-SILENT sql=" + sql)
                 flush()
                 sleep(30000)
                 break
-            var aff = 0
-            if sql == "SELECT 1":
-                aff = 7
-                queried = 1
-            var _s = tcp_send_ex(fd, mk_ok(aff, 1))
-            print("MOCK-QUERY sql=" + sql + " affected=" + str(aff))
+            # errcase（M314）：服务器**只让本条语句失败**的 ERR 包 vs 表示连接不能再用
+            if mode == "errcase" and sql == "SELECT bad":
+                var _e = tcp_send_ex(fd, mk_err(1054, "Unknown column 'no_such_col' in 'field list'", 1))
+                print("MOCK-QUERY-ERR sql=" + sql + " code=1054")
+                flush()
+            elif mode == "errcase" and sql == "SELECT fatal":
+                var _f = tcp_send_ex(fd, mk_err(1053, "Server shutdown in progress", 1))
+                print("MOCK-QUERY-ERR sql=" + sql + " code=1053")
+                flush()
+            else:
+                var aff = 0
+                if sql == "SELECT 1":
+                    aff = 7
+                    queried = 1
+                if sql == "SELECT ok1":
+                    aff = 1
+                if sql == "SELECT ok2":
+                    aff = 2
+                var _s = tcp_send_ex(fd, mk_ok(aff, 1))
+                print("MOCK-QUERY sql=" + sql + " affected=" + str(aff))
+                flush()
+        elif cmd == 2:
+            # COM_INIT_DB（M314：select_db 的动态覆盖）
+            var dbn = bytes_to_str(bytes_slice(p, 1, bytes_len(p)))
+            var _db = tcp_send_ex(fd, mk_ok(0, 1))
+            print("MOCK-SELECTDB db=" + dbn)
             flush()
         elif cmd == 14:
+            # silent_after：心跳也静默（M314：验 ping 的 IO 失败分支是否关连接）
+            if mode == "silent_after":
+                print("MOCK-PING-SILENT")
+                flush()
+                sleep(30000)
+                break
             var _p = tcp_send_ex(fd, mk_ok(0, 1))
+            print("MOCK-PING-OK")
+            flush()
         else:
             var _u = tcp_send_ex(fd, mk_err(1047, "unsupported command", 1))
     tcp_close(fd)

@@ -1341,6 +1341,15 @@ jobs:
           bash examples/m313_mysql_driver/verify.sh --neg-skip > /tmp/v_m313.log 2>&1 || { echo "❌ m313_mysql_driver 门失败（握手 / token 对拍 / 读超时）"; grep -E '^(  ❌|     |        )' /tmp/v_m313.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           tail -3 /tmp/v_m313.log
 
+      - name: m314_mysql_err_conn（mysql 驱动「服务器 ERR 包 ⇄ IO 错」分流 · M314 · 缺陷 541/542）
+        # 判据：静态（分类原语 / 前缀单源 / 分流先于 tcp_close / ping·select_db 收口）
+        #       + 动态（mock MySQL：SELECT bad ⇒ ERR 1054 **不**关连接、同一连接继续可用；
+        #              SELECT fatal ⇒ ERR 1053 关连接；ping 超时 ⇒ 关连接不留半连接）。
+        # 负控 A（撤回分流）要重建探针 ⇒ CI 用 --neg-skip；权威档在本机全量门。
+        run: |
+          bash examples/m314_mysql_err_conn/verify.sh --neg-skip > /tmp/v_m314.log 2>&1 || { echo "❌ m314_mysql_err_conn 门失败（ERR 包保连接 / 致命码废连接）"; grep -E '^(  ❌|     |      )' /tmp/v_m314.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          tail -3 /tmp/v_m314.log
+
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
