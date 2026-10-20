@@ -12,12 +12,15 @@
 #     ② 数值面：与 onnxruntime 1.19.2 逐字节输出对拍 ⇒ 记录 max/mean 绝对误差与相关系数；
 #     ③ 漂移面：**在同一台机器、同一模型、同一输入**下，误差不得比登记基线恶化 25%。
 #
-#   ⚠️ **如实登记（缺陷 533）**：当前 PuXian 与 onnxruntime 的输出**并非逐位一致**
-#      （max abs err 0.477 / mean 0.066 / 相关系数 0.975，量级 ≈ int8 量化噪声在 12 层上的累积）。
-#      判别实验证明**不是注意力/掩码**问题：seq=1（注意力退化）仍然偏离
-#      （max 0.136 / mean 0.032 / corr 0.990）⇒ 病灶在共享路径（量化矩阵乘族）。
-#     因此本门**不声称等价**，只声称「结构正确 + 确定性 + 非退化 + 不恶化」，
-#      并把「与 onnxruntime 精确对齐」列为下一轮主项（M312）。
+#   ⚠️ **口径已修正（M315 · 缺陷 533 收尾）**：
+#      M311 当时把「PuXian ⇄ onnxruntime」的 0.477 记成了我们的数值缺陷，并做了判别实验
+#      排除注意力/掩码（seq=1 仍偏 0.136）—— 方向对了，但当时**没找到真正来源**。
+#      M314 侦察钉死：那 0.477 **全部来自 onnxruntime 的 MatMulInteger(u8s8) kernel**
+#      （把真模型 72 个该算子换成等价子图绕开 kernel 后，ORT 与自己相差 max 0.477362，
+#        与 M311 记录逐位吻合；而 PuXian ⇄ 改写后 ORT 只差 5e-6）。
+#      ⇒ 本门主判据改为 **PuXian ⇄ 可信真值（truth_bge_fixed.npy）≤ 1e-4**，
+#        「与 ORT 原始比」降为**辅判据**（保留回归守护，不再是等价性的依据）。
+#      最小装置与触发条件见 examples/m315_onnx_ort_kernel/ 与 docs/ONNX_ORT_KERNEL.md。
 #
 # 前提（缺失时**响亮 SKIP**，不装作绿）：
 #   · 真模型：env `M311_MODEL`，默认 /data/app/ws/models/embed/model.onnx
@@ -77,6 +80,13 @@ fi
 hdr "[1] 静态"
 [ -f "$HERE/run_px.px" ] && ok "探针 run_px.px 在位" || bad "缺 run_px.px"
 [ -f "$HERE/baseline.tsv" ] && ok "数值基线 baseline.tsv 在位" || bad "缺 baseline.tsv"
+# M315：可信真值（绕开 ORT bug kernel 的等价子图输出）—— **主判据**的前提，缺了就没法判方向
+TRUTH="$HERE/truth_bge_fixed.npy"
+if [ -f "$TRUTH" ]; then
+    ok "可信真值 truth_bge_fixed.npy 在位（$(stat -c %s "$TRUTH") 字节）"
+else
+    bad "缺可信真值 truth_bge_fixed.npy —— 主判据 [A] 无法成立（见 docs/ONNX_ORT_KERNEL.md）"
+fi
 # 探针**不许**写死模型路径（模型路径由 env 注入）—— 写死会在别的机器上静默测错对象
 if grep -qE '^\s*let\s+\w+\s*=\s*onnx_model_open\("/data/' "$HERE/run_px.px" 2>/dev/null; then
     bad "探针里写死了绝对模型路径（必须经 env M311_MODEL 注入）"
@@ -121,8 +131,8 @@ else
 fi
 
 # ── [4] 数值对拍（量出来，不猜）──────────────────────────────
-hdr "[4] 数值对拍（PuXian ⇄ onnxruntime）"
-if PYTHONPATH="$ORT_HOME" python3 "$HERE/compare.py" "$W/px1.out" "$W/ref.out" "$HERE/baseline.tsv" > "$W/cmp.out" 2>&1; then
+hdr "[4] 数值对拍（主：PuXian ⇄ 可信真值 ／ 辅：PuXian ⇄ onnxruntime 原始）"
+if PYTHONPATH="$ORT_HOME" python3 "$HERE/compare.py" "$W/px1.out" "$W/ref.out" "$TRUTH" "$HERE/baseline.tsv" > "$W/cmp.out" 2>&1; then
     sed 's/^/  /' "$W/cmp.out"
     PASS=$((PASS+1))
 else
@@ -144,16 +154,54 @@ else
     bad "负控构造失败（sed 没有命中输入行）"
 fi
 
-# ── [5b] 负控：判据自伤（漂移判据必须有牙）────────────────────
-#   把基线改成「误差必须 < 0.001」⇒ 同一份输出**必须判红**；
-#   否则 compare.py 的漂移判据就是个摆设（M209/M213 的口径：负控要证明红来自该判据）。
-hdr "[5b] 负控：漂移判据自伤（收紧基线 ⇒ 必须判红）"
-printf 'max_abs_err\t0.001\nmean_abs_err\t0.001\n' > "$W/tight.tsv"
-if PYTHONPATH="$ORT_HOME" python3 "$HERE/compare.py" "$W/px1.out" "$W/ref.out" "$W/tight.tsv" > "$W/tight.log" 2>&1; then
-    bad "基线收紧到 0.001 后**仍然判绿** ⇒ 漂移判据没有牙"
+# ── [5b] 负控 A：篡改可信真值 ⇒ 主判据 [A] 必须判红 ──────────────
+#   主判据换成了「PuXian ⇄ 可信真值」，那它的牙在哪必须自己证明：
+#   动一个元素（+0.5，远大于 1e-4 阈值）⇒ [A] 必须红。否则 [A] 就是个摆设。
+hdr "[5b] 负控 A：篡改可信真值一个元素 ⇒ 主判据 [A] 必须判红"
+python3 - "$TRUTH" "$W/truth_bad.npy" <<'PY'
+import sys
+import numpy as np
+a = np.load(sys.argv[1]).astype(np.float32).ravel().copy()
+a[0] = np.float32(a[0] + 0.5)          # 远超 1e-4 阈值
+np.save(sys.argv[2], a.reshape(np.load(sys.argv[1]).shape))
+PY
+if PYTHONPATH="$ORT_HOME" python3 "$HERE/compare.py" "$W/px1.out" "$W/ref.out" "$W/truth_bad.npy" "$HERE/baseline.tsv" > "$W/neg_a.log" 2>&1; then
+    bad "篡改真值后主判据**仍然判绿** ⇒ [A] 层没有牙"
 else
-    grep -q '\[漂移\] max_abs_err' "$W/tight.log" && ok "收紧基线 ⇒ 漂移判据判红（有牙）" \
-        || bad "判红了但不是漂移判据造成的（见 $W/tight.log）"
+    grep -q '\[A\] 真值判据' "$W/neg_a.log" && grep -q '❌ max_abs_err' "$W/neg_a.log" \
+        && ok "篡改真值 ⇒ [A] 判红（判据有牙）" \
+        || bad "判红了但不是 [A] 造成的（见 $W/neg_a.log）"
+fi
+
+# ── [5c] 负控 B：漂移判据有牙（收紧基线 ⇒ [B] 必须判红）───────────
+#   把基线改成「误差必须 < 0.001」⇒ 同一份输出**必须**在 [B] 段判红；
+#   否则 [B] 就是个摆设（M209/M213 的口径：负控要证明红来自该判据）。
+hdr "[5c] 负控 B：收紧基线 ⇒ 辅判据 [B] 必须判红"
+printf 'max_abs_err\t0.001\nmean_abs_err\t0.001\n' > "$W/tight.tsv"
+if PYTHONPATH="$ORT_HOME" python3 "$HERE/compare.py" "$W/px1.out" "$W/ref.out" "$TRUTH" "$W/tight.tsv" > "$W/tight.log" 2>&1; then
+    bad "基线收紧到 0.001 后**仍然判绿** ⇒ [B] 层没有牙"
+else
+    grep -q '\[B\] 漂移判据' "$W/tight.log" && grep -q '❌ max_abs_err' "$W/tight.log" \
+        && ok "收紧基线 ⇒ [B] 判红（有牙）" \
+        || bad "判红了但不是 [B] 造成的（见 $W/tight.log）"
+fi
+
+# ── [5d] 负控 C：真值文件与生产模型对不上 ⇒ 自洽判据必须判红 ──────
+#   [A] 的绿只有在「真值文件确实是为这个模型/输入生成的」时才有意义。
+#   把真值整体乘 0 ⇒ ORT 自身误差变成 1.0 开外 ⇒ 自洽层必须红（而不是静默绿）。
+hdr "[5d] 负控 C：真值文件被换成全 0 ⇒ 自洽判据必须判红"
+python3 - "$TRUTH" "$W/truth_zero.npy" <<'PY'
+import sys
+import numpy as np
+a = np.load(sys.argv[1])
+np.save(sys.argv[2], np.zeros_like(a))
+PY
+if PYTHONPATH="$ORT_HOME" python3 "$HERE/compare.py" "$W/px1.out" "$W/ref.out" "$W/truth_zero.npy" "$HERE/baseline.tsv" > "$W/neg_c.log" 2>&1; then
+    bad "真值全 0 后**仍然判绿** ⇒ 自洽判据没有牙（[A] 的绿可能无意义）"
+else
+    grep -q '真值文件可能已过期或输入不符' "$W/neg_c.log" \
+        && ok "真值全 0 ⇒ 自洽判据判红（[A] 的绿有前提保证）" \
+        || bad "判红了但不是自洽判据造成的（见 $W/neg_c.log）"
 fi
 
 # ── [6] 覆盖边界 ────────────────────────────────────────────
@@ -162,9 +210,13 @@ cat <<'EOF'
   · 只验 seq=4 单批单条输入；不验多批 / 变长 / padding 行为。
   · 只验这一个 int8 量化模型（生产 embedding 用）；fp32 模型与其它架构不在面内。
   · onnxruntime 版本钉 1.19.2（/opt/fw）；版本变了要重新登记基线（数值面可能整体位移）。
-  · **数值面不声称等价**：当前 max abs err 0.477 / mean 0.066 / corr 0.975（缺陷 533），
-    本门只判「不恶化 25%」；精确对齐是 M312 的主项。
-  · CI 档无 onnxruntime ⇒ 数值面 SKIP（静态层仍跑）；权威覆盖在本地全量门（M311_REQUIRE_ORT=1）。
+  · **主判据 [A] 的绿有前提**：真值文件 truth_bge_fixed.npy 必须是为**这个模型 + 这份输入**
+    生成的。反过来，对参考实现的回归守护由 [B] 段（漂移 +25%）承担 —— 它拿的是**同一个
+    onnxruntime**，所以永远看不到"ORT 自己变了"。**别靠 [B] 判断 ORT 是否已修复。**
+  · ORT kernel 的触发面（u8u8 / s8s8 / 高维 / 批量维）**不在本门** —— 见
+    examples/m315_onnx_ort_kernel/（那里有最小装置与双向登记核对）。
+  · CI 档无 onnxruntime 与 102MB 生产模型 ⇒ 数值面 SKIP（静态层仍跑，含真值文件在位检查与
+    探针不写死路径）。权威覆盖在本地全量门（M311_REQUIRE_ORT=1）。
 EOF
 
 echo ""

@@ -1350,6 +1350,18 @@ jobs:
           bash examples/m314_mysql_err_conn/verify.sh --neg-skip > /tmp/v_m314.log 2>&1 || { echo "❌ m314_mysql_err_conn 门失败（ERR 包保连接 / 致命码废连接）"; grep -E '^(  ❌|     |      )' /tmp/v_m314.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           tail -3 /tmp/v_m314.log
 
+      - name: m315_onnx_ort_kernel（MatMulInteger 真值方向：规范 ⇄ PuXian ⇄ onnxruntime · M315 · 缺陷 533 收尾）
+        # 立论：把第三方实现当真值，会把正确的实现记成缺陷（缺陷 533 就是这么来的）。
+        # 判据：① 装置可复现（重跑生成器逐字节比对 · 防手改装置）
+        #       ② **PuXian ⇄ 规范真值逐位一致**（7 装置 · 不需要 onnxruntime ⇒ CI 也能跑）
+        #       ③ ORT ⇄ 规范的**双向登记**（true 必须偏离 / false 必须一致 / null 不断言）
+        #       ④ 负控 A（篡改真值 ⇒ ② 必红且指名）+ B（判据自伤 ⇒ 红消失）
+        # CI 无 onnxruntime ⇒ ③ 层响亮 SKIP 并打印原因（② 层不受影响）。负控要重编探针 ⇒ --neg-skip。
+        run: |
+          bash examples/m315_onnx_ort_kernel/verify.sh --neg-skip > /tmp/v_m315.log 2>&1 || { echo "❌ m315_onnx_ort_kernel 门失败（PuXian 与规范真值不一致 / 装置漂移）"; grep -E '^(  ❌|     )' /tmp/v_m315.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅|^  ℹ️' /tmp/v_m315.log | tail -14
+          echo "✅ m315_onnx_ort_kernel（7 装置 · PuXian ⇄ 规范逐位一致 · ORT 双向登记 · 装置可复现）PASS"
+
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
