@@ -46,6 +46,20 @@ echo "══ M315 · MatMulInteger(u8s8) 真值方向（规范 ⇄ PuXian ⇄ on
 # ── [0] 前提 ──────────────────────────────────────────────────────────
 hdr "[0] 前提"
 [ -x "$PX" ] && ok "tools/px 可执行" || { bad "tools/px 缺失：$PX"; echo "M315-VERIFY-FAIL"; exit 1; }
+# numpy/onnx 是本门的**硬前提**（[1] 重跑生成器要 onnx、[2] 数值对拍要 numpy）。
+# 缺模块不是 SKIP 而是 FAIL —— 这两条腿就是本门的主判据，缺工具等于没有判据。
+# CI 侧由 ci.yml 的「m315 前提」步骤显式安装且**钉版本**（与装置生成时一致）：
+#   numpy 影响 float32 舍入、onnx 影响 protobuf 序列化，换版本会让「装置漂移」变成假红。
+miss=""
+python3 -c 'import numpy' >/dev/null 2>&1 || miss="$miss numpy"
+python3 -c 'import onnx'  >/dev/null 2>&1 || miss="$miss onnx"
+if [ -n "$miss" ]; then
+    bad "缺 python3 模块:$miss（[1] 装置可复现 / [2] 数值对拍的前提）"
+    echo "     CI 修法：python3 -m pip install 'numpy==2.0.2' 'onnx==1.19.1'（须与装置生成版本一致）"
+    echo "M315-VERIFY-FAIL"; exit 1
+fi
+ok "python3 数值栈可用（numpy + onnx）"
+
 have_ort=0
 PYTHONPATH="$ORT_HOME" python3 -c 'import onnxruntime' >/dev/null 2>&1 && have_ort=1
 [ "$have_ort" = 1 ] && ok "onnxruntime 可用（$ORT_HOME）· [3] 层会执行" \
