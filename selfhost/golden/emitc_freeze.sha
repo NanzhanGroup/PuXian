@@ -297,6 +297,9 @@ examples/m313_accept_nodelay/srv.px src=6e0d512b606b732a rc=0 out=b87d11c1b043c3
 examples/m313_mysql_driver/mock_mysql.px src=0745809551ea63f6 rc=0 out=d26ad6fef5ea615d327ecea7e7127b65 err=e3b0c44298fc1c14
 examples/m313_mysql_driver/probe.px src=bae9bd0b2174be24 rc=0 out=331c90795d532513b4dad8641272e346 err=e3b0c44298fc1c14
 examples/m315_onnx_ort_kernel/run_px.px src=108555f9a5244ba4 rc=0 out=7648018b9cac55284d0c314558712ce0 err=e3b0c44298fc1c14
+examples/m316_http_dup_host/cli.px src=c1910eced3b0ee5e rc=0 out=05ae36be836b0beb205427248fa3f5b4 err=e3b0c44298fc1c14
+examples/m316_http_dup_host/cli_unix.px src=a31cc9e5350647b5 rc=0 out=8192425fd1691a09e176f97113f503f9 err=e3b0c44298fc1c14
+examples/m316_http_dup_host/srv.px src=7759f505fbd2917f rc=0 out=a9eea7197b042820cba33c692c474679 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

@@ -1,3 +1,107 @@
+## M316 —— 缺陷 550：HTTP 客户端把 Host / User-Agent **发了两遍**（第 188 轮）
+
+**一句话**：调用方在 `headers` 里自备 `Host`（虚拟主机 / 反代场景的**标准**写法）时，
+运行时又无条件补一条内部 Host ⇒ 线上出现**两条 Host** ⇒ nginx / Go 反代 / 云 WAF 直接 400。
+晨曦生产实证：`/api/reg/` 7 次、`/.well-known/ma-cdn-certs/*` 5 次 400，此前被误判成「后端故障」，
+且连接池复用率归零（400 之后连接不可复用）。
+
+### 一 缺陷面（本轮实测确认，**不是**照报障文本抄）
+
+| 位置 | 函数 | 修前 |
+|---|---|---|
+| `runtime.c:17779` | `bi_http_request`（TCP 面） | **Host + User-Agent 都无条件写** |
+| `runtime.c:17991` | `bi_http_unix`（Unix 面） | 同族（**两份独立实现**，M84-S1 当年也是分别加的判据） |
+| `runtime.c:22908` | `sse_cli_connect_slot`（SSE） | User-Agent 自 M137 起已按需发、**Host 漏判** |
+
+根因：M84-S1 把「调用方自备则不重复发」只做在 Content-Type / Content-Length 上。
+⚠️ **正确样例一直在自己代码里** —— `sse_cli_connect_slot` 的四个默认头早就是按需发的
+⇒ 这不是设计取舍，是**漏改**。
+
+⚠️ **更正报障里的一处范围**：报障说「同族 6 处」，但另外三处（`px_s3_exec` /
+`bi_http_get_stream` / `px_http_once`）经核查**不属本缺陷** ——
+它们是内部构造（SigV4 签名 / 无 `headers` 参数 / 重定向跟随），调用方**无法注入**同名头
+⇒ 结构上不可能重复。首轮我按「6 处同族」记过，本轮已改准。
+
+### 二 修法（两条都是「按契约写」，不是打补丁）
+
+**① 新增 `px_hdr_val(headers, name, out, cap)` 三态原语**
+
+| 返回 | 含义 | 行为 |
+|---|---|---|
+| `1` | 存在且值非空 | 用调用方的（不补内部头） |
+| `2` | **存在但值全空白** | 视作**未提供** —— 仍用内部值 |
+| `0` | 不存在 | 用内部值 |
+
+为什么必须区分 `1` 与 `2`：调用方写 `Host: `（空）时**不能**因此发出一个空 Host
+（HTTP/1.1 要求 Host 非空；空 Host 比双 Host 更容易被直接 400）。
+
+**② 新增 `px_hdr_copy_clean()`：把调用方头块逐行净化后拷入**
+
+丢弃「运行时自管头 + 值全空白」的行（自管清单 = Host / User-Agent / Content-Type /
+Content-Length / Transfer-Encoding）；值非空的行**原样保留**（那是调用方意图）。
+顺带修掉三处**无边界检查的 `memcpy`**（修前 `memcpy(req+rlen, extra_headers, strlen(...))`）。
+
+`px_extra_hdr_has` 与 `sse_req_hdr_has` 同时改为走 `px_hdr_val`（**一条语义一份实现**）。
+
+### 三 实测对照（原始请求头，逐字节可比）
+
+| case | 修前 | 修后 |
+|---|---|---|
+| 不传 headers | Host 1 · UA 1 | 同（无回归） |
+| `{"Host":"other.example:8080","User-Agent":"MyClient/9.9"}` | **Host 2 · UA 2** | **Host 1（other.example:8080）· UA 1（MyClient/9.9）** |
+| `{"host":"lower.example"}`（头名小写） | **Host 2** | **Host 1（lower.example）** |
+| `{"Host":" "}`（空值） | **Host 2**（内部 + `Host:  `） | **Host 1（内部）** |
+| `{"User-Agent":"OnlyUA/1.0"}` | **UA 2** | **UA 1（OnlyUA/1.0）** |
+| POST + 自备 Content-Type | Host 1 · CT 1（M84-S1 已对） | 同（回归位） |
+
+Unix socket 面（`bi_http_unix`）四条 case 同款对照（内部 Host = `localhost`）。
+
+### 四 新门 `examples/m316_http_dup_host/`（22 通过 / 0 失败 · `--neg-skip` 档 15/0）
+
+| 层 | 判据 |
+|---|---|
+| [0] | 前置 7 件在场（缺失即判红，不静默跳过） |
+| [1] | 静态 8 组：`px_hdr_val` 三态 + 三处 Host 都过判据 + 净化拷贝 3 处 + **请求行模板里的 Host 恰好 3 处且每处紧邻判据** + 两个 has 走同一实现 + 规模锚点 |
+| [2] | `devbuild pxc`（**用当前源码的 runtime** —— 入库 `bootstrap/pxc` 是旧件；M216 的教训）+ 三语料构建 |
+| [3] | 动态 TCP 6 case ×「**每个头名恰好 1 条**」+ 值正确 |
+| [4] | 动态 Unix 4 case（第二份实现，只修一边会留半条缺陷） |
+| [5] | **判据自证**：合成 hex（单 Host 必绿 / 双 Host 必红 / 双 UA 必红）3/3 |
+| [6] | **负控 A**：忠实撤回三处 ⇒ 编译器与语料**都重建**（前提自证 sha 不同）⇒ **Host 条数 = 2** 复现 + 判据判红 ⇒ 还原 1 后回绿 |
+| [7] | 覆盖边界 6 条（如实） |
+
+**判据只吃线上字节**：服务端把同名头聚合成 list ⇒ 解析后看不到「几条」，
+而真实受害方看的正是原始字节。
+
+### 五 本轮踩到的四个坑（都是「判据自己的错」）
+
+1. **静态判据把修复后的 `else` 分支判红**（首版「含 `Host:` 的请求行模板即红」）⇒ 改成
+   「恰好 3 处 **且** 每处 ±12 行内有 `px_hdr_val`」。
+2. **`body()` 命中前置声明** ⇒ 往后找的第一个 `{` 落在**别的函数**里 ⇒ S2/S3/S4 全假红。
+3. **括号配平没跳过字符串/注释** ⇒ `sse_cli_connect_slot` 体里有含 `{` 的格式串 ⇒ 体被截断
+   ⇒ 明明写了判据却报「未见」。
+4. **负控改了源码却没重建语料** ⇒ 语料是**静态链接**的可执行文件 ⇒ `[6.3]` 报 Host=1
+   「缺陷没复现」的**假绿** ⇒ 加 `[6.2b]` 用负控编译器重建三语料 + `[6.6]` 还原后重建。
+
+### 六 未修（同族，如实登记）
+
+**`Connection` 头仍是运行时无条件发** —— 调用方给 `Connection: close` 时会得到两条。
+不改的理由不是「不重要」，而是改它必须同步**连接池的「这条连接能不能回收」语义**
+（现在运行时恒发 `keep-alive` 并把连接放回池；若尊重调用方的 `close` 就必须不回收）。
+属独立改动，登记为后续候选。
+
+### 七 覆盖边界
+
+- sse 面只做**静态判据**（动态要事件循环 + 长连接抓首包），配 m137 门回归
+- 代理 / TLS 面未单独覆盖（同一段构造代码，只是 `req_target` 形态 / `conn_send` 通道不同）
+- HTTP/2 / HTTP/3 不涉及（客户端只有 HTTP/1.x）
+
+### 八 回归（改了 runtime.c ⇒ 必跑历史上动过同一处的门）
+
+`m109_headers_multi` ✅（vhost 自备 Host 的**核心**回归面）· `m109_s0` ✅ ·
+`m137_sse_connect_ex` ✅（sse 客户端）· `m123_http_conn_alive` ✅（连接池）·
+`m132_sse_chunked` ✅ · `m173_http_proxy` ✅（131s）· `m222_http_body` ✅ ·
+`m140_http_conn_errno` ✅ · `m133_http_unix_timeout` ✅（unix 客户端）
+
 ## M315 —— 缺陷 533 收尾：MatMulInteger 真值方向（规范 ⇄ PuXian ⇄ onnxruntime）+ 判据方向修正（第 187 轮）
 
 **一句话**：M311 把 onnxruntime 当真值，把 ORT kernel 的 0.477 误差记成了**我们的**数值缺陷；

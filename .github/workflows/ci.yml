@@ -1370,6 +1370,19 @@ jobs:
           grep -E '^  ✅|^  ℹ️' /tmp/v_m315.log | tail -14
           echo "✅ m315_onnx_ort_kernel（7 装置 · PuXian ⇄ 规范逐位一致 · ORT 双向登记 · 装置可复现）PASS"
 
+      - name: m316_http_dup_host（HTTP 客户端 Host/UA 重复 · M316 · 缺陷 550）
+        # 立论：**同一个头名出现两次**只能从「线上字节」看见 —— 服务端解析后会把同名头
+        #   聚合成 list，而真实受害方（nginx / Go 反代 / 云 WAF）看到的正是原始字节。
+        # 判据：① 静态（三处 Host 都过 px_hdr_val + 净化拷贝 3 处 + 一条语义一份实现）
+        #       ② 动态 TCP 6 case × 「每个头名恰 1 条」+ 值正确
+        #       ③ 动态 Unix 4 case（bi_http_unix 是第二份实现，只修一边会留半条缺陷）
+        #       ④ 判据自证（合成 hex：单 Host 必绿 / 双 Host 必红）
+        # 负控要重建两次 runtime（约 3 分钟）⇒ CI 用 --neg-skip。
+        run: |
+          bash examples/m316_http_dup_host/verify.sh --neg-skip > /tmp/v_m316.log 2>&1 || { echo "❌ m316_http_dup_host 门失败（Host/UA 重复 · 空值行 · 净化拷贝）"; grep -E '^(  ❌|     )' /tmp/v_m316.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m316.log | tail -8
+          echo "✅ m316_http_dup_host（TCP 6 case + Unix 4 case · 每头名恰 1 条 · 判据自证 3/3）PASS"
+
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

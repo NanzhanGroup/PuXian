@@ -1,0 +1,51 @@
+# M316 门 · 语料（客户端）：按 M316_CASE 选择调用方自备哪些头
+# ------------------------------------------------------------
+# 每个 case 对应一条**用户会真实写出来**的调用：
+#   none          —— 什么都不传（运行时用内部 Host / UA）
+#   host_and_ua   —— 虚拟主机 / 反代场景：调用方指定 Host 与 UA
+#   host_lower    —— 头名小写（HTTP 头名大小写不敏感）
+#   host_empty    —— 传空值 `Host: `（不能因此发出空 Host）
+#   ua_only       —— 只换 UA
+#   post_ct       —— POST + 自备 Content-Type（M84-S1 的回归面）
+
+var PORT = 19531
+let _p = env("M316_PORT")
+if _p != null:
+    if _p != "":
+        PORT = int(_p)
+
+var cs = "none"
+let _c = env("M316_CASE")
+if _c != null:
+    if _c != "":
+        cs = _c
+
+let url = "http://127.0.0.1:" + str(PORT) + "/probe"
+
+var hd = null
+var method = "GET"
+var body = null
+if cs == "host_and_ua":
+    hd = {"Host": "other.example:8080", "User-Agent": "MyClient/9.9"}
+elif cs == "host_lower":
+    hd = {"host": "lower.example"}
+elif cs == "host_empty":
+    hd = {"Host": " "}
+elif cs == "ua_only":
+    hd = {"User-Agent": "OnlyUA/1.0"}
+elif cs == "post_ct":
+    method = "POST"
+    body = "a=1"
+    hd = {"Content-Type": "application/json"}
+elif cs != "none":
+    print("M316-CLI-BADCASE " + cs)
+    exit(1)
+
+let r = http_request(url, method, body, hd)
+# 成功 → dict{status,headers,body}；失败 → Err(result)（px_net_err）
+if type(r) == "result":
+    print("M316-CLI-ERR " + cs + " " + str(r.err()))
+elif r["status"] == 200:
+    print("M316-CLI-OK " + cs)
+else:
+    print("M316-CLI-STATUS " + str(r["status"]) + " " + cs)

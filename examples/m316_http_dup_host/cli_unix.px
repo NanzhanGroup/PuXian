@@ -1,0 +1,36 @@
+# M316 门 · 语料（客户端 · Unix socket 面）：bi_http_unix 的同族判据
+#   为什么单独一条通路：`http_unix` 与 `http_request` 是两份独立实现
+#   （M84-S1 的 CT/CL 判据当年也是分别加在两边）⇒ 只修一边会留半条缺陷。
+
+var SOCK = "/tmp/m316_u.sock"
+let _s = env("M316_SOCK")
+if _s != null:
+    if _s != "":
+        SOCK = _s
+
+var cs = "host_and_ua"
+let _c = env("M316_CASE")
+if _c != null:
+    if _c != "":
+        cs = _c
+
+var hd = null
+if cs == "host_and_ua":
+    hd = {"Host": "u.example", "User-Agent": "UnixCli/1.0"}
+elif cs == "host_empty":
+    hd = {"Host": "\t "}
+elif cs == "none":
+    hd = null
+elif cs != "ua_only":
+    print("M316-UCLI-BADCASE " + cs)
+    exit(1)
+if cs == "ua_only":
+    hd = {"User-Agent": "UnixUA/2.0"}
+
+let r = http_unix(SOCK, "/p", "GET", null, hd)
+if type(r) == "result":
+    print("M316-UCLI-ERR " + cs + " " + str(r.err()))
+elif r["status"] == 200:
+    print("M316-UCLI-OK " + cs)
+else:
+    print("M316-UCLI-STATUS " + str(r["status"]) + " " + cs)
