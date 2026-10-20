@@ -1638,4 +1638,10 @@ run m313_mysql_driver bash examples/m313_mysql_driver/verify.sh
 #   判据用**可判定的状态位**（accept 后 tcp_opt 回读 nodelay），不量回环 40ms（回环恒 0ms = 假绿）。
 #   负控要重建 runtime ⇒ CI 用 --neg-skip。
 run m313_accept_nodelay bash examples/m313_accept_nodelay/verify.sh
+# ── M314：mysql 驱动「服务器 ERR 包 ⇄ IO 错」的分流（缺陷 541/542 · 半山提单）──
+#   一条写错的 SQL（1046/1054/1062…）服务器回的是**完整的 ERR 包**，连接健康；
+#   M313 把它和 IO 错一起 tcp_close ⇒ 「一条错 SQL 废掉整条连接」。
+#   本门复用 m313 的 mock 服务端，验「ERR 包保连接 / 致命码废连接 / ping 超时关连接」。
+#   负控 A 撤回分流 ⇒ 必须复现半山报障形态；负控 B 让致命码表失效 ⇒ 1053 不得再关。
+run m314_mysql_err_conn bash examples/m314_mysql_err_conn/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test

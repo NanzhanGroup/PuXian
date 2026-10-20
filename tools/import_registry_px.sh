@@ -28,6 +28,12 @@
 #       便于 M187 门继续做「表 ⇔ 磁盘」防漂移对拍；
 #     · 补丁只用于「上游尚未修、但缺陷根因在我方语言面变更」的场景（如 M184 的严格 int()），
 #       上游修复后**撤销补丁**即可（表里会少一列内容）。
+#
+# M314 补：**按版本寻址的补丁** —— `<name>@<ver>.patch` 只对该版本生效
+#   （`<name>.patch` 仍对所有版本生效；顺序 = 通用在前、专用在后）。
+#   由来：mysql 0.2.0 比 0.1.0 多出 ping / select_db / begin / commit / rollback 等 API，
+#   针对这些新增 API 的修复打进通用补丁会让 **0.1.0 锚点失配**（M313 的补丁头注已登记为待办）。
+#   THIRD_PARTY.md 的「补丁」列在多个补丁时用逗号连接（如 `mysql.patch,mysql@0.2.0.patch`）。
 # ============================================================
 set -uo pipefail
 SRC=""
@@ -115,14 +121,20 @@ for libdir in "$SRC_REG"/*/; do
         rm -rf "$stage"; mkdir -p "$stage"
         for f in "${files[@]}"; do cp -f "$verdir/$f" "$stage/$f"; done
         patch_name=""
-        if [ -f "$PATCHDIR/$name.patch" ]; then
-            if ! ( cd "$stage" && patch -p0 -s --no-backup-if-mismatch < "$PATCHDIR/$name.patch" ); then
-                echo "  [补丁失败] $name/$ver：$PATCHDIR/$name.patch 未能应用（锚点漂移？）" >&2
-                CONFLICT=$((CONFLICT+1)); continue
+        # M314：**按版本寻址** ——
+        #   <name>.patch         对所有版本生效（两版本同形的改动）；
+        #   <name>@<ver>.patch   只对该版本生效（上游只在某版本有的 API，打进通用补丁
+        #                        会让另一版本锚点失配 —— mysql@0.2.0 就是这一例）。
+        # 顺序：通用在前、版本专用在后（后者可依赖前者已建立的新增行作为上下文）。
+        for pf in "$name.patch" "$name@$ver.patch"; do
+            [ -f "$PATCHDIR/$pf" ] || continue
+            if ! ( cd "$stage" && patch -p0 -s --no-backup-if-mismatch < "$PATCHDIR/$pf" ); then
+                echo "  [补丁失败] $name/$ver：$PATCHDIR/$pf 未能应用（锚点漂移？）" >&2
+                CONFLICT=$((CONFLICT+1)); continue 2
             fi
-            patch_name="$name.patch"
+            if [ -z "$patch_name" ]; then patch_name="$pf"; else patch_name="$patch_name,$pf"; fi
             PATCHED=$((PATCHED+1))
-        fi
+        done
         dst="$ROOT/registry/$name/$ver"
         conflict=0
         missing=""

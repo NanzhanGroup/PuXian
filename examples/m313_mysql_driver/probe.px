@@ -7,6 +7,9 @@
 #                   期望**读超时有界返回 Err**（修前是永久阻塞）
 #   mode = qtimeout 握手正常、查询不回 ⇒ 期望查询超时后**连接被关闭**，
 #                   且再用该 conn 发查询 ⇒ 立即 Err（**不留半连接态**）
+#   mode = errcase  M314：服务器 ERR 包不废连接（1046/1054/1062…），致命码（1053…）才废
+#   mode = ping     M314：ping / select_db 的成功路径
+#   mode = pingtimeout M314：心跳超时 ⇒ 必须关连接并标记（修前留半连接）
 # 判据只用**产品自带输出**：驱动返回的 Ok/Err 与其中的字段，不依赖任何插桩。
 # ============================================================
 import "../../registry/mysql/0.2.0/mysql.px"
@@ -16,6 +19,95 @@ def main():
     var mode = "ok"
     if len(a) > 2:
         mode = a[2]
+    if mode == "errcase":
+        # M314（半山）：服务器 ERR 包（1046/1054/1062…）只让**本条语句**失败 ⇒ 连接必须保留；
+        #   致命码（1053 服务器关闭 等）才作废连接。
+        var ce = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 3000, "read_timeout_ms": 2000})
+        if ce.is_err():
+            print("PROBE-CONNECT-ERR " + str(ce.err()))
+            exit(1)
+        var cn = ce.unwrap()
+        var a1 = mysql_query(cn, "SELECT ok1")
+        if a1.is_err():
+            print("PROBE-ERR-OK1-FAIL " + str(a1.err()))
+            exit(1)
+        var aff1 = a1.unwrap()["affected"]
+        print("PROBE-ERR-OK1 affected=" + str(aff1))
+        var a2 = mysql_query(cn, "SELECT bad")
+        if a2.is_ok():
+            print("PROBE-ERR-BAD-UNEXPECTED-OK")
+            exit(1)
+        var m2 = str(a2.err())
+        var closed2 = "false"
+        if m2.find("connection closed") >= 0:
+            closed2 = "true"
+        print("PROBE-ERR-BAD msg=" + m2 + " closed=" + closed2)
+        var a3 = mysql_query(cn, "SELECT ok2")
+        if a3.is_err():
+            print("PROBE-ERR-OK2-FAIL " + str(a3.err()))
+            exit(1)
+        var aff3 = a3.unwrap()["affected"]
+        print("PROBE-ERR-OK2 affected=" + str(aff3))
+        var a4 = mysql_query(cn, "SELECT fatal")
+        if a4.is_ok():
+            print("PROBE-ERR-FATAL-UNEXPECTED-OK")
+            exit(1)
+        var m4 = str(a4.err())
+        var closed4 = "false"
+        if m4.find("connection closed") >= 0:
+            closed4 = "true"
+        print("PROBE-ERR-FATAL msg=" + m4 + " closed=" + closed4)
+        var a5 = mysql_query(cn, "SELECT ok2")
+        print("PROBE-ERR-AFTER msg=" + str(a5.err()))
+        var _ce = mysql_close(cn)
+        if aff1 == 1 and closed2 == "false" and aff3 == 2 and closed4 == "true" and str(a5.err()).find("already closed") >= 0:
+            print("PROBE-ERR-KEEP-OK")
+            return
+        print("PROBE-ERR-KEEP-FAIL")
+        exit(1)
+    if mode == "ping":
+        # M314：ping / select_db 的**失败路径**也必须收口（修前只 Err、不关连接不置 fd=-1）
+        var cp = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 3000})
+        if cp.is_err():
+            print("PROBE-CONNECT-ERR " + str(cp.err()))
+            exit(1)
+        var cnp = cp.unwrap()
+        var g1 = mysql_ping(cnp)
+        print("PROBE-PING ok=" + str(g1.is_ok()))
+        var g2 = mysql_select_db(cnp, "pxtest")
+        print("PROBE-SELECTDB ok=" + str(g2.is_ok()))
+        var _cp = mysql_close(cnp)
+        if g1.is_ok() and g2.is_ok():
+            print("PROBE-PING-OK")
+            return
+        print("PROBE-PING-FAIL " + str(g1.err()) + " / " + str(g2.err()))
+        exit(1)
+    if mode == "pingtimeout":
+        # M314：心跳超时 ⇒ 必须**关连接并标记**（修前会留下半连接态，调用方拿错位 fd 继续用）
+        var ct = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 3000, "read_timeout_ms": 400})
+        if ct.is_err():
+            print("PROBE-CONNECT-ERR " + str(ct.err()))
+            exit(1)
+        var cnt = ct.unwrap()
+        var t0 = now_ms()
+        var h1 = mysql_ping(cnt)
+        var el = now_ms() - t0
+        if h1.is_ok():
+            print("PROBE-PINGTIMEOUT-UNEXPECTED-OK elapsed_ms=" + str(el))
+            exit(1)
+        var hm = str(h1.err())
+        var hc = "false"
+        if hm.find("connection closed") >= 0:
+            hc = "true"
+        print("PROBE-PINGTIMEOUT-ERR elapsed_ms=" + str(el) + " closed=" + hc + " msg=" + hm)
+        var h2 = mysql_ping(cnt)
+        print("PROBE-PING-AFTER msg=" + str(h2.err()))
+        var _ct = mysql_close(cnt)
+        if hc == "true" and str(h2.err()).find("already closed") >= 0:
+            print("PROBE-PING-NO-HALF-OPEN")
+            return
+        print("PROBE-PING-HALF-OPEN-REMAINS")
+        exit(1)
     if mode == "timeout":
         var t0 = now_ms()
         var r = mysql_connect("127.0.0.1", port, "pxuser", "px_secret_456", "pxtest", {"timeout_ms": 500})

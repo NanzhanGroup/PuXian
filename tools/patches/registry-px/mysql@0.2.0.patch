@@ -1,0 +1,50 @@
+# ============================================================
+# 本地补丁（**仅 0.2.0**）：registry/mysql/0.2.0/mysql.px
+# ------------------------------------------------------------
+# M314（第 185 轮 · 缺陷 542）：mysql_ping / mysql_select_db 的失败路径收口。
+#   修前：send 失败只 return Err —— 既不关连接、也不置 fd=-1
+#         ⇒ my_conn_check 仍判「健康」⇒ 调用方拿一根已错位的 fd 继续用。
+#   修后：两处都走 my_conn_bad（IO 错关连接并标记；服务器 ERR 包按 M314 口径保留）。
+#
+# 为什么单独成文件（不进 mysql.patch）：0.1.0 **没有**这两个 API
+#   ⇒ 同一份补丁会在 0.1.0 上锚点失配（M314 引入「按版本寻址」就是为了这件事）。
+# 应用顺序：mysql.patch → 本文件（import 脚本按此顺序）。
+# ============================================================
+--- mysql.px
++++ mysql.px
+@@ -436,23 +436,31 @@
+ 
+ # ---- 0.2.0 新增：ping / select_db / begin / commit / rollback ----
+ # mysql_ping — COM_PING(0x0e)，保活
++#   M314（半山）：修前 send 失败只 Err、既不关连接也不置 fd=-1 ⇒ 之后 my_conn_check
++#   仍判「健康」，调用方拿一根已错位的 fd 继续用（比原 bug 更难查）。
+ def mysql_ping(conn):
++    var ck = my_conn_check(conn)
++    if ck.is_err():
++        return ck
+     var rq = my_send_packet(conn["fd"], 0, bytes(chr(14)))
+     if rq.is_err():
+-        return Err("mysql: ping send: " + rq.err())
++        return my_conn_bad(conn, "ping send: " + str(rq.err()))
+     var r = mysql_read_result(conn["fd"])
+     if r.is_err():
+-        return r
++        return my_conn_bad(conn, r.err())
+     return Ok(true)
+ # mysql_select_db — COM_INIT_DB(0x02)，切换数据库
+ def mysql_select_db(conn, dbname):
++    var ck = my_conn_check(conn)
++    if ck.is_err():
++        return ck
+     var body = bytes_concat(bytes(chr(2)), bytes(dbname))
+     var rq = my_send_packet(conn["fd"], 0, body)
+     if rq.is_err():
+-        return Err("mysql: select_db send: " + rq.err())
++        return my_conn_bad(conn, "select_db send: " + str(rq.err()))
+     var r = mysql_read_result(conn["fd"])
+     if r.is_err():
+-        return r
++        return my_conn_bad(conn, r.err())
+     conn.set("db", dbname)
+     return Ok(true)
+ # mysql_begin — 开始事务

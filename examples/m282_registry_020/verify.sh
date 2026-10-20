@@ -197,11 +197,18 @@ upstream_compare() {   # $1=上游根（默认 $UPSTREAM）；置 SAME/DIFF/EXT/
         u="$UP/registry/$n/0.2.0"
         [ -d "$u" ] || continue
         pf="$ROOT/tools/patches/registry-px/$n.patch"
-        if [ -f "$pf" ]; then
+        # M314：按版本寻址 —— 0.2.0 目录还要叠 `<n>@0.2.0.patch`（与 import 脚本同序）
+        pfv="$ROOT/tools/patches/registry-px/$n@0.2.0.patch"
+        if [ -f "$pf" ] || [ -f "$pfv" ]; then
             PAT=$((PAT+1))
             st="$W/pat/$n"; rm -rf "$st"; mkdir -p "$st"
             cp -f "$u"/*.px "$st"/ 2>/dev/null
-            if ( cd "$st" && patch -p0 -s --no-backup-if-mismatch < "$pf" ) >/dev/null 2>&1; then
+            PATOK=1
+            for q in "$pf" "$pfv"; do
+                [ -f "$q" ] || continue
+                ( cd "$st" && patch -p0 -s --no-backup-if-mismatch < "$q" ) >/dev/null 2>&1 || PATOK=0
+            done
+            if [ "$PATOK" = 1 ]; then
                 if diff -rq "$d" "$st" >/dev/null 2>&1; then SAME=$((SAME+1)); else DIFF=$((DIFF+1)); MISSING="$MISSING $n(补丁未覆盖全部差异)"; fi
             else
                 PATBAD=$((PATBAD+1)); MISSING="$MISSING $n(补丁无法应用)"

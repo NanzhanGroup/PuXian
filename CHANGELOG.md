@@ -1,3 +1,142 @@
+## M314 —— mysql「服务器 ERR 包也废连接」（缺陷 541/542）+ 全量门档位规则（用户令 A）+ 报告追记（第 185 轮）
+
+**一句话**：本轮按用户令「先阶段 0 → 再阶段 1」执行 —— 阶段 0 清**地基**：
+半山的 mysql 错误语义提单（一条写错的 SQL 就把整条连接废掉）、一条拖了一轮的流程欠账
+（用户 2026-10-19 选的档位方案 A）、以及 M307–M313 七轮的报告缺失。阶段 1（缺陷 533 ONNX 数值对齐）随后开工。
+
+### 一 来历（半山 2026-10-20 总线【缺陷提单】`m18e01cc5c477865c9f35426b`）
+
+实测（puxian 0.2.313-1.m313.el9 · MySQL 5.7.44 · mysql_native_password）：
+
+```
+SELECT no_such_col FROM juans
+ → mysql err 1054: Unknown column 'no_such_col' in 'field list' (connection closed)
+同一连接再查
+ → mysql: connection already closed
+```
+
+即：**一条写错的 SQL 就把整条连接废掉**，后续查询全部 `already closed`，
+应用必须有重连兜底才不炸。半山同时指出同族缺口：`mysql_ping` / `mysql_select_db`
+的失败路径只 `return Err`，既不关连接也不置 `fd = -1` ⇒ 之后 `my_conn_check` 仍判「健康」，
+调用方会拿一根已错位的 fd 继续用（**比原 bug 更难查**）。
+
+### 二 缺陷 541：服务器 ERR 包 ⇄ IO 错 的分流
+
+M313 的 `my_conn_bad()` 对**所有** Err 一律 `tcp_close + fd=-1`，但两类错误语义完全不同：
+
+| 类别 | 特征 | 正确处置 |
+|---|---|---|
+| **服务器 ERR 包**（payload 首字节 255） | 包完整、seq 对齐、**连接健康**，只是本条语句失败 | 只返回 Err，**保留连接** |
+| **IO 错**（read/send 失败） | 流已错位（读到半个包） | 必须废连接 |
+
+修法（**分类原语放 proto.px，前缀单源**）：
+
+| 件 | 内容 |
+|---|---|
+| `proto.px` | `MY_ERR_PREFIX`（文件顶部声明，避免缺陷 193「先读后声明」）· `my_err_is_server` · `my_err_code`（从 `"mysql err <code>: …"` 取码）· `my_err_fatal`（6 个致命码） |
+| `mysql.px` | `my_conn_bad` 入口先分流：`my_err_is_server(what) and not my_err_fatal(my_err_code(what))` ⇒ 直接 `Err(what)`，**不关连接、不加 `(connection closed)` 后缀**（错误文案必须诚实） |
+
+**致命码表（6 个，均有据可查）**：1053 `ER_SERVER_SHUTDOWN` · 1927 `ER_CONNECTION_KILLED` ·
+3169 `ER_SESSION_WAS_KILLED` · 4031 `ER_CLIENT_INTERACTION_TIMEOUT` · 2006/2013
+（客户端错误码，正常不会以 ERR 包下发，但 ProxySQL 一类中间件会）。
+其余（1046/1054/1062/1317/3024…）保留连接 —— 那是「本条语句失败」，不是「连接不能再用」。
+
+⚠️ **不采纳的功能面**：不解包 ERR 包里的 `#SQLSTATE` 做更细分类 —— 本轮的分界是
+「这条连接还能不能用」，SQLSTATE 不提供这个信息（半山口径也一致）。
+
+### 三 缺陷 542：`ping` / `select_db` 的失败路径收口
+
+两处都改为走 `my_conn_bad`（send 失败 + read 失败各两处），并补 `my_conn_check` 入口检查
+—— 与 `mysql_query` / `mysql_stmt_*` 同口径。修后实测：心跳超时 402ms ⇒ `closed=true`，
+二次 `ping` ⇒ `already closed`（不留半连接态）。
+
+### 四 补丁通道：**按版本寻址**（`<name>@<ver>.patch`）
+
+半山点出的落位要求（这条最要紧）：`registry/*.px` 属 **rpm 内容**，直接改磁盘会被
+`uppx.sh` / 每日 04:00 升级覆盖 ⇒ bug 静默复现。必须走补丁通道。
+
+而 M313 的补丁头注已登记待办：「0.2.0 尾段新增 API（ping / select_db / begin / commit / rollback）
+未包含 —— 打进同一 patch 会让 0.1.0 打不上」。
+
+⇒ 本轮给 `tools/import_registry_px.sh` 加**按版本寻址**：
+`<name>.patch` 对所有版本生效，`<name>@<ver>.patch` 只对该版本（顺序 = 通用在前、专用在后），
+`patch_name` 多补丁时用逗号连接写进 `THIRD_PARTY.md`。
+
+| 文件 | 作用域 | 内容 |
+|---|---|---|
+| `tools/patches/registry-px/mysql.patch` | 0.1.0 + 0.2.0 | 536–538 · 540 · **541**（`my_conn_bad` 分流 + proto.px 分类原语） |
+| `tools/patches/registry-px/mysql@0.2.0.patch` | **仅 0.2.0** | **542**（ping / select_db 收口） |
+
+**重放自证**：用旧补丁 `patch -R` 反打出上游原版，再顺序应用两个新补丁 ⇒
+6 个文件（两版本的 mysql/proto/stmt）**逐字节 == 当前 registry**；
+且与 GitHub 上游 HEAD（`banshanhanfu/registry-px`）的 mysql.px **sha256 逐字符一致**
+（`d9ba075e…` / `95113e7e…`）⇒ 证明「上游 + 补丁 == 我方」。
+
+### 五 门：`examples/m314_mysql_err_conn/`（**49 通过 / 0 失败** · CI 档 45/0）
+
+复用 m313 的 mock MySQL 服务端（扩展 `errcase` 模式 + `COM_INIT_DB`），判据层次：
+
+| 层 | 内容 |
+|---|---|
+| [0] | **前置在场**：m313 的 mock/probe 语料必须在（缺失即判红，不静默跳过） |
+| [1] | 静态 22 条：分类原语齐备 / 前缀**单源**（`MY_ERR_PREFIX` 声明先于使用 + 无硬编码）/ **分流先于 `tcp_close`**（在 `my_conn_bad` 函数体内比较，不看文件里第一个 `tcp_close`）/ ping·select_db 收口 |
+| [2] | 构建（mock + 两版本探针；驱动复制进 W，仓库零写入） |
+| [3][4] | 动态（0.2.0 / 0.1.0）：`SELECT bad` ⇒ 1054 `closed=false` → `SELECT ok2` affected=2（**连接真能继续用**）→ `SELECT fatal` ⇒ 1053 `closed=true` → 再查 `already closed` |
+| [5] | ping / select_db 成功路径（服务端侧断言 `MOCK-PING-OK` / `MOCK-SELECTDB db=pxtest`） |
+| [6] | ping 超时 ⇒ 关连接（缺陷 542 的回归位） |
+| [7] | **负控 A**：撤回分流 ⇒ **必须复现半山报障的形态**（实测 `mysql: mysql err 1054: … (connection closed)` + `PROBE-ERR-OK2-FAIL already closed`） |
+| [8] | **负控 B**：致命码表失效 ⇒ 1053 **不得**再关连接（`closed=false` + 后查仍可用） |
+| [9] | 覆盖边界 5 条（含「4031/3169 未在真实服务器上实测」「ERR 后服务端是否断开取决于中间件」） |
+
+### 六 用户令 A 落地：全量门档位规则（`SERIAL` / `SHARD`）
+
+用户 2026-10-19 原话：「常规发布走分片档（~98min），串行权威档只在**改了 runtime / 编译器**
+的轮次跑一次做周期性复核」。⇒ 新增 `packaging/chain/pick_gate_tier.sh`：
+
+| 语义面 | 命中 ⇒ | 未命中 ⇒ |
+|---|---|---|
+| `runtime/*.c` `runtime/*.h` · `selfhost/*.px` · `tools/*.px` | **SERIAL** | **SHARD**（+ 必须与串行基线逐门对拍） |
+
+- **自证 7/0**：三个历史区间判对（M311→SHARD · M312→SERIAL · M313→SERIAL）+ 非法 ref **rc=3**
+  + 空区间→SHARD + 超期→强制 SERIAL + 未超期→SHARD。
+  ⚠️ 首版自测在「超期逻辑」判红，真因是**自测自己没给 `--overdue-days`**（判据而非代码的问题）。
+- **判定失败 ⇒ SERIAL**（宁可慢，不可漏）；取不到 ref 时 `GATE-TIER=` 为空 + rc=3，**绝不静默选档**。
+- `watch_chain.sh --tier auto`（默认）把档位写进 p0 通知；**SERIAL 且 GREEN** 写时间戳
+  `/tmp/.puxian_last_serial_gate.stamp`，`--overdue-days N` 据此做周期性复核。
+- `docs/RELEASE_PROCESS.md` 新增「全量门档位」节 + 核对清单同步（含三条实测对照与「分片档不保证 98min」的边界）。
+
+### 七 报告追记：M307–M313（7 份）
+
+`/data/reports/` 最新只到 M306 ⇒ 补 `puxian-m307…m313-*.md` 共 7 份。
+⚠️ **如实标注「追记」**（依据 `CHANGELOG.md` + `git log` + 各轮单一出处文档），不冒充现场记录。
+
+### 八 门与守卫同步（改判据必须全仓扫锚点）
+
+| 件 | 改动 | 原因 |
+|---|---|---|
+| `examples/m187_registry_import/verify.sh` | 补丁列形状判据放宽为「以 `.patch` 结尾」+ 名字逐个抽取 | 一个包可有多个补丁（`mysql.patch,mysql@0.2.0.patch`）；`NPAT_ROW+NPAT_EMPTY == N` 守恒仍成立（实测 4+240=244=N） |
+| `examples/m282_registry_020/verify.sh` | [7] 对拍按「通用 + 版本专用」顺序应用 | 否则只打 `mysql.patch` ⇒ 必有差异 ⇒ 假红 |
+| `selfhost/gates.registry.sh` / `ci.yml` | 注册 `m314_mysql_err_conn` | 注册一致性守卫 9/0 |
+| `registry/THIRD_PARTY.md` | mysql 两行的 sha256 + 补丁列 + 表头说明 | 表 ⇔ 磁盘防漂移（m187 重算通过） |
+
+### 九 验收
+
+- 门 `m314_mysql_err_conn`：**49/0**（全量档）· **45/0**（CI 档）
+- 门 `m313_mysql_driver` 回归：**38/0**（mock 扩展后无回归）
+- 门 `m187_registry_import`：**20/0**（补丁列多名字后守恒与双向核对均成立）
+- `check_gate_registry.sh`：**9/0**
+- `pick_gate_tier.sh --self-test`：**7/0**
+- 未重烘：本轮**未改** `runtime/*.c` 或 `selfhost/*.px`（只改 registry 库、tools 的 `.sh`、门）
+  ⇒ 入库件指纹不变；`--check-all` 在收尾统一复核。
+
+### 十 覆盖边界（如实）
+
+- 致命码表中 **4031 / 3169 未在真实服务器上实测**（需对应版本 + 触发条件）；
+  2006/2013 是客户端码，按「中间件可能下发」防御性列入。
+- 「ERR 包之后服务端是否主动断开」取决于服务器/中间件 —— 本门只判**客户端**是否自行关闭。
+- 结果集（列定义 + 行）与 `COM_STMT_*` 仍不在动态面内（同 m313 边界）。
+- 事务语义（begin/commit/rollback 走 `mysql_query` ⇒ 同一路径）未单独设用例。
+
 ## M313 —— mysql 驱动三处握手缺陷 + 读无界 + 不留半连接 + 服务端 accept 漏设 TCP_NODELAY（缺陷 536–540）（第 184 轮）
 
 **一句话**：本轮收两条独立报障 —— ① 半山的 **mysql 驱动三处握手缺陷**（`Bad handshake` + 永久阻塞），

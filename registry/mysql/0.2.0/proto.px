@@ -6,6 +6,11 @@
 # 语言缺陷规避：同 mysql.px 头部说明。
 # ============================================================
 
+# M314：服务器 ERR 包消息的固定前缀（**全文件唯一来源**）
+#   声明在文件顶部：my_err_message 与 my_err_is_server 都读它，
+#   避免「先读后声明」（缺陷 193）。
+var MY_ERR_PREFIX = "mysql err "
+
 # ---- 内部：字节/字符串小工具 ----
 # MySQL wire protocol：数字一律小端。
 # 编码：int_to_bytes(v, n, "little") 双模式可靠（已实测）
@@ -132,7 +137,51 @@ def my_err_message(payload):
         off += 1
         off += 5
     var msg = bytes_to_str(bytes_slice(payload, off, bytes_len(payload)))
-    return "mysql err " + str(code) + ": " + msg
+    return MY_ERR_PREFIX + str(code) + ": " + msg
+
+# ---- M314（半山）：区分「服务器 ERR 包」与「IO 错」----
+#   服务器 ERR 包 = **本条语句**失败：包完整、seq 对齐、连接健康 ⇒ 保留连接；
+#   IO 错 = 流已错位（读到半个包）⇒ 必须废连接。
+#   判据只认本文件自己造的固定前缀（**唯一来源**）—— 格式若变，只改这一处，
+#   门里的静态判据会「格式串 ⇄ 前缀」对拍，改了不同步就判红。
+
+def my_err_is_server(msg):
+    if type(msg) != "string":
+        return false
+    return msg.find(MY_ERR_PREFIX) == 0
+
+# "mysql err <code>: <msg>" → code；不是服务器 ERR 包 ⇒ -1
+def my_err_code(msg):
+    if not my_err_is_server(msg):
+        return -1
+    var b = bytes(msg)
+    var i = len(MY_ERR_PREFIX)
+    var n = 0
+    var got = 0
+    while i < bytes_len(b):
+        var c = bytes_get(b, i)
+        if c < 48 or c > 57:
+            break
+        n = n * 10 + (c - 48)
+        got += 1
+        i += 1
+    if got == 0:
+        return -1
+    return n
+
+# 致命码：服务器明确表示「这条连接不能再用」（其余码 ⇒ 连接仍可复用）
+def my_err_fatal(code):
+    # 1053 ER_SERVER_SHUTDOWN             服务器正在关闭
+    # 1927 ER_CONNECTION_KILLED           KILL <id> 掉
+    # 3169 ER_SESSION_WAS_KILLED          会话被 KILL（8.0）
+    # 4031 ER_CLIENT_INTERACTION_TIMEOUT  服务端空闲超时已断开（8.0.24+）
+    if code == 1053 or code == 1927 or code == 3169 or code == 4031:
+        return true
+    # 2006/2013 是**客户端**错误码（正常不会以 ERR 包下发），
+    # 但 ProxySQL 一类中间件会 ⇒ 一并按致命处理
+    if code == 2006 or code == 2013:
+        return true
+    return false
 
 # OK 包解析 → 命令影响行数等
 def my_ok_result(payload):
