@@ -1,7 +1,8 @@
 # onnxruntime 的 MatMulInteger(u8s8) kernel 偏差 —— 事实、证据、以及它对我们判据的影响
 
-> 状态：**OURS-OK**（PuXian 与规范一致）· **UPSTREAM-BUG**（ORT 1.19.2 偏差）
-> 里程碑：M314（发现并钉死根因）· M315（判据方向修正 + 最小装置入仓）
+> 状态：**OURS-OK**（PuXian 与规范一致）· **UPSTREAM-BUG**（ORT **1.19.2 – 1.31.0** 全档偏差，跨 12 个次版本未修）
+> 里程碑：M314（发现并钉死根因）· M315（判据方向修正 + 最小装置入仓 + 跨版本复核）
+> 上游 issue：**已备未发**（2026-10-20 用户决定不发，理由见第六节）
 > 相关门：`examples/m315_onnx_ort_kernel/`（最小装置 · 双向登记核对）、
 >        `examples/m311_real_model/`（端到端 · 主判据改为「与可信真值比」）
 
@@ -52,6 +53,28 @@ bash examples/m311_real_model/verify.sh          # M311_REQUIRE_ORT=1 强制数�
 所以门里只对**实测确认稳定偏离**的装置做硬断言，其余标 `expect_ort_diverge: null`（只报告）。
 **硬断言「A 含 >127 就必须偏离」会偶发判红** —— 会偶发判红的门等于没有门（M274 缺陷 480）。
 
+### 跨版本复核（1.19.2 ⇄ 1.31.0 · 2026-10-20 实测）
+
+报告上游之前必须先排除一句话：**「请升级到最新版」**。本机默认 Python 3.9 只支持到
+ORT 1.19.2（1.20+ 要求 Python ≥3.10），因此另装独立 **Python 3.12.15 + onnxruntime 1.31.0**
+（PyPI 当日最新），用**同一份 `devices/`** 重跑全部 7 个装置：
+
+| 装置 | ORT 1.19.2 | ORT 1.31.0 | 判定 |
+|---|---|---|---|
+| `mmi_k3_ortbad` | 1/8 错 · `[3]` -9068 ⇄ -9728（差 **660**） | **逐位相同** | 未修 |
+| `mmi_k16_hi` | 4/8 错 · `[4]` -56188 ⇄ -127616（差 **71428**） | **逐位相同** | 未修 |
+| 其余 5 个 | == 规范 | == 规范 | — |
+
+- 两个优化级（`ORT_DISABLE_ALL` / 默认）在**两个版本上各自结论一致** ⇒ 病灶在 CPU EP 的
+  MLAS 量化 GEMM kernel，不在图优化器。
+- **跨 12 个次版本、约两年，错误数值逐位不变** ⇒ 不是「已修好只是我们版本旧」。
+- 复算：`python3 examples/m315_onnx_ort_kernel/ort_version_probe.py`
+  （只依赖 numpy + onnxruntime；换版本 = 换解释器，`PYTHONPATH=/opt/fw python3 …` 跑本机 1.19.2）。
+  ⚠️ 该探针**刻意不进任何门** —— CI 只有一个 ORT 版本，装第二个只会在每次门跑时多烧两分钟。
+
+> 纪律：**报 upstream 前先验证「是不是新版已修」**。否则要么被打回（浪费对方时间），
+> 要么报了个早就不存在的问题（损害自己的可信度）。
+
 ### 为什么生产模型必然受影响
 `a_zero_point` 来自 `DynamicQuantizeLinear`，其输出域是 **0..255**（含 >127 与 ≤127 两者）
 ⇒ 72 个 `MatMulInteger` 里只要有一个触发，误差就会经后续 12 层放大。实测端到端确实受影响
@@ -81,16 +104,24 @@ bash examples/m311_real_model/verify.sh          # M311_REQUIRE_ORT=1 强制数�
    ORT 74% 触发 ⇒ 任何「必须偏离」的硬断言都有 26% 概率假红。
    门里改成「实测稳定触发的装置断言偏离 + 对照组断言一致 + 其余只报告」。
 
-## 六 给上游的报告要点（ORT issue 草稿）
+## 六 给上游的报告要点（**已备 · 未发**）
 
-- 版本：onnxruntime **1.19.2**（CPU EP，`GraphOptimizationLevel.ORT_DISABLE_ALL` 与默认档**都复现**）
+> **2026-10-20 用户决定：不发上游。** 理由：这是我们对外发帖，需要用户本人的判断与署名；
+> 而它在我们的账上已经结清（判据改对了、文档登记了、门盯着回归），发与不发不影响我们。
+> ⇒ 以下要点**原样留档**，将来若要发，直接取用即可（材料都是现成的，不需要重新侦察）。
+> ⚠️ 如果要发，**先重跑一次跨版本复核**（`ort_version_probe.py`）—— 万一那之前修好了，
+> 发出去就是无效报告。
+
+- 版本：onnxruntime **1.19.2 与 1.31.0 均复现，数值逐位相同**（CPU EP，`GraphOptimizationLevel.
+  ORT_DISABLE_ALL` 与默认档**都复现** ⇒ kernel 层，非图优化）
 - 算子：`MatMulInteger`，`A: uint8[2,K]` · `B: int8[K,4]` · `a_zero_point: uint8` · `b_zero_point: int8`
-- 触发：`A` 含 > 127 的值（`K=1` 不触发）
+- 触发：`A` 含 > 127 的值（`K=1` 不触发；`K≥4` 进 SIMD 路径）
 - 最小复现：`examples/m315_onnx_ort_kernel/devices/mmi_k3_ortbad.onnx`（149 B）
-  · 输入 `examples/m315_onnx_ort_kernel/devices/mmi_k3_ortbad.in.txt`
+  · 输入 `...mmi_k3_ortbad.in.txt`
   · 期望 `...ref.txt`（规范真值，可由 `gen_devices.py::ref_manual` 独立复算）
   · 实测：`[0,3]` 应为 `-9728`，ORT 给 `-9068`（差 660）
 - 影响：int8 量化模型的 `DynamicQuantizeLinear → MatMulInteger` 主路径（左侧激活必然含 >127）
+  ⇒ **静默错值，无报错无警告**；生产 bge 端到端 max 0.477 / corr 0.975
 - 我们这一侧的对照：PuXian（同一规范定义的独立实现）+ `onnx.ReferenceEvaluator` + numpy 整数域
   **三者一致** ⇒ 期望值可信
 
@@ -99,6 +130,7 @@ bash examples/m311_real_model/verify.sh          # M311_REQUIRE_ORT=1 强制数�
 | 路径 | 作用 |
 |---|---|
 | `examples/m315_onnx_ort_kernel/` | 最小装置 + 双向登记核对门（7 装置 · 14 判据） |
+| `examples/m315_onnx_ort_kernel/ort_version_probe.py` | **跨版本复核探针**（不进任何门 · 报 upstream 前必跑） |
 | `examples/m311_real_model/` | 端到端门（主判据已改为「与可信真值比」） |
 | `examples/m311_real_model/truth_bge_fixed.npy` | 端到端可信真值（12416 B · 入仓生成物） |
 | `examples/m311_real_model/baseline.tsv` | 辅判据（对 ORT 原始）的漂移基线 |
