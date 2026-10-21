@@ -220,8 +220,10 @@ else
     M319_SELFHARM=1
     python3 "$HERE/negctl.py" --inject "$SNAP" "$ROOT" >/dev/null
     U=$(dyn_run "selfharm")
+    # ⚠️ M319 收尾修：自伤开关必须在**调用 spin_of 时**仍为 1（原写法先复位成 0 再调 ⇒ 自伤从未生效 ⇒ 负控 C 假红）。
+    S_SH=$(spin_of "$U")
     M319_SELFHARM=0
-    case "$(spin_of "$U")" in
+    case "$S_SH" in
         0) ok "判据自伤后不再判红（实测「$U」）⇒ 负控 A 的红确实来自判据" ;;
         *) bad "负控 C：判据自伤后仍判红（$U）" ;;
     esac
