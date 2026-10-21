@@ -128,6 +128,16 @@ m295_quic_slot\tFAIL\t130\t1"
 "upstream_tests\tOK\t950\t0
 m295_quic_slot\tOK\t130\t0" 1 "分片侧缺结果"
 
+    # S6 分片红门未被抽样覆盖（M319 补：M318 假绿的**精确形状**）
+    #   夹具：分片侧 graph_red_gate 是 FAIL 且耗时最低（Top-1 取不到它）⇒ 抽样集只有 upstream_tests
+    #   ⇒ 抽样侧全绿、逐门一致，但**分片红门没人确认** ⇒ 必须 RED 并指名。
+    #   这一条在修前是绿的（前五条判据都过）—— 正是它让 M318 的第 1 轮红门溜过去。
+    run_case s6_red_uncovered \
+"upstream_tests\tOK\t900\t0
+ghost_red_gate\tFAIL\t5\t1" \
+"upstream_tests\tOK\t950\t0
+m295_quic_slot\tOK\t130\t0" 1 "分片红门未被抽样覆盖"
+
     echo
     if [ "$FAIL" = "0" ]; then echo "══ RECHECK-SELFTEST-OK · $PASS 通过 / 0 失败 ══"; exit 0
     else echo "══ RECHECK-SELFTEST-FAIL · $PASS 通过 / $FAIL 失败 ══"; exit 1; fi
@@ -193,7 +203,7 @@ open(os.path.join(log, 'recheck.quiet.txt'), 'w', encoding='utf-8').write('\n'.j
 print('抽样集 %d 门（Top-%d 耗时）· quiet 组 %d 门（读 quiet.times.tsv，只判全绿）'
       % (len(topk), top, len(quiet)))
 for t, g in rows[:top + 3]:
-    print('   %6ds  %s%s' % (t, g, '  ← 抽样' if g in set(sample) else ''))
+    print('   %6ds  %s%s' % (t, g, '  ← 抽样' if g in set(topk) else ''))
 PY
 
 SAMPLE="$(paste -sd, "$LOG/recheck.sample.txt")"
@@ -271,7 +281,17 @@ q_miss = [g for g in QUIET_LIST if g not in qd]
 lines.append('⑤ quiet 组（被摘出分片、分片后串行跑）: %d 门 · 红 %d %s · 缺 %d %s'
              % (len(QUIET_LIST), len(q_red), [g for g, _ in q_red][:8], len(q_miss), q_miss[:8]))
 
-ok = (not red_ser) and (not missing_par) and (not missing_ser) and (not diff) and (not q_red) and (not q_miss)
+# ── ⑥ 分片侧的红门必须被抽样集覆盖（M319 补：这是 M318 假绿的根因）──
+#    案情：M318 第 1 轮分片有 2 个红门（m317_gc_time_trigger / m283_gate_premise），
+#    而抽样集按「耗时 Top-K」派生 ⇒ 两个红门都不在内 ⇒ 前五条判据全绿 ⇒ 裁决 GREEN。
+#    红门只要「没被抽到」就被算成绿 —— 这是「判据的扫描面漏了一整类对象」的同族
+#    （M252/M265/M285）。权威性来自「红门必被串行确认」，不是「抽到就算」。
+red_par = [g for g, v in par.items() if v[0] != 'OK']
+uncovered = [g for g in red_par if g not in sample]
+lines.append('⑥ 分片红门未被抽样覆盖: %d %s（分片红共 %d）'
+             % (len(uncovered), uncovered[:10], len(red_par)))
+
+ok = (not red_ser) and (not missing_par) and (not missing_ser) and (not diff) and (not q_red) and (not q_miss) and (not uncovered)
 lines.append('RECHECK-VERDICT-' + ('GREEN' if ok else 'RED'))
 txt = '\n'.join(lines)
 print(txt)
