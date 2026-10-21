@@ -77,6 +77,7 @@ if [ "$SELF_TEST" = "1" ]; then
             printf '%b\n' "$2" > "$1/shard$i.times.tsv"
         done
         printf '%b\n' "$3" > "$1/recheck.times.tsv"
+        printf '%b\n' "${4:-$3}" > "$1/quiet.times.tsv"
     }
     # quiet 表固定为 m295（夹具里作为"抽样门"之一）
     QF="$TMPD/quiet.txt"; echo "m295_quic_slot" > "$QF"
@@ -113,6 +114,13 @@ m295_quic_slot\tOK\t130\t0" 1 "状态/rc 不一致      : 1"
 m295_quic_slot\tOK\t120\t0" \
 "upstream_tests\tFAIL\t950\t1
 m295_quic_slot\tOK\t130\t0" 1 "串行侧红门"
+
+    # S5 quiet 组红门（被摘出分片的门在串行档里红 ⇒ 必须 RED；这是"只判全绿"的牙）
+    run_case s5_quiet_red \
+"upstream_tests\tOK\t900\t0" \
+"upstream_tests\tOK\t950\t0" 1 "quiet 组" \
+"upstream_tests\tOK\t950\t0
+m295_quic_slot\tFAIL\t130\t1"
 
     # S4 分片侧缺结果（抽样门在分片里没跑出来 ⇒ 必须 RED，不许算绿）
     run_case s4_missing_par \
@@ -174,13 +182,16 @@ if os.path.exists(qfile):
         if l: quiet.append(l)
 quiet_set = set(quiet)
 
-# ① Top-K（排除静音档 —— 它们本来就在分片后串行跑过，其结果已在 quiet.times.tsv）
+# ① Top-K：只从「分片里真跑过」的门里取（排除 quiet —— 它们已被摘出分片）
 topk = [g for _, g in rows if g not in quiet_set][:top]
-# ② quiet 全部（要求确实在分片日志里有记录，否则说明表与运行不一致）
-sample = topk + [g for g in quiet if g in {x[1] for x in rows}]
-open(os.path.join(log, 'recheck.sample.txt'), 'w', encoding='utf-8').write('\n'.join(sample) + '\n')
+# ② quiet：**另立一组**。它们被 shard_run.sh 摘出分片、在分片跑完后串行跑过，
+#    结果在 $LOG/quiet.times.tsv ⇒ 分片侧**本来就没有结果**，所以只能判「串行侧全绿」，
+#    不能做双向对拍（否则会把「设计如此」误判成「分片缺结果」）。
+open(os.path.join(log, 'recheck.sample.txt'), 'w', encoding='utf-8').write('\n'.join(topk) + '\n')
 open(os.path.join(log, 'recheck.topk.txt'), 'w', encoding='utf-8').write('\n'.join(topk) + '\n')
-print('抽样集 %d 门（Top-%d 耗时 %d ∪ quiet %d）' % (len(sample), top, len(topk), len(sample) - len(topk)))
+open(os.path.join(log, 'recheck.quiet.txt'), 'w', encoding='utf-8').write('\n'.join(quiet) + '\n')
+print('抽样集 %d 门（Top-%d 耗时）· quiet 组 %d 门（读 quiet.times.tsv，只判全绿）'
+      % (len(topk), top, len(quiet)))
 for t, g in rows[:top + 3]:
     print('   %6ds  %s%s' % (t, g, '  ← 抽样' if g in set(sample) else ''))
 PY
@@ -222,6 +233,8 @@ python3 - "$MERGED" "$LOG/recheck.times.tsv" "$LOG/recheck.sample.txt" "$LOG" <<
 import sys, os
 merged, serial, sample_f, log = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
+QUIET_LIST = [l.strip() for l in open(os.path.join(log, 'recheck.quiet.txt'), encoding='utf-8') if l.strip()] if os.path.exists(os.path.join(log, 'recheck.quiet.txt')) else []
+
 def load_par(p):
     d = {}
     for ln in open(p, encoding='utf-8', errors='ignore'):
@@ -250,7 +263,15 @@ lines.append('③ 串行侧缺结果        : %d %s' % (len(missing_ser), missin
 lines.append('④ 状态/rc 不一致      : %d' % len(diff))
 for g, p, s in diff[:12]:
     lines.append('     %s: 分片=%s 串行=%s' % (g, p, s))
-ok = (not red_ser) and (not missing_par) and (not missing_ser) and (not diff)
+# ── quiet 组：分片侧无结果（被摘出），只判「串行侧全绿」──
+qt = os.path.join(log, 'quiet.times.tsv')
+qd = load_par(qt) if os.path.exists(qt) else {}
+q_red  = [(g, qd[g]) for g in QUIET_LIST if g in qd and qd[g][0] != 'OK']
+q_miss = [g for g in QUIET_LIST if g not in qd]
+lines.append('⑤ quiet 组（被摘出分片、分片后串行跑）: %d 门 · 红 %d %s · 缺 %d %s'
+             % (len(QUIET_LIST), len(q_red), [g for g, _ in q_red][:8], len(q_miss), q_miss[:8]))
+
+ok = (not red_ser) and (not missing_par) and (not missing_ser) and (not diff) and (not q_red) and (not q_miss)
 lines.append('RECHECK-VERDICT-' + ('GREEN' if ok else 'RED'))
 txt = '\n'.join(lines)
 print(txt)
