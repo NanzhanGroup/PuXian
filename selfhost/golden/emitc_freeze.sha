@@ -303,6 +303,10 @@ examples/m316_http_dup_host/srv.px src=7759f505fbd2917f rc=0 out=a9eea7197b04282
 examples/m317_gc_time_trigger/drive.px src=d389f4e3e6efce92 rc=0 out=74b9618bbd3708a3540c5f97a2e44d6e err=e3b0c44298fc1c14
 examples/m317_gc_time_trigger/proxy.px src=efc435d59b665542 rc=0 out=193ead42a1eff050d5298bcf59a568f0 err=e3b0c44298fc1c14
 examples/m317_gc_time_trigger/srv.px src=4f283fabf2120edf rc=0 out=034ae9ba0d8f330508246e6c9bc940fe err=e3b0c44298fc1c14
+examples/m318_mem_layers/diag.px src=0840ca392eef8777 rc=0 out=f79f7ebf1e7a511d1a5f81c021184f04 err=e3b0c44298fc1c14
+examples/m318_mem_layers/drive.px src=d389f4e3e6efce92 rc=0 out=74b9618bbd3708a3540c5f97a2e44d6e err=e3b0c44298fc1c14
+examples/m318_mem_layers/proxy.px src=efc435d59b665542 rc=0 out=193ead42a1eff050d5298bcf59a568f0 err=e3b0c44298fc1c14
+examples/m318_mem_layers/srv.px src=4f283fabf2120edf rc=0 out=034ae9ba0d8f330508246e6c9bc940fe err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

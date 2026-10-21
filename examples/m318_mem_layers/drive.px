@@ -1,0 +1,61 @@
+# drive.px —— M317 门：驱动器（对「被测进程的 pid」采样 RssAnon，同时打 N 个请求）
+#
+# 与晨曦的 probeT 关键差别：probeT 采的是**自己的** /proc/self；本门必须采**服务端的** pid
+#   （缺陷在服务端：Ma 的内存涨在 proxy_routes 那侧；采客户端会把两件事混在一起）。
+#
+# 用法：drive <port> <pid> <n>
+# 输出（判据只认这四行前缀）：
+#   M317-DRV start anon=<KB>
+#   M317-DRV mid   anon=<KB> after=<n/2>
+#   M317-DRV end   anon=<KB> after=<n>
+#   M317-DRV RESULT d1_bytes=.. d2_bytes=.. slope2_bpr=.. bad=..
+def kv_kb(txt, key):
+    for line in txt.split("\n"):
+        if starts_with(line, key):
+            parts = line.split(":")
+            if len(parts) >= 2:
+                return int(trim(parts[1]).split(" ")[0])
+    return -1
+
+def anon_of(pid):
+    r = read_file_opt("/proc/" + str(pid) + "/status")
+    if r.is_err():
+        return -1
+    return kv_kb(r.ok(), "RssAnon:")
+
+def run():
+    av = args()
+    if len(av) < 4:
+        print("usage: drive <port> <pid> <n>")
+        exit(2)
+    port = int(av[1])
+    pid = int(av[2])
+    n = int(av[3])
+    url = "http://127.0.0.1:" + str(port) + "/probe"
+    a0 = anon_of(pid)
+    print("M317-DRV start anon=" + str(a0) + " pid=" + str(pid))
+    flush()
+    half = n / 2
+    a_mid = -1
+    bad = 0
+    i = 0
+    while i < n:
+        r = http_request(url, "GET", "", {"User-Agent": "m317-drive/1"})
+        if type(r) != "dict":
+            bad += 1
+        elif r["status"] != 200:
+            bad += 1
+        i += 1
+        if i == half:
+            a_mid = anon_of(pid)
+            print("M317-DRV mid anon=" + str(a_mid) + " after=" + str(i))
+            flush()
+    a1 = anon_of(pid)
+    print("M317-DRV end anon=" + str(a1) + " after=" + str(n))
+    d1 = (a_mid - a0) * 1024
+    d2 = (a1 - a_mid) * 1024
+    slope2 = d2 / half
+    print("M317-DRV RESULT d1_bytes=" + str(d1) + " d2_bytes=" + str(d2) + " slope2_bpr=" + str(slope2) + " bad=" + str(bad))
+    flush()
+
+run()

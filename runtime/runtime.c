@@ -542,6 +542,7 @@ static void sse_cli_pump(int idx);
 static void sse_cli_feed(int idx, const unsigned char* data, int n);
 // M22 P1：强制垃圾回收（gc()）
 static LXValue bi_gc(LXValue* args, int nargs, void* ctx);
+static LXValue bi_gc_diagnose(LXValue* args, int nargs, void* ctx);   // M318：内存分层诊断
 // M23 P1：进程/信号（os_pid/os_spawn/os_wait/os_kill/signal）
 static LXValue bi_os_pid(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_exec(LXValue* args, int nargs, void* ctx);
@@ -1397,6 +1398,15 @@ static long long g_gc_max_interval_ms = 0;   // 0 = 关闭时间触发
 static long long g_gc_time_floor = 0;        // 时间触发所需的最小垃圾量（自上次 GC 的分配字节）
 static long long g_gc_time_check_at = 0;     // 下次取时钟的分配水位（省掉「每次分配都取时钟」）
 static volatile int g_gc_idle_reclaim = 0;   // 1 = 上次 GC 后仍有非头空 slab 待归还 ⇒ 空闲也可推进
+// ==================== M318：存活集字节（自适应软上限的输入） ====================
+// 来历：M317 把 GC「何时跑」补齐了（时间 + 增量），但**字节判据仍是硬编码 512MiB**，
+//   于是「高水位 = min(512MiB, 速率 × 间隔)」这条公式里那个 512MiB 成了唯一的死旋钮。
+//   实测（M317 §四）：490rps × 10KB ⇒ 4.9MB/s × 30s ⇒ 平台 147MB，而此时**存活集只有 20MB 级**
+//   ⇒ 堆比存活集大 7 倍，多出来的全是「还没攒满 30s 的垃圾」。调小间隔能压平台，但 GC 次数线性增加。
+// 本变量 = 上一轮 GC 结束时的**存活集字节**（sweep 时逐对象累加，O(1)/对象）。
+//   用途：触发点取「再分配一个 live 的量」（= Go 的 GOGC=100 语义）⇒ 堆 ≈ 2×live，
+//   与堆的绝对大小无关：小服务压得低，大服务不会因为阈值太死而白跑。
+static long long g_gc_live_bytes = 0;
 static long long g_gcs_time_runs = 0;        // M317：因时间/增量判据而跑的轮数（观测用）
 static long long g_gcs_idle_runs = 0;        // M317：其中由**空闲心跳**（px_gc_poll）发起的轮数
 static long long g_gcs_tick_wakeups = 0;     // M317：GC 心跳线程的唤醒次数（判据「心跳真的在跳」）
@@ -2011,6 +2021,38 @@ static int gcs_put(char* b, int n, int cap, const char* fmt, ...) {
 }
 
 // 汇总输出。调用者须保证「不持 stdio 锁」——本函数只用 write(2)。
+// ==================== M318：内存分层 —— slab 总量读数（单一实现） ====================
+// 为什么要抽出来：M317 的 dump 里已经算了这一组（map_bytes / free_slots / fully_empty），
+//   而 M318 新增的 `gc_diagnose()` 需要**同一组数字**。本仓反复踩过「同一语义两处实现」的坑
+//   （M215 缺陷 305：`//` 的商在两个文件里各写一遍；M230 缺陷 345：VM 索引快路径另有一份），
+//   ⇒ 抽成一份，两处共用。
+// 判据（三层内存模型里的第 ② 层）：
+//   map_bytes    = 已向 OS 要的 slab 总量（含空闲页）
+//   free_slots   = 空闲槽数（碎片）
+//   fully_empty  = **完全空**的 slab 块数（下一轮 GC 可归还）
+// ⚠️ 内部取 g_slab_mu ⇒ **不得在 STW 暂停窗口内调用**（持 g_slab_mu 的线程会被 gc_block_stop
+//    保护、不会被暂停，故正常路径无死锁；但若在 sweep 中途调，本线程自己的加锁顺序会变）。
+typedef struct {
+    long long map_bytes;
+    long long free_slots;
+    int       n;
+    int       fully_empty;
+} GcSlabTotals;
+
+static void gc_slab_totals(GcSlabTotals* out) {
+    out->map_bytes = 0; out->free_slots = 0; out->n = 0; out->fully_empty = 0;
+    pthread_mutex_lock(&g_slab_mu);
+    size_t nslab = g_slab_range_count;
+    for (size_t i = 0; i < nslab; i++) {
+        Slab* s = g_slab_ranges[i];
+        out->map_bytes += (long long)s->map_bytes;
+        out->free_slots += (long long)s->free_count;
+        if (s->free_count == s->slot_count) out->fully_empty++;
+    }
+    out->n = (int)nslab;
+    pthread_mutex_unlock(&g_slab_mu);
+}
+
 static void gcs_dump(const char* why) {
     char b[3072];   // M317：新增 heap/slab 两行
     int n = 0;
@@ -2024,7 +2066,8 @@ static void gcs_dump(const char* why) {
     long long lwm   = __atomic_load_n(&g_gcs_lockwait_max_us, __ATOMIC_RELAXED);
     n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] === dump why=%s runs=%lld skips=%lld empty=%lld slow=%lld ===\n",
                 why, runs, skips, empty, slowr);
-    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] rss_obj_live=%d\n", g_obj_count);
+    n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] rss_obj_live=%d live_bytes=%lldKB\n",
+                g_obj_count, (long long)__atomic_load_n(&g_gc_live_bytes, __ATOMIC_RELAXED) / 1024);
     // M317（缺陷 551）：补「何时该回收」的两个旋钮读数 + 时间触发次数。
     //   来历：晨曦 2026-10-21 明确提的 P1 —— 修前 dump 里没有 alloc/trigger 两行，
     //   只能靠「首次 GC 落点」反推阈值，而落点受其它分配影响、波动可达 ±35%。
@@ -2040,19 +2083,11 @@ static void gcs_dump(const char* why) {
     //   判据：map_bytes（已向 OS 要的总量）vs free_slots（空闲槽）vs fully_empty（可归还的整块）。
     //   ⚠️ 只在 dump 时取 g_slab_mu（持 g_slab_mu 的线程被 gc_block_stop 保护、不会被暂停 ⇒ 无死锁）。
     {
-        size_t nslab; long long sbytes = 0, freeslots = 0; int nfe = 0;
-        pthread_mutex_lock(&g_slab_mu);
-        nslab = g_slab_range_count;
-        for (size_t i = 0; i < nslab; i++) {
-            Slab* s = g_slab_ranges[i];
-            sbytes += (long long)s->map_bytes;
-            freeslots += (long long)s->free_count;
-            if (s->free_count == s->slot_count) nfe++;
-        }
-        pthread_mutex_unlock(&g_slab_mu);
+        GcSlabTotals st;   // M318：与 gc_diagnose() 共用同一份实现（避免「同一语义两处写」）
+        gc_slab_totals(&st);
         n = gcs_put(b, n, (int)sizeof(b),
-                    "[px-gc-stats] slab n=%llu map_bytes=%lldKB free_slots=%lld fully_empty=%d\n",
-                    (unsigned long long)nslab, sbytes / 1024, freeslots, nfe);
+                    "[px-gc-stats] slab n=%d map_bytes=%lldKB free_slots=%lld fully_empty=%d\n",
+                    st.n, st.map_bytes / 1024, st.free_slots, st.fully_empty);
     }
     n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] pause_ms p50=%.1f p95=%.1f p99=%.1f max=%.1f n=%lld\n",
                 gcs_quantile(g_gcs_hist_total, 0.50) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 0.50) / 1000.0,
@@ -2252,6 +2287,49 @@ static bool px_value_is_obj(LXValue v) {
 int px_dbg_val_is_obj(LXValue v) { return px_value_is_obj(v) ? 1 : 0; }
 
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
+// ==================== M318：单对象占用字节（纯读） ====================
+// 为什么需要：自适应软上限要「存活集字节」，而 LXObject 是定长 struct，并不记录自身占用。
+//   两条替代路径都不通：
+//     ① 给 LXObject 加一个 size 字段 —— 会让**每一个**对象多 8 字节（本仓对象量级百万 ⇒ 8MB 常驻），
+//        而且要在所有构造点维护，属于「为观测改数据布局」；
+//     ② 反查 xmalloc 的大小头 —— 要区分 slab/mmap 两条路径（头格式不同），且 `data` 可能是
+//        内联、独立、mmap 三种（PX_STR 内联 / PX_BYTES 独立 / mmap bytes），判据比算一遍还复杂。
+//   ⇒ 按 type 直接算。公式与各构造点的 `gc_register(o, est)` 口径**逐条对齐**（见 px_str_len_raw、
+//     px_bytes_len、px_list、px_dict… 的 est 实参）。
+// ⚠️ 必须是**纯读**：不分配、不调 px_type_name（M257：后者内部走 px_dict_get ⇒ 与容器守卫互递归）。
+// ⚠️ O(1)/对象 —— dict/struct 的**键内容**刻意不计（键通常远小于容器本体；计了会让 sweep
+//   从 O(对象数) 变成 O(总键数)，而 sweep 在 STW 窗口里跑）。
+static long long gc_obj_size(const LXObject* o) {
+    long long sz = (long long)sizeof(LXObject);
+    switch (o->type) {
+        case PX_STR:   // 对象 + 内联 data（M107-S3d：同一次 xmalloc）+ 惰性 rune 偏移表
+            sz += (long long)o->as.str.len + 1;
+            if (o->as.str.rune_offs) sz += (long long)o->as.str.offs_cnt * (long long)sizeof(int);
+            break;
+        case PX_BYTES: // 对象 + 独立 data 块（mmap bytes 与普通 bytes 都是 len 字节）
+            sz += (long long)o->as.str.len + 1;
+            break;
+        case PX_LIST:
+            sz += (long long)o->as.list.cap * (long long)sizeof(LXValue);
+            break;
+        case PX_DICT:
+            sz += (long long)o->as.dict.cap * (long long)(sizeof(char*) + sizeof(LXValue));
+            break;
+        case PX_STRUCT:
+            sz += (long long)o->as.struct_inst.nfields * (long long)(sizeof(char*) + sizeof(LXValue));
+            break;
+        case PX_TUPLE:
+            sz += (long long)o->as.tuple.len * (long long)sizeof(LXValue);
+            break;
+        case PX_CHAN:
+            sz += (long long)o->as.chan.cap * (long long)sizeof(LXValue);
+            break;
+        default:       // RESULT / FUNC / NATIVE / ENUM / MUTEX / RWLOCK / GEN / TYPE：只有对象本身
+            break;
+    }
+    return sz;
+}
+
 static void px_obj_free(LXObject* o) {
     int uaf_prev_ty = g_uaf_free_type;                 // M183：标记「本对象及其内部数组」的归属类型
     if (g_gc_uafdet) g_uaf_free_type = (int)o->type;
@@ -3287,12 +3365,14 @@ void px_gc_collect(void) {
         if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[mk] sweep count=%d\n", g_obj_count); (void)write(2, dbg, (size_t)dn); }
         g_in_gc_sweep = 1;   // ISSUE28-B1：sweep 单线程（executor 已屏蔽信号）→ xfree 免逐趟 sigprocmask
         int freed = 0, w = 0;
+        long long live_b = 0;   // M318：本轮存活集字节（逐对象累加，O(1)/对象）
         for (int i = 0; i < g_obj_count; i++) {
             LXObject* o = g_objs[i];
             if (!gc_hash_has(&set, (uintptr_t)o)) continue;   // 防御：损坏条目，丢弃
             if (o->gc_mark) {
                 o->gc_mark = 0;
                 g_objs[w++] = o;
+                live_b += gc_obj_size(o);
             } else {
                 gc_trace_check_freed(o);   // M183 诊断：回收「仍登记在根栈里」的对象 → 响亮
                 px_obj_free(o);
@@ -3301,6 +3381,7 @@ void px_gc_collect(void) {
         }
         g_in_gc_sweep = 0;
         g_obj_count = w;
+        g_gc_live_bytes = live_b;
         g_alloc_bytes = 0;
         g_gc_last_ms = gc_now_ms();      // M317（缺陷 551）：时间判据基准
         g_gc_time_check_at = 0;
@@ -3384,12 +3465,14 @@ void px_gc_collect(void) {
     if (g_gc_stats_on) _gcs_mark = gc_mono_us() - _gcs_t0 - _gcs_lock;   // M312：标记（单线程无握手）
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
+    long long live_b = 0;   // M318：本轮存活集字节（与并发路径同口径）
     for (int i = 0; i < g_obj_count; i++) {
         LXObject* o = g_objs[i];
         if (!gc_hash_has(&set, (uintptr_t)o)) continue;   // 防御：损坏条目，丢弃
         if (o->gc_mark) {
             o->gc_mark = 0;
             g_objs[w++] = o;
+            live_b += gc_obj_size(o);
         } else {
             gc_trace_check_freed(o);   // M183 诊断：回收「仍登记在根栈里」的对象 → 响亮
             px_obj_free(o);
@@ -3398,6 +3481,7 @@ void px_gc_collect(void) {
     }
     g_in_gc_sweep = 0;
     g_obj_count = w;
+    g_gc_live_bytes = live_b;
     g_alloc_bytes = 0;
     g_gc_last_ms = gc_now_ms();      // M317（缺陷 551）：时间判据基准
     g_gc_time_check_at = 0;
@@ -13063,6 +13147,7 @@ void px_register_builtins(void) {
     px_set_global("cron", px_native("cron", bi_cron));
     // M22 P1：强制垃圾回收（解释器追踪式 GC / 编译模式保守标记-清除）
     px_set_global("gc", px_native("gc", bi_gc));
+    px_set_global("gc_diagnose", px_native("gc_diagnose", bi_gc_diagnose));   // M318
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
     px_set_global("os_pid", px_native("os_pid", bi_os_pid));
     px_set_global("os_spawn", px_native("os_spawn", bi_os_spawn));
@@ -13196,6 +13281,54 @@ static LXValue bi_gc(LXValue* args, int nargs, void* ctx) {
     if (nargs != 0) px_error("R1002: gc 不需要参数");
     px_gc_collect();
     return px_int(1);
+}
+
+// ==================== M318：GC 内存分层诊断（用户可调用的结构化读数） ====================
+// 来历（本机实测，M318 侦察）：同一个「反代 3000 请求」装置，
+//   · 关闭档（PX_GC_MAX_INTERVAL_MS=0）：anon 45.8MB · slab 21.5MB · 对象 64794
+//   · 开启档（interval=1000）        ：anon 26.5MB · slab 4.0MB  · 对象 8147 · **live 62KB**
+//   ⇒ 同一个 RSS 里，「活数据」与「已回收但未归还的页」与「非 GC 内存（线程栈/arena）」相差两个量级，
+//     而修前 dump 只有 rss_obj_live 一个数 ⇒ 报障时**无法回答「这 200MB 里哪一层在涨」**。
+// 本函数把三层一次性交给程序自己：
+//   ① 活对象层  live_objs / live_bytes        —— 真在用的数据
+//   ② 分配器层  slab_bytes / slab_n / slab_free_slots / slab_fully_empty —— 已向 OS 要但未必在用
+//   ③ 触发层    alloc_since_gc / trigger_bytes / max_interval_ms / runs 族 —— 「下一次 GC 何时来」
+// 用途：Ma 这类长期在线的服务可以在 /metrics 里暴露它；报障时直接给出分层读数，
+//   而不是像 M317 之前那样靠「RSS 曲线 + 猜」。
+// ⚠️ M206（缺陷 248 族）：容器创建后必须**立刻** PX_KEEP —— 每次 px_dict_set 都可能分配
+//    （键副本），若 d 只活在 C 局部，precise GC 会把它回收 ⇒ 返回已释放对象。
+static LXValue bi_gc_diagnose(LXValue* args, int nargs, void* ctx) {
+    (void)ctx; (void)args;
+    if (nargs != 0) px_error("R1002: gc_diagnose 不需要参数");
+    px_root_push();
+    LXValue d = px_dict();
+    PX_KEEP(d);
+    long long live_bytes = 0, alloc = 0;
+    int live_objs = 0, runs = 0;
+    pthread_mutex_lock(&g_gc_mu);
+    live_bytes = g_gc_live_bytes;
+    alloc = g_alloc_bytes;
+    live_objs = g_obj_count;
+    runs = (int)g_gc_runs;
+    pthread_mutex_unlock(&g_gc_mu);
+    GcSlabTotals st;
+    gc_slab_totals(&st);   // 与 PX_GC_STATS 的 slab 行同一份实现
+    px_dict_set(d, "live_objs", px_int(live_objs));
+    px_dict_set(d, "live_bytes", px_int(live_bytes));
+    px_dict_set(d, "alloc_since_gc", px_int(alloc));
+    px_dict_set(d, "slab_bytes", px_int(st.map_bytes));
+    px_dict_set(d, "slab_n", px_int(st.n));
+    px_dict_set(d, "slab_free_slots", px_int(st.free_slots));
+    px_dict_set(d, "slab_fully_empty", px_int(st.fully_empty));
+    px_dict_set(d, "runs", px_int(runs));
+    px_dict_set(d, "time_runs", px_int((int64_t)__atomic_load_n(&g_gcs_time_runs, __ATOMIC_RELAXED)));
+    px_dict_set(d, "idle_runs", px_int((int64_t)__atomic_load_n(&g_gcs_idle_runs, __ATOMIC_RELAXED)));
+    px_dict_set(d, "trigger_bytes", px_int((int64_t)g_gc_trigger_bytes));
+    px_dict_set(d, "max_interval_ms", px_int((int64_t)g_gc_max_interval_ms));
+    px_dict_set(d, "pending", px_bool(__atomic_load_n(&g_gc_pending, __ATOMIC_RELAXED) != 0));
+    px_dict_set(d, "stress", px_bool(g_gc_stress != 0));
+    px_root_pop();
+    return d;
 }
 
 // ==================== M23 进程 / 信号（编译模式，与解释器 builtin.rs 双模式一致） ====================
