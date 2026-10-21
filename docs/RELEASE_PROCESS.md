@@ -364,40 +364,71 @@ GH_TOKEN=$(cat /data/pat.md) packaging/release_reconcile.sh --limit 12 --rerun  
 - 豁免表过期判据：若某条豁免的 tag **就是最新的版本 tag** ⇒ 判 `STALE-IGNORE`（最新必须有发布）
 - 门：`examples/m278_release_reconcile/verify.sh`（离线自证 30/0 + 静态判据 + 负控）
 
-## 全量门档位：SERIAL / SHARD（M314 · 用户令 A）
+## 全量门档位：SERIAL / SHARD / **SHARD_SEM**（M314 立 · M317 改）
 
 > 用户令（2026-10-19）：「常规发布走分片档（~98min），串行权威档只在**改了 runtime / 编译器**
 > 的轮次跑一次做周期性复核。」
+>
+> ⭐ **用户令更新（2026-10-21 · 方案②）**：「语义轮改**分片全覆盖 + 抽样串行复核**。」
+> 依据（实测）：语义轮 SERIAL 档 **18774s ≈ 5.2h**，而跑门期间 **CPU 利用率仅 12.6%
+> （1.01 核 / 8 核）** —— 慢的不是门，是「一次只跑一个门」。
 
 **判据由代码派生，不靠人工记忆**（`packaging/chain/pick_gate_tier.sh`）：
 
 | 语义面 | 命中 ⇒ | 未命中 ⇒ |
 |---|---|---|
-| `runtime/*.c` `runtime/*.h` · `selfhost/*.px` · `tools/*.px` | **SERIAL**（逐门权威档） | **SHARD**（分片档 + 逐门对拍） |
+| `runtime/*.c` `runtime/*.h` · `selfhost/*.px` · `tools/*.px` | **SHARD_SEM**（分片全覆盖 + 抽样串行复核） | **SHARD**（分片档 + 逐门对拍） |
+
+**SERIAL（串行权威档）仍保留三种触发**：`--force-serial` 显式指定 · 超期周期性复核
+（`--overdue-days N`）· 档位判定失败（rc≠0，保守回落）。
 
 ```bash
 bash packaging/chain/pick_gate_tier.sh              # 输出 GATE-TIER / GATE-REASON / GATE-HITS
-bash packaging/chain/pick_gate_tier.sh --self-test  # 自证 7/0（含 3 个历史区间 + 非法 ref rc=3）
+bash packaging/chain/pick_gate_tier.sh --self-test  # 自证 9/0（含 3 个历史区间 + force-serial 两档 + rc=3）
+bash packaging/chain/recheck_sample.sh --self-test  # 自证 4/0（全一致/不一致/串行红/分片缺结果）
 ```
+
+### SHARD_SEM 的抽样集怎么定（**源码派生，不手抄**）
+
+`packaging/chain/recheck_sample.sh <分片日志目录> [--top K]`：
+
+| 来源 | 内容 | 理由 |
+|---|---|---|
+| ① **Top-K 耗时门** | 从**本轮分片实测**的 `shard*.times.tsv` 排序取前 K（默认 12） | 资源竞争最敏感；并行若影响结果，最先在它们身上露出来 |
+| ② **quiet 档全部** | `quiet_needed.txt`（本就摘出分片、机器空闲时串行跑） | 天然已是权威结果，直接纳入对拍集 |
+
+**对拍判据**（四条，任一不满足 ⇒ RED）：抽样门串行侧红门 = 0 · 分片侧缺结果 = 0 ·
+串行侧缺结果 = 0 · 逐门 (状态, rc) 一致 = 全部。
+⚠️ **分片侧缺结果不许"跳过算绿"** —— 那是本脚本最容易被"优化"掉的一条，已进自证 S4。
+
+**成本（实测口径）**：分片 ~98min + 抽样串行 ~40min ≈ **2.3h**（vs SERIAL 5.2h）。
+⚠️ 抽样门数按 `RECHECK_TOP` 调；K 越大越接近 SERIAL，K=0 则退化成纯分片（不推荐）。
 
 **为什么语义面只算这三处**：`runtime/*.c` 决定运行时语义；`selfhost/*.px` 是编译器/解释器本体；
 `tools/*.px` 是 `px` CLI 的行为（`px build` 本身在三轨对拍链上）。改门、改打包、改文档、
 改 `registry/*.px`（库）都**不**改变这三者的语义 ⇒ 分片档 + 逐门对拍足以保证判据强度不降。
 
-**纪律四条**：
+**纪律六条**：
 1. **判定失败 ⇒ SERIAL**（宁可慢，不可漏）—— 这是唯一允许的保守回落方向；
    取不到 ref 时 `pick_gate_tier.sh` 回 **rc=3** 且 `GATE-TIER=` 为空，**绝不静默选档**。
 2. 走 SHARD 的轮次**必须**与串行基线逐门对拍（`shard_verdict.py`；红门/缺失/多余/状态不一致
    任一非零即 RED）。对拍结论要留档。
 3. `watch_chain.sh --tier auto`（默认）会把档位写进 p0 通知；**SERIAL 且 GREEN** 时写时间戳
-   `/tmp/.puxian_last_serial_gate.stamp`。
+   `/tmp/.puxian_last_serial_gate.stamp`（**SHARD_SEM 不写** —— 否则超期复核永不触发）。
 4. `--overdue-days N`：距上次串行档超 N 天 ⇒ **强制 SERIAL**（周期性复核兜底；
    默认 0 = 关闭，建议发布链传 14）。
+5. ⭐ **SHARD_SEM 档必须给 `watch_chain.sh --recheck <分片日志目录>`**：收尾读
+   `recheck.verdict.txt`，非 GREEN 或无该文件 ⇒ `rc=5` 且挂 p1（**复核没过不许推**）。
+6. ⭐ **抽样核对必须在分片全部结束后跑** —— 抽样门的判据前提是「机器空闲」
+   （与 `quiet_needed.txt` 的注册理由同源）。脚本自带前提自证（4 个 `shard*.rc` 必须齐）。
 
 **实测对照**（说明这条规则省了什么）：
 - `v0.2.310..v0.2.311`（M311 只改门/工具/registry/打包）⇒ SHARD：串行档实测 9526s ≈ 2.6h ⇒ 分片档 ≈ 98min
-- `v0.2.311..v0.2.312`（M312 改 `runtime.c`+`coro.c`）⇒ SERIAL
-- `v0.2.312..v0.2.313`（M313 改 `runtime_conn.c`）⇒ SERIAL
+- `v0.2.311..v0.2.312`（M312 改 `runtime.c`+`coro.c`）⇒ **SHARD_SEM**（原口径 SERIAL；M317 起）
+- `v0.2.312..v0.2.313`（M313 改 `runtime_conn.c`）⇒ **SHARD_SEM**
+- `v0.2.315..v0.2.316`（M316 改 `runtime.c` 的 HTTP 头合成）⇒ SERIAL 实测 **18774s ≈ 5.2h**（230 门 · 1 红）
+  —— 这一轮就是方案② 的触发证据
+- `--force-serial` 随时可回到逐门权威档（M316 那轮的口径）
 
 ⚠️ **分片档不保证 98 分钟**：M311 实测 5896s（超 5400s 判据 9.2%，已定位到单次扰动）。
 常态轮次 ≈ 98min，大改动轮次 100min 上下 —— **不为凑时间放宽判据**（红线）。
@@ -410,8 +441,10 @@ bash packaging/chain/pick_gate_tier.sh --self-test  # 自证 7/0（含 3 个历�
 - [ ] 本地先跑一次 `tools/make_release.sh` 确认冒烟全 PASS（避免 workflow 白跑）
 - [ ] 本地全量门无红：`./selfhost/run_gates.sh`（本地含负控；旧名 `m116_gates.sh` 仍可用 = 兼容转发）
       · 迭代期可用 `--only <门名表>` / `--fail-fast` 快速验回归（**发布前必须跑全量**）
-      · **档位**（M314）：先跑 `packaging/chain/pick_gate_tier.sh` —— 语义面命中 ⇒ SERIAL（串行权威档）；
-        未命中 ⇒ SHARD（分片档，**必须**与串行基线逐门对拍）。判定失败 ⇒ 按 SERIAL 跑。
+      · **档位**（M314 立 · M317 改）：先跑 `packaging/chain/pick_gate_tier.sh` ——
+        语义面命中 ⇒ **SHARD_SEM**（分片全覆盖 + `recheck_sample.sh` 抽样串行复核；
+        传给 `watch_chain.sh --recheck <分片日志目录>`）；未命中 ⇒ SHARD（与串行基线逐门对拍）。
+        判定失败 / `--force-serial` / 超期 ⇒ SERIAL（串行权威档）。
 - [ ] CHANGELOG 已记录本版变更（含每轮缺陷编号与验证证据）
 - [ ] 打 tag 前 `git log --oneline <上一tag>..HEAD` 确认入版范围符合预期
 - [ ] 打完 tag 后：**CI / Release / Tag Guard 三个 run 全绿**，且 Release 资产齐全

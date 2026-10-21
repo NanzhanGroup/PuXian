@@ -7,8 +7,14 @@
 #
 # 判据（**可判定，不靠人工记忆**）：
 #   语义面 = runtime/*.c|h  ∪  selfhost/*.px  ∪  tools/*.px
-#     · 命中  ⇒ SERIAL（逐门最稳判据；且入库件会全部重烘 ⇒ 门内 devbuild 也会全冷）
+#     · 命中  ⇒ SHARD_SEM（**分片全覆盖 + 抽样串行复核**；见 recheck_sample.sh）
 #     · 未命中 ⇒ SHARD（与串行基线逐门对拍，不一致即 RED —— 见 shard_verdict.py）
+#
+# ⭐ 用户令更新（2026-10-21 · 方案②）：
+#     原「语义面命中 ⇒ SERIAL（~5.2h）」改为「⇒ SHARD_SEM（分片 ~98min + 抽样串行复核 ~40min）」。
+#     强度不降的依据：抽样集 = **Top-K 耗时门**（资源竞争最敏感）+ **quiet 档全部**（本就串行跑），
+#     这批门**既有分片结果又有串行结果** ⇒ 可逐门对拍；其余门靠分片 + 全套判据自证。
+#     SERIAL 仍保留三种触发：① --force-serial 显式指定 ② 超期周期性复核 ③ 判定失败保守回落。
 #   --overdue-days N ⇒ 距上次串行档超过 N 天也强制 SERIAL（周期性复核兜底）
 #
 # 为什么语义面只算这三处：
@@ -38,12 +44,14 @@ OVERDUE_DAYS=0
 STAMP=""
 QUIET=0
 SELF_TEST=0
+FORCE_SERIAL=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --base) BASE="${2:-}"; shift 2 ;;
         --head) HEAD="${2:-}"; shift 2 ;;
         --overdue-days) OVERDUE_DAYS="${2:-0}"; shift 2 ;;
+        --force-serial) FORCE_SERIAL=1; shift ;;
         --stamp) STAMP="${2:-}"; shift 2 ;;
         --quiet) QUIET=1; shift ;;
         --self-test) SELF_TEST=1; shift ;;
@@ -69,7 +77,7 @@ tier_for_range() {   # $1=base $2=head ⇒ 置 TIER/REASON/HITS
     n="$(printf '%s\n' "$files" | grep -cE "$SEM_PATTERNS" || true)"
     HITS="${n:-0}"
     if [ "${HITS:-0}" -gt 0 ]; then
-        TIER="SERIAL"; REASON="语义面命中 $HITS 个文件（runtime/*.c|h · selfhost/*.px · tools/*.px）"
+        TIER="SHARD_SEM"; REASON="语义面命中 $HITS 个文件（runtime/*.c|h · selfhost/*.px · tools/*.px）⇒ 分片 + 抽样串行复核"
     else
         TIER="SHARD"; REASON="语义面 0 命中 ⇒ 分片档（须与串行基线逐门对拍）"
     fi
@@ -92,8 +100,8 @@ if [ "$SELF_TEST" = "1" ]; then
         fi
     }
     check_range "v0.2.310" "v0.2.311" SHARD "M311 只改门/工具/registry/打包 ⇒ 分片"
-    check_range "v0.2.311" "v0.2.312" SERIAL "M312 改 runtime.c + coro.c ⇒ 串行"
-    check_range "v0.2.312" "v0.2.313" SERIAL "M313 改 runtime_conn.c ⇒ 串行"
+    check_range "v0.2.311" "v0.2.312" SHARD_SEM "M312 改 runtime.c + coro.c ⇒ 分片+抽样复核"
+    check_range "v0.2.312" "v0.2.313" SHARD_SEM "M313 改 runtime_conn.c ⇒ 分片+抽样复核"
 
     # T2 非法 ref ⇒ rc=3（绝不静默回落）
     tier_for_range "no-such-ref-xyz" "HEAD"; RC=$?
@@ -101,6 +109,18 @@ if [ "$SELF_TEST" = "1" ]; then
 
     # T3 同一 ref ⇒ 0 命中 ⇒ SHARD
     check_range "HEAD" "HEAD" SHARD "空区间 ⇒ 无语义面改动 ⇒ 分片"
+
+    # T3b --force-serial ⇒ 必须 SERIAL（语义面即使 0 命中也要能强制）
+    #   ⚠️ 判据写的是**最终输出**而不是中间变量：模拟正式路径（tier_for_range + force 覆盖）
+    TIER=""; REASON=""; HITS=0
+    tier_for_range "HEAD" "HEAD"
+    if [ "$TIER" = "SHARD" ]; then TIER="SERIAL"; REASON="人工指定 --force-serial（原判：${REASON}）"; fi
+    if [ "$TIER" = "SERIAL" ]; then ok "--force-serial ⇒ 强制 SERIAL（覆盖 SHARD）"; else bad "--force-serial 未生效（$TIER）"; fi
+    # T3c 语义命中 + force-serial ⇒ 仍是 SERIAL（幂等）
+    TIER=""; REASON=""; HITS=0
+    tier_for_range "v0.2.311" "v0.2.312"
+    if [ "$TIER" = "SHARD_SEM" ]; then TIER="SERIAL"; REASON="人工指定 --force-serial（原判：${REASON}）"; fi
+    if [ "$TIER" = "SERIAL" ]; then ok "--force-serial 对语义轮幂等（SHARD_SEM ⇒ SERIAL）"; else bad "force 对语义轮不幂等（$TIER）"; fi
 
     # T4 超期逻辑：stamp 很旧 ⇒ 强制 SERIAL
     #   ⚠️ 必须**显式设 OVERDUE_DAYS**（自测默认不带 --overdue-days，否则这一档恒不触发
@@ -145,8 +165,13 @@ fi
 TIER=""; REASON=""; HITS=0
 tier_for_range "$BASE" "$HEAD" || { echo "GATE-TIER="; echo "GATE-REASON=$REASON"; exit 3; }
 
+# 人工强制：--force-serial（保留串行权威档的显式入口）
+if [ "$FORCE_SERIAL" = "1" ]; then
+    TIER="SERIAL"; REASON="人工指定 --force-serial（原判：${REASON}）"
+fi
+
 # 周期性复核：距上次串行档超期 ⇒ 升级为 SERIAL
-if [ "$TIER" = "SHARD" ] && [ "$OVERDUE_DAYS" -gt 0 ]; then
+if { [ "$TIER" = "SHARD" ] || [ "$TIER" = "SHARD_SEM" ]; } && [ "$OVERDUE_DAYS" -gt 0 ]; then
     if [ -n "$STAMP" ] && [ -f "$STAMP" ]; then
         LAST="$(tr -d ' \n' < "$STAMP" 2>/dev/null || echo 0)"
         case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
