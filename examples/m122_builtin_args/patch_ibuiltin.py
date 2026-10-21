@@ -2,9 +2,14 @@
 # M122 · 给 selfhost/ibuiltin.px 的 49 个「直调宿主 native」分支补 arity 校验
 # 文案逐字对齐 runtime.c 的 px_error（C 轨），错码用 i_r1002（参数错）
 # 仅插入「该分支没有 len(args) 校验」的 return 行之前；已校验/复杂逻辑分支不动
-import re, sys
+import re, sys, os
 
-SRC = "/data/code/puxian/selfhost/ibuiltin.px"
+# ⚠️ M317 修（缺陷 300 同族）：原先写死 `/data/code/puxian/selfhost/ibuiltin.px`
+#   ⇒ 分片 worktree 里打桩改的是**主仓库**，被测树没变 ⇒ 负控失效/污染其他分片。
+#   修法 = 按本文件位置上溯两级推导仓根（门在 `<root>/examples/m122_.../`），可被 M122_ROOT 覆盖。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.environ.get("M122_ROOT") or os.path.abspath(os.path.join(_HERE, "..", ".."))
+SRC = os.path.join(_ROOT, "selfhost", "ibuiltin.px")
 
 # name -> (校验条件, 文案)
 RULES = {

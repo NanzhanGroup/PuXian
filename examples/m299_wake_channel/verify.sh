@@ -130,7 +130,12 @@ run_wc(){ # $1=形态  $2=额外参数（**可空**）
   local extra="${2:-}"
   : > "$STUBLOG"
   # shellcheck disable=SC2086  # extra 需要按词拆分成多个参数
-  PATH="$W/bin:$PATH" bash "$WC" 299 "$W/logs/$m.log" --no-push $extra >"$W/logs/out.$m" 2>&1
+  # ⚠️ **必须显式给 `--tier shard`**（M317 补 · 变量隔离）：
+  #    用户令 2026-10-21 方案② 之后，`auto` 在「语义面命中」的轮次会判成 SHARD_SEM，
+  #    而 SHARD_SEM 要求 `--recheck <分片目录>`（缺则 `exit 5` 并挂 p1 —— 那是**设计**）。
+  #    本门测的是「四分支各自挂什么」，**与档位无关** ⇒ 显式钉住档位，否则本门会在
+  #    任何改了 runtime/selfhost 的轮次里 rc=5 假红（M317 实测：四分支全 rc=5）。
+  PATH="$W/bin:$PATH" bash "$WC" 299 "$W/logs/$m.log" --no-push --tier shard $extra >"$W/logs/out.$m" 2>&1
   echo "$?"
 }
 mklog "$W/logs/red.log" red

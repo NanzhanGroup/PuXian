@@ -156,7 +156,10 @@ selftest() {
 
     t() { # $1=算子串 $2=模型名
         printf '# 夹具\nonnx_fixture %s %s 夹具\n' "$2" "$1" > "$fx/examples/m267_perf/onnx_loads.tsv"
-        M267_COVERAGE_REPO=/data/code/puxian M267_COVERAGE_ROOT="$fx" \
+        # ⚠️ M317 修（缺陷 300 同族）：原先写死 `M267_COVERAGE_REPO=/data/code/puxian`
+        #   ⇒ 分片 worktree 里跑自证时扫的是**主仓库**（与 worktree 同提交才等价）。
+        #   脚本头已有 `REPO="${M267_COVERAGE_REPO:-$(cd "$HERE/../.." && pwd)}"` ⇒ 用 "$REPO" 即跟随被测树。
+        M267_COVERAGE_REPO="$REPO" M267_COVERAGE_ROOT="$fx" \
           M267_COVERAGE_TABLE="$fx/examples/m267_perf/onnx_loads.tsv" \
           M267_COVERAGE_VERIFY="$fx/examples/m267_perf/verify.sh" \
           M267_COVERAGE_GEN="$fx/examples/m267_perf/tools/gen_perf_models.py" \
