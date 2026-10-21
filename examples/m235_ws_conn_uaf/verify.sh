@@ -77,9 +77,13 @@ chk "runtime.c · acquire/release/owner_free 三 API" "$S_C" "1"
 # read/write 必须被引用计数包裹（各 1 次 acquire + 1 次 release）
 WRAP=$(grep -c "px_conn_acquire(c)" "$RC")
 chk "acquire 调用点 ≥2（read/write 各一）" "$([ "$WRAP" -ge 2 ] && echo 1 || echo 0)" "1"
-grep -A3 "^ssize_t px_conn_read(PxConn\* c" "$RC" | grep -q "px_conn_release(c)" && R1=1 || R1=0
+# 判据口径（M319 收尾修）：按**函数体**取，不用固定行窗（grep -A3）。
+#   原锚点「read 函数起 + 3 行内出现 release」在 M319 给 acquire 失败出口插了 errno 分支后
+#   行号漂移 ⇒ 假红（release 仍在函数体内）。判据强度不降：仍要求包装内确有 release。
+body_of() { awk -v fn="$1" 'index($0, fn "(")==1 {f=1} f {print; if ($0 ~ /^}/) exit}' "$RC"; }
+body_of "ssize_t px_conn_read"  | grep -q "px_conn_release(c)" && R1=1 || R1=0
 chk "px_conn_read 包装含 release" "$R1" "1"
-grep -A3 "^ssize_t px_conn_write(PxConn\* c" "$RC" | grep -q "px_conn_release(c)" && R2=1 || R2=0
+body_of "ssize_t px_conn_write" | grep -q "px_conn_release(c)" && R2=1 || R2=0
 chk "px_conn_write 包装含 release" "$R2" "1"
 
 # close 必须无条件 shutdown（只关读方向 —— 不打断正在进行的写）

@@ -126,7 +126,9 @@ chkge "[1.5c] 心跳按秒醒（不是忙等）" "$c" "1"
 # 1.6 dump 增行（晨曦 P1）
 c=$(grep -c 'heap alloc_since_gc=' "$RT" || true)
 chk "[1.6] PX_GC_STATS 增 heap 行（alloc/trigger 可读）" "$c" "1"
-c=$(grep -c 'slab n=%llu map_bytes=' "$RT" || true)
+# M319 收尾修：M318 把 slab 行从 %llu 改成了 %d、map_bytes 单位标 KB ⇒ 字面量锚点漂移（假红）。
+#   判据口径不变：PX_GC_STATS 必须有一行 slab 读数（n / map_bytes / free_slots / fully_empty 四项齐）。
+c=$(grep -cE 'slab n=%[a-z]+ map_bytes=%[a-z]+KB free_slots=%[a-z]+ fully_empty=%[a-z]+' "$RT" || true)
 chk "[1.6b] PX_GC_STATS 增 slab 行（归还判据可读）" "$c" "1"
 
 # 1.7 语义红线：只改「何时」，不改「回收什么」——S和T两处回收实现的入口一字未动

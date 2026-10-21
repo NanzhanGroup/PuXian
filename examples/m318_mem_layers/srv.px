@@ -5,7 +5,7 @@ def h(req):
 
 def run():
     av = args()
-    port = 18982
+    port = 18984
     if len(av) > 1:
         port = int(av[1])
     print("srv ready port=" + str(port))
