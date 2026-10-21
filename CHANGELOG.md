@@ -1,3 +1,89 @@
+## M319 —— WS 接管读循环在 EOF 上自旋：`errno` 契约 + **删掉一条借残留值判重试的判据**（第 191 轮 · 缺陷 552）
+
+**一句话**：晨曦（wsa-chenxi）报广州 Ma 进程 12 个线程烧满 2 核 **5h38m**（累计 CPU 9h01m）、
+8 条 CLOSE-WAIT。热栈 4/4 同型，落在 `px_conn_read` 的 mutex 上，`/proc/<tid>/syscall = running`、
+5 秒内 `voluntary_ctxt_switches +0` ⇒ **纯用户态自旋，一个系统调用都不发**。
+根因是**两处叠加**：`px_conn_read` 的失败出口不设 errno，而 `ws_read_exact` 用 `errno == EINTR`
+判「该重试」并且**没有轮次上限** —— 它判的是一个**不可信的残留值**。
+
+### 一 根因（缺陷 552）
+
+```c
+/* runtime.c（修前） */
+ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
+    if (!px_conn_acquire(c)) return -1;      // ← 连接已关闭：返回 -1，**不设 errno**
+    ...
+}
+
+/* runtime_ws.c（修前） */
+static int ws_read_exact(...) {
+    ssize_t r = px_conn_read(...);
+    if (r == 0) return -1;
+    if (r < 0) { if (errno == EINTR) continue; return -1; }   // ← 读的是**上一次调用的** errno
+    ...
+}
+```
+
+因果链（四步，缺一不可）：
+
+1. GC 的 `SIG_GC_STOP` 打断线程上某次 `recv` ⇒ 内核置 `errno = EINTR`；
+2. `px_conn_read_body` 内部重试并**读成功** ⇒ 成功调用**不改 errno** ⇒ 该线程的 `errno` 长期停在 `EINTR`；
+3. 连接被关掉（心跳超时 / 中继协程 `ws_close` / 对端 FIN 后收尾）⇒ `px_conn_acquire` 失败；
+4. `px_conn_read` 返回 -1 且 errno 仍是 `EINTR` ⇒ `ws_read_exact` 无条件 `continue`
+   ⇒ **「连接已关闭」这个原因不会自愈**，但重试没有上限 ⇒ 死循环（每轮两把 mutex，无任何 syscall）。
+
+⇒ 现场 12 个热线程正好是 12 条已被对端关掉、却仍在泵循环里的 WS 会话；8 条 CLOSE-WAIT
+（本端从未进入 close 路径）与「一条被扔下的会话 ≈ 1 个空转线程 + 1 个 CLOSE-WAIT fd」逐项对上。
+
+### 二 修复（三层，各自独立生效）
+
+| # | 位置 | 改法 |
+|---|---|---|
+| **层 1 · errno 契约** | `px_conn_read` / `px_conn_write` / `px_conn_read_body` / `px_conn_write_body` | **每个返回负值的出口显式设 errno**（读 ⇒ `ECONNRESET`，写 ⇒ `EPIPE`）。口径：任何失败出口都要让 errno 说明原因，调用方可能据此决策 |
+| **层 2 · 判据** | `ws_read_exact` | **删掉 `errno == EINTR` 重试**。理由：重试**本来就在下一层做完了** —— 明文分支 `for(;;){recv; if(r<0&&errno==EINTR) continue;}`（M211 缺陷 265）、TLS 分支 `WANT_READ/WANT_WRITE` 循环（M211 缺陷 286）都是无限重试。外层再判一次，判的只可能是残留值 ⇒ 语义上没有任何合法的 EINTR 需要在这里重试 |
+| **层 3 · 留痕** | 两处源码注释 | 写明根因、实测数字、与 M211 的关系，避免后人「把重试加回来」 |
+
+⚠️ **两层是纵深防御、各自独立生效**：门里实测「只撤回层 2」时自旋**不复现**（层 1 已把 errno 设成
+`ECONNRESET`）—— 所以负控必须**同时撤回两层**才测得到缺陷本身（M209「判据回放」同款纪律）。
+
+### 三 证据（A/B · 同一探针、同一压力档）
+
+| 版本 | 单线程重试次数 | utime / 墙钟 |
+|---|---|---|
+| 修前（+ 诊断插桩） | **2.13 亿次**（`#213400000`） | **1487 ticks / 5s ≈ 297% CPU** |
+| 修前（忠实态，4 轮） | — | 249 / 792 / 397 / 30 ticks（4s）⇒ **3/4 自旋** |
+| **修复后（4 轮）** | **0** | 24 / 26 / 38 / 25 ticks ⇒ **0/4 自旋** |
+
+插桩实测的 `errno=4`（EINTR）与晨曦现场栈逐层对应。
+
+### 四 门 `examples/m319_ws_eof_spin/`（**M319-VERIFY-OK · 17 通过 / 0 失败**）
+
+- **[1] 静态**：4 处 errno 契约在位 · `ws_read_exact` 代码行里 `errno`/`continue` 均为 0 ·
+  失败分支直接 `return -1` · 两处根因注释留痕
+- **[2] 动态（正判据）**：8 并发「中继协程 + `ws_close` + C 泵循环」× 3 轮，压力档
+  `PX_GC_STRESS=1 PX_GC_INLINE=1` ⇒ **双判据**（`utime ≥ 120 ticks/4s` **或** 重试计数 `≥ 1000`）
+  全部不命中
+- **[3] 负控 A（确定性）**：失败分支改成无条件 `continue`（等价「errno 判据恒真」）⇒ **217 ticks 判红**
+- **[4] 负控 B（忠实撤回 + 还原现场 I/O）**：同时撤回两层，并在 acquire 失败分支加**有界**诊断打印
+  ⇒ **4 轮里 3 轮自旋**（251/2300万 · 179/2000万 · 258/2100万）
+- **[5] 负控 C（判据自伤）**：`spin_of` 恒绿 ⇒ 负控 A 的红消失
+- **[6] 还原保真**：两个源码文件与门开头的快照**逐字节一致**
+- **[7] 覆盖边界**：4 条（含「TLS `WANT_READ` 自旋是同族另一条路径，已登记」）
+
+⚠️ **负控 B 为什么要带诊断打印**（如实登记）：不带时实测 **0/8 复现** —— 因为 errno 的残留
+只能由**系统调用被打断**产生，而打印本身就是那次 `write`。晨曦现场（`px-access` 日志、GC 信号、
+大量小 `write`）正好处于这个状态 ⇒ 带打印是**还原现场**，不是人为制造缺陷。
+判据要证的是「`errno` 判据 + 残留 `EINTR` ⇒ 自旋」这条因果链，而不是某个特定 errno 值。
+确定性由负控 A 提供，两者各司其职（M289/M274 口径：概率性现象不硬断言）。
+
+### 五 波及面与回归
+
+- `px_conn_read` / `px_conn_write` 的**所有**调用点都受益（http / http_serve / px_serve / h2 / ws）。
+  全仓只有 `ws_read_exact` 一处按 `errno` 判重试（已 grep 确认）。
+- `ws_serve` 轨（`bi_ws_recv`）与 `ws_stream` 轨共用 `ws_read_frame` ⇒ 两轨同修。
+- 已登记未做：TLS `mbedtls_ssl_read` 的 `WANT_READ` 循环**没有上限**（16693 行的注释早已登记过
+  「表现为 WANT_READ 自旋」）⇒ 同族候选，下轮处理。
+
 ## M318 —— 内存分层可观测性：`gc_diagnose()` + `live_bytes` + **一次否证**（第 190 轮）
 
 **一句话**：M317 让 GC「该跑的时候跑」，但**「RSS 涨了」这句话仍然无法分解** ——

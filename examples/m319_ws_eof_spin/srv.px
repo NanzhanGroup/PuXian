@@ -1,0 +1,36 @@
+# ============================================================
+# m319 复现器 · 服务端：ws_stream 接管 + 语言层中继协程 + 中继收尾时 ws_close
+#
+# 为什么是这个形状（缺陷 552 的必要条件，对齐晨曦广州现场）：
+#   ① handler 里 spawn 中继协程 —— 语言层与 C 泵循环**同时**在同一个 conn 上读
+#      （现场栈的两种形态：`bi_ws_recv ← vm_run_loop` 与 `ws_read_frame ← px_ws_takeover_http_conn`）
+#   ② 中继读到 EOF 后调 `ws_close(conn)` ⇒ 连接标记 closed
+#   ③ handler 已返回 ⇒ C 泵循环继续 `ws_read_frame(c)`
+#      ⇒ `px_conn_read` 的 acquire 失败 ⇒ **修前**：return -1 且不设 errno，
+#        而 `ws_read_exact` 用 `errno == EINTR` 判重试 ⇒ 读到残留值就无限 continue
+#   ④ 若该线程近期被 GC 的 SIG_GC_STOP 打断过（errno 残留 EINTR）⇒ 纯用户态死循环
+#      ⇒ 现场形态：12 线程烧满 2 核、8 条 CLOSE-WAIT、栈全在 px_conn_read 的 mutex 上
+#
+# 环境变量：无（端口由命令行给）
+# ============================================================
+var port = int(args()[1])
+
+def relay(conn):
+    n = 0
+    while true:
+        m = ws_recv(conn, 1500)
+        if m == null:
+            break
+        ws_send(conn, "e:" + m)
+        n = n + 1
+    print("RELAY done n=" + str(n) + " -> ws_close")
+    ws_close(conn)
+    print("RELAY closed")
+
+def agent(conn, req):
+    print("SRV accept path=" + ws_conn_path(conn))
+    spawn relay(conn)
+    print("SRV handler-return")
+
+ws_stream("/agent/x", agent, {})
+px_serve(port, ".", 30000, {})

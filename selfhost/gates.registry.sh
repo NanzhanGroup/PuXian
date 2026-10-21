@@ -1663,4 +1663,12 @@ run m317_gc_time_trigger bash examples/m317_gc_time_trigger/verify.sh --neg-skip
 #         + 负控 A（关闭档 slab ≥ 2× 开启档 · **相对判据**）+ 负控 B（判据回放双向）。
 #   负控只多跑一次服务场景（~15s）⇒ **本地全量档**；CI 用 --neg-skip。
 run m318_mem_layers bash examples/m318_mem_layers/verify.sh
+# M319（第 191 轮 · 缺陷 552）：WS 接管读循环在 EOF 上自旋（晨曦广州现场 12 线程烧满 2 核 5.6h）。
+#   根因两层叠加：① px_conn_read 失败出口不设 errno ⇒ 调用方读到**残留值**；
+#   ② ws_read_exact 用 errno == EINTR 判重试且**无上限**⇒ 已关闭连接上的读变成纯用户态死循环
+#   （实测单线程 2.13 亿次重试 / 5s 297% CPU）。
+#   判据：静态（4 处 errno 契约 + 无 errno 重试）+ 动态双判据（utime 或重试计数）
+#         + 负控 A（注入 continue ⇒ 确定性红）+ 负控 B（忠实撤回 + 还原现场 I/O ⇒ 4 轮至少 1 红）
+#         + 负控 C（判据自伤 ⇒ A 的红消失）。负控要重编 runtime 三次（~60s）⇒ CI 用 --neg-skip。
+run m319_ws_eof_spin bash examples/m319_ws_eof_spin/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test
