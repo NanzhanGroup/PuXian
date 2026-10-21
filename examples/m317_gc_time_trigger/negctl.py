@@ -15,7 +15,13 @@ import sys
 import shutil
 import os
 
-P = "/data/code/puxian/runtime/runtime.c"
+# ⚠️ M317 修（缺陷 300 同族 · 门自身绝对路径）：
+#   原先写死 `/data/code/puxian/runtime/runtime.c` ⇒ 分片 worktree 里跑时改的是**主仓库**，
+#   而不是被测树（M316 的 `[6.2]` 就是这么红的；根因见 examples/m316_http_dup_host/negctl.py）。
+#   修法 = 由本文件位置上溯两级推导仓根；`M317_ROOT` 可显式覆盖。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.environ.get("M317_ROOT") or os.path.abspath(os.path.join(_HERE, "..", ".."))
+P = os.path.join(ROOT, "runtime", "runtime.c")
 BAK = "/tmp/m317_negctl_runtime.c.bak"
 
 # ── 负控 A-1：gc_register 里的「时间 + 增量」判据 ────────────────────────────

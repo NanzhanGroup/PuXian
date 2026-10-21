@@ -7,8 +7,18 @@
   （由 --verify-faithful 对着备份比对）。
 """
 import sys
+import os
 
-P = "/data/code/puxian/runtime/runtime.c"
+# ⚠️ M317 修（缺陷 300 同族 · 门自身绝对路径）：
+#   此处原先写死 `/data/code/puxian/runtime/runtime.c` ⇒ 在**分片 worktree** 里跑门时，
+#   打桩改的是**主仓库**源码，而不是被测的那棵树。实测后果（M317 分片档）：
+#     ① devbuild 用的是 worktree（源码没变）⇒ 命中缓存 ⇒ `[6.2]` 报「负控档与修复档相同」；
+#     ② 打桩期间**主仓库源码被改成撤回态** ⇒ 同窗口其他分片的门读到被污染的源码。
+#   修法 = 由本文件位置上溯两级推导仓根（门在 `<root>/examples/m316_.../`）⇒ 天然指向被测树；
+#   仍允许 `M316_ROOT` 显式覆盖（门里传 $ROOT）。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.environ.get("M316_ROOT") or os.path.abspath(os.path.join(_HERE, "..", ".."))
+P = os.path.join(ROOT, "runtime", "runtime.c")
 
 # ① bi_http_request 的「按需发」块
 FIX_HDR = r'''    int rlen;

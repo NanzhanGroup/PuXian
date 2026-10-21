@@ -1,0 +1,46 @@
+# selfhost/gate_paths_allow.tsv —— `check_gate_paths.sh` 的**存量豁免表**（M317 建）
+#
+# 背景：M213 的守卫只扫 `examples/*/verify.sh` + `selfhost/*.sh` + `tools/*.sh` + workflows
+#   ⇒ 门目录里的 **`.py` 辅助脚本**（negctl / stubs / scan_* / sweep_*）与**子目录 .sh**
+#   整类不在判据面内。M317 实测后果（分片档）：
+#     `examples/m316_http_dup_host/negctl.py` 写死 `/data/code/puxian/runtime/runtime.c`
+#     ⇒ 分片 worktree 里跑门时**打桩改的是主仓库**，被测树没变
+#     ⇒ ① 该门负控自证 `[6.2]` 判红（devbuild 命中缓存 ⇒ 两档产物同 sha）
+#        ② 打桩期间**其他分片读到被污染的源码**（概率性假红/假绿）
+#   ⇒ 2026-10-21 把扫描面扩到 `.py` 与子目录 `.sh`，本表登记**扩面后暴露的存量**。
+#
+# 纪律（同 M249 / M264 / M283 的豁免表）：
+#   ① 每行必须给**非空理由**，且理由要能被核对（不是「历史遗留」四个字）；
+#   ② **只减不增**：新增文件一律按判据修，不许往本表加行；
+#   ③ **过期判据**：本表登记的文件若在真仓里**已无违例**，也判红（逼我删行）。
+#       ⇒ 本表的目标是变空。
+#
+# 格式：<相对仓库根的路径><TAB><理由>   （`#` 开头为注释行）
+#
+# ── A 类：只读扫描器 ────────────────────────────────────────────────
+#   它们读源码文本做判据（错误码清单 / 文案对照 / arity 面 / 覆盖台账），**从不写回**。
+#   分片 worktree 与主仓库是**同一提交** ⇒ 内容等价 ⇒ 扫哪棵树结果相同。
+#   ⚠️ 前提：主仓库不再被任何门打桩（A 类成立依赖这一点 —— 三个「写源码」的门
+#      m316 / m317 / m122 已于 M317 修成「按位置推导仓根」，见 CHANGELOG M317 §十二）。
+examples/m191_error_codes/scan_errcodes.py	A类·只读扫描（扫源码收集错误码，不写回）
+examples/m196_msg_parity/scan_msgs.py	A类·只读扫描（扫 runtime/ibuiltin 文案做三轨对照）
+examples/m197_builtin_arity/sweep_arity.py	A类·只读扫描（从声明派生 arity 清单）
+examples/m198_argface/sweep_upper.py	A类·只读扫描（从声明派生上界面）
+#
+# ── B 类：默认值兜底（门里已显式传参，实际不生效）────────────────────
+#   风险：若将来门改写法不再传参，会**静默**扫到主仓库（不报错、只是结论偏）。
+#   ⇒ 登记为待改；改法 = 与 m316/m317/m122 同款（`__file__` 上溯两级）。
+examples/m202_crypto_ext/stubs.py	B类·argv[2] 兜底（verify.sh 显式传根）
+examples/m202_crypto_ext/check_names.py	B类·argv[1] 兜底（verify.sh 显式传根）
+examples/m203_iter_index_msg/stubs.py	B类·argv[2] 兜底（verify.sh 显式传根）
+examples/m204_assign_op/stubs.py	B类·argv[2] 兜底（verify.sh 显式传根）
+examples/m227_two_faces/negctl.py	B类·M227_ROOT 环境变量兜底（verify.sh 的 NEGCTL() 显式传）
+examples/m237_field_enum/negctl.py	B类·--root 参数兜底（verify.sh 的 NEGCTL() 显式传）
+examples/m253_bcorpus/negctl.py	B类·--root 参数兜底（verify.sh 的 snap/restore 显式传）
+#
+# ── C 类：非「被测树」路径（协议标识 / 工具回退 / 子进程环境）───────────
+examples/m65_lsp/lsp_client_s2.py	C类·`file://` URI 是 LSP 协议里的文档标识（客户端按 URI 打开）
+examples/m65_lsp/lsp_client_s3.py	C类·同上（3 处 URI）
+examples/m110_s1/run.sh	C类·`[ -x "$PXC" ] ||` 工具回退（环境变量优先）
+examples/m171_lint_scope/three_tracks.sh	C类·`[ -x "$PX" ] ||` 工具回退（环境变量优先）
+examples/m124_stw/ab_verify.sh	C类·A/B 对照里「新代码在哪」的基准点（手工一次性别对照脚本，不在 gates.registry 内）
