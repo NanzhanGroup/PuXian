@@ -1383,6 +1383,10 @@ jobs:
           grep -E '^  ✅' /tmp/v_m316.log | tail -8
           echo "✅ m316_http_dup_host（TCP 6 case + Unix 4 case · 每头名恰 1 条 · 判据自证 3/3）PASS"
 
+      - name: m317_gc_time_trigger（GC 时间/增量触发 + 空闲页归还 · M317 · 缺陷 551）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m317_gc_time_trigger/verify.sh --neg-skip > /tmp/v_m317.log 2>&1 || { echo "❌ m317_gc_time_trigger 门失败（时间触发 / 空闲心跳 / slab 归还 / 启动模式）"; grep -E '^(  ❌|     )' /tmp/v_m317.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

@@ -1373,6 +1373,43 @@ static char* m128_strdup(const char* s, const char* site) {
     return p;
 }
 
+// ==================== M317（缺陷 551）：时间 + 增量驱动的 GC 触发 ====================
+// 病灶（晨曦 2026-10-20/21 生产报障，本机独立复现）：
+//   GC 只有两条触发判据 —— 对象数（默认 100 万）与分配字节（默认 512MiB），**都是批处理尺度的旋钮**。
+//   对「长期在线、低流量」的服务，两条都打不到：
+//     · 实测反代路径 10.2KB/请求，6000 请求后 **runs=0**（7.4MB → 68.8MB 线性不变斜率）；
+//       Ma 生产 8.5h 涨 234MB（≈7.6KB/s）⇒ 按 512MiB 要 **19 小时**才触发一次；
+//     · 分配对象 8.9 个/请求 ⇒ 对象数阈值也要十万级请求。
+//   ⇒ **GC 实际上永不运行**，垃圾线性累积。而同负载把字节阈值调小后立刻**平台化**
+//     （4MiB ⇒ 27.0MB / 256KiB ⇒ 23.6MB，6000 请求后不再涨）
+//     ⇒ 证明确实是「该回收的没回收」，不是泄漏。
+//
+// 新增两条判据（**只影响"何时"回收，不影响"回收什么"** —— 回收语义一字未动）：
+//   ① 距上次 GC ≥ PX_GC_MAX_INTERVAL_MS（默认 30000；≤0 显式关闭时间触发）
+//   ② 自上次 GC 起分配 ≥ PX_GC_TIME_FLOOR_BYTES（默认 1MiB）
+//   ③ 或：上次 GC 后仍有「空 slab 等待归还」（g_gc_idle_reclaim）⇒ 允许**空闲时**继续推进
+// 为什么必须有 ②：缺了它，空闲服务每 60s 白跑一次 O(堆) 的 GC（回收 0 个），纯浪费。
+// 为什么必须有 ③：缺了它，「流量一停 ⇒ 不再分配 ⇒ 不再 GC ⇒ 空页永不归还」——
+//   这正是晨曦观测到的「平台化后静置 60s 不降」；ISSUE28-B2 的页归还要求
+//   连续 SLAB_FREE_STREAK(4) 轮都观测到空 slab，而没有 GC 就永远到不了第 2 轮。
+static long long g_gc_last_ms = 0;           // 上次 GC 完成时刻（monotonic ms）
+static long long g_gc_max_interval_ms = 0;   // 0 = 关闭时间触发
+static long long g_gc_time_floor = 0;        // 时间触发所需的最小垃圾量（自上次 GC 的分配字节）
+static long long g_gc_time_check_at = 0;     // 下次取时钟的分配水位（省掉「每次分配都取时钟」）
+static volatile int g_gc_idle_reclaim = 0;   // 1 = 上次 GC 后仍有非头空 slab 待归还 ⇒ 空闲也可推进
+static long long g_gcs_time_runs = 0;        // M317：因时间/增量判据而跑的轮数（观测用）
+static long long g_gcs_idle_runs = 0;        // M317：其中由**空闲心跳**（px_gc_poll）发起的轮数
+static long long g_gcs_tick_wakeups = 0;     // M317：GC 心跳线程的唤醒次数（判据「心跳真的在跳」）
+
+// 单调毫秒。COARSE 走 vDSO 共享页（~5ns，精度 ~4ms）——间隔判据是 60s 量级，精度无影响。
+static long long gc_now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC_COARSE, &ts) != 0) {
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    }
+    return (long long)ts.tv_sec * 1000 + (long long)ts.tv_nsec / 1000000;
+}
+
 // ==================== ISSUE28-B2（qg-issue 28）：slab 空页归还 OS ====================
 // 现象：高频短请求场景堆"只涨不落"（40MB→380MB→1.1GB 不回吐）——对象 sweep 释放后
 // 槽位回空闲链表复用，但整块 slab 的 mmap 映射从不归还 OS（无 munmap/madvise 路径）。
@@ -1401,7 +1438,9 @@ static void slab_reclaim_empty(void) {
         }
         if (ci < 0) { s->empty_streak = 0; g_slab_ranges[w++] = s; continue; }   // 防御：无法归类则不回收
         s->class_idx = ci;
-        if (s == g_slab_heads[ci]) { g_slab_ranges[w++] = s; continue; }  // 头 slab 缓冲保留
+        if (s == g_slab_heads[ci]) { s->empty_streak = 0; g_slab_ranges[w++] = s; continue; }  // 头 slab 缓冲保留
+        //   M317：同时清 streak —— 头 slab 按设计永不归还，留着 streak 会让
+        //   g_gc_idle_reclaim 永久为真（空闲时白跑 GC）。
         // M107-S3c：空 slab 滞留水位——连续 SLAB_FREE_STREAK 轮仍空才归还（防 mmap/munmap 抖动）
         if (++s->empty_streak < SLAB_FREE_STREAK) { g_slab_ranges[w++] = s; continue; }
         // S3b：该 slab 若在复用链上，摘除交给下方整链重建（O(N) 一次完成，不做逐 slab 走链）
@@ -1430,6 +1469,22 @@ static void slab_reclaim_empty(void) {
         s->next = g_slab_heads[k];
         g_slab_heads[k] = s;
         s->on_list = 1;
+    }
+    // M317（缺陷 551）：记录「是否还有**非头**空 slab 在等归还」——
+    //   这一位决定「空闲时要不要继续推进 GC」（px_gc_poll 的判据 ③）。
+    //   只数非头 slab：头 slab 按设计永久保留作分配缓冲，若也算进来 ⇒ 该位永不清零
+    //   ⇒ 服务空闲时每 60s 白跑一轮 GC（回收 0 个）。
+    {
+        int pend = 0;
+        for (size_t i = 0; i < g_slab_range_count; i++) {
+            Slab* s = g_slab_ranges[i];
+            if (s->free_count != s->slot_count) continue;
+            int ci2 = s->class_idx;
+            if (ci2 >= 0 && ci2 < SLAB_CLASS_COUNT && g_slab_heads[ci2] == s) continue;
+            pend = 1;
+            break;
+        }
+        __atomic_store_n(&g_gc_idle_reclaim, pend, __ATOMIC_RELAXED);
     }
     memset(g_xfree_hint, 0, sizeof(g_xfree_hint));   // 归还 slab 后清 hint（同锁，防悬垂）
     g_xfree_hint_head = 0;
@@ -1522,6 +1577,15 @@ static void g_hash_put(uint64_t hv, int slot) {
 //     · 单线程 CLI/编译轨：到量即内联回收（无安全点问题）
 //     · 多线程服务轨：仍走既有「延迟到安全点」路径（改动只影响**何时**触发）
 #define GC_TRIGGER_BYTES_DEFAULT (512LL * 1024 * 1024)
+// M317（缺陷 551）：时间 + 增量触发的缺省值（语义见文件上方 M317 段注释）。
+//   30s：GC 成本是 O(存活对象)（实测 5 万对象 ~4ms、5 千对象 <1ms）⇒ 每 30s 摊薄后 <0.02%；
+//        而它把「高水位」钉在 **速率 × 30s**：实测 490 rps × 10KB/请求（≈4.9MB/s）
+//        ⇒ 平台 147MB（对照：修前**无平台**；同负载 60s 档实测 243MB 且不再涨）
+//   1MiB：低于它不触发 —— 否则空闲/极低流量服务每 30s 白跑一次「回收 0 个」。
+//   ⚠️ 单靠「时间」**管不住字节**：高吞吐节点的平台 ≈ min(512MiB, 速率 × 30s)。
+//      要压更低就调小 PX_GC_MAX_INTERVAL_MS，或调小既有的 PX_GC_TRIGGER_BYTES。
+#define GC_MAX_INTERVAL_MS_DEFAULT 30000LL
+#define GC_TIME_FLOOR_BYTES_DEFAULT (1LL * 1024 * 1024)
 #define GC_HASH_MIN_CAP 4096          // 对象地址哈希集合初始容量
 
 static pthread_mutex_t g_gc_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -1597,6 +1661,7 @@ static int g_gc_stress = 0;
 //   修法 = 建表期间**冻结回收**（对齐 V8「初始化期不允许堆分配回收」的做法）：注册是
 //   一次性、内存有界的启动动作，冻结的代价只是启动期堆稍大。
 static int g_gc_frozen = 0;
+
 static long long g_a_by_type[PX_TYPE_MAX];
 static long long g_a_bytes;
 static long long g_a_total;
@@ -1816,6 +1881,23 @@ static void gc_init_env(void) {
     } else {
         g_gc_trigger_bytes = GC_TRIGGER_BYTES_DEFAULT;
     }
+    // M317（缺陷 551）：时间 + 增量驱动触发（语义见文件上方 M317 段注释）
+    const char* mi = getenv("PX_GC_MAX_INTERVAL_MS");
+    if (mi) {
+        long long v = atoll(mi);
+        g_gc_max_interval_ms = (v > 0) ? v : 0;   // <=0 ⇒ 显式关闭（旧行为）
+    } else {
+        g_gc_max_interval_ms = GC_MAX_INTERVAL_MS_DEFAULT;
+    }
+    const char* tf = getenv("PX_GC_TIME_FLOOR_BYTES");
+    if (tf) {
+        long long v = atoll(tf);
+        g_gc_time_floor = (v > 0) ? v : 0;
+    } else {
+        g_gc_time_floor = GC_TIME_FLOOR_BYTES_DEFAULT;
+    }
+    g_gc_last_ms = gc_now_ms();
+    g_gc_time_check_at = 0;
     const char* inl = getenv("PX_GC_INLINE");
     if (inl && inl[0] == '1') g_gc_force_inline = 1;
     // M153：分配统计（见 g_alloc_stats 注释）
@@ -1930,7 +2012,7 @@ static int gcs_put(char* b, int n, int cap, const char* fmt, ...) {
 
 // 汇总输出。调用者须保证「不持 stdio 锁」——本函数只用 write(2)。
 static void gcs_dump(const char* why) {
-    char b[2048];
+    char b[3072];   // M317：新增 heap/slab 两行
     int n = 0;
     long long runs  = __atomic_load_n(&g_gcs_runs, __ATOMIC_RELAXED);
     long long skips = __atomic_load_n(&g_gcs_skips, __ATOMIC_RELAXED);
@@ -1943,6 +2025,35 @@ static void gcs_dump(const char* why) {
     n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] === dump why=%s runs=%lld skips=%lld empty=%lld slow=%lld ===\n",
                 why, runs, skips, empty, slowr);
     n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] rss_obj_live=%d\n", g_obj_count);
+    // M317（缺陷 551）：补「何时该回收」的两个旋钮读数 + 时间触发次数。
+    //   来历：晨曦 2026-10-21 明确提的 P1 —— 修前 dump 里没有 alloc/trigger 两行，
+    //   只能靠「首次 GC 落点」反推阈值，而落点受其它分配影响、波动可达 ±35%。
+    n = gcs_put(b, n, (int)sizeof(b),
+                "[px-gc-stats] heap alloc_since_gc=%lldB trigger_bytes=%lldB max_interval_ms=%lld time_runs=%lld idle_runs=%lld idle_reclaim=%d tick=%lld\n",
+                (long long)__atomic_load_n(&g_alloc_bytes, __ATOMIC_RELAXED),
+                (long long)g_gc_trigger_bytes, (long long)g_gc_max_interval_ms,
+                (long long)__atomic_load_n(&g_gcs_time_runs, __ATOMIC_RELAXED),
+                (long long)__atomic_load_n(&g_gcs_idle_runs, __ATOMIC_RELAXED),
+                (int)__atomic_load_n(&g_gc_idle_reclaim, __ATOMIC_RELAXED),
+                (long long)__atomic_load_n(&g_gcs_tick_wakeups, __ATOMIC_RELAXED));
+    // M317（缺陷 551）：slab 分配器的占用真相 —— 回答「平台态那几十 MB 到底是活数据、还是留着不用的页」。
+    //   判据：map_bytes（已向 OS 要的总量）vs free_slots（空闲槽）vs fully_empty（可归还的整块）。
+    //   ⚠️ 只在 dump 时取 g_slab_mu（持 g_slab_mu 的线程被 gc_block_stop 保护、不会被暂停 ⇒ 无死锁）。
+    {
+        size_t nslab; long long sbytes = 0, freeslots = 0; int nfe = 0;
+        pthread_mutex_lock(&g_slab_mu);
+        nslab = g_slab_range_count;
+        for (size_t i = 0; i < nslab; i++) {
+            Slab* s = g_slab_ranges[i];
+            sbytes += (long long)s->map_bytes;
+            freeslots += (long long)s->free_count;
+            if (s->free_count == s->slot_count) nfe++;
+        }
+        pthread_mutex_unlock(&g_slab_mu);
+        n = gcs_put(b, n, (int)sizeof(b),
+                    "[px-gc-stats] slab n=%llu map_bytes=%lldKB free_slots=%lld fully_empty=%d\n",
+                    (unsigned long long)nslab, sbytes / 1024, freeslots, nfe);
+    }
     n = gcs_put(b, n, (int)sizeof(b), "[px-gc-stats] pause_ms p50=%.1f p95=%.1f p99=%.1f max=%.1f n=%lld\n",
                 gcs_quantile(g_gcs_hist_total, 0.50) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 0.50) / 1000.0,
                 gcs_quantile(g_gcs_hist_total, 0.95) < 0 ? -1.0 : gcs_quantile(g_gcs_hist_total, 0.95) / 1000.0,
@@ -2016,12 +2127,65 @@ static void gcs_report_run(long long total_us, long long ph_lock, long long ph_s
 // 连接池循环顶），使全量 STW 不落在在途请求处理中。持 g_gc_mu 判定+清 pending，
 // 防多 worker 同时进入（thundering herd）→ 同刻仅一个触发 px_gc_collect。
 void px_gc_poll(void) {
-    if (!g_gc_pending) return;
+    if (!g_gc_pending) {
+        // M317（缺陷 551）：**空闲推进**。原实现只在 pending 时干活，而 pending 只由「分配越过
+        //   对象数/字节阈值」置位 ⇒ 「流量一停就不再分配 ⇒ 不再 GC ⇒ 空 slab 的 empty_streak
+        //   永远到不了 SLAB_FREE_STREAK ⇒ 页永不归还」（晨曦实测平台化后静置 60s RSS 不降）。
+        //   此处补一条判据：距离上次 GC 已过间隔，且「有新垃圾」或「还有空 slab 待归还」⇒ 跑一轮。
+        if (g_gc_max_interval_ms <= 0) return;
+        int idle = __atomic_load_n(&g_gc_idle_reclaim, __ATOMIC_RELAXED);
+        if (!idle && __atomic_load_n(&g_alloc_bytes, __ATOMIC_RELAXED) < g_gc_time_floor) return;
+        if (gc_now_ms() - g_gc_last_ms < g_gc_max_interval_ms) return;
+        pthread_mutex_lock(&g_gc_mu);
+        if (!g_gc_pending) {
+            g_gc_pending = 1;
+            __atomic_fetch_add(&g_gcs_time_runs, 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&g_gcs_idle_runs, 1, __ATOMIC_RELAXED);
+        }
+        pthread_mutex_unlock(&g_gc_mu);
+    }
     pthread_mutex_lock(&g_gc_mu);
     int run = g_gc_pending;
     g_gc_pending = 0;
     pthread_mutex_unlock(&g_gc_mu);
     if (run) px_gc_collect();
+    // M317：周期汇总也挂在安全点上 —— 否则「空闲服务」永远不分配 ⇒ 永远不打印数字，
+    //   而这正是 M312 建立周期汇总要解决的场景（进程不退出也要能看读数）。
+    if (g_gc_stats_interval_s > 0) gcs_maybe_periodic();
+}
+
+// ==================== M317（缺陷 551）：空闲 GC 心跳线程 ====================
+// 为什么需要它（而不是只靠「请求间安全点」）：
+//   两个 serve 形态（px_serve 的 g_pool_* 池 / http_serve 的 g_fserve_* 池）在**没有连接**时
+//   都阻塞在 pthread_cond_wait 上，而 px_gc_poll() 只在**处理完一个 job 之后**被调用
+//   ⇒ 「流量一停 ⇒ 不再分配 ⇒ 不再 GC ⇒ 空 slab 的 empty_streak 永远到不了
+//      SLAB_FREE_STREAK(4) ⇒ 页永不归还」。晨曦实测「平台化后静置 60s RSS 不降」正是这条。
+//   本线程每秒醒一次调 px_gc_poll()：是否**真的**跑 GC 由 M317 的时间/空闲/增量三条判据决定
+//   ⇒ 空闲且无可回收物时它只做几次读 + 一次 COARSE 时钟（~10ns 级），不产生 GC。
+// 位置：懒启动、只启一次（fserve_ensure / px_serve 各自建池时调用）。
+//   不放进 worker 循环的理由：① 两套池要改两处（易漂移）；② fserve worker 空闲时**会注销 GC 槽**
+//   （F3-fix 防长锁窗口），让它醒来自救反而会把「注销」这套语义搅乱。
+// 该线程自身不持有任何 px 对象，也不注册 GC 槽：它是 GC 的**发起者**（executor），不需要被暂停。
+static int g_gc_tick_started = 0;
+
+static void* gc_tick_thread(void* argp) {
+    (void)argp;
+    for (;;) {
+        px_io_sleep_ms(1000);   // M256：EINTR 安全睡眠
+        __atomic_fetch_add(&g_gcs_tick_wakeups, 1, __ATOMIC_RELAXED);
+        px_gc_poll();
+    }
+    return NULL;
+}
+
+static void px_gc_tick_start(void) {
+    if (__atomic_exchange_n(&g_gc_tick_started, 1, __ATOMIC_SEQ_CST)) return;
+    pthread_t t;
+    if (pthread_create(&t, NULL, gc_tick_thread, NULL) != 0) {
+        __atomic_store_n(&g_gc_tick_started, 0, __ATOMIC_SEQ_CST);   // 失败允许下次再试
+        return;
+    }
+    pthread_detach(t);
 }
 
 static void gc_debug(const char* fmt, ...) {
@@ -3138,6 +3302,8 @@ void px_gc_collect(void) {
         g_in_gc_sweep = 0;
         g_obj_count = w;
         g_alloc_bytes = 0;
+        g_gc_last_ms = gc_now_ms();      // M317（缺陷 551）：时间判据基准
+        g_gc_time_check_at = 0;
         g_gc_freed += freed;
         g_gc_runs++;
         // M208（缺陷 269）：**不得清 g_tmp_root** —— 见 px_gc_collect 出口注释。
@@ -3233,6 +3399,8 @@ void px_gc_collect(void) {
     g_in_gc_sweep = 0;
     g_obj_count = w;
     g_alloc_bytes = 0;
+    g_gc_last_ms = gc_now_ms();      // M317（缺陷 551）：时间判据基准
+    g_gc_time_check_at = 0;
     g_gc_freed += freed;
     g_gc_runs++;
     // M208（缺陷 269）：**不得清 g_tmp_root** ——
@@ -3635,6 +3803,16 @@ static void gc_register(LXObject* o, long long est) {
     g_tmp_root = o;  // 保护刚创建对象
     int need = (g_obj_count >= g_gc_threshold) ||
                (g_gc_trigger_bytes && g_alloc_bytes >= g_gc_trigger_bytes);
+    // M317（缺陷 551）：时间 + 增量判据（与上面两条并列，只决定「何时」，不改回收语义）。
+    //   持 g_gc_mu 内 ⇒ g_gc_time_check_at 无需原子；时钟只在每分配 256KiB 后取一次。
+    if (!need && g_gc_max_interval_ms > 0 && g_alloc_bytes >= g_gc_time_floor &&
+        g_alloc_bytes >= g_gc_time_check_at) {
+        g_gc_time_check_at = g_alloc_bytes + (256LL << 10);
+        if (gc_now_ms() - g_gc_last_ms >= g_gc_max_interval_ms) {
+            need = 1;
+            __atomic_fetch_add(&g_gcs_time_runs, 1, __ATOMIC_RELAXED);
+        }
+    }
     if (g_gc_stress) need = 1;   // M170：每次分配即 GC（debug/门；见 gc_init_env 注释）
     if (g_gc_frozen) need = 0;   // M170（缺陷 189）：native 建表期禁回收（见 g_gc_frozen 注释）
     int snap_count = g_obj_count;
@@ -20706,6 +20884,7 @@ static void fserve_ensure(void) {
     pthread_mutex_unlock(&g_fserve_mu);
     if (th) xfree(th);   // 复核失败（他线程已建池）⇒ 释放备货
     if (fq) xfree(fq);
+    px_gc_tick_start();   // M317（缺陷 551）：空闲 GC 心跳（见该函数注释）
 }
 
 // http_serve(port, handler)：阻塞 accept 循环（Go 风格），连接交池 worker 处理
@@ -28120,6 +28299,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
                 g_px_hs_tmo_ms > 0 ? g_px_hs_tmo_ms : PX_TLS_HS_TMO_DEFAULT_MS, g_serve_diag);
     }
     px_serve_watchdog_start();
+    px_gc_tick_start();   // M317（缺陷 551）：空闲 GC 心跳（见 px_gc_tick_start 注释）
     g_pool_size = max_conn;
     for (int i = 0; i < g_pool_size; i++) {
         if (pthread_create(&g_pool_threads[i], NULL, px_pool_worker, (void*)(intptr_t)i) != 0) {

@@ -1656,4 +1656,5 @@ run m315_onnx_ort_kernel bash examples/m315_onnx_ort_kernel/verify.sh
 #   缺陷面三处（bi_http_request · bi_http_unix · sse_cli_connect_slot 的 Host 漏判）；
 #   判据只看**线上字节**（原始请求头 hex），负控撤回 ⇒ 双 Host 必须复现。
 run m316_http_dup_host bash examples/m316_http_dup_host/verify.sh
+run m317_gc_time_trigger bash examples/m317_gc_time_trigger/verify.sh --neg-skip
 run release_assets bash packaging/check_release_assets.sh --self-test
