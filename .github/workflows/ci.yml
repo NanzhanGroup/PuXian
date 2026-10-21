@@ -1398,6 +1398,17 @@ jobs:
           bash examples/m318_mem_layers/verify.sh --neg-skip > /tmp/v_m318.log 2>&1 || { echo "❌ m318_mem_layers 门失败（gc_diagnose 契约 / 分层判据 / 名册同步）"; grep -E '^(  ❌|     |      )' /tmp/v_m318.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m318.log | tail -8
           echo "✅ m318_mem_layers（14 字段契约 · 三轨一致 · 分层 3 判据）PASS"
+      - name: m319_ws_eof_spin（WS 接管读循环在 EOF 自旋 · M319 · 缺陷 552）
+        # 判据：静态（4 处 errno 契约 + ws_read_exact 无 errno 判据/无重试）
+        #      + 动态双判据（utime ≥120 ticks 或 重试计数 ≥1000 ⇒ 自旋）
+        #      + 负控 A（注入 continue ⇒ 确定性红）+ 负控 B（忠实撤回 ⇒ 4 轮至少 1 红）
+        #      + 负控 C（判据自伤 ⇒ A 的红消失）
+        # 负控要重编 runtime 三次（~60s）⇒ CI 用 --neg-skip。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m319_ws_eof_spin/verify.sh --neg-skip > /tmp/v_m319.log 2>&1 || { echo "❌ m319_ws_eof_spin 门失败（errno 契约 / 自旋判据 / 还原保真）"; grep -E '^(  ❌|     |      )' /tmp/v_m319.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m319.log | tail -8
+          echo "✅ m319_ws_eof_spin（4 处 errno 契约 · 无 errno 重试 · 双判据无自旋）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

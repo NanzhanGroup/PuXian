@@ -229,16 +229,30 @@ static void ws_b64_encode(const unsigned char* in, size_t len, char* out) {
 #define WS_OP_PING 0x9
 #define WS_OP_PONG 0xA
 
-// 精确读 n 字节（阻塞；EOF/错误返回 -1，EINTR 重试）
+// 精确读 n 字节（阻塞；EOF/错误返回 -1）
+//
+// ═══ M319（缺陷 552 · 晨曦 2026-10-22 广州现场）：**删掉外层的 `errno == EINTR` 重试** ═══
+//   修前：`if (r < 0) { if (errno == EINTR) continue; return -1; }`
+//   这条判据有两个错误：
+//   ① **errno 不是本次调用的**：`px_conn_read` 的失败出口（acquire 失败 / 已关闭）原本**不设 errno**
+//      ⇒ 这里读到的是**上一次调用残留的值**。GC 的 `SIG_GC_STOP` 打断过一次 recv 之后，
+//      该线程 errno 会**长期是 EINTR**（成功调用不改 errno）⇒ 判据恒真。
+//   ② **重试是无条件的**：`continue` 没有任何轮次上限，而「连接已关闭」这个原因**不会自愈**
+//      ⇒ 纯用户态死循环，一个系统调用都不发（`/proc/<tid>/syscall = running`、
+//      `voluntary_ctxt_switches +0`）+ 每轮两把 mutex（现场 12 个热线程栈全落在
+//      `__pthread_mutex_lock/unlock ← px_conn_read`）。实测单线程 **2.13 亿次**重试。
+//   为什么直接删而不是「有界重试」：**重试本来就已经在下一层做完了** ——
+//     `px_conn_read_body` 的明文分支 `for(;;) { recv; if (r<0 && errno==EINTR) continue; }`（M211 缺陷 265）、
+//     TLS 分支的 `WANT_READ/WANT_WRITE` 循环（M211 缺陷 286）都是无限重试且**每次都在本函数内**。
+//     外层再判一次，判的只可能是残留值 ⇒ 语义上没有任何合法的 EINTR 需要在这里重试。
+//   配套：`px_conn_read`/`px_conn_write` 的失败出口已显式设置 errno（ECONNRESET/EPIPE），
+//     使「读 errno 的调用方」不再读到残留值（缺陷 552 同时修了这个契约缺口）。
 static int ws_read_exact(PxConn* c, unsigned char* buf, size_t n) {
     size_t off = 0;
     while (off < n) {
         ssize_t r = px_conn_read(c, buf + off, n - off);
-        if (r == 0) return -1;
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
+        if (r == 0) return -1;   // EOF（对端正常关闭）
+        if (r < 0) return -1;    // 错误（含已关闭/已释放）—— 不重试，见上方 M319 说明
         off += (size_t)r;
     }
     return 0;

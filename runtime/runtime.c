@@ -24815,7 +24815,8 @@ int px_conn_init(PxConn* c, int fd) {
 
 // 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）
 static ssize_t px_conn_read_body(PxConn* c, void* buf, size_t n) {
-    if (c->closed) return -1;
+    // M319（缺陷 552）：同上 —— 失败出口显式设 errno（此处是「已关闭」，不是 EOF；EOF 用 return 0 表达）
+    if (c->closed) { errno = ECONNRESET; return -1; }
     // M288（缺陷 501）：**先还后读** —— 上层（WS 握手）交还的残余字节在逻辑上早于
     //   fd/TLS 里尚未读入的任何数据（明文与 TLS 走同一条路径）。
     if (c->pb && c->pb_off < c->pb_len) {
@@ -24865,7 +24866,7 @@ static ssize_t px_conn_read_body(PxConn* c, void* buf, size_t n) {
 }
 
 static ssize_t px_conn_write_body(PxConn* c, const void* buf, size_t n) {
-    if (c->closed) return -1;
+    if (c->closed) { errno = EPIPE; return -1; }   // M319（缺陷 552 同族）
     if (!c->is_tls) {
         // M33 修复：send 可能部分发送（TCP 缓冲满/非阻塞）→ 循环发送到写完，
         // 否则响应头/体错位（客户端读到上一响应残留字节，双模式不一致根因之一）
@@ -25057,8 +25058,22 @@ void px_conn_owner_free(PxConn* c) {
 
 // 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）。
 // M235：包一层引用计数 —— 阻塞期间持引用 ⇒ close 不会在读取中途释放 ssl。
+// ═══ M319（缺陷 552 · 晨曦 2026-10-22 广州现场）：**失败出口必须设置 errno** ═══
+//   病灶：本函数在 `acquire` 失败（连接已关闭/已释放）时 `return -1` 而**不设 errno**
+//   ⇒ 调用方读到的是**上一次调用残留的 errno**。
+//   为什么这能烧满 CPU：`ws_read_exact`（runtime_ws.c）曾用 `errno == EINTR` 判「信号打断、应重试」，
+//   而 GC 的 `SIG_GC_STOP` 打断过一次 recv 后，该线程的 errno 会**长期残留 EINTR**
+//   （成功调用不改 errno）⇒ 已关闭连接上的每一轮「读」都变成 `continue`
+//   ⇒ **纯用户态死循环**（每轮两把 mutex，一个系统调用都不发）。
+//   实测（插桩版，`PX_GC_STRESS=1`）：单线程 **2.13 亿次**重试 / 5 秒 **297% CPU**；
+//   现场：12 线程烧满 2 核 5h38m（9h01m CPU）· 8 条 CLOSE-WAIT · 栈全在
+//   `px_conn_read ← ws_read_frame ← px_ws_takeover_http_conn ← px_conn_worker`。
+//   口径：**任何返回负值的出口都要让 errno 说明原因**（调用方可能据此决策）。
 ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
-    if (!px_conn_acquire(c)) return -1;
+    if (!px_conn_acquire(c)) {
+        errno = ECONNRESET;   // M319（缺陷 552）：连接已关闭/已释放 —— 显式、不留残留值
+        return -1;
+    }
     ssize_t r = px_conn_read_body(c, buf, n);
     px_conn_release(c);
     return r;
@@ -25066,7 +25081,10 @@ ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
 
 // 写：同理。
 ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
-    if (!px_conn_acquire(c)) return -1;
+    if (!px_conn_acquire(c)) {
+        errno = EPIPE;        // M319（缺陷 552 同族）：失败出口同样显式给原因
+        return -1;
+    }
     ssize_t r = px_conn_write_body(c, buf, n);
     px_conn_release(c);
     return r;
