@@ -12,7 +12,11 @@
 #                  [--tier auto|serial|shard] [--tier-base REF] [--tier-stamp FILE] [--overdue-days N]
 # 档位（M314 · 用户令 A）：
 #   auto（默认）⇒ 交 `packaging/chain/pick_gate_tier.sh` 从 git 语义面派生：
-#       runtime/*.c|h ∪ selfhost/*.px ∪ tools/*.px 命中 ⇒ SERIAL；否则 SHARD。
+#       runtime/*.c|h ∪ selfhost/*.px ∪ tools/*.px 命中 ⇒ **SHARD_SEM**（分片 + 抽样串行复核，
+#       用户令 2026-10-21 方案②；复核由 recheck_sample.sh 做）；否则 SHARD。
+#       `--force-serial` / 超期 / 判定失败 ⇒ SERIAL（串行权威档）。
+#   ⚠️ SHARD_SEM 档必须给 `--recheck <分片日志目录>`：收尾时读该目录下的 recheck.verdict.txt，
+#      非 GREEN ⇒ 整轮判 RED（**抽样复核没过就不许推**）。
 #   SERIAL 且 GREEN ⇒ 写时间戳（--tier-stamp，默认 /tmp/.puxian_last_serial_gate.stamp），
 #       `--overdue-days N` 据此做周期性复核（距上次串行档超 N 天 ⇒ 强制 SERIAL）。
 #   ⚠️ 判定失败 ⇒ **按 SERIAL 跑**（宁可慢，不可漏）。
@@ -45,7 +49,8 @@ N="${1:-}"; LOG="${2:-}"
 [ -n "$N" ] && [ -n "$LOG" ] || {
     echo "用法：watch_chain.sh <里程碑号> <门日志> --pid <门PID> [--times t.tsv]" >&2
     echo "      [--runner run_gates.sh] [--no-push] [--dry]" >&2
-    echo "      [--tier auto|serial|shard] [--tier-base REF] [--tier-stamp FILE] [--overdue-days N]" >&2
+    echo "      [--tier auto|serial|shard|shard-sem] [--tier-base REF] [--tier-stamp FILE] [--overdue-days N]" >&2
+    echo "      [--recheck DIR]   # SHARD_SEM 档：分片日志目录（读 recheck.verdict.txt）" >&2
     exit 4
 }
 shift 2
@@ -53,7 +58,7 @@ PID=""; TIMES=""; RUNNER="selfhost/run_gates.sh"; TAGPUSH=1; DRY=0
 # M314（用户令 A）：档位 —— 语义面改动（runtime/*.c|h · selfhost/*.px · tools/*.px）⇒ SERIAL，
 #   否则 SHARD（分片档 + 逐门对拍）。判定交给 pick_gate_tier.sh（唯一判据来源）。
 TIERMODE="auto"; TIER_STAMP="${TIER_STAMP:-/tmp/.puxian_last_serial_gate.stamp}"
-TIER_OVERDUE_DAYS="${TIER_OVERDUE_DAYS:-0}"; TIER_BASE="${TIER_BASE:-}"
+TIER_OVERDUE_DAYS="${TIER_OVERDUE_DAYS:-0}"; TIER_BASE="${TIER_BASE:-}"; RECHECK_DIR="${RECHECK_DIR:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --pid)     PID="${2:-}"; shift 2 ;;
@@ -63,6 +68,7 @@ while [ $# -gt 0 ]; do
         --tier-stamp) TIER_STAMP="${2:-}"; shift 2 ;;
         --overdue-days) TIER_OVERDUE_DAYS="${2:-0}"; shift 2 ;;
         --tier-base) TIER_BASE="${2:-}"; shift 2 ;;
+        --recheck)   RECHECK_DIR="${2:-}"; shift 2 ;;
         --no-push) TAGPUSH=0; shift ;;
         --dry)     DRY=1; shift ;;
         *) echo "未知参数: $1" >&2; exit 4 ;;
@@ -77,6 +83,7 @@ TIER=""; TIER_REASON=""
 case "$TIERMODE" in
     serial) TIER="SERIAL"; TIER_REASON="人工指定（--tier serial）" ;;
     shard)  TIER="SHARD";  TIER_REASON="人工指定（--tier shard）" ;;
+    shard-sem) TIER="SHARD_SEM"; TIER_REASON="人工指定（--tier shard-sem · 分片 + 抽样串行复核）" ;;
     auto)
         if TOUT="$(bash packaging/chain/pick_gate_tier.sh --base "$TIER_BASE" --overdue-days "$TIER_OVERDUE_DAYS" --stamp "$TIER_STAMP" 2>/dev/null)"; then
             TIER="$(printf '%s\n' "$TOUT" | awk -F= '/^GATE-TIER=/{print $2; exit}')"
@@ -174,6 +181,26 @@ printf '门已结束：%s\n' "$(date '+%F %T')"
 # ── ①.5 等待前提守卫：日志没跑完就别急着裁决 ───────────────────────
 wait_gate_finished || true
 
+# ── ①.9 SHARD_SEM 档：抽样串行复核必须已跑且 GREEN（缺陷 495 同族：前提不成立不许裁决）
+#   判据对象是 recheck_sample.sh 产出的 recheck.verdict.txt（**唯一**裁决文件，不另造格式）。
+RECHECK_BAD=""
+if [ "$TIER" = "SHARD_SEM" ]; then
+    if [ -z "$RECHECK_DIR" ]; then
+        RECHECK_BAD="SHARD_SEM 档未给 --recheck <分片日志目录>"
+    elif [ ! -f "$RECHECK_DIR/recheck.verdict.txt" ]; then
+        RECHECK_BAD="$RECHECK_DIR/recheck.verdict.txt 不存在（抽样复核未跑）"
+    elif ! grep -q '^RECHECK-VERDICT-GREEN' "$RECHECK_DIR/recheck.verdict.txt"; then
+        RECHECK_BAD="抽样复核非 GREEN（见 $RECHECK_DIR/recheck.verdict.txt）"
+    else
+        printf '抽样串行复核：GREEN（%s）\n' "$RECHECK_DIR/recheck.verdict.txt"
+    fi
+    if [ -n "$RECHECK_BAD" ]; then
+        printf '❌ 复核前提不成立：%s\n' "$RECHECK_BAD"
+        notify p1 "m$N-recheck" "M$N 抽样复核未通过（未推送）" "$RECHECK_BAD"
+        exit 5
+    fi
+fi
+
 # ── ② 裁决（唯一权威）──────────────────────────────────────────────
 VB="packaging/chain/gate_verdict.sh"
 ARGS=("$LOG" --runner "$RUNNER")
@@ -198,7 +225,9 @@ GREEN)
             }
         fi
     fi
-    notify p0 "M$N 全量门绿 · 已推 main + tag v0.2.$N" "裁决：$VERD（多路一致）· 档位：$TIER（$TIER_REASON）"
+    RCNOTE=""
+    [ "$TIER" = "SHARD_SEM" ] && RCNOTE=" · 抽样复核：GREEN（$RECHECK_DIR）"
+    notify p0 "M$N 全量门绿 · 已推 main + tag v0.2.$N" "裁决：$VERD（多路一致）· 档位：$TIER（$TIER_REASON）$RCNOTE"
     ;;
 RED)
     RL="$(printf '%s\n' "$OUT" | awk '/^  红门：/{sub(/^  红门：/,""); print}')"
