@@ -1,0 +1,326 @@
+#!/bin/bash
+# ══════════════════════════════════════════════════════════════════════
+# packaging/chain/shard_run.sh —— 全量门「分片并行」调度器（M303 步3 · M317 入仓）
+#
+# ⚠️ 入仓说明（M317 · 纪律来自 M284 缺陷 490「编排脚本住 /tmp ⇒ 守卫扫不到」）：
+#   本文件是**权威版本**；/data/gatevm/shard_run.sh 是宿主运行副本（内容曾长期只在那里）。
+#   路径可覆盖：PX_SRC（默认=仓库根，从脚本位置推导）· PX_GATEVM（默认 /data/gatevm）。
+#   宿主数据依赖（不是代码）：$BASE/times*.tsv · quiet_needed.txt · net_needed.txt ·
+#                              $BASE/wt{1..N} · $BASE/tmp{1..N} · $BASE/shard-<ts>/
+#
+# 来历：M302 收尾时做的步1/步2 侦察（实测）——
+#   · worktree 检出 198MB / 1.8s（.git 共享）
+#   · .rtcache 10G ⇒ cp -al 硬链接副本（1.7s / 真实占用≈0，inode 共享已验证）
+#   · 隔离：unshare(mount+pid+net) + bind 私有 /tmp ⇒ **锁文件天然分片**
+#     （gate_lock.sh 的全局单锁在私有 /tmp 里，各分片互不可见 ⇒ 无需改产品代码）
+#   · 门峰值内存实测 2.0GB（最重门）· 8 核 16G 足够 4 路
+#
+# 用法：
+#   shard_run.sh [N]            N=分片数（默认 4）
+#   shard_run.sh 4 --dry        只输出分片规划，不跑
+#   shard_run.sh 4 --times F    指定耗时依据 TSV（默认用备份的上一轮全量数据）
+#   ⭐ M309 阶段B（2026-10-17）起：**默认夹住门内并行度**（档A/档A' 实测口径）
+#     SHARD_JOBS=2（每路 GATE_JOBS）+ 按 N 自动切 N 段连续核区间 taskset 绑核
+#     ⇒ 4×2 = 8 线程恰好占满 8 核（不超订）· 实测 118 min → 87 min（1.36×）
+#     覆盖：SHARD_JOBS=3 / SHARD_CPUS="0-3,4-7" ｜ **退回旧行为：SHARD_NO_CLAMP=1**
+#
+# 超时：GATE_TIMEOUT_DEFAULT=900（分片与 quiet 档同口径）。
+#   ⭐ M305：`upstream_tests` **单独放宽到 1200s** —— 2026-10-12 宿主冷迁移后机器慢 1.4–2.3×，
+#      该门实测从 525s（EPYC）涨到 **>901s** ⇒ 在 shard1 撞 900s 上限被判超时（rc=124）。
+#      放宽依据是**实测**，不是“怕红”；其余门仍 900s。
+#   ⭐⭐ M306（2026-10-13）：**1200 → 1800**。同一个门第三次撞线，而这次的原因**不是"再慢了一点"**：
+#      · 本分发**不改 runtime** 的轮次：该门 ≈950s（M305 分片实测）⇒ 1200s 只剩 26% 余量；
+#      · 本分发**改了 runtime**（M306 动了 onnx_*.c）⇒ `.rtcache` 的 key 全变 ⇒ 该门里
+#        每个 build 配置都要**冷编译**一遍 ⇒ 实测 **1201s ≥ 1200s**（rc=124，差 1 秒）。
+#      · 而分片的 `.rtcache` 是**每轮从主树 reflink 一份**（`cp -a --reflink=auto`，不回写）
+#        ⇒ 「改了 runtime 的轮次必然冷」是**结构性**的，不是偶发。
+#      ⇒ 取 1800s：对**实测最坏值**（冷档 1201s）留 **50% 余量**。
+#      ⚠️ 这条超时**同时**要贴在 quiet 档上（否则它落到 900s 默认值上，比原来还紧）。
+#   ⭐⭐⭐ M311（2026-10-18）：**这两处硬编码已删除** —— 知识搬回仓库。
+#      为什么：上面 M305/M306 的结论**只写在宿主脚本里**，仓内既没有记录、也没有判据 ⇒
+#      任何人跑**串行权威档**（`gate_verdict.sh` 裁决的就是它）都撞 900s：
+#      M310 D2 段2 实测 `upstream_tests` **963s（空闲）/ 902s（分片）** ⇒ rc=124，
+#      成为那一轮全量门唯一红。现在声明在 `selfhost/gates.registry.sh`：
+#      `gate_timeout upstream_tests 1800`（分片/串行/D2 同源），并由
+#      `selfhost/check_gate_timeouts.sh` 用**实测基线**盯裕度（≥80% 上限即判红）。
+#      ⚠️ 分片 worktree 恒取自 HEAD（下方 worktree add --detach $HEAD_SHA）⇒ 注册源一定在场。
+#
+# 判据（步3 验收）：**并行结果 == 串行结果**（逐门 rc + 状态），且至少跑两轮。
+# ══════════════════════════════════════════════════════════════════════
+set -uo pipefail
+
+N=4; DRY=0
+TIMES=/tmp/gatevm/times_m302_full.tsv
+# ── M309 C1 A/B（2026-10-16）：夹住「门内并行度」的两个旋钮 ──
+#   动机（实测）：分片 4 路 × GATE_JOBS 默认(=本机核数 8) = 32 线程抢 8 核
+#   ⇒ 每路负载被抬高 2.5–3.3× ⇒ 净加速只有 ≈1.0–1.3×（M306 R5 实测 118 min）。
+#   口径：**默认全空 = 既有行为一字不改**；只有显式设了才生效。
+#     SHARD_JOBS=2   ⇒ 每路 GATE_JOBS=2（门内并行度上限）
+#     SHARD_CPUS="0-1,2-3,4-5,6-7" ⇒ 第 i 路 taskset -c <第 i 段>（逗号分隔）
+# ── M309 C1 阶段B 收口（2026-10-17 · 东月）：夹并行度 = **默认口径** ──
+#   实测依据（A/B 两档各 87 min，老分片 M306 R5 = 118 min）：
+#     · 不夹：4 路 × GATE_JOBS=8(=本机核数) = **32 线程抢 8 核** ⇒ 净加速仅 ≈1.0–1.3×
+#     · 夹：4 路 × GATE_JOBS=2 + 绑核 = **8 线程不超订** ⇒ 118 → 87 min（1.36×），
+#       且逐门 (状态, rc) 与串行权威档一致（shard_verdict.py 逐门对拍）
+#   默认：SHARD_JOBS=2；SHARD_CPUS 未给 ⇒ 按 N 自动切 N 段连续核区间（见下）。
+#   退出开关：**SHARD_NO_CLAMP=1** ⇒ 两变量都不设，完全恢复旧行为（含 SHARD_JOBS/SHARD_CPUS 也不再生效）。
+SHARD_NO_CLAMP="${SHARD_NO_CLAMP:-}"
+SHARD_JOBS="${SHARD_JOBS:-}"
+SHARD_CPUS="${SHARD_CPUS:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry)   DRY=1 ;;
+    --times) shift; TIMES="${1:-}" ;;
+    [0-9]*)  N="$1" ;;
+    *) echo "未知参数: $1" >&2; exit 4 ;;
+  esac
+  shift
+done
+
+# ── M309 阶段B：默认值推导（解析完 N 之后才能切核区间）──
+if [ -z "$SHARD_NO_CLAMP" ]; then
+  SHARD_JOBS="${SHARD_JOBS:-2}"
+  if [ -z "$SHARD_CPUS" ]; then
+    SHARD_CPUS="$(python3 -c '
+import os, sys
+n = int(sys.argv[1]); c = os.cpu_count() or 1
+step = max(1, c // n); segs = []
+for i in range(n):
+    a = i * step
+    b = (a + step - 1) if i < n - 1 else (c - 1)
+    if a > c - 1: a = c - 1
+    segs.append("%d-%d" % (a, b))
+print(",".join(segs))' "$N")"
+  fi
+  echo "（M309 默认口径：SHARD_JOBS=$SHARD_JOBS · 绑核 $SHARD_CPUS · 退回旧行为 SHARD_NO_CLAMP=1）"
+else
+  echo "（SHARD_NO_CLAMP=1：不夹门内并行度 / 不绑核 —— 旧行为）"
+fi
+
+SRC="${PX_SRC:-$(cd "$(dirname "$0")/../.." && pwd)}"
+BASE="${PX_GATEVM:-/data/gatevm}"
+TS=$(date +%Y%m%d-%H%M%S)
+LOG="$BASE/shard-$TS"
+mkdir -p "$LOG"
+
+echo "═══ 分片调度：N=$N · 日志 $LOG ═══"
+
+# ── 1) 门清单（**取自 HEAD**，而不是主树）──
+# ⚠️ 为什么不能用主树的 `run_gates.sh --list`（2026-10-12 实测）：主树可能有**别处的未提交改动**
+#    —— 当时主树多了个新门 `selfwake_guard`（另一个会话在建），而分片 worktree 检出的是 HEAD、
+#    没有那个门 ⇒ 分片会去跑一个**不存在的门**。分片跑的是 HEAD，清单就必须与 HEAD 同源。
+#    `--list` 读的是 `gates.registry.sh` 的 `run <name>` 行 ⇒ 直接从 HEAD 提取即可。
+git -C "$SRC" show "HEAD:selfhost/gates.registry.sh" | sed -n 's/^run \([A-Za-z0-9_]*\) .*/\1/p' > "$LOG/gates.txt"
+NG=$(wc -l < "$LOG/gates.txt")
+echo "门数: $NG（清单取自 HEAD:$(git -C "$SRC" rev-parse --short HEAD)）"
+
+# ── 2) 耗时依据 ──
+: > "$LOG/plan.tsv"
+while read -r g; do
+  [ -z "$g" ] && continue
+  t=$(awk -F'\t' -v G="$g" '$1==G{print $3}' "$TIMES" 2>/dev/null | head -1)
+  [ -z "$t" ] && t=60          # 未见过的门给保守估计
+  printf '%s\t%s\n' "$t" "$g" >> "$LOG/plan.tsv"
+done < "$LOG/gates.txt"
+
+# ── 3) LPT 分片（最贵的先排）──
+python3 - "$N" "$LOG/plan.tsv" "$LOG" <<'PY'
+import sys
+N=int(sys.argv[1]); plan=sys.argv[2]; out=sys.argv[3]
+rows=[]
+for ln in open(plan, encoding='utf-8'):
+    p=ln.rstrip('\n').split('\t')
+    if len(p)==2:
+        try: rows.append((int(p[0]), p[1]))
+        except ValueError: pass
+rows.sort(reverse=True)
+bins=[[] for _ in range(N)]; load=[0]*N
+for t,g in rows:
+    i=load.index(min(load)); bins[i].append(g); load[i]+=t
+for i,b in enumerate(bins):
+    open('%s/shard%d.txt'%(out,i+1),'w',encoding='utf-8').write('\n'.join(b)+'\n')
+print('分片负载(s):', load)
+print('串行总量 %d s (%.1f min) ⇒ 理论并行 %.1f min（单门下界 %d s）'
+      % (sum(load), sum(load)/60.0, max(load)/60.0, max(rows)[0] if rows else 0))
+PY
+
+# ── 3b) 出网门：pin 到 shard1（唯一**带宿主网络**的分片）──
+#   为什么需要（2026-10-12 首航实测）：`--net` 隔离让需要 UDP 出网的用例失败
+#     （`upstream_tests` 的 dns 用例：`udp_send 失败 (errno=101)`）—— 那不是缺陷，是隔离的代价。
+#   为什么只放开**一个**分片：分片之间**靠 netns 互不可见**才不会撞端口（P1 登记的 10 个端口）。
+#     只让 shard1 看宿主网络 ⇒ 它只需与**宿主自身服务**不冲突（门都用自用端口，实测无冲突），
+#     而 shard2..N 之间仍完全隔离 ⇒ 并行性不受影响。
+if [ -s "$BASE/net_needed.txt" ]; then
+  python3 - "$LOG" "$N" "$BASE/net_needed.txt" <<'PY'
+import sys, os
+log, n, nn = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+want = set(l.split('#')[0].strip() for l in open(nn, encoding='utf-8') if l.split('#')[0].strip())  # M309 阶段B：剥行内注释
+bins = []
+for i in range(1, n + 1):
+    p = os.path.join(log, 'shard%d.txt' % i)
+    bins.append([l.strip() for l in open(p, encoding='utf-8') if l.strip()])
+moved = []
+for b in bins[1:]:
+    for g in list(b):
+        if g in want:
+            b.remove(g); moved.append(g)
+for g in sorted(want):
+    if g not in bins[0]:
+        bins[0].append(g); moved.append(g)
+for i, b in enumerate(bins, 1):
+    open(os.path.join(log, 'shard%d.txt' % i), 'w', encoding='utf-8').write('\n'.join(b) + '\n')
+# 报「**最终**在 shard1 的出网门」（不是"移动了几个" —— 首版因此误报「（无）」，
+# 而实际上 upstream_tests 本来就被装进了 shard1 ⇒ 只是没"移动"，不是没生效）
+final = sorted(g for g in bins[0] if g in want)
+print('出网门在 shard1 的有 %d 个：%s' % (len(final), ', '.join(final) or '（无）'))
+missing = sorted(want - set(final))
+if missing:
+    print('⚠️ 有出网门没落到 shard1（隔离档下会失败）：%s' % ', '.join(missing))
+PY
+fi
+
+# ── 3c) 低负载门：从分片里**摘出去**（分片跑完后单独串行跑；见 quiet_needed.txt）──
+QUIET_LIST=""
+if [ -s "$BASE/quiet_needed.txt" ]; then
+  # ── M309 阶段B · 行内注释剥离（实测缺陷修复）──
+  #   档A' 日志实测：quiet_needed.txt 里 m208 那行带了**行内注释**，而旧解析只剥「# 开头」的整行
+  #   ⇒ 门名被拼成「m208_vm_c_local_roots#追加证据：宿主重负载（dnf-makecache）下亦假红（M307r4）」
+  #   这种**脏门名**传进 --only（A' 的 /tmp/gatevm/m309ab_a2.log 第 17 行可复现）。
+  #   本仓纪律：数据文件照写，解析器必须健壮 ⇒ 统一「先剥行内注释、再分列」。
+  QUIET_LIST="$(sed -e 's/#.*//' "$BASE/quiet_needed.txt" | tr -d ' \t' | grep -v '^$' | paste -sd,)"
+  python3 - "$LOG" "$N" "$BASE/quiet_needed.txt" <<'PY'
+import sys, os
+log, n, qf = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+want = set(l.split('#')[0].strip() for l in open(qf, encoding='utf-8') if l.split('#')[0].strip())  # M309 阶段B：剥行内注释
+gone = []
+for i in range(1, n + 1):
+    p = os.path.join(log, 'shard%d.txt' % i)
+    b = [l.strip() for l in open(p, encoding='utf-8') if l.strip()]
+    gone += [g for g in b if g in want]
+    open(p, 'w', encoding='utf-8').write('\n'.join([g for g in b if g not in want]) + '\n')
+print('低负载门已摘出分片（改串行后跑）：%s' % (', '.join(sorted(set(gone))) or '（无）'))
+PY
+fi
+
+if [ "$DRY" = 1 ]; then
+  echo "── 各分片门数 ──"
+  for i in $(seq 1 "$N"); do echo "  shard$i: $(wc -l < "$LOG/shard$i.txt") 门"; done
+  echo "（--dry：不启动）"; exit 0
+fi
+
+# ── 4) 准备分片环境（worktree + .rtcache reflink 副本 + 私有 tmp + 私有 devbuild 槽）──
+# ⚠️ worktree **不能放 /tmp 下** —— 私有 /tmp 一 bind 就把它遮蔽了（步2 实测）
+# ⚠️ .rtcache 用 **reflink（COW）** 而不是硬链接：实测本机 / 是 XFS reflink=1
+#    （cp -a --reflink=auto 全量 10G 耗时 6.4s · 0 空间 · 改副本不影响源，已实证）。
+#    硬链接的两个隐患：① 若某 key 目录「存在但缺 .complete」，rt_cache_compile 会
+#    `cp src $dir/` 与 `cc -o $dir/x.o` **就地截断**同名 inode ⇒ 源 + 全部分片一起污染；
+#    ② 无法界定「谁写脏了谁」。reflink 从根上消掉这类风险，代价只有几秒。
+# ⚠️ devbuild 多槽（/tmp/devbuild_slots）也要**每分片一份**：回填是
+#    `cp -a $out $slot/$name` 后写 key ⇒ 多分片同填一个槽时读者可能拿到半个二进制。
+#    默认路径在私有 /tmp 里 ⇒ 不预置就是**空槽**（每片冷建）。
+HEAD_SHA="$(git -C "$SRC" rev-parse HEAD)"
+for i in $(seq 1 "$N"); do
+  WT="$BASE/wt$i"
+  # 每次重建 worktree：消掉「上一轮残留 vs 这一轮 HEAD」这类不可见差异
+  # （步2 实测：检出 198MB / 1.8s，代价可忽略）
+  git -C "$SRC" worktree remove --force "$WT" >/dev/null 2>&1
+  rm -rf "$WT"
+  echo "── 建 worktree wt$i @ ${HEAD_SHA:0:8} ──"
+  git -C "$SRC" worktree add --detach "$WT" "$HEAD_SHA" >/dev/null 2>&1 || { echo "❌ wt$i 建树失败"; exit 3; }
+  cp -a --reflink=auto "$SRC/.rtcache" "$WT/.rtcache" || { echo "❌ wt$i .rtcache 副本失败"; exit 3; }
+  # ⚠️ 私有 /tmp **每次清空重建**（不能只删 devbuild_slots）——
+  #   实测（2026-10-12）：上一轮被 `kill -KILL` 打断时，分片里的门锁文件
+  #   （`/tmp/m116_gates.lock`）留了下来，里面记的是**分片 PID 命名空间里的低号 PID**（4），
+  #   而 `kill -0 4` 在新命名空间里仍然算"活着" ⇒ 之后每一轮分片都报
+  #   「已有 m116 全门在跑（PID 4）…拒绝启动」⇒ **整轮空跑**（211 门一个没跑，汇总却只报
+  #   「合计 绿 3」（quiet 档那 3 个）—— 见下面 7) 新增的"空跑必红"判据）。
+  rm -rf "$BASE/tmp$i"
+  mkdir -p "$BASE/tmp$i"
+  if [ -d /tmp/devbuild_slots ]; then
+    cp -a --reflink=auto /tmp/devbuild_slots "$BASE/tmp$i/devbuild_slots" 2>/dev/null \
+      || echo "  ⚠ wt$i：devbuild 槽副本失败（仍可跑，会冷建）"
+  fi
+done
+
+# ── 5) 启动 ──
+PIDS=()
+for i in $(seq 1 "$N"); do
+  ONLY=$(paste -sd, "$LOG/shard$i.txt")
+  # ── M309 C1 A/B：每路的 GATE_JOBS / 绑核（空 = 保持既有行为）──
+  JOBS_ENV=""; [ -n "$SHARD_JOBS" ] && JOBS_ENV="GATE_JOBS=$SHARD_JOBS "
+  TSET=""
+  if [ -n "$SHARD_CPUS" ]; then
+    _cpus=$(printf '%s' "$SHARD_CPUS" | cut -d, -f"$i")
+    [ -n "$_cpus" ] && TSET="taskset -c $_cpus "
+  fi
+  # ⚠️ shard1 = **唯一带宿主网络**的分片（跑需要出网的门，见 3b）。
+  #    其余分片 `--net` 隔离 ⇒ 彼此端口互不可见 —— 这才是分片之间能并行的前提。
+  NS="--mount --pid --net --fork --mount-proc"
+  [ "$i" = 1 ] && NS="--mount --pid --fork --mount-proc"
+  (
+    unshare $NS bash -c "
+      mount --bind $BASE/tmp$i /tmp
+      ip link set lo up 2>/dev/null
+      cd $BASE/wt$i || exit 9
+      GATE_TSV=/tmp/times.tsv GATE_TIMEOUT_DEFAULT=900 \
+      ${JOBS_ENV}${TSET}bash selfhost/run_gates.sh --only '$ONLY'
+    " > "$LOG/shard$i.log" 2>&1
+    echo "$?" > "$LOG/shard$i.rc"
+  ) &
+  PIDS+=($!)
+  if [ "$i" = 1 ]; then NSN="· 宿主网络"; else NSN="· net 隔离"; fi
+  echo "  shard$i 启动 pid=${PIDS[-1]}（$(wc -l < "$LOG/shard$i.txt") 门 · $NSN）"
+done
+
+# ── 6) 等待 ──
+echo "── 等待 $N 个分片 ──"
+for p in "${PIDS[@]}"; do wait "$p"; done
+echo "── 全部分片结束 ──"
+
+# ── 6b) 低负载门：此时机器已空闲 ⇒ 串行跑（见 quiet_needed.txt）──
+if [ -n "$QUIET_LIST" ]; then
+  echo "── 低负载门串行跑（$QUIET_LIST）──"
+  # 用分片 worktree（与分片同一份代码）；先恢复被负控改过的受管目录，避免 run_gates 拒脏树
+  git -C "$BASE/wt1" checkout -q -- selfhost runtime tools 2>/dev/null || true
+  ( cd "$BASE/wt1" && GATE_TSV="$LOG/quiet.times.tsv" GATE_TIMEOUT_DEFAULT=900 \
+      bash selfhost/run_gates.sh --only "$QUIET_LIST" ) > "$LOG/quiet.log" 2>&1
+  echo "  quiet rc=$?"
+fi
+
+# ── 7) 汇总 ──
+echo ""
+echo "═══ 分片汇总 ═══"
+TOT_OK=0; TOT_FAIL=0; TOT_SKIP=0
+for i in $(seq 1 "$N"); do
+  # ⚠️ 红必须数**两种**：`❌`（判红）**与** `⏱`（超时）—— `run_gates.sh` 的超时不打 ❌
+  #    但同样 FAIL++（M284 缺陷 495 同源；2026-10-12 M305 首轮实测：shard1 自报「绿 45 红 0」
+  #    而裁决器报 rc=124 ⇒ 超时被算成了绿）。
+  ok=$(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/shard$i.log" 2>/dev/null)
+  bad=$(grep -cE '^(❌|⏱)[[:space:]]+[a-zA-Z0-9_]+（' "$LOG/shard$i.log" 2>/dev/null)
+  rc=$(cat "$LOG/shard$i.rc" 2>/dev/null || echo '?')
+  echo "  shard$i: 绿 $ok · 红 $bad · rc=$rc"
+  TOT_OK=$((TOT_OK+ok)); TOT_FAIL=$((TOT_FAIL+bad))
+  cp "$BASE/tmp$i/times.tsv" "$LOG/shard$i.times.tsv" 2>/dev/null || true
+done
+if [ -n "$QUIET_LIST" ]; then
+  qok=$(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/quiet.log" 2>/dev/null)
+  qbad=$(grep -cE '^(❌|⏱)[[:space:]]+[a-zA-Z0-9_]+（' "$LOG/quiet.log" 2>/dev/null)
+  echo "  quiet : 绿 $qok · 红 $qbad（低负载档）"
+  TOT_OK=$((TOT_OK+qok)); TOT_FAIL=$((TOT_FAIL+qbad))
+fi
+echo "  合计：绿 $TOT_OK · 红 $TOT_FAIL（门清单 $NG）"
+# ── 7b) 「空跑必红」：分片一个门都没跑出来 ⇒ 整轮**没有意义**，必须响亮 ──
+#   实测（2026-10-12 11:38）：分片全部因残留锁被拒（rc=1 / 0 门），而汇总只打
+#   「合计：绿 3」（那是 quiet 档那 3 个）—— 不细看会以为"绿了"。判据：分片侧合计必须 > 0。
+SH_OK=0
+for i in $(seq 1 "$N"); do
+  SH_OK=$((SH_OK + $(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/shard$i.log" 2>/dev/null || echo 0)))
+done
+if [ "$SH_OK" -eq 0 ]; then
+  echo "  ❌ 空跑：4 个分片一个门都没跑出来（看 $LOG/shard1.log —— 多半是残留锁/建树失败）"
+  exit 6
+fi
+if [ "$TOT_FAIL" != 0 ]; then
+  echo "  ❌ 有红 ⇒ 逐条看 $LOG/shard*.log"
+fi
+echo "日志目录：$LOG"
