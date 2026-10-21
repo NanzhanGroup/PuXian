@@ -120,8 +120,32 @@ else
     L_PEAK=$(lim rss_peak_max_kb)
 
     echo "[3] 判据（收敛性 = 后段均值 vs 前段均值；不是单点绝对增量）"
-    cmax=0; for r in $(seq 1 "$ROUNDS"); do [ "${CR[$r]}" -gt "$cmax" ] && cmax=${CR[$r]}; done
-    le "[3a] CPU 每轮峰值 tick" "$cmax" "$L_CPU"
+    # ── v5（M317 · 2026-10-21）：[3a] 改「中位数 + 离群轮数 + 单轮硬上限」─────────────
+    #   v4（离群 ≤1 轮）仍会假红：同机 7 次实测里 2 次出现 **2 轮**离群
+    #   （run3 = 18/25 · 关掉时间触发 PX_GC_MAX_INTERVAL_MS=0 的 run2 = 19/44
+    #    ⇒ 与 M317 的 GC 无关；同一轮 px-gc-stats 实读 runs=0 也是 0 次 GC）。
+    #   实测（本机空闲 · 每轮 220 请求 + 3s 静置 · 9 轮）：
+    #     无尖峰：9 9 8 8 9 8 8 9 9（中位数 9）
+    #     有尖峰：9 22 12 10 10 11 11 11 11 · 8 10 11 11 10 11 10 31 10 · 8 9 14 9 10 11 18 11 25
+    #   尖峰轮的自证：20/20 请求全成功、RSS 落在同一条收敛曲线上、线程/fd 增量 0
+    #     ⇒ 是「偶发突发」（0.2~0.45s CPU），不是持续烧 CPU。
+    #   ⇒ 判据换成**中位数**（与 [3c] 用均值同一方法论：判稳不看极值），并留两道边界：
+    #     · 离群轮 ≤2/9（再多就不是偶发）；
+    #     · 单轮硬上限 = 5×上限（75 tick ≈ 0.75s/5s）。
+    #   忙等/真泄漏是**每轮** 460~502 ⇒ 中位数、离群轮、硬上限三道全红（负控 [4a] 仍逐轮实测）。
+    cmax=0; nover=0
+    for r in $(seq 1 "$ROUNDS"); do
+      [ "${CR[$r]}" -gt "$cmax" ] && cmax=${CR[$r]}
+      [ "${CR[$r]}" -gt "$L_CPU" ] && nover=$((nover+1))
+    done
+    med=$(for r in $(seq 1 "$ROUNDS"); do echo "${CR[$r]}"; done | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+    L_CPU_HARD=$(( L_CPU * 5 ))
+    curve=$(for r in $(seq 1 "$ROUNDS"); do printf '%s ' "${CR[$r]}"; done)
+    if [ "$med" -le "$L_CPU" ] && [ "$nover" -le 2 ] && [ "$cmax" -le "$L_CPU_HARD" ]; then
+      ok "[3a] CPU 每轮 tick（中位数 $med ≤ 上限 $L_CPU；离群 $nover/$ROUNDS 轮；峰值 $cmax ≤ 硬上限 $L_CPU_HARD；曲线 $curve）"
+    else
+      bad "[3a] CPU 每轮 tick 判红（中位数 $med / 上限 $L_CPU；离群 $nover/$ROUNDS 轮；峰值 $cmax / 硬上限 $L_CPU_HARD；曲线 $curve）—— 疑似 CPU 泄漏/忙等"
+    fi
     # [3b] 只抓「一上来就失控」——绝对增量跨分配器不可比（见 BASELINE.tsv 头注的 CI/本机对照）
     le "[3b] 首轮 RSS 预热增量(KB)" "$d1" "$L_FIRST"
     lim6=$(( f_avg * L_RATIO / 100 ))
@@ -183,6 +207,8 @@ cat <<'TXT'
      · 只覆盖 px_serve 的 **H3 托管 listener**（QUIC/H3 路径）；HTTP/1.1 明文路径不在面内。
      · 判据一律是**增量 + 收敛性**（不是绝对值）：基线随机器/内核变化，判「是否收敛」才可判定。
      · 「忙自旋」判据 = CPU tick 增量（HZ=100 ⇒ 1 tick ≈ 1% 单核·秒），采样窗口 5s。
+     · CPU 判据取 **9 轮中位数**（偶发 ≤2 轮突发不计，单轮硬上限 5×）：本机实测突发 18~44 tick、
+       忙等 460~502 tick ⇒ 「偶发突发」与「持续烧 CPU」可分辨；本门只判后者。
      · RSS 看 VmRSS；allocator 不归还内存时「不回落」可能掩盖真泄漏 ⇒ 本门只做**筛查**。
      · 线程/fd 只数**个数**，不判身份/类型。
      · **未覆盖**：长时间（>1h）稳态漂移；多 listener 并发；TLS 路径的资源面。
