@@ -25,6 +25,15 @@
 #   [3] 服务端面（两模式对照）：together（同段）/ after（分开）
 #   [4] 负载档：服务端「紧接 101 就 ws_send」× N 次，首帧丢失必须为 0
 #   [5] 负控 3 道（A 撤头部交还 / B 撤接管点交还 / C 判据自伤）；源逐字节还原
+# ⚠ M319s1（分片档 shard-20261022-051954 红）：**端口与就绪前提修正**。原写法
+#   `$((18950 + RANDOM % 40))` 有三个前提缺陷：
+#     ① 18950–18989 与 m317（18982/18983）、m318（18984/18985）**撞号** —— 同分片
+#        GATE_JOBS=2 并发时对方占着端口 ⇒ 本门 mock bind 失败 ⇒ 假红；
+#     ② 本门内部 10 次取号只从 40 个孔里随机取 ⇒ 重复率约 70%；
+#     ③ 只用固定 sleep 就假定服务已就绪（违反 M283 P2 强就绪）。
+#   修法：专用带 18500/18650/19250/19350 + 带内单调取号（不重复）+ `wait_listen`
+#   主动探 LISTEN（不发起连接 ⇒ 不打扰对端状态机）。探不到 ⇒ **rc=3 前提不成立**（不算产品红）。
+
 #   [6] 覆盖边界登记
 #
 # 用法：verify.sh [--neg-skip]
@@ -60,6 +69,37 @@ cleanup_all() {
 }
 # ⚠ 绝不用 pkill -f（命令串含模式时会把工具调用自己打掉 —— 本仓记过多次）
 trap 'cleanup_all' EXIT
+
+# ── M319s1：端口 = 专用带 + 带内单调取号（不随机、不重复、不撞别的门）
+#   ⚠ 计数器走**文件**而不是 shell 变量：调用点是 $(port_take cli)（命令替换 = 子 shell），
+#     变量自增会丢，只剩常量端口 ⇒ 又变成「同一个孔反复用」。文件侧效不受子 shell 影响。
+port_take() {
+    local fam="$1" base f n
+    case "$fam" in
+        cli)  base=18500 ;;
+        srv)  base=18650 ;;
+        nega) base=19250 ;;
+        negb) base=19350 ;;
+        *)    echo "port_take: 未知族 $fam" >&2; exit 2 ;;
+    esac
+    f="$W/.portseq_$fam"
+    n=$(cat "$f" 2>/dev/null || echo 0)
+    printf '%s\n' "$((n + 1))" > "$f"
+    printf '%s\n' "$((base + n))"
+}
+
+# ── M319s1：强就绪（M283 P2）—— 探 /proc/net/tcp 的 LISTEN，不发连接
+wait_listen() {   # $1=port $2=上限秒（默认 30）
+    local port="$1" tmo="${2:-30}" hex i=0
+    hex=$(printf '%04X' "$port")
+    while [ "$i" -lt $((tmo * 10)) ]; do
+        awk -v h=":$hex" 'NR>1 { split($2,a,":"); if (":" a[2] == h && $4 == "0A") { found=1; exit } } END { exit !found }' /proc/net/tcp 2>/dev/null && return 0
+        sleep 0.1
+        i=$((i + 1))
+    done
+    return 1
+}
+premise_fail() { echo "❌ 前提不成立：$*" >&2; exit 3; }
 
 echo "=== M288 门 · WS 握手残余字节（首帧静默丢失）==="
 echo "ROOT=$ROOT  W=$W"
@@ -115,11 +155,7 @@ cli_run() {   # $1=engine  $2=mockmode  $3=port  $4=dirtag   → $d/cli.out
     python3 "$HERE/mock_ws.py" "$port" "$mm" > "$d/mock.log" 2>&1 &
     local mpid=$!
     echo "$mpid" >> "$LEFT"
-    local k
-    for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-        grep -q 'listening' "$d/mock.log" 2>/dev/null && break
-        sleep 0.1
-    done
+    wait_listen "$port" 30 || { grep -q 'listening' "$d/mock.log" 2>/dev/null || premise_fail "mock_ws.py 未在 127.0.0.1:$port 监听（端口被占/进程未起）"; }
     if [ "$eng" = "i" ]; then
         ( cd "$d" && timeout 25 "$ROOT/bootstrap/pxi" "$port" "$mm" "$d/cli.px" > cli.out 2>&1 )
     else
@@ -144,14 +180,14 @@ R1_CHK() {   # $1=标签  $2=cli.out路径  $3=期望(键=值 串)
 }
 
 for eng in c vm i; do
-    cli_run "$eng" split    "$((18950 + RANDOM % 40))" "$eng-split"
-    cli_run "$eng" combined "$((18950 + RANDOM % 40))" "$eng-combined"
-    cli_run "$eng" partial  "$((18950 + RANDOM % 40))" "$eng-partial"
+    cli_run "$eng" split    "$(port_take cli)" "$eng-split"
+    cli_run "$eng" combined "$(port_take cli)" "$eng-combined"
+    cli_run "$eng" partial  "$(port_take cli)" "$eng-partial"
     R1_CHK "$eng · split（101 与首帧分开）"    "$W/$eng-split/cli.out"    "R1EQ = true"
     R1_CHK "$eng · combined（101+首帧同段）"   "$W/$eng-combined/cli.out" "R1EQ = true"
     R1_CHK "$eng · partial（101+半帧同段）"    "$W/$eng-partial/cli.out"  "R1EQ = true"
 done
-cli_run c big "$((18950 + RANDOM % 40))" "c-big"
+cli_run c big "$(port_take cli)" "c-big"
 R1_CHK "c · big（3000 字节首帧同段）" "$W/c-big/cli.out" "R1LEN = 3000"
 
 # ------------------------------------------------------------
@@ -170,7 +206,7 @@ pair_raw() {   # $1=engine  $2=mode  $3=port  $4=dirtag   → $d/${mode}.srv.out
     fi
     local spid=$!
     echo "$spid" >> "$LEFT"
-    sleep 1.5
+    wait_listen "$port" 30 || premise_fail "srv 未在 127.0.0.1:$port 监听（启动失败/端口被占）"
     timeout 20 python3 "$HERE/client_raw.py" "$port" "$mode" > "$d/$mode.cli.out" 2>&1
     sleep 0.4
     kill "$spid" 2>/dev/null; kill -9 "$spid" 2>/dev/null
@@ -187,8 +223,8 @@ SRV_CHK() {   # $1=标签  $2=srv.out路径  $3=期望
     esac
 }
 for eng in c vm; do
-    pair_raw "$eng" together "$((19050 + RANDOM % 40))" "$eng-srv"
-    pair_raw "$eng" after    "$((19050 + RANDOM % 40))" "$eng-srv2"
+    pair_raw "$eng" together "$(port_take srv)" "$eng-srv"
+    pair_raw "$eng" after    "$(port_take srv)" "$eng-srv2"
     SRV_CHK "$eng · together（请求+首帧同段 ⇒ 首帧必须收到）" "$W/$eng-srv/together.srv.out"  "SRVEQ = true"
     SRV_CHK "$eng · after（分开发 ⇒ 对照，修前也必须正常）"   "$W/$eng-srv2/after.srv.out"   "SRVEQ = true"
 done
@@ -207,7 +243,7 @@ if build_probe c "$d" srv.px && build_probe c "$d" cli.px; then
         port=$((19100 + i))
         ( cd "$d" && exec ./build/srv "$port" ) > "$d/srv_$i.out" 2>&1 &
         spid=$!; echo "$spid" >> "$LEFT"
-        sleep 1.2
+        wait_listen "$port" 30 || premise_fail "负载档 srv 未在 127.0.0.1:$port 监听"
         ( cd "$d" && timeout 25 ./build/cli "$port" load > "cli_$i.out" 2>&1 )
         sleep 0.2
         kill "$spid" 2>/dev/null; sleep 0.1; kill -9 "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
@@ -245,9 +281,9 @@ if s.count(old) != 1:
 io.open(p, 'w', encoding='utf-8').write(s.replace(old, '        (void)rest_len;   /* NEG-A：不交还残余 */', 1))
 print('NEG-A patch ok')
 PYEOF
-    cli_run c combined "$((19250 + RANDOM % 20))" "negA-combined"
-    cli_run c partial  "$((19250 + RANDOM % 20))" "negA-partial"
-    cli_run c split    "$((19250 + RANDOM % 20))" "negA-split"
+    cli_run c combined "$(port_take nega)" "negA-combined"
+    cli_run c partial  "$(port_take nega)" "negA-partial"
+    cli_run c split    "$(port_take nega)" "negA-split"
     na_c=$(grep -c 'R1EQ = true' "$W/negA-combined/cli.out" 2>/dev/null); na_c=${na_c:-0}
     na_p=$(grep -c 'R1EQ = true' "$W/negA-partial/cli.out" 2>/dev/null); na_p=${na_p:-0}
     na_s=$(grep -c 'R1EQ = true' "$W/negA-split/cli.out" 2>/dev/null); na_s=${na_s:-0}
@@ -258,12 +294,12 @@ PYEOF
     fi
     # ── 负控 C：判据自伤 —— 同一份「已打桩」的产物，判决一放宽 ⇒ A 的红必须消失
     WEAK=1
-    cli_run c combined "$((19250 + RANDOM % 20))" "negC-combined"
+    cli_run c combined "$(port_take nega)" "negC-combined"
     R1_CHK "负控 C · 弱判据下同一产物" "$W/negC-combined/cli.out" "R1EQ = true"   # 恒真 ⇒ 必 ok
     WEAK=0
     restore_neg
     # ⚠ 还原后必须复跑：证明「弱判据下绿」确由判据造成（否则红可能来自别的变化）
-    cli_run c combined "$((19250 + RANDOM % 20))" "negC2-combined"
+    cli_run c combined "$(port_take nega)" "negC2-combined"
     R1_CHK "负控 C · 还原并复跑（真判据下必须回到绿）" "$W/negC2-combined/cli.out" "R1EQ = true"
 
     # ── 负控 B：撤「收口 C」（px_serve 接管点不交还残余）
@@ -280,8 +316,8 @@ if s.count(old) != 1:
 io.open(p, 'w', encoding='utf-8').write(s.replace(old, '                    /* NEG-B：不交还残余 */', 1))
 print('NEG-B patch ok')
 PYEOF
-    pair_raw c together "$((19350 + RANDOM % 20))" "negB-srv"
-    pair_raw c after    "$((19350 + RANDOM % 20))" "negB-srv2"
+    pair_raw c together "$(port_take negb)" "negB-srv"
+    pair_raw c after    "$(port_take negb)" "negB-srv2"
     nb_t=$(grep -c 'SRVEQ = true' "$W/negB-srv/together.srv.out" 2>/dev/null); nb_t=${nb_t:-0}
     nb_a=$(grep -c 'SRVEQ = true' "$W/negB-srv2/after.srv.out" 2>/dev/null); nb_a=${nb_a:-0}
     if [ "$nb_t" = "0" ] && [ "$nb_a" = "1" ]; then
