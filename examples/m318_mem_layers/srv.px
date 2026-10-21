@@ -1,0 +1,15 @@
+# srv.px —— M317 门：上游最小件（纯 http_serve，直接 200）
+#   与晨曦复测装置的 srv 同构：不含任何反代逻辑，用来量「纯入站」的基线。
+def h(req):
+    return {"status": 200, "body": "ok\n", "headers": {"Content-Type": "text/plain"}}
+
+def run():
+    av = args()
+    port = 18982
+    if len(av) > 1:
+        port = int(av[1])
+    print("srv ready port=" + str(port))
+    flush()
+    http_serve(port, h)
+
+run()

@@ -1657,4 +1657,10 @@ run m315_onnx_ort_kernel bash examples/m315_onnx_ort_kernel/verify.sh
 #   判据只看**线上字节**（原始请求头 hex），负控撤回 ⇒ 双 Host 必须复现。
 run m316_http_dup_host bash examples/m316_http_dup_host/verify.sh
 run m317_gc_time_trigger bash examples/m317_gc_time_trigger/verify.sh --neg-skip
+# M318（第 190 轮）：内存分层可观测性（gc_diagnose / live_bytes / slab 单一实现）。
+#   三层模型：① 活对象 ② 分配器 ③ 非 GC 内存 —— 修前「RSS 涨了」无法分解到层。
+#   判据：静态 13 条 + 三轨契约一致 + 编译轨分层（live≤4MB/slab≤16MB/比值≥3）
+#         + 负控 A（关闭档 slab ≥ 2× 开启档 · **相对判据**）+ 负控 B（判据回放双向）。
+#   负控只多跑一次服务场景（~15s）⇒ **本地全量档**；CI 用 --neg-skip。
+run m318_mem_layers bash examples/m318_mem_layers/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test
