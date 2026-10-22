@@ -21,6 +21,13 @@ mkdir -p build
 
 echo "== [truth] 生成 Go 真值（encoding/json 本尊：Indent / Compact / Marshal / HTMLEscape / quoteChar）=="
 command -v go >/dev/null 2>&1 || { echo "FAIL：本机无 go 工具链（本门真值必须来自 Go）"; exit 1; }
+# ── Go `encoding/json` 口径钉死（M320 / 缺陷 553）──
+#   Go 1.27 起 `encoding/json` 默认走 **jsonv2**：Compact 错误对象的 Offset 与全部错误文案
+#   都变了，本门 696 行真值里有 **112 行**会跟着工具链默认档漂移（实测 go1.27.3 vs 1.26.7）。
+#   PuXian 复刻的是 **v1** 口径 ⇒ 显式 `GOEXPERIMENT=nojsonv2`，并**断言确实生效**
+#   （未生效就判红 —— 不许工具链换默认档，把我们的基准悄悄换掉）。
+. "../../selfhost/go_json_v1.sh" || { echo "❌ [M320] source 失败（selfhost/go_json_v1.sh）" >&2; exit 2; }
+go_json_v1_report || { echo "FAIL [truth] JSON 口径未钉在 v1 —— 基准会随工具链漂移"; exit 1; }
 if (cd truth && GOFLAGS=-mod=mod go build -o ../build/truth . > "$LOG" 2>&1); then
     ./build/truth corpus.txt > build/truth.txt
     echo "   真值行数：$(wc -l < build/truth.txt)（88 例 × 5 行 + Q 面 256 行）"
