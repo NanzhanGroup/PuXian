@@ -24,6 +24,11 @@
 #   R3 产品面/门面/工具面零变更（runtime/ stdlib/ tools/ spec/ selfhost/
 #      packaging/ examples/ cmd/ internal/）—— R2 的反面，单列便于读因
 #   R4 唯一读 CHANGELOG 的元门 check_defect_refs.py 通过（GATE_SCOPE 分档的对口证据）
+#   R0 门日志可解析 —— **两种权威档都要认**（缺陷 558）：
+#      · 分片档：shard1..4 + quiet（/data/gatevm/shard_run.sh）
+#      · 串行权威档：「══ 汇总：失败 N 项」+ 逐门 ✅/❌ 行（selfhost/run_gates.sh 全量档）
+#      R0 同时自检两档的**内部自洽**：汇总的失败数必须等于逐门红数，
+#      否则一律判红（M323 第 6 轮实测：串行档日志被判「汇总段缺失」⇒ 假红 R0）
 #   R5 门日志：各分片 rc=0、红 0、合计绿 == 注册门数 == 日志自述门清单数
 #   R6 工作树干净（tag 要打在一个已落仓的提交上）
 #   R7 tag 目标 == HEAD（禁止「tag 打在门覆盖的旧提交上」）
@@ -36,6 +41,9 @@
 #   N5 脏树            ⇒ R6 红（前提：porcelain 非空）
 #   N6 正控：全绿      ⇒ 判绿（证明判据不是恒红）
 #   N7 元门失败        ⇒ R4 红（前提：桩脚本 rc=1）
+#   N9 串行权威档全绿  ⇒ GREEN（前提：解析出 mode=serial 且绿=3）
+#   N10 串行档红 1     ⇒ R5 红（前提：逐门红=1 == 汇总「失败 1」）
+#   N11 串行档自相矛盾 ⇒ R0 红（前提：汇总「失败 2」而逐门红=0）
 #   任一负控未红 ⇒ 打印「负控失效」并 exit 3 —— 判据没牙就是没判据（CRITERIA ③）
 #
 # 用法
@@ -136,10 +144,40 @@ def parse_gates_log(text):
     mb = re.search(r"建 worktree wt\d+ @ ([0-9a-f]{7,40})", text)
     if mb:
         base = mb.group(1)
+    if base is None:
+        # 串行权威档头行：=== M323 全量门（第 6 轮 · base=<sha>）· <ts> ===
+        mh = re.search(r"base=([0-9a-f]{7,40})", text)
+        if mh:
+            base = mh.group(1)
+
+    mode = "sharded"
     if not shard or tot is None:
-        return {"error": "汇总段缺失（未找到「shardN: 绿 X · 红 Y」或「合计：绿 X · 红 Y」）",
-                "shards": shard, "total": tot, "base_from_log": base}
-    return {"shards": shard, "total": tot, "base_from_log": base}
+        # ── 串行权威档（缺陷 558）：run_gates.sh 全量档只打「汇总：失败 N 项」，
+        #    不给绿数 ⇒ 绿/红由**逐门状态行**数出来，并用汇总失败数做自洽校验。
+        ms = re.search(r"汇总：失败\s*(\d+)\s*项(?:[^\n]*?跳过\s*(\d+)\s*门)?", text)
+        if not ms:
+            return {"error": "汇总段缺失（分片档「shardN: 绿 X · 红 Y / 合计」与"
+                             "串行档「汇总：失败 N 项」都没有）",
+                    "shards": shard, "total": tot, "base_from_log": base}
+        skipped = int(ms.group(2) or 0)
+        ok_n = len(re.findall(r"(?m)^✅\s+[A-Za-z0-9_.-]+（", text))
+        bad_n = len(re.findall(r"(?m)^(?:❌|⏱)\s+[A-Za-z0-9_.-]+（", text))
+        failed_decl = int(ms.group(1))
+        if skipped:
+            return {"error": "串行档跳过了 %d 门（--fail-fast/中途退出）⇒ 不是全量，不能裁决" % skipped,
+                    "shards": shard, "total": tot, "base_from_log": base}
+        if ok_n + bad_n == 0:
+            return {"error": "串行档「汇总：失败 %d 项」在，但逐门状态行为 0（日志截断？）" % failed_decl,
+                    "shards": shard, "total": tot, "base_from_log": base}
+        if failed_decl != bad_n:
+            return {"error": "串行档自相矛盾：汇总「失败 %d 项」≠ 逐门红 %d 条" % (failed_decl, bad_n),
+                    "shards": shard, "total": tot, "base_from_log": base}
+        rc_m = re.search(r"(?m)^rc=(\d+)\s*$", text)
+        shard = {"serial": {"green": ok_n, "red": bad_n,
+                            "rc": int(rc_m.group(1)) if rc_m else None}}
+        tot = {"green": ok_n, "red": bad_n, "declared_total": None}
+        mode = "serial"
+    return {"shards": shard, "total": tot, "base_from_log": base, "mode": mode}
 
 
 def evaluate(repo, gates_log, base=None, expect_head=None, defect_refs=None,
@@ -158,7 +196,9 @@ def evaluate(repo, gates_log, base=None, expect_head=None, defect_refs=None,
         v.add("R0", "门日志含可解析的汇总段", False, parsed["error"])
         return v
     v.add("R0", "门日志含可解析的汇总段", True,
-          "分片 %d 个：%s" % (len(parsed["shards"]), " ".join(sorted(parsed["shards"]))))
+          "%s · %d 组：绿 %d · 红 %d" % (
+              "串行权威档" if parsed.get("mode") == "serial" else "分片档",
+              len(parsed["shards"]), parsed["total"]["green"], parsed["total"]["red"]))
 
     # ── 解析提交 ────────────────────────────────────────
     head_full = sh(["git", "-C", repo, "rev-parse", "HEAD"])[1].strip()
@@ -282,6 +322,23 @@ def _log(shards, green, red, declared):
     return "\n".join(lines) + "\n"
 
 
+def _serial_log(ok_names, bad_names, failed_decl=None, skipped=0):
+    """造一份**串行权威档**日志（run_gates.sh 全量档的原样格式，缺陷 558）。"""
+    lines = ["=== M323 全量门（第 7 轮 · base=deadbeefcafe）· 2026-10-23T04:00:00+08:00 ===", ""]
+    for n in ok_names:
+        lines.append("✅ %s（1s）" % n)
+    for n in bad_names:
+        lines.append("❌ %s（rc=1, 2s）" % n)
+    fd = len(bad_names) if failed_decl is None else failed_decl
+    tail = "══ 汇总：失败 %d 项" % fd
+    if skipped:
+        tail += " · 跳过 %d 门" % skipped
+    tail += "（总耗时 3s）══"
+    lines.append(tail)
+    lines.append("rc=%d" % (1 if bad_names else 0))
+    return "\n".join(lines) + "\n"
+
+
 def self_test():
     ok = 0
     bad = 0
@@ -402,6 +459,41 @@ def self_test():
                         expect_head=base)
         report("N8 tag 目标=基线（旧提交）⇒ R7 判红（M322 假绿场景）",
                "R7" in v_r7.as_dict()["failed_ids"])
+
+        # ── N9–N11：串行权威档（缺陷 558：R0 曾把串行档日志判成「汇总段缺失」）──
+        log_serial_green = _serial_log(["gate_a", "gate_b", "gate_c"], [])
+        pser = parse_gates_log(log_serial_green)
+        premise = pser.get("mode") == "serial" and pser["total"]["green"] == 3
+        v = evaluate(repo, None, base=base, defect_refs=stub, log_text=log_serial_green)
+        if not premise:
+            dead += 1
+            print("  ❌ N9 前提自证失败：mode=%s green=%s"
+                  % (pser.get("mode"), pser.get("total", {}).get("green")))
+        else:
+            report("N9 串行权威档全绿 ⇒ GREEN（前提：mode=serial 且绿=3）",
+                   v.green, "失败判据 %s" % v.as_dict()["failed_ids"])
+
+        log_serial_red = _serial_log(["gate_a", "gate_b"], ["gate_c"])
+        pser = parse_gates_log(log_serial_red)
+        premise = pser.get("total", {}).get("red") == 1
+        v = evaluate(repo, None, base=base, defect_refs=stub, log_text=log_serial_red)
+        if not premise:
+            dead += 1
+            print("  ❌ N10 前提自证失败：解析出的逐门红不是 1")
+        else:
+            report("N10 串行档红 1 ⇒ R5 判红（前提：汇总「失败 1」== 逐门红 1）",
+                   "R5" in v.as_dict()["failed_ids"])
+
+        log_serial_lie = _serial_log(["gate_a", "gate_b"], [], failed_decl=2)
+        perr = parse_gates_log(log_serial_lie)
+        premise = "error" in perr and "自相矛盾" in perr["error"]
+        v = evaluate(repo, None, base=base, defect_refs=stub, log_text=log_serial_lie)
+        if not premise:
+            dead += 1
+            print("  ❌ N11 前提自证失败：汇总与逐门红的不一致未被识破")
+        else:
+            report("N11 串行档自相矛盾（汇总失败 2 · 逐门红 0）⇒ R0 判红",
+                   "R0" in v.as_dict()["failed_ids"])
 
     print("===== 通过 %d 项 · 失败 %d 项 · 负控失效 %d 项 =====" % (ok, bad, dead))
     if dead:
