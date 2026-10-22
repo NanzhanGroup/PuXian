@@ -32,6 +32,14 @@ step "门注册一致性（本地清单 ⇄ ci.yml 双向 —— M243）"
 #   ⇒ M243 抽出单一注册源（本文件）+ 本门做**双向守卫**：
 #     漏注册 / 反向缺口 / 例外过期 / 例外缺理由 ⇒ 判红。
 run gate_registry bash selfhost/check_gate_registry.sh
+step "发布就绪裁决的负控自证（M323 · 缺陷 557）"
+#   M322 第 5 轮实测：/tmp 里那版裁决器拿「短 sha 文本相等」当判据
+#     EXPECT_HEAD=9fb6c1cc vs HEAD=cd152820
+#   ⇒ ① 假红：HEAD 只多了一个只改 CHANGELOG 的提交（19:39 用户令：CHANGELOG 不是代码）
+#      ② 可假绿：若它判绿，会把 tag 打在门覆盖的**旧提交**上（tag 与 main 脱节）
+#   本门跑 release_readiness.py --self-test：8 条正控/负控，任一负控不红 ⇒ exit 3
+#   （负控失效也是红 —— 判据没牙就是没判据 · CRITERIA ③）。
+run release_readiness_selftest python3 selfhost/release_readiness.py --self-test
 step "门路径卫生（不许写死开发机绝对路径 —— M213 缺陷 300）"
 #   2026-09-26 实锤：`m213_gcroot_precision` 的 ⑦ 层把 `/data/code/puxian/...` 写进 python
 #   ⇒ 本机全绿、**CI 红**（CI 仓库在 /home/runner/work/... 下）。⚠️ 「干净导出复现」抓不到
