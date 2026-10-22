@@ -1,3 +1,92 @@
+## M323 —— 发布就绪裁决器把「短 sha 文本」当判据 ⇒ 假红 + 可假绿（错被误打误撞挡住）（第 195 轮 · 缺陷 557）
+
+> 触发：M322 第 5 轮（229 门全绿 · 20:26）。裁决器输出 `VERDICT=RED_OR_INCOMPLETE · 未推送`，
+> 而门日志逐行读下来是 `合计：绿 229 · 红 0 · rc=0`。门没问题，错在裁决器。
+
+### 一 两次判错（同一行代码）
+
+```bash
+EXPECT_HEAD=9fb6c1cc                      # 18:37 写脚本时的 HEAD
+H=$(git rev-parse --short=8 HEAD)         # 19:31 后 HEAD=cd15282 ⇒ 短 8 位 cd152820
+[ "$H" = "$EXPECT_HEAD" ] || BAD=1        # ⇒ BAD=1
+```
+
+| # | 后果 | 为什么 |
+|---|---|---|
+| ① | **假红** | 门覆盖 `9fb6c1c`，HEAD 只多一个「只改 CHANGELOG」的提交（用户 19:39 令：CHANGELOG 不是代码）。契约「待发布变更面 ⊆ 门覆盖变更面」成立 ⇒ 该绿 |
+| ② | **可假绿（更危险）** | 若它判绿，会 `git tag -a v0.2.322 ... 9fb6c1c`，把 tag 打在**旧提交**上，而 push 推 main ⇒ tag 与 main 脱节。那次误判是**误打误撞**挡住了这个错 |
+
+同一族错法（M322 缺陷 556 的镜像）：**判据贴的是可变宽度的表象（短 sha 文本），不是契约**。
+
+### 二 新判据：R1–R7（每条给证据 · `selfhost/release_readiness.py`）
+
+| 判据 | 契约 |
+|---|---|
+| R0 | 门日志存在且汇总段可解析（分片 + 合计 + 日志内的 worktree 基线） |
+| R1 | 基线是 HEAD 的**祖先**（`merge-base --is-ancestor`，不比 sha 文本）；基线可解析 |
+| R2 | 基线→HEAD 变更路径 ⊆ 文档白名单（`CHANGELOG.md` / 顶层 `*.md` / `docs/`） |
+| R3 | 产品面/门面/工具面**零变更**（runtime stdlib tools spec selfhost packaging examples cmd internal native bootstrap）——R2 的反面，单列便于读因 |
+| R4 | `check_defect_refs`（唯一读 CHANGELOG 的元门）通过 —— GATE_SCOPE 分档的**对口证据**，不许跳过 |
+| R5 | 各分片 rc=0、红 0，且 **合计绿 == 注册源门数 == 日志自述门清单数**（三点交叉；门数**动态取**，不硬编码 229） |
+| R6 | 工作树干净（tag 要打在一个已落仓的提交上） |
+| R7 | **tag 目标 == HEAD** —— 直接判掉 ② 那个假绿场景 |
+
+`--emit-tag-cmd` 只在绿时输出 `packaging/make_tag.sh --milestone N --push`（唯一合法创建入口，main + tag 同一次 push）。
+
+### 三 负控：8 条，每条先自证扰动真的发生（`--self-test`）
+
+| 场景 | 期望 | 前提自证 |
+|---|---|---|
+| N6 正控 文档-only + 门全绿 | **绿** | ——（证明判据不是恒红） |
+| N1 混入 `runtime/b.c` | R3 红 | diff 里确实出现该文件 |
+| N2 基线非祖先 | R1 红 | `is-ancestor rc≠0` **且 base≠HEAD** |
+| N3 门日志「红 1」 | R5 红 | 解析出的红确实是 1 |
+| N4 门数 2 vs 注册 3 | R5 红 | 两数字确实不等 |
+| N5 脏工作树 | R6 红 | porcelain 非空 |
+| N7 元门失败（桩 rc=1） | R4 红 | 桩确实 rc=1 |
+| N8 tag 目标=基线 | R7 红 | 目标 ≠ HEAD（M322 假绿场景） |
+
+**负控失效 ⇒ exit 3 ⇒ 判红**：判据没牙就是没判据（CRITERIA ③）。
+
+自测第一版就抓到两个「自测自己假绿」：N2 里 HEAD 恰好停在 side 上 ⇒ `is-ancestor(side,side)=0` 让前提自证失效；
+N8 里 HEAD 又恰好等于基线 ⇒ R7 不可能红。两条都补了前提断言（`side≠head` / `目标≠HEAD`）后才真红。
+
+### 四 落仓（`/tmp` → `selfhost/`）
+
+M322 的裁决器住在 `/tmp/watch_r5_m322.sh`、`/tmp/gate_r5_verdict.txt` —— 重启即失，
+**「一段判据不落仓，它就不算判据」**。本轮的裁决器 `selfhost/release_readiness.py` 入库，
+并注册成门 `release_readiness_selftest`（门数 229 → **230**）。
+
+### 五 通知（NO_SELFCHANNEL：只走 `dy-notify.sh`，不自建通道）
+
+```
+--notify   绿 ⇒ p0「M<N> 发布就绪」（结论，用户可见）
+           红 ⇒ p1 release-m<N>-red（过程态，只记账 + ws-core 自驱，不推用户）
+```
+
+分档依据仍是 NOTIFY 纪律：**过程态叫醒东月，结论才推用户**。
+
+### 六 实证：拿真实那一轮回放
+
+```
+python3 selfhost/release_readiness.py --gates-log /tmp/gate_r5_m322.log --base 9fb6c1c --milestone 322
+  ✅ R0/R1a/R1b/R1 ✅（is-ancestor 9fb6c1cc cd152820 ⇒ rc=0）
+  ✅ R2 变更 1 个文件（CHANGELOG.md）      ✅ R3 代码面变更 0
+  ✅ R4 check_defect_refs rc=0（判定 700 条 · 跳过 118 条）
+  ✅ R5 合计绿 229 · 红 0 · 注册 229      ✅ R7 目标 HEAD(cd152820) == HEAD
+  ❌ R6 porcelain 1 行：?? selfhost/release_readiness.py   ← 当时确有未提交新文件
+  VERDICT=RED · 失败判据 R6
+```
+
+即：**同一轮，旧裁决器给「判据错导致的红」，新裁决器给「唯一真实的、可解释的红」**（未提交文件）；
+提交后同一条命令转绿。`--self-test` 8/8 通过。
+
+### 七 边界（没做的）
+
+- 不改 `packaging/make_tag.sh` / `tag_guard.sh`：裁决器只**决定能不能发**，命名规则仍归 M248 的入口。
+- 不自动 `--do-tag`：本轮只输出命令，执行仍由人（或下一轮显式 `--notify` 的自动化）决定。
+- 未挂 CI：`check_gate_registry` 只对拍 example 门，本门不是 example 门 ⇒ 不改 `ci.yml`（避免制造第二份名单）。
+
 ## M322 —— m294 的 fd 判据把「启动环境」当成了判据 ⇒ 产品零改动却假红（第 194 轮 · 缺陷 556）
 
 > 触发：M319 轮第 4 次全量门（HEAD `26bd249` · 229 门）**唯一**红门 `m294_h3_qpack_share`，

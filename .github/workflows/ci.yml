@@ -264,6 +264,13 @@ jobs:
         run: |
           python3 selfhost/check_defect_refs.py --self-test
           python3 selfhost/check_defect_refs.py
+      - name: 发布就绪裁决的负控自证（M323 · 缺陷 557）
+        #   M322 第 5 轮：/tmp 里那版裁决器拿「短 sha 文本相等」当判据
+        #     EXPECT_HEAD=9fb6c1cc vs HEAD=cd152820
+        #   ⇒ ① 假红（HEAD 只多一个只改 CHANGELOG 的提交）② 可假绿（tag 会打在旧提交上）。
+        #   本门跑 8 条正控/负控；**任一负控不红 ⇒ exit 3 ⇒ 判红**（判据没牙就是没判据）。
+        run: |
+          python3 selfhost/release_readiness.py --self-test
       - name: 内置名册防漂移（单一事实源：runtime 注册表 → lint_core.px 生成块）
         run: |
           bash selfhost/builtin_list_check.sh
