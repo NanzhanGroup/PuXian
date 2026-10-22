@@ -43,6 +43,29 @@
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 export LC_ALL=C LANG=C
+
+# ── M320（缺陷 555）：运行器**自给**构建缓存目录，不吃调用者的 HOME ─────────
+#   实测（2026-10-22 第 4 轮全量门，HEAD 388da9d）：用 `systemd-run` 把全量门起在
+#   **独立 cgroup**（目的：`ws-supervisor` 重启不杀掉跑了两小时的门）时，该瞬态单元
+#   **没有 HOME**（`systemctl show -p Environment` 为空、`/proc/<pid>/environ` 里无 HOME）
+#   ⇒ 23 个调 `go` 的门里 10 个注册门全部判红，报：
+#       build cache is required, but could not be located: GOCACHE is not defined
+#       and neither $XDG_CACHE_HOME nor $HOME are defined
+#     `cross_ports` 同源（zig：`unable to resolve zig cache directory: AppDataDirUnavailable`）
+#   ⇒ **产品一行未动，14 门红**。这不是门判据的问题，是**运行环境前提**没人兜底：
+#   门必须在 cron / CI / transient unit / 交互 shell 里**都**能跑。
+#   为什么修在运行器而非逐门：23 个门调 go/zig、1 个调 zig ⇒ 逐门兜底等于 23 份真相
+#   （与 M243「三份门清单」、M311「超时只在宿主侧硬编码」同族）。
+#   为什么不用写死 `/root`：非 root 跑门时取该 uid 的家目录；取不到才退 /root。
+if [ -z "${HOME:-}" ]; then
+    HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+    [ -n "$HOME" ] || HOME=/root
+    export HOME
+fi
+export GOCACHE="${GOCACHE:-$HOME/.cache/go-build}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$GOCACHE" "$XDG_CACHE_HOME" 2>/dev/null || true
+
 FAIL=0
 SKIPPED=0
 REG="${GATE_REGISTRY:-selfhost/gates.registry.sh}"

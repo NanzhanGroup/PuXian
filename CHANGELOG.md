@@ -1,3 +1,80 @@
+## M321 —— 门运行器**依赖调用者的 HOME** ⇒ 14 门假红（第 193 轮 · 缺陷 555）
+
+> 触发：把全量门起在 `systemd-run` 的**瞬态单元**（独立 cgroup，`--unit=puxian-gate-m320`），
+> 目的只有一个 —— 让门活过 `ws-supervisor` 重启（当时有个待执行的文殊更新会重启它，
+> 而门进程和我的工具进程同在 supervisor 的 cgroup 里）。
+> 结果：4 个分片 rc 全 1，**14 门红**；而产品代码
+> `git diff e9aa357 HEAD -- runtime/ stdlib/ tools/` **为空**。
+
+### 一 根因：瞬态单元没有 HOME，而门在**运行时**现场编译 Go / zig 真值
+
+| 证据 | 内容 |
+|---|---|
+| ① 单元环境 | `systemctl show puxian-gate-m320 -p Environment` ⇒ 空；`/proc/<pid>/environ` 里**既无 `HOME` 也无 `GOCACHE`** |
+| ② 报错原文 | `build cache is required, but could not be located: GOCACHE is not defined and neither $XDG_CACHE_HOME nor $HOME are defined` |
+| ③ 同源旁证 | `cross_ports`：`zig: unable to resolve zig cache directory: AppDataDirUnavailable` —— zig 同样靠 HOME 定位缓存 |
+| ④ 与 Go 升级无关 | `env -i go env GOCACHE` 在 **1.26.7 与 1.27.3 上都返回 `off`** ⇒ 两版行为一致，是**启动环境**差异 |
+
+**为什么以前从没暴露**：此前全量门都在交互 shell 里跑，`HOME=/root` 天然继承；
+这次为了让它活过 supervisor 重启换了启动方式 —— 换了启动方式，就换没了 HOME。
+
+### 二 14 个红门：13 个同源（已逐个在**同一瞬态单元环境**里实测转绿）
+
+| 门 | 修前 | 修后 |
+|---|---|---|
+| m136 · m138 · m142 · m143 · m146 · m147 · m148 · m150 · m151 · m215（**全部**「Go 产真值」注册门） | ❌ | ✅ |
+| cross_ports（zig cache） | ❌ 2s | ✅ 90s |
+| pkg_make_tag | ❌ 4s | ✅ 4s |
+| m210_param_kw | ❌ | ✅ 131s |
+| **m294_h3_qpack_share** | ❌ | ❌ **另有原因，见第四节** |
+
+### 三 缺陷 555：修在**运行器**，不修在各门
+
+`selfhost/run_gates.sh` 顶部兜底（`set -uo pipefail` 之后）：
+
+```bash
+if [ -z "${HOME:-}" ]; then
+    HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+    [ -n "$HOME" ] || HOME=/root
+    export HOME
+fi
+export GOCACHE="${GOCACHE:-$HOME/.cache/go-build}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+```
+
+- **为什么修在运行器**：23 个门调 `go`、1 个调 `zig` ⇒ 逐门兜底等于 **23 份真相**
+  （与 M243「三份门清单」、M311「超时只写在宿主侧硬编码」同族）。
+- **为什么不写死 `/root`**：非 root 跑门时取该 uid 的家目录，取不到才退 `/root`。
+- **验证环境必须是真的失败环境**：`env -i` 模拟**过严**（PATH 少 `/usr/local/sbin`
+  ⇒ gcc 找不到 `cc1`，会造出**另一种**假红）。正确做法是 `systemd-run` 起同样单元：
+
+```
+systemd-run --unit=ws-gate-m136probe --wait --collect --pipe \
+  /bin/bash -c 'cd /data/code/puxian && bash selfhost/run_gates.sh --only m136_go_json_fidelity'
+  ⇒ ✅ m136_go_json_fidelity（5s）
+```
+
+> 顺带记一条方法论：**「模拟故障环境」本身会被判据咬**。`env -i` 只清环境变量、不清 PATH 语义，
+> 造出来的红是第三件事（gcc 缺 cc1），既不是产品问题也不是原故障 —— 拿它当证据会跑偏。
+
+### 四 m294 的真红：判据把**实现细节**当契约（门缺陷，非产品回归）
+
+`examples/m294_h3_qpack_share/verify.sh:355`
+
+```bash
+BASE_FD=$(ls "/proc/$SRV_PID/fd" | wc -l)
+[ "$BASE_FD" -ge 6 ] && ok "listener fd 数 $BASE_FD（≥6 · 未塌缩）" \
+                     || bad "[S2] listener fd 数异常（$BASE_FD）"
+```
+
+实测 `BASE_FD=5`（0/1/2 + listen socket + epoll）。`≥6` 的来历是「典型进程会多一个 fd」，
+不是任何契约。R3（`e9aa357`）该门绿、R4（`388da9d`）红，而两版之间**产品零改动**
+（只新增 `selfhost/go_json_v1.sh` 与一行注册）⇒ 只能归因于**运行环境的 fd 继承面**。
+
+> 状态：**待定性**。修法候选 —— ① 改为「listen socket 存活 + 后续仍能服务」这类契约判据；
+> ② 或在测量前**固定 fd 继承面**（关掉多余的继承 fd）再量。**不擅自改判据**：先复跑确认它的可复现性。
+
+
 ## M320 —— Go 1.27 把 `encoding/json` 默认实现换成了 jsonv2 ⇒ **门基准跟着工具链漂移**（第 192 轮 · 缺陷 553 / 554）
 
 > 触发：本机 Go 切到 **1.27.3**（对应 CVE-2026-111943 / GO-2026-6809：`crypto/x509` 对失真中间 CA 的信任）
