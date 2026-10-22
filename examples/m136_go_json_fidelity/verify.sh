@@ -25,6 +25,10 @@ echo "== [truth] 生成 Go 真值（encoding/json 本尊） =="
 command -v go >/dev/null 2>&1 || { echo "SKIP：本机无 go 工具链（真值对拍跳过，仅跑自断言）"; TRUTH=""; }
 TRUTH_GEN=0
 if command -v go >/dev/null 2>&1; then
+    # ── Go `encoding/json` 口径钉死（M320 / 缺陷 553）：本门真值含 json.Marshal 文本 ──
+    #   无 go 时本门本就跳过真值（不产基准 ⇒ 不会漂移），所以断言放在「有 go」这一支里。
+    . "../../selfhost/go_json_v1.sh" || { echo "❌ [M320] source 失败（selfhost/go_json_v1.sh）" >&2; exit 2; }
+    go_json_v1_report || exit 1
     if (cd truth && GOFLAGS=-mod=mod go build -o ../build/truth . > "$LOG" 2>&1); then
         TRUTH_GEN=1
         ./build/truth > build/truth.txt

@@ -116,9 +116,12 @@ run m133_unix_timeout bash examples/m133_http_unix_timeout/verify.sh
 run m134_gc_obj_roots bash examples/m134_gc_obj_roots/verify.sh
 run m136_go_json_fidelity bash examples/m136_go_json_fidelity/verify.sh
 run m137_sse_connect_ex bash examples/m137_sse_connect_ex/verify.sh
+# m138（正则的「Go 保真」门，qg-issue 87 缺陷 84 的复发防线）：需要 Go 产真值（regexp 本尊）。
+# ⚠️ M320 补注册：此前本清单里**没有它的 run 行**，而注释却写着「只在本地全门跑」——
+#    实际是本地 228 门**从来没跑过它**，只有 ci.yml 跑（典型的「第二份真相」）。
+#    无 go 时门内自动 SKIP 真值并响亮打印原因（口径同 m136）。
+run m138_regex_go_parity bash examples/m138_regex_go_parity/verify.sh
 # M139（第 19 轮）：裸标识符语句 = 编译错误（缺陷 101）。
-# ⚠️ m138（正则的 Go 保真门）需要 Go 产真值，口径同 m136 ⇒ 只在本地全门跑，
-#     CI 侧由 ci.yml 的 toolchain 步骤显式跑（该 runner 自带 Go）。
 run m139_bare_ident_stmt bash examples/m139_bare_ident_stmt/verify.sh
 # m140（连接失败成因分类 + 双栈）：**不依赖任何外部服务**，CI 也跑
 run m140_http_conn_errno bash examples/m140_http_conn_errno/verify.sh
@@ -128,6 +131,9 @@ run m141_now_ns bash examples/m141_now_ns/verify.sh
 # m142（Go encoding/json 的 Indent/Compact/HTMLEscape/quoteChar 逐字节复刻 + 缺陷 111/112）：
 #   **需要 Go 产真值**（encoding/json 本尊），口径同 m136/m138 —— 本机全门跑，
 #   CI runner 自带 Go ⇒ ci.yml 里也跑。
+#   ⚠️ M320（缺陷 553）：门内已显式钉死 `GOEXPERIMENT=nojsonv2` —— Go 1.27 起
+#   encoding/json 默认走 jsonv2，Compact 的 Offset 与错误文案全变了（本门 696 行
+#   真值里 112 行分叉）⇒ 不吃工具链默认档，并断言「确实钉在 v1」。
 run m142_go_json_indent bash examples/m142_go_json_indent/verify.sh
 # m143（float32 值族 / 位模式 / Go encoding/json 的 **32 位**浮点文本 + append_file_opt，
 #   缺陷 115/117/118/119）：**需要 Go 产真值**（math.Float32bits / Float32frombits /

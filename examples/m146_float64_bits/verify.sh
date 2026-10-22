@@ -32,6 +32,9 @@ fi
 
 echo "== [truth] 生成 Go 真值（math.Float64bits / encoding/json 本尊）=="
 command -v go >/dev/null 2>&1 || { echo "FAIL：本机无 go 工具链（本门真值必须来自 Go）"; exit 1; }
+# ── Go `encoding/json` 口径钉死（M320 / 缺陷 553）：本门真值含 json.Marshal 的 float64 文本 ──
+. "../../selfhost/go_json_v1.sh" || { echo "❌ [M320] source 失败（selfhost/go_json_v1.sh）" >&2; exit 2; }
+go_json_v1_report || { echo "FAIL [truth] JSON 口径未钉在 v1 —— 基准会随工具链漂移"; exit 1; }
 if (cd truth && GOFLAGS=-mod=mod go build -o ../build/truth . > "$LOG" 2>&1); then
     ./build/truth corpus.txt > build/truth.txt 2> build/truth.stderr
     NTRUTH=$(wc -l < build/truth.txt)

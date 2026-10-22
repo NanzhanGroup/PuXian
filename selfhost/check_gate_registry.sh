@@ -50,7 +50,6 @@ comm -13 "$T/local.txt" "$T/ci.txt" > "$T/only_ci.txt"
 cat > "$T/exempt.txt" <<'EOF'
 examples/m136_go_json_fidelity/verify.sh|CI 有意跳过（它需要 go；ci.yml 里有注释说明：该门由本地全量门覆盖）
 examples/m117_realworld_defects/verify.sh|CI 独有：本地在 selfhost/m117_gates.sh（M117 专项运行器）里跑，不在 m116 全量清单内
-examples/m138_regex_go_parity/verify.sh|CI 独有：第三份真值需要 go（本仓 CI 无 go 步骤 ⇒ 本地跑会自动 SKIP 并响亮打印原因）
 examples/m67_multiarch/verify.sh|CI 独有：多架构 qemu 由 ci.yml 的 m67 job 专管（本机无齐全交叉工具链时不跑）
 examples/m67_aarch64/verify.sh|CI 独有：aarch64 qemu，同上
 EOF

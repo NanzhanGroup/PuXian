@@ -1,3 +1,77 @@
+## M320 —— Go 1.27 把 `encoding/json` 默认实现换成了 jsonv2 ⇒ **门基准跟着工具链漂移**（第 192 轮 · 缺陷 553 / 554）
+
+> 触发：本机 Go 切到 **1.27.3**（对应 CVE-2026-111943 / GO-2026-6809：`crypto/x509` 对失真中间 CA 的信任）
+> 之后，重跑「以 Go 产真值」的 9 个门 —— **m142 红**，其余 8 门绿。红的那一个**不是产品回归**：
+> `runtime/` `stdlib/` 一字未动（`git diff HEAD` 只有门与注册表）。
+
+### 一 根因：Go 1.27 默认启用 jsonv2，JSON v1 退到实验开关后面
+
+三重实证（不是推测）：
+
+| 证据 | 内容 |
+|---|---|
+| ① 老实现没变 | 两版 GOROOT 里 `encoding/json/scanner.go` 的 md5 **完全相同**（`e75c2a3e…7af0`）⇒ 不是老实现被改，是**根本没走老实现** |
+| ② build tag 二选一 | `indent.go` = `//go:build !goexperiment.jsonv2`；`v2_indent.go` = `//go:build goexperiment.jsonv2` ⇒ 两套实现并存，默认档选了后者 |
+| ③ 关掉即绿 | `GOEXPERIMENT=nojsonv2` 重跑 m142 ⇒ `M142-VERIFY-OK`（696 行逐字节一致 + 3 道负控全 PASS），`Compact` 的 `Offset` 同时回到 0 |
+
+实测分叉（同语料、同门，go1.27.3 默认档 vs 钉死 v1）：**696 行真值里 112 行不同**
+
+- `Compact` 错误对象的 `Offset`：v1 **恒 0**，v2 = 「输入长度」（本门首 6 处差异全是这一列）
+- 错误文案：`after array element`→`after array value` · `in string escape code`→`invalid escape sequence \x in string` ·
+  `looking for beginning of value`→`invalid character '\ufeff'…` · `invalid character '[' exceeded max depth`→`exceeded max depth` ·
+  `in literal true (…)`→`unexpected end of JSON input`
+
+⇒ 「基准」一旦来自**活工具链**，它就不是基准，而是**工具链当前默认档的快照**。
+
+### 二 缺陷 553：4 个「拿 `encoding/json` 当基准」的门统一钉死口径
+
+新增 `selfhost/go_json_v1.sh`（口径契约 + 证据打印 + 断言），接入 **m136 / m142 / m143 / m146**
+（实测只有这 4 个门的 truth 程序 import `encoding/json`）：
+
+- 默认 `export GOEXPERIMENT=nojsonv2` —— 实测 **go1.26.7 与 go1.27.3 都接受**（老版本上是无害 no-op，不影响旧机器）
+- 调用方显式指定时不覆盖，但门里 `go_json_v1_report` **响亮判红**（不许静默吃默认档）
+- 将来某版 Go 删掉该实验项 ⇒ `go build` 报 `unknown GOEXPERIMENT nojsonv2` **直接红** ⇒ 被迫回来重定口径
+- **全局一律不动**：除门内这一处 export，任何地方都没有设 `GOEXPERIMENT`（不干扰他人构建）
+
+判据（本次实测）：
+
+```
+m136 23 行 · m142 696 行 · m143 1625 行 · m146     全绿（toolchain=go1.27.3 · GOEXPERIMENT=nojsonv2）
+负控D  调用方显式 GOEXPERIMENT=jsonv2 ⇒ 门**退出码 1** 并打印「基准会随工具链漂移」⇒ 断言有牙（不是只在注释里）
+漂移量  同语料 v1 vs v2 真值 diff = **112 行 / 696 行**
+```
+
+### 三 缺陷 554：m138 的**第二份真相**（注释说在本地跑，注册表里根本没有它）
+
+`m138_regex_go_parity` 的注释写着「只在本地全门跑」，而 `gates.registry.sh` 里**没有它的 `run` 行**
+⇒ 本地 228 门**从来没跑过它**，只有 ci.yml 跑；`check_gate_registry.sh` 的例外表还把它登记成「CI 独有」。
+
+- 补注册（`gates.registry.sh`，紧随 m137）⇒ 本地全门 **228 → 229**
+- 删掉 `check_gate_registry.sh` 里那条例外（不删会因「例外已过期」判红 —— 守卫按设计工作）
+- 实测：`M138-VERIFY-OK`（1170 行与 Go regexp 本尊逐字节一致 · VM+C 双轨 · 2 道负控）
+
+### 四 门与守卫（本轮全部复跑）
+
+```
+m136 / m138 / m142 / m143 / m146     5 门全绿
+check_gate_registry                  9 通过 / 0 失败（例外表 4 条 · 无过期）
+check_gate_assertions                403 个 .sh · 判定串 573 · 违例 0
+check_gate_anchors                   17 条锚点 · 无过期
+check_gate_paths                     554 个门/脚本 · 无开发机绝对路径
+check_gate_shared_tmp                257 门 · 共用固定 /tmp 名 6 个全部已登记
+check_gate_timeouts                  5 通过 / 0 失败
+check_gate_lock                      门 230 · 标记 117
+check_orphan_gates                   12 通过 / 0 失败
+check_gate_premise                   门 230 · 违例 0 · 登记过期 0
+check_no_selfwake                    5 通过 / 0 失败
+```
+
+### 五 教训
+
+「以 Go 本尊产真值」看起来最忠实，但它把**工具链的默认档**偷偷写进了判据里：
+实验特性一转正，同一条门在不同机器上一红一绿，而红的那台会被误读成产品回归。
+⇒ 拿外部实现当真值时，必须把**该实现的语义档位**写进门里，并**断言档位**；
+只在注释里写「口径同 m136」不算，注释不会跑。
 ## M319 收尾 —— 分片档 4 红**全部定性为门缺陷**（2026-10-22 · SHARD_SEM · 第 191 轮收尾）
 
 > 分片档 `shard-20261022-014835`：228 门 · 绿 224 / 红 4，抽样串行复核裁决 `RECHECK-VERDICT-RED`。
