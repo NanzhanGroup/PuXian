@@ -32,11 +32,22 @@
 # 判据层次：
 #   [1] 静态（结构 + **逆向** + 顺序 + 规模锚点）· [2] 编译 · [3] 起服务（强就绪 + 功能探针）
 #   [4] **顺序对照**（变量隔离：不并发时本来就对）· [5] **并发主力**（前戏 4 + 3 轮 × 16 并发）
-#   [6] 并发后串行不受污染 + 存活/fd · [6b] 槽位预算（缺陷 508 登记）· [7] 负控 A/B/C/D · [8] 覆盖边界
+#   [6] 并发后串行不受污染 + **listener 契约**（存活/端口/真实探针）+ fd **增量** · [6b] 槽位预算（缺陷 508 登记）· [7] 负控 A/B/C/D/E · [8] 覆盖边界
 #
 # ⚠️ 本门**会就地改仓库源码**（负控 A/C 撤回 `runtime/runtime_h3_qpack_dyn.c`）⇒
 #   · 开头 source `selfhost/gate_lock.sh`（M276：与全量门/其它门互斥）
 #   · `trap` 里无条件 `restore_all`（中途被杀也还原）
+#
+# ── M322（第 194 轮）：[6] 的 fd 判据从「环境指纹」换成「契约」────────────────────
+#   旧判据 `[ "$BASE_FD" -ge 6 ]` 量的是**启动环境**：同一份产品，交互 shell 起 fd=6、
+#   `systemd-run` 瞬态单元起 fd=5（少一条管道/日志 fd）⇒ M319 轮 R3 绿 / R4 红，而两版产品
+#   `git diff -- runtime/ stdlib/ tools/` **为空**。且它是**绝对数**：真泄漏（5→50）照样绿，
+#   数字变小才判红 —— 方向与它自己的标题（「未泄漏」）相反。
+#   新判据 = 契约：① listener 进程存活 + 端口仍 LISTEN（+ [S2] 的 3/3 真实请求拿到自己的响应体）
+#                 ② fd 只许**增量**（after − base ≤ FD_SLACK），**绝对数不进判据**
+#   牙由 NC-E1（判据回放：泄漏读数必须红 / 稳定读数必须绿 / 基线 0 必须红）与
+#   NC-E3（真实链路：kill -9 listener 后必须红）看守；NC-E2 治的正是本次假红：
+#   **额外继承 3 个 fd** 起服务（绝对数 +3）⇒ 判据必须仍绿。
 #
 # 用法：verify.sh [--neg-skip]
 # ============================================================
@@ -142,6 +153,26 @@ srv_stop() {
 }
 run_cli() { M294_HTTP_PORT="$PORT" M294_TAG="$1" timeout -k 5 30 "$BD/cli_tag" >"$W/one.out" 2>&1; }
 probe_service() { run_cli ready || true; [ "$(tail -1 "$W/one.out" 2>/dev/null)" = "TAG ready OK" ]; }
+
+# ---------- listener / fd 契约判据（M322）----------
+#   ⚠️ 这两个函数是**纯判据**（只吃读数、不量环境），因此可以被 NC-E1 直接回放 ——
+#      与 [S2] 的 5 条契约回放（NC-A1）同一套纪律：装置可以是概率性的，判据必须确定。
+FD_SLACK=2     # 允许增量：epoll/signalfd 等在并发期间可能按需建立；但**不得随连接数增长**
+fd_judge() {   # $1=base $2=after → 0 = 通过（契约：增量 ≤ 余量，绝对数不参与）
+  local base after d
+  base="$(num "${1:-}")"; after="$(num "${2:-}")"; d=$((after - base))
+  echo "    fd 读数：base=$base after=$after ⇒ 增量 $d（余量 $FD_SLACK · 绝对数不进判据）"
+  # 基线下限 4 = stdio(0/1/2) + listen socket：只自证「读到了东西」，不是环境指纹（不再要求 ≥6）
+  if [ "$base" -lt 4 ]; then echo "    ⇒ 判红：基线不可信（base=$base < 4，读空或进程已死）"; return 1; fi
+  if [ "$d" -gt "$FD_SLACK" ]; then echo "    ⇒ 判红：增量 $d > 余量 $FD_SLACK（泄漏）"; return 1; fi
+  return 0
+}
+listener_judge() {   # $1=pid $2=tcp 端口 → 0 = 契约成立（进程在 + 端口仍 LISTEN）
+  local pid="${1:-}" port="${2:-}"
+  kill -0 "$pid" 2>/dev/null || { echo "    ⇒ 判红：进程 $pid 已不存在"; return 1; }
+  (ss -ltnp 2>/dev/null) | grep -qE ":${port} " || { echo "    ⇒ 判红：tcp/$port 不再 LISTEN（listener 塌缩）"; return 1; }
+  return 0
+}
 
 # ---------- 服务端访问日志解析（**产品自带输出**）----------
 #   [px-access] <ts> <remote> GET <path> <status> <bytes> <ms> req=<id>
@@ -340,6 +371,9 @@ srv_stop
 if srv_start main; then
   ok "listener 重启就绪（槽位预算重置）"
   probe_service && ok "重启后 功能就绪探针" || bad "重启后 功能就绪探针失败"
+  # M322：基线必须取自**同一个 listener 实例**、并发之前 —— 这是「增量」判据的分母
+  BASE_FD="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
+  echo "       并发前基线：fd=$BASE_FD（同一实例 · 绝对数只登记，不进判据）"
   measure_conc C1 3 16
   show_read C1
   judge_dyn C1
@@ -348,12 +382,21 @@ else
 fi
 
 echo
-echo "【6】并发后：串行不受污染 + 服务存活 + fd 未泄漏"
+echo "【6】并发后：串行不受污染 + listener 契约（存活/端口/真实探针）+ fd **增量**未泄漏"
 measure_serial S2 3
 chk "[S2] 并发测量后 串行 3/3 不受污染（这才是「listener 被拖垮」的判据）" "$M_OK" "3"
-if kill -0 "$SRV_PID" 2>/dev/null; then ok "并发测量后服务仍存活（同一 listener）"; else bad "并发测量后服务已死"; fi
-BASE_FD="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
-[ "$BASE_FD" -ge 6 ] && ok "[S2] listener fd 数 $BASE_FD（≥6 · 未塌缩）" || bad "[S2] listener fd 数异常（$BASE_FD）"
+# M322：旧写法 `[ "$BASE_FD" -ge 6 ]`（绝对数 ≥6）已删除 —— 它量的是启动环境且方向反了（见文件头）。
+if listener_judge "$SRV_PID" "$PORT"; then
+  ok "并发测量后 listener 契约成立（pid=$SRV_PID 存活 · tcp/$PORT 仍 LISTEN · 且 [S2] 3/3 真实请求成功）"
+else
+  bad "并发测量后 listener 契约破裂（进程死 或 端口不再 LISTEN）"
+fi
+AFTER_FD="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
+if fd_judge "$BASE_FD" "$AFTER_FD"; then
+  ok "[S2] fd 未泄漏（契约：base=$BASE_FD → after=$AFTER_FD，增量 ≤ $FD_SLACK）"
+else
+  bad "[S2] fd 泄漏 或 基线不可信（base=$BASE_FD → after=$AFTER_FD）"
+fi
 
 echo
 echo "【6b】槽位预算（**缺陷 508 已修**的登记 —— 也是本门规模取值的依据）"
@@ -491,6 +534,58 @@ else
   else
     bad "还原后重建失败"
   fi
+
+  echo "  ── NC-E：fd/listener **契约判据**的牙（M322 —— 治「R3 绿 / R4 红、产品零改动」那条假红）"
+  echo "     ⚠️ 下面 E1 是**判据回放**（只喂读数，不碰产品 · 确定性）；E2 是真环境扰动；E3 是真塌缩"
+  if fd_judge 9 9 >"$W/ncE1a.out" 2>&1; then
+    ok "NC-E1a 稳定读数 base=9 → after=9 ⇒ 判据**通过**（防恒红自伤）"
+  else bad "NC-E1a 稳定读数却判红 ⇒ 判据恒红"; fi
+  if fd_judge 9 40 >"$W/ncE1b.out" 2>&1; then
+    bad "NC-E1b 泄漏读数 base=9 → after=40 ⇒ **未**判红 ⇒ 判据无牙"
+  else ok "NC-E1b 泄漏读数 base=9 → after=40 ⇒ **判红**（有牙）"; fi
+  if fd_judge 9 11 >"$W/ncE1c.out" 2>&1; then
+    ok "NC-E1c 边界读数 base=9 → after=11（增量 2 = 余量）⇒ 通过（余量不多不少）"
+  else bad "NC-E1c 边界读数（增量 2）被误判红 ⇒ 余量算错"; fi
+  if fd_judge 0 0 >"$W/ncE1d.out" 2>&1; then
+    bad "NC-E1d 基线不可信（base=0）却判绿 ⇒ 空读数被静默吞掉"
+  else ok "NC-E1d 基线不可信（base=0）⇒ 判红（不静默吃空读数）"; fi
+
+  echo "  ── NC-E2：**额外继承 3 个 fd** 起同一个 listener ⇒ 绝对数变大、判据必须仍绿（这才是治假红的那条）"
+  srv_stop
+  exec 7<>"$W/ncE2_fd7" 8<>"$W/ncE2_fd8" 9<>"$W/ncE2_fd9" 2>/dev/null || true
+  if srv_start ncE2; then
+    E2BASE="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
+    if [ "$E2BASE" -ge $((BASE_FD + 3)) ]; then
+      ok "NC-E2 前提自证：额外 fd 确实被继承（base=$E2BASE ≥ 原基线 $BASE_FD + 3）⇒ 扰动不是空操作"
+    else
+      bad "NC-E2 前提失败：额外 fd 未被继承（base=$E2BASE，原基线 $BASE_FD）⇒ 扰动是空操作、负控无意义"
+    fi
+    measure_serial S3 3 >/dev/null 2>&1
+    E2AFTER="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
+    if fd_judge "$E2BASE" "$E2AFTER"; then
+      ok "NC-E2 绝对数 $E2AFTER 因环境而变了、判据仍绿（增量 $((E2AFTER - E2BASE))）⇒ 环境差异不再造成假红"
+    else
+      bad "NC-E2 环境扰动后判红（$E2BASE → $E2AFTER）⇒ 判据仍在量环境"
+    fi
+    srv_stop
+  else
+    bad "NC-E2 服务未就绪"
+  fi
+  exec 7>&- 8>&- 9>&- 2>/dev/null || true
+
+  echo "  ── NC-E3：kill -9 listener（**真实链路**，不是回放）⇒ listener 契约必须判红"
+  if srv_start ncE3; then
+    E3PID="$SRV_PID"
+    kill -9 "$E3PID" 2>/dev/null; SRV_PID=""; sleep 0.4
+    if listener_judge "$E3PID" "$PORT"; then
+      bad "NC-E3 进程已被 kill -9 却判绿 ⇒ listener 契约无牙"
+    else
+      ok "NC-E3 进程被 kill -9 后 listener 契约判红（有牙 · 真实测量链）"
+    fi
+  else
+    bad "NC-E3 服务未就绪"
+  fi
+  srv_stop
 fi
 
 echo
