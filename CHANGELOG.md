@@ -70,6 +70,9 @@ M294-VERIFY-OK          （rc=0）
 
 
 
+## M321 —— 门运行器**依赖调用者的 HOME** ⇒ 14 门假红（第 193 轮 · 缺陷 555）
+
+
 > 触发：把全量门起在 `systemd-run` 的**瞬态单元**（独立 cgroup，`--unit=puxian-gate-m320`），
 > 目的只有一个 —— 让门活过 `ws-supervisor` 重启（当时有个待执行的文殊更新会重启它，
 > 而门进程和我的工具进程同在 supervisor 的 cgroup 里）。
