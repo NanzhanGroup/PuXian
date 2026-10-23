@@ -1416,6 +1416,18 @@ jobs:
           bash examples/m319_ws_eof_spin/verify.sh --neg-skip > /tmp/v_m319.log 2>&1 || { echo "❌ m319_ws_eof_spin 门失败（errno 契约 / 自旋判据 / 还原保真）"; grep -E '^(  ❌|     |      )' /tmp/v_m319.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m319.log | tail -8
           echo "✅ m319_ws_eof_spin（4 处 errno 契约 · 无 errno 重试 · 双判据无自旋）PASS"
+      - name: m324_tls_failclosed（TLS 认证 fail-closed + IP 字面量校名 · M324 · 缺陷 559/560/561）
+        # 判据：A1 CA 正常 + SAN=IP ⇒ 成功（防误杀）· A2 无 IP SAN ⇒ 拒绝（560 判据）
+        #       A3 系统 CA 全不可用 ⇒ 拒绝（559 判据）· A4 A3 + PX_TLS_INSECURE=1 ⇒ 成功（显式降级通道）
+        #       A5 拒绝时给出 R1010/R1011（561）· R runtime.c 逐字节还原自证
+        # ⚠️ A3/A4 用 `unshare -m` 把系统 CA bundle 换 /dev/null ⇒ **需 CAP_SYS_ADMIN**，故用 sudo；
+        #   runner 的普通用户跑 unshare -m 会失败 ⇒ 门会**判红**（不跳过：跳过等于「559 未验证却记绿」）。
+        #   负控 N1/N2 要重编 runtime 两次（~2min）⇒ CI 用 --neg-skip（本地发布档跑全量含负控）。
+        if: ${{ !cancelled() }}
+        run: |
+          sudo HOME=/root bash examples/m324_tls_failclosed/verify.sh --neg-skip > /tmp/v_m324.log 2>&1 || { echo "❌ m324_tls_failclosed 门失败（fail-closed / IP 校名 / 还原）"; grep -E '^(  ❌|     |      )' /tmp/v_m324.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m324.log | tail -8
+          echo "✅ m324_tls_failclosed（A1–A5 · CA 不可用 ⇒ 拒绝 · IP 校名生效）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

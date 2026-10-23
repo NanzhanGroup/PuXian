@@ -724,7 +724,13 @@ static int px_https_request(const char* host, int port, const char* req, char** 
 static pthread_mutex_t g_cacert_mu = PTHREAD_MUTEX_INITIALIZER;
 static mbedtls_x509_crt g_cacert;
 static int g_cacert_loaded = 0;
+static int g_cacert_warned = 0;   // M324：加载失败只喊一次
 static void px_ensure_cacert(void);
+// M324（缺陷 559/560/561）：TLS 认证必须 fail-closed；IP 字面量的名字校验改在握手后自校。
+//   两个辅助定义在 px_ensure_cacert 之后（此处先声明：https_connect_t / px_tls_session_config 都要用）。
+static int px_tls_authmode_or_fail(mbedtls_ssl_config* conf, const char* site, int* out_verify);
+static int px_tls_check_ip_name(mbedtls_ssl_context* ssl, const char* host);
+static int px_host_is_ip_literal(const char* h);
 // M21 gzip / chunked 辅助（px_http_request 客户端解码用，定义在后方）
 static char* px_gzip_decompress(const char* in, int inlen, int* outlen);
 static char* px_chunked_decode(const char* in, int inlen, int* outlen);
@@ -16487,6 +16493,8 @@ typedef struct {
     mbedtls_ctr_drbg_context ctr_drbg;
     mbedtls_entropy_context entropy;
     char skey[256];                  // M25：host:port（关闭时保存会话票据用）
+    char vhost[256];                 // M324（缺陷 560）：名字校验用（IP 字面量不发 SNI，握手后自校）
+    int  vverify;                    // M324：本会话是否要求验证对端证书
 } HttpsSession;
 
 // ==================== M25 TLS 会话票据恢复（RFC 5077 session ticket） ====================
@@ -16583,6 +16591,7 @@ static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms,
     char portstr[16];
     snprintf(portstr, sizeof(portstr), "%d", port);
     int ret = 0;   // M140：fail 路径可能在任何赋值前到达（如 TCP 连接阶段失败）
+    int vpol = 1;  // M324：本连接生效的验证策略（1=要校；0=PX_TLS_INSECURE 显式降级）
     if ((ret = mbedtls_ctr_drbg_seed(&s->ctr_drbg, mbedtls_entropy_func, &s->entropy,
                                      (const unsigned char*)pers, strlen(pers))) != 0) goto fail;
     // M117（qg-issue 72 F2）：HTTPS 也走带超时的连接（mbedtls_net_connect 是无超时阻塞，
@@ -16592,17 +16601,18 @@ static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms,
         if (cfd < 0) goto fail;
         s->net.fd = cfd;   // mbedtls_net_context 就是 fd 包装；后续 send/recv/close 均由 mbedtls 走
     } else if ((ret = mbedtls_net_connect(&s->net, host, portstr, MBEDTLS_NET_PROTO_TCP)) != 0) goto fail;
-    px_ensure_cacert();
     if ((ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT,
                                            MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)) != 0) goto fail;
-    mbedtls_ssl_conf_authmode(&s->conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
-    mbedtls_ssl_conf_ca_chain(&s->conf, &g_cacert, NULL);
+    // M324（缺陷 559）：CA 加载失败 ⇒ 响亮失败（旧行为是静默降级为「完全不验证」）
+    if (px_tls_authmode_or_fail(&s->conf, host, &vpol) != 0) { ret = MBEDTLS_ERR_X509_CERT_VERIFY_FAILED; goto fail; }
     mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->ctr_drbg);
     mbedtls_ssl_conf_min_version(&s->conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
     // M25：显式开启会话票据（TLS 1.2 静态票据；TLS 1.3 客户端自动接受 NewSessionTicket）
     mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
     if ((ret = mbedtls_ssl_setup(&s->ssl, &s->conf)) != 0) goto fail;
-    mbedtls_ssl_set_hostname(&s->ssl, host);
+    // M324（缺陷 560）：IP 字面量**不发** SNI（RFC 6066）⇒ 名字校验改在握手后用
+    //   px_tls_check_ip_name 显式比对 SAN IP（此前 IP 完全不校名：任何 CA 签发的证书都能冒充该 IP）
+    if (!px_host_is_ip_literal(host)) mbedtls_ssl_set_hostname(&s->ssl, host);
     mbedtls_ssl_set_bio(&s->ssl, &s->net, mbedtls_net_send, mbedtls_net_recv, NULL);
     // M25：尝试用保存的会话票据恢复握手（服务器拒绝则自动完整握手）
     char skey[300];
@@ -16619,6 +16629,11 @@ static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms,
     while ((ret = mbedtls_ssl_handshake(&s->ssl)) != 0) {
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) goto fail;
         if (++guard > 40) goto fail;
+    }
+    // M324（缺陷 560）：IP 字面量握手后校名（不发 SNI 的代价必须在这里补上）
+    if (vpol && px_host_is_ip_literal(host) && px_tls_check_ip_name(&s->ssl, host) != 0) {
+        ret = MBEDTLS_ERR_X509_CERT_VERIFY_FAILED;
+        goto fail;
     }
     // M25：握手完成即保存本次会话（供下次连接恢复；TLS 1.3 票据在 close 时再补存）
     {
@@ -16811,10 +16826,12 @@ static int px_tls_session_config(HttpsSession* s, const char* host, int verify,
     int ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT,
                                           MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) return ret;
+    // M324：记下 verify / host —— IP 字面量不发 SNI，改在握手后自校（px_tls_session_handshake）
+    s->vverify = verify ? 1 : 0;
+    if (host) snprintf(s->vhost, sizeof(s->vhost), "%s", host); else s->vhost[0] = 0;
     if (verify) {
-        px_ensure_cacert();   // 走运行时内置 CA（与 http_get/https 同一份）
-        mbedtls_ssl_conf_authmode(&s->conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
-        mbedtls_ssl_conf_ca_chain(&s->conf, &g_cacert, NULL);
+        // M324（缺陷 559）：CA 加载失败 ⇒ 响亮失败（旧行为静默降级为 VERIFY_NONE）
+        if (px_tls_authmode_or_fail(&s->conf, host, &s->vverify) != 0) return MBEDTLS_ERR_X509_CERT_VERIFY_FAILED;
     } else {
         // libpq 的 require / Go 的 InsecureSkipVerify=true：加密但不验证身份
         mbedtls_ssl_conf_authmode(&s->conf, MBEDTLS_SSL_VERIFY_NONE);
@@ -16831,6 +16848,8 @@ static int px_tls_session_config(HttpsSession* s, const char* host, int verify,
         if (servername && servername[0]) sni = servername;
         else if (host && host[0] && !px_host_is_ip_literal(host)) sni = host;
         if (sni) mbedtls_ssl_set_hostname(&s->ssl, sni);
+        // M324（缺陷 560）：IP 字面量走上面的「不发 SNI」分支 ⇒ 其名字校验由
+        //   px_tls_session_handshake 的 px_tls_check_ip_name 补做（mbedtls 3.6.2 实测支持 SAN IP）。
     }
     // ⚠️ 陷阱（第 32 轮本地实测踩到）：`mbedtls_ssl_conf_read_timeout` **只对 BIO 的
     //   `f_recv_timeout` 回调生效** —— 若第 5 个参数传 NULL（= 退回阻塞 `mbedtls_net_recv`），
@@ -16849,6 +16868,10 @@ static int px_tls_session_handshake(HttpsSession* s) {
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) return ret;
         if (++guard > 40) return ret;
     }
+    // M324（缺陷 560）：IP 字面量握手后校名（见 px_tls_session_config 的 SNI 注释）
+    if (s->vverify && s->vhost[0] && px_host_is_ip_literal(s->vhost) &&
+        px_tls_check_ip_name(&s->ssl, s->vhost) != 0)
+        return MBEDTLS_ERR_X509_CERT_VERIFY_FAILED;
     return 0;
 }
 
@@ -19131,7 +19154,60 @@ static void px_ensure_cacert(void) {
             }
         }
     }
+    // M324（缺陷 561）：系统 bundle 三个路径全失败时必须响亮（旧行为完全无声，运维无从发现已降级）
+    if (!g_cacert_loaded && !g_cacert_warned) {
+        g_cacert_warned = 1;
+        fprintf(stderr, "[px] R1010: 系统 CA bundle 全部加载失败（/etc/pki/tls/certs/ca-bundle.crt · "
+                        "/etc/ssl/certs/ca-certificates.crt · /etc/ssl/cert.pem）\n");
+        fprintf(stderr, "[px]       ⇒ 之后所有要求验证的 TLS 连接都会失败（不再静默降级为不验证）。\n");
+    }
     pthread_mutex_unlock(&g_cacert_mu);
+}
+
+// ── M324（缺陷 559）：TLS 认证模式 fail-closed ───────────────────────────────
+//   旧：g_cacert_loaded ? VERIFY_REQUIRED : VERIFY_NONE —— CA 缺失/损坏/无读权限 ⇒ **静默不验证**。
+//   新：CA 不可用 ⇒ 返回 -1（调用方必须中止连接）；确要降级必须显式 PX_TLS_INSECURE=1（打警告）。
+static int px_tls_authmode_or_fail(mbedtls_ssl_config* conf, const char* site, int* out_verify) {
+    px_ensure_cacert();
+    if (out_verify) *out_verify = 1;
+    if (g_cacert_loaded) {
+        mbedtls_ssl_conf_authmode(conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+        mbedtls_ssl_conf_ca_chain(conf, &g_cacert, NULL);
+        return 0;
+    }
+    const char* ins = getenv("PX_TLS_INSECURE");
+    if (ins && strcmp(ins, "1") == 0) {
+        fprintf(stderr, "[px] ⚠️ 危险：CA 证书不可用，PX_TLS_INSECURE=1 显式放行 ⇒ 本次连接**不验证**对端证书（%s）\n",
+                site ? site : "?");
+        mbedtls_ssl_conf_authmode(conf, MBEDTLS_SSL_VERIFY_NONE);
+        if (out_verify) *out_verify = 0;   // 显式降级：名字校验也不再做（否则 g_cacert 空必红）
+        return 0;
+    }
+    fprintf(stderr, "[px] R1010: 无可用 CA 证书 ⇒ 拒绝建立加密连接（%s）。如需临时降级，显式设置 PX_TLS_INSECURE=1。\n",
+            site ? site : "?");
+    return -1;
+}
+
+// ── M324（缺陷 560）：IP 字面量的名字校验 ──────────────────────────────────
+//   为何不用 mbedtls_ssl_set_hostname：那会把 IP 塞进 SNI（RFC 6066 禁止；实测服务端确实收到
+//   server_name="127.0.0.1"）。故握手后拿对端证书显式做一次 mbedtls_x509_crt_verify(cn=IP)。
+//   mbedtls 3.6.2 实测支持 SAN IP 比对（/tmp/m326/tls_ip 四组矩阵：有 IP SAN ⇒ rc=0；无 ⇒ flags=0x4）。
+static int px_tls_check_ip_name(mbedtls_ssl_context* ssl, const char* host) {
+    // get_peer_cert 返回 const，而 x509_crt_verify 只要非 const；verify 不改证书内容 ⇒ 显式去 const
+    mbedtls_x509_crt* peer = (mbedtls_x509_crt*)(void*)mbedtls_ssl_get_peer_cert(ssl);
+    if (!peer) {
+        fprintf(stderr, "[px] R1011: 对端未提供证书，无法校验 IP 名字（%s）\n", host ? host : "?");
+        return -1;
+    }
+    uint32_t flags = 0;
+    int vrc = mbedtls_x509_crt_verify(peer, &g_cacert, NULL, host, &flags, NULL, NULL);
+    if (vrc == 0 && flags == 0) return 0;
+    char info[256];
+    info[0] = 0;
+    if (flags) mbedtls_x509_crt_verify_info(info, sizeof(info), "      ", flags);
+    fprintf(stderr, "[px] R1011: 证书与 IP 名字不匹配（host=%s rc=%d flags=0x%08x）\n%s",
+            host ? host : "?", vrc, (unsigned)flags, info);
+    return -1;
 }
 
 // mbedtls HTTPS 请求：返回 malloc 响应（含响应头+体），*out_len 输出长度；0=成功
@@ -19158,18 +19234,19 @@ static int px_https_request(const char* host, int port, const char* req, char** 
     ret = mbedtls_net_connect(&server_fd, host, portstr, MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) { ret = -1002; goto cleanup; }
 
-    px_ensure_cacert();
     ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
         MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) { ret = -1003; goto cleanup; }
-    mbedtls_ssl_conf_authmode(&conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
-    mbedtls_ssl_conf_ca_chain(&conf, &g_cacert, NULL);
+    // M324（缺陷 559）：CA 不可用 ⇒ 响亮失败（-1010），不再静默降级为不验证
+    int vpol = 1;
+    if (px_tls_authmode_or_fail(&conf, host, &vpol) != 0) { ret = -1010; goto cleanup; }
     mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &ctr_drbg);
     mbedtls_ssl_conf_min_version(&conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
 
     ret = mbedtls_ssl_setup(&ssl, &conf);
     if (ret != 0) { ret = -1004; goto cleanup; }
-    mbedtls_ssl_set_hostname(&ssl, host);
+    // M324（缺陷 560）：IP 字面量不发 SNI，握手后自校名字
+    if (!px_host_is_ip_literal(host)) mbedtls_ssl_set_hostname(&ssl, host);
     mbedtls_ssl_set_bio(&ssl, &server_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
 
     int guard = 0;
@@ -19180,6 +19257,8 @@ static int px_https_request(const char* host, int port, const char* req, char** 
         }
         if (++guard > 40) { ret = -1006; goto cleanup; }
     }
+    // M324（缺陷 560）：IP 字面量握手后校名（-1011）
+    if (vpol && px_host_is_ip_literal(host) && px_tls_check_ip_name(&ssl, host) != 0) { ret = -1011; goto cleanup; }
 
     // 发送请求
     int len = (int)strlen(req);
