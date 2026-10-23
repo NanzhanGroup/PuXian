@@ -25,19 +25,28 @@ ROOT=$(cd ../.. && pwd)                      # 绝对路径：门内会 cd 到 R
 . "$ROOT/selfhost/gate_lock.sh" || { echo "❌ 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 RT=$ROOT/runtime/runtime.c
 PX=$ROOT/tools/px
-LOG=/tmp/m326_gate_build.log
 FAIL=0
 mkdir -p build
 
+# 缺陷 573（M324 补 5）：本门用 sudo（root）跑，与 runner 侧普通用户门共用 /tmp。
+#   固定名（/tmp/m326_gate_build.log / /tmp/pxc_gcc_err.log …）⇒ 文件属主 ≠ 当前 fsuid，
+#   O_CREAT 打开既有外属主文件即 EACCES（fs.protected_regular=2 的 GitHub runner 实测）
+#   ⇒ 被误报成「tools/px build 失败」。故门自身产物与工具侧日志一律落**本门独占目录**。
+GATE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/m326_gate.XXXXXX") || { echo "❌ mktemp -d 失败"; exit 2; }
+LOG=$GATE_TMP/m326_gate_build.log
+export TMPDIR_DIR_M324="$GATE_TMP"   # 仅供诊断打印，不改变外部行为
+
 # 快照 + 还原（负控会改 runtime.c；不能用 git diff 判 —— 门跑时树本来就可能脏）
-SNAP=/tmp/m326_rt_snapshot.c
+SNAP=$GATE_TMP/m326_rt_snapshot.c
 cp "$RT" "$SNAP" || { echo "❌ runtime.c 快照失败"; exit 2; }
 SNAP_SHA=$(sha256sum "$SNAP" | cut -d' ' -f1)
 restore_rt() { [ -f "$SNAP" ] && cp "$SNAP" "$RT" 2>/dev/null; }
+# 成功才清独占目录；失败留现场（/tmp/m326_gate.XXXXXX）
+gate_tmp_clean() { [ "${FAIL:-0}" = 0 ] && [ -n "${GATE_TMP:-}" ] && rm -rf "$GATE_TMP"; return 0; }
 # sudo 门（CI 用 root 跑）会留下 root 属主的门锁 ⇒ /tmp sticky 位让后续普通用户门删不掉，
 # 整条 CI 被拖红（M324 post-tag CI 实测：m128 因 root 残留锁假红）。故把锁带走。
-trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' INT TERM HUP
-trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' EXIT
+trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' INT TERM HU; gate_tmp_clean' INT TERM HUP
+trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' EXI; gate_tmp_clean' EXIT
 
 for _f in "$RT" "$ROOT/runtime/vm.c"; do
     if [ -f "$_f" ] && grep -q 'NEGCTL' "$_f" 2>/dev/null; then
@@ -79,6 +88,15 @@ mk_leaf() {   # $1=名字 $2=san 内容 $3=CN
 mk_leaf ip  "IP:127.0.0.1"           "127.0.0.1"
 mk_leaf dns "DNS:wrong.example.com"  "wrong.example.com"
 [ -s build/ip.pem ] && [ -s build/dns.pem ] && [ -s build/ca.pem ] || { echo "❌ 证书生成失败"; exit 2; }
+
+# ── ①.5 缺陷 573 回归判据：工具侧不得再用固定 /tmp 编译日志名 ──
+#   判据为什么静态：动态方式（造一个外属主残留文件再 build）在 root 下被 CAP_DAC_OVERRIDE 放行，
+#   本地复现不了；而 CI 的 root 门确实被拒 ⇒ 只有「源码里根本没有固定名」是可判定的。
+echo "── ①.5 编译器 stderr 日志口径（缺陷 573）"
+_NFIX=$(grep -vE '^[[:space:]]*#' "$PX" | grep -cE '/tmp/pxc_(gcc|rtcc)_err\.log|/tmp/px_refs_err\.log' || true)
+ck "tools/px 不再写固定 /tmp 编译日志（命中 ${_NFIX:-0} 处，期望 0）" "$([ "${_NFIX:-0}" = 0 ] && echo 0 || echo 1)"
+_NMK=$(grep -vE '^[[:space:]]*#' "$PX" | grep -c 'px_cc_err_log' || true)
+ck "tools/px 走 px_cc_err_log 独占文件（命中 ${_NMK:-0} 处，期望 ≥5）" "$([ "${_NMK:-0}" -ge 5 ] && echo 0 || echo 1)"
 
 # ── ② 产品二进制（未打桩）：构建探针 ──
 echo "── ② 构建探针（产品路径：tools/px build --full）"

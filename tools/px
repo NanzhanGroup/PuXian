@@ -51,6 +51,20 @@
 #     `px build --print-plan` 打印解析后的计划（不编译），宿主架构这类决策据此可断言。
 # ============================================================
 set -u
+# ── 缺陷 573（M324 补 5）：编译器 stderr 日志**不得**用固定 /tmp 名 ──
+#   实锤：CI run 39977180550 · step 90（m324 用 sudo 以 root 跑）
+#     tools/px: line 821: /tmp/pxc_gcc_err.log: Permission denied
+#     ⇒ gcc 根本没跑起来，却被报成「编译失败: probe.c」（真死因=共享 /tmp 文件）
+#   机理：同一 job 内普通用户（runner）与 root 门共用 /tmp/pxc_gcc_err.log；/tmp 是
+#   sticky 世界可写目录，文件属主 ≠ 当前 fsuid ⇒ 以 O_CREAT 打开外属主既有文件即 EACCES
+#   （fs.protected_regular / ACL 任一开启；GitHub runner 默认 =2）。
+#   同族：/tmp/pxc_rtcc.log、/tmp/px_refs_err.log —— 一并收口。
+#   口径：每次编译独占一个文件（mktemp，尊重 TMPDIR），成功即删，失败留现场并打印路径。
+px_cc_err_log() {
+    local f
+    f="$(mktemp "${TMPDIR:-/tmp}/.px_cc_err.XXXXXX" 2>/dev/null)" && { printf '%s\n' "$f"; return 0; }
+    printf '%s\n' "${TMPDIR:-/tmp}/.px_cc_err.$$"
+}
 # M71-S4：argv0 自发现 —— readlink 解析符号链接到真实位置（软链安装
 # /usr/local/bin/px → 包/tools/px、/usr/local/bin/pxc → 包/tools/pxc（→px）时
 # PXC_HOME 仍定位到包根，免 PX_STDLIB）
@@ -344,13 +358,16 @@ rt_cache_compile() {
     done
     srcs="$srcs miniz.c miniz_tinfl.c miniz_tdef.c"
     local src base
+    local _err; _err="$(px_cc_err_log)"
     for src in $srcs; do
         base="$(basename "$src" .c)"
-        if ! eval "$cc -c $common -o \"$dir/$base.o\" \"$dir/$src\"" 2>>/tmp/pxc_rtcc.log; then
-            echo "错误: runtime 预编译失败 $src（$cc）—— 日志 /tmp/pxc_rtcc.log" >&2
+        if ! eval "$cc -c $common -o \"$dir/$base.o\" \"$dir/$src\"" 2>>"$_err"; then
+            echo "错误: runtime 预编译失败 $src（$cc）—— 日志 $_err" >&2
+            tail -20 "$_err" >&2
             return 1
         fi
     done
+    rm -f "$_err"
     rt_fp_emit "$dir" "$(basename "$dir")" "$cc" "$common" || return 1
     touch "$dir/.complete"
     return 0
@@ -371,10 +388,13 @@ rt_fp_emit() {   # $1=dir $2=key $3=cc $4=common_flags（引号原样，走 eval
 /* 自动生成（tools/px）：runtime 缓存指纹。勿手改。 */
 const char* px_rt_fp_$key(void) { return "PXRT-$key"; }
 EOF
-    eval "$cc -c $common -o \"$dir/__rtfp.o\" \"$dir/__rtfp.c\"" 2>>/tmp/pxc_rtcc.log || {
-        echo "错误: runtime 缓存指纹编译失败（$cc）—— 日志 /tmp/pxc_rtcc.log" >&2
+    local _err; _err="$(px_cc_err_log)"
+    eval "$cc -c $common -o \"$dir/__rtfp.o\" \"$dir/__rtfp.c\"" 2>"$_err" || {
+        echo "错误: runtime 缓存指纹编译失败（$cc）—— 日志 $_err" >&2
+        tail -20 "$_err" >&2
         return 1
     }
+    rm -f "$_err"
     return 0
 }
 rt_ensure() {
@@ -818,11 +838,13 @@ cmd_build() {
         common_def="$common_def -I\"$RT_DIR/third_party/ngtcp2/include\" -I\"$RT_DIR/third_party/openssl/include\""
     fi
     # 用户 C 单文件现编（与 runtime .o 同 defines/include → ABI 一致）
-    if ! eval "$cc -c $common_def -o \"$build_dir/$base.o\" \"$c_path\"" 2>/tmp/pxc_gcc_err.log; then
+    local _err; _err="$(px_cc_err_log)"
+    if ! eval "$cc -c $common_def -o \"$build_dir/$base.o\" \"$c_path\"" 2>"$_err"; then
         echo "编译失败: $base.c" >&2
-        tail -20 /tmp/pxc_gcc_err.log >&2
+        tail -20 "$_err" >&2
         return 1
     fi
+    rm -f "$_err"
     # 链接：base.o + runtime/miniz 预编译 .o + sqlite3 + 三方静态库
     local objs="" f
     for f in "$cache_dir"/*.o; do
@@ -872,11 +894,13 @@ cmd_build() {
         cc_cmd="$cc_cmd \"$zlib_lib/libz.a\""
     fi
     cc_cmd="$cc_cmd -lm -ldl"
-    if ! eval "$cc_cmd" 2> /tmp/pxc_gcc_err.log; then
+    local _err; _err="$(px_cc_err_log)"
+    if ! eval "$cc_cmd" 2> "$_err"; then
         echo "编译失败: $out_path" >&2
-        tail -20 /tmp/pxc_gcc_err.log >&2
+        tail -20 "$_err" >&2
         return 1
     fi
+    rm -f "$_err"
     local size
     size=$(stat -c %s "$out_path" 2>/dev/null || echo 0)
     echo "编译成功: $out_path （$size 字节）"
@@ -1141,10 +1165,12 @@ cmd_refs() {
     [ -n "$file" ] || { echo "用法: px refs <file.px>" >&2; exit 1; }
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; exit 1; }
     local c
-    c="$(mktemp /tmp/px_refs_XXXXXX.c)" || return 1
-    if ! "$PXC_BIN" build "$file" > "$c" 2>/tmp/px_refs_err.log; then
+    c="$(mktemp "${TMPDIR:-/tmp}/px_refs_XXXXXX.c")" || return 1
+    local _err; _err="$(px_cc_err_log)"
+    if ! "$PXC_BIN" build "$file" > "$c" 2>"$_err"; then
         rm -f "$c"
         echo "错误: 编译失败（$file）—— 自动裁剪退全量" >&2
+        tail -20 "$_err" >&2
         return 1
     fi
     # M112-S2（Issue 53）：与 cmd_build 自动裁剪同一口径 —— 必须**同时**提取
@@ -1156,7 +1182,7 @@ cmd_refs() {
         grep -oE 'px_get_global\("ffi_call"\), \(LXValue\[\]\)\{px_str\("[^"]+"\)' "$c" \
             | grep -oE 'px_str\("[^"]+"\)' | sed 's/px_str("//; s/")$//'
     } | LC_ALL=C sort -u
-    rm -f "$c"
+    rm -f "$c" "$_err"
 }
 
 # ---- 入口 ----
