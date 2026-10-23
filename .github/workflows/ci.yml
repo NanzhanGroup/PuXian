@@ -1425,7 +1425,7 @@ jobs:
         #   负控 N1/N2 要重编 runtime 两次（~2min）⇒ CI 用 --neg-skip（本地发布档跑全量含负控）。
         if: ${{ !cancelled() }}
         run: |
-          sudo HOME=/root bash examples/m324_tls_failclosed/verify.sh --neg-skip > /tmp/v_m324.log 2>&1 || { echo "❌ m324_tls_failclosed 门失败（fail-closed / IP 校名 / 还原）"; grep -E '^(  ❌|     |      )' /tmp/v_m324.log | tail -25; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          sudo HOME=/root bash examples/m324_tls_failclosed/verify.sh --neg-skip > /tmp/v_m324.log 2>&1 || { echo "❌ m324_tls_failclosed 门失败（fail-closed / IP 校名 / 还原）"; echo "--- v_m324.log 末 40 行（不窄 grep：门锁 bail 行形如「❌ [gate_lock] ...」无缩进，窄模式会全滤掉 ⇒ 缺陷 570）---"; tail -40 /tmp/v_m324.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m324.log | tail -8
           echo "✅ m324_tls_failclosed（A1–A5 · CA 不可用 ⇒ 拒绝 · IP 校名生效）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
@@ -1455,7 +1455,7 @@ jobs:
       - name: m128_unlock_grow（扩容分配移出临界区 · 缺陷 439 修好后收编）
         if: always()
         run: |
-          bash examples/m128_unlock_grow/verify.sh > /tmp/v_m128.log 2>&1 || { echo "❌ m128_unlock_grow verify 失败"; grep -E '^(  ❌|== )' /tmp/v_m128.log | tail -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m128_unlock_grow/verify.sh > /tmp/v_m128.log 2>&1 || { echo "❌ m128_unlock_grow verify 失败"; grep -E '^(  ❌|== )' /tmp/v_m128.log | tail -20; echo "--- v_m128.log 末 30 行（含无缩进的 gate_lock bail 行）---"; tail -30 /tmp/v_m128.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^== M128 门结束' /tmp/v_m128.log || true
           echo "✅ m128_unlock_grow（C1–C12 · 五个站点注入全绿 · C5 对象表扩容已在锁外）PASS"
 
