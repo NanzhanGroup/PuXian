@@ -36,8 +36,8 @@ SNAP_SHA=$(sha256sum "$SNAP" | cut -d' ' -f1)
 restore_rt() { [ -f "$SNAP" ] && cp "$SNAP" "$RT" 2>/dev/null; }
 # sudo 门（CI 用 root 跑）会留下 root 属主的门锁 ⇒ /tmp sticky 位让后续普通用户门删不掉，
 # 整条 CI 被拖红（M324 post-tag CI 实测：m128 因 root 残留锁假红）。故把锁带走。
-trap 'restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' INT TERM HUP
-trap 'type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' EXIT
+trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' INT TERM HUP
+trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' EXIT
 
 for _f in "$RT" "$ROOT/runtime/vm.c"; do
     if [ -f "$_f" ] && grep -q 'NEGCTL' "$_f" 2>/dev/null; then
@@ -99,8 +99,29 @@ PROBE="$PWD/build/probe"
 # ── 服务端（两个叶子各一个；端口从 19861 起找空闲）──
 free_port() { local p=$1; while ss -ltn 2>/dev/null | grep -q ":$p "; do p=$((p+1)); done; echo $p; }
 P_IP=$(free_port 19861); P_DNS=$(free_port $((P_IP+1)))
-( setsid openssl s_server -quiet -accept "$P_IP"  -cert build/ip.pem  -key build/ip.key  -www >/dev/null 2>&1 & )
-( setsid openssl s_server -quiet -accept "$P_DNS" -cert build/dns.pem -key build/dns.key -www >/dev/null 2>&1 & )
+# 缺陷 571：旧版 ( setsid openssl s_server ... & ) 从不回收 ⇒ 门结束后 mock 变孤儿（PPID 1）常驻占端口，
+# 后续门（如 m131 硬编码 19871）撞上去就假红。改：记 PID + trap 里 stop_mocks 带走。
+MOCK_PIDS=""
+start_mock() {   # start_mock <端口> <证书> <私钥>
+    local pid
+    pid=$(setsid openssl s_server -quiet -accept "$1" -cert "$2" -key "$3" -www >/dev/null 2>&1 & echo $!)
+    MOCK_PIDS="$MOCK_PIDS $pid"
+}
+stop_mocks() {
+    local p port
+    for p in $MOCK_PIDS; do kill "$p" 2>/dev/null; done
+    for p in $MOCK_PIDS; do wait "$p" 2>/dev/null; done
+    MOCK_PIDS=""
+    # 兜底：按端口回收（setsid 万一又 fork 了一层，PID 对不上）
+    for port in $P_IP $P_DNS; do
+        [ -n "$port" ] || continue
+        p=$(ss -ltnp 2>/dev/null | grep ":$port " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+        [ -n "$p" ] && kill "$p" 2>/dev/null
+    done
+    return 0
+}
+start_mock "$P_IP"  build/ip.pem  build/ip.key
+start_mock "$P_DNS" build/dns.pem build/dns.key
 sleep 2
 
 # run_probe <二进制> <端口> [env...]  → stdout

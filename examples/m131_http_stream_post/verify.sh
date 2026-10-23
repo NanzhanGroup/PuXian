@@ -30,6 +30,8 @@ PY2
 )
     echo "  ⚠ 端口 $_BUSY 已被占用 ⇒ 改用空闲端口 $PORT（脏测量防护）"
 fi
+# 缺陷 572：选定端口必须**同时**交给服务端（旧版只改探针 ⇒ 服务端仍绑 19871 ⇒ 端口被占必假红）。
+export M131_GATE_PORT="$PORT"
 
 cat > /tmp/m131_probe.py <<'PY'
 import socket, sys, time
@@ -110,6 +112,12 @@ run_track() {   # $1=标签；其余为编译前置（env 形式）
         grep -q M131_READY /tmp/m131_srv.log 2>/dev/null && break
         sleep 0.1; i=$((i+1))
     done
+    # 缺陷 572：READY 是 http_serve 之前打的，绑失败也照样出现 ⇒ 单纯等 READY 无牙。
+    # 这里核「服务端进程存活 + READY 已打」，失败就把服务端日志原样吐出来（别只报 Connection refused）。
+    if ! kill -0 "$srv" 2>/dev/null || ! grep -q M131_READY /tmp/m131_srv.log 2>/dev/null; then
+        echo "FAIL [$label] 服务端未就绪（端口 $PORT）"; tail -5 /tmp/m131_srv.log 2>/dev/null | sed 's/^/     | /'
+        FAIL=$((FAIL+1)); return
+    fi
     local out rc
     out=$(python3 /tmp/m131_probe.py "$PORT" 2>&1); rc=$?
     echo "$out"

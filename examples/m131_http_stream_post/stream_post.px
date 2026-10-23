@@ -58,8 +58,14 @@ def main():
     http_stream("/s", on_s, {"methods": ["POST"], "manual": true})
     http_stream("/s3", on_s3, {"methods": ["POST"], "manual": true})
     http_stream("/s2", on_s2)
+    # 缺陷 572：端口必须可被门改写 —— 旧版硬编码 19871，而门的「端口卫生」只改探针端口，
+    # 一旦 19871 被占（如并发的 m324 mock 遗留），服务端绑定失败、探针 Connection refused ⇒ 假红。
+    var port = 19871
+    var pe = env("M131_GATE_PORT")
+    if pe != null and pe != "":
+        port = int(pe)
     print("M131_READY")
     flush()
-    http_serve(19871, handler)
+    http_serve(port, handler)
 
 main()
