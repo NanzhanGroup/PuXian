@@ -9,8 +9,15 @@ on:
 #   旧的在队列里的运行会被取消。背景：2026-09-21 一轮里连推 5 个提交 ⇒ 5 个 CI 串行排队
 #   （每个 ~15min），最想要的"最新提交"要等 1 小时才轮到；而旧提交的结论已无意义。
 #   ⚠️ release.yml **不能**这样（发布中途被取消会留下半成品），故只在 CI 上用。
+# M324 补 8（2026-10-24 · 缺陷 576）：组键追加 ${{ github.sha }}。
+#   原口径（M168）按分支成组 ⇒ 连推 N 个提交时只留最新一次，前几次 run 被 cancel。
+#   代价在 2026-10-23 夜显形：连推三补（2e9a5bd / 7765d57 / b5e6022），
+#   2e9a5bd 的 run 被顶掉成 cancelled ⇒「哪一补引入了红」无法回溯，只能推断。
+#   改成按提交成组：每个提交各留一份结论，可二分；代价是连推时并行消耗 runner 分钟。
+#   注：组键改变后，新提交的 run 与旧口径的 in-flight run **不同组**，故不会互相取消。
+#   release.yml 仍按 workflow 串行且 cancel-in-progress: false（发布不可打断）。
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -1425,7 +1432,12 @@ jobs:
         #   负控 N1/N2 要重编 runtime 两次（~2min）⇒ CI 用 --neg-skip（本地发布档跑全量含负控）。
         if: ${{ !cancelled() }}
         run: |
-          sudo HOME=/root bash examples/m324_tls_failclosed/verify.sh --neg-skip > /tmp/v_m324.log 2>&1 || { echo "❌ m324_tls_failclosed 门失败（fail-closed / IP 校名 / 还原）"; echo "--- v_m324.log 末 40 行（不窄 grep：门锁 bail 行形如「❌ [gate_lock] ...」无缩进，窄模式会全滤掉 ⇒ 缺陷 570）---"; tail -40 /tmp/v_m324.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          # M324 补 8（缺陷 577）：sudo 门的锁**不落 /tmp**。sudo 让锁变成 root 属主，
+          #   /tmp 带 sticky 位 ⇒ 普通用户删不掉 ⇒ 后续门假红（缺陷 569 的成因）。
+          #   569 已让门显式释放，这里是第二道：改用 gate_lock 支持的 PX_GATE_LOCK 环境变量，
+          #   把锁放进 $RUNNER_TEMP（无 sticky 位、属主即 runner 用户）⇒ 即使残留也能删。
+          #   仅动锁文件位置，不设 TMPDIR（多门对 /tmp 有显式路径，整体搬动风险大于收益）。
+          sudo HOME=/root PX_GATE_LOCK="$RUNNER_TEMP/.px_gate_lock" bash examples/m324_tls_failclosed/verify.sh --neg-skip > /tmp/v_m324.log 2>&1 || { echo "❌ m324_tls_failclosed 门失败（fail-closed / IP 校名 / 还原）"; echo "--- v_m324.log 末 40 行（不窄 grep：门锁 bail 行形如「❌ [gate_lock] ...」无缩进，窄模式会全滤掉 ⇒ 缺陷 570）---"; tail -40 /tmp/v_m324.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m324.log | tail -8
           echo "✅ m324_tls_failclosed（A1–A5 · CA 不可用 ⇒ 拒绝 · IP 校名生效）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
