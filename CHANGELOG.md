@@ -72,6 +72,9 @@ mbedtls_ssl_conf_authmode(&conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED :
 | **564** | m208 ④ 段 `R1003` 是**概率性硬断言** | 4 次采样 2 红 = 50%；分片档 140s 红；单跑 116/118s 绿 | **未修**（同上：要确定性注入，不能靠概率碰；也不改成「k 次里红 m 次」那种放宽遮丑） |
 | **565** | m319_ws_eof_spin 状态**不确定** | M325-A v2 81 门 × 2 次唯一不一致：run1 OK 94s / run2 FAIL 108s | **未修**（先定性失败形态，列 M325） |
 | **566** | 新增 `.px` 后**提交前无任何预警**，只能靠全量门的 `emitc_freeze` 事后抓 | r12 全量门 231 门绿 230 红 1，唯一红 = `emitc_freeze` rc=1「仅在当前里 1 件（新增文件需 `--freeze`）」= `examples/m324_tls_failclosed/probe.px`；**类别 B 为空**（无发射行为回归） | **基准已补**：`--freeze` 重定基 494 → 495 行，`git diff --stat` 仅 +1 行（该探针 `src/rc/out/err` 指纹）；`--check` 495 文件逐字节一致 ⇒ 全绿。**预警未修**（缺「改/加 `.px` ⇒ 提交前提示要 freeze」的钩子），列 M325 |
+| **568** | `selfhost/go_json_v1.sh` 给 **pre-1.27** 工具链塞未知 `GOEXPERIMENT=nojsonv2`：`go` 连 `go env` 都炸 ⇒ 门把「工具链代差」误报成「Go 编译失败」，且版本维丢失（显示 `<无 go>`） | post-tag CI（run 39966351094）step16：`[json-v1] toolchain=<无 go> · GOEXPERIMENT=nojsonv2 · 来源=go_json_v1.sh 默认钉死` → `FAIL [truth] Go 编译失败` / `go: unknown GOEXPERIMENT jsonv2`（**m142_go_json_indent** 红，14:08:04）。本机用假 pre-1.27 工具链复现：同一行 `<无 go>` 逐字重现 | **本轮修**：`_go_json_has_v2_experiment()` 先探测（清空 `GOEXPERIMENT` 后再调 `go env GOVERSION`）；pre-1.27 走 `natural` 档并**自证**（报告时再探一次，若有实验项却没钉 ⇒ 判红）；1.27+ 才钉 `nojsonv2`。三档实测：假 1.26.7 ⇒ `natural` / rc=0；真 1.27.3 ⇒ `pin` / rc=0；伪装 natural 撞真 1.27.3 ⇒ rc=1 |
+| **569** | `sudo`/root 跑的门**不释放门锁** ⇒ root 属主 `/tmp/.px_gate_lock`（`/tmp` 带 sticky 位）后续普通用户门删不掉；`gate_lock.sh` 八次重试后报「疑似并发」⇒ 把「锁残留」误诊断成「并发启动」 | post-tag CI：m324（`sudo HOME=/root`）**1 秒**红，紧随其后的 m128 **0.18 秒**红（`❌ m128_unlock_grow verify 失败`）；本地同一门 34 秒绿（pass=90 fail=0）⇒ 纯装置侧假红 | **本轮修**：`gate_lock.sh` 增 `px_gate_lock_release()`；`rm` 失败时**当场列出属主与 sticky 原因 + 处置命令**（不再误诊为并发）；`m324_tls_failclosed/verify.sh` 的 trap（EXIT/INT/TERM）调它带走锁。实测：`sudo HOME=/root` 跑 m324 后 A1–A5 + 还原自证全绿且**锁未残留** |
+| **570** | CI 失败诊断用**窄 grep**（`^(  ❌|     |      )`）⇒ `❌ [gate_lock] …` 这类**无缩进**行被全滤掉 | post-tag CI m324 失败时 CI 输出**零信息**（只剩一句「门失败」），无法定位；`logs_url` 需 admin 权限（403）⇒ 连一轮 CI（~40 分钟）白跑 | **本轮修**：m324 / m128 两个 step 的失败分支追加「日志末 40 / 30 行 + 每行 `  \\| ` 前缀」（不靠窄模式）；m324 门自身 build 失败分支补「日志规模 + uid/编译器/缓存/磁盘/内存环境 + 末 40 行」 |
 
 ### 附：跨仓缺陷登记
 
@@ -79,7 +82,7 @@ mbedtls_ssl_conf_authmode(&conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED :
   保留 24h）」，实测 `.trash` 目录**从未被创建**，被移出任务 `T17898429733515071` 的 2 步明细
   被直接删除（`tasks.json` 零命中、`steps/` 无文件、只剩 `tasks.json.bak-20261023-133233`）。
   二进制内确有 `trashDir` / `pruneTrash` 符号 ⇒ **实现缺陷（路径未创建 / 写入静默失败）而非文案错**。
-  本次仅 2 步且升级前备份完整，危害低；但「声称的保护不存在」必须留账。
+  **状态：已由清歌处理并换版 2.53.14（10-23 18:04:40 上线），本仓库关闭该条、不再跟踪。**
   归属：文殊仓库（清歌），不在 PuXian 源码链内，故此处只作交叉登记，不参与 `check_defect_refs`。
 
 ## M323 —— 发布就绪裁决器把「短 sha 文本」当判据 ⇒ 假红 + 可假绿（错被误打误撞挡住）（第 195 轮 · 缺陷 557 / 558）

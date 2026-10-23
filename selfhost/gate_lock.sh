@@ -56,6 +56,17 @@ fi
 _PX_GLF="${PX_GATE_LOCK:-/tmp/.px_gate_lock}"
 _PX_GLW="${PX_GATE_LOCK_WAIT:-0}"
 
+# 锁的主动释放（供 sudo 门用）：
+#   gate_lock.sh 的设计是「不 unlink，靠持有者 PID 存活自愈」。
+#   但 root 写的锁文件在 /tmp（sticky）里普通用户删不掉 ⇒ 后续门全部假红。
+#   所以跑在 sudo/root 下的门，请在 trap 里调它把锁带走。
+px_gate_lock_release() {
+    [ -n "$_PX_GLF" ] || return 0
+    [ "$(cat "$_PX_GLF" 2>/dev/null)" = "$$" ] || return 0
+    rm -f "$_PX_GLF" 2>/dev/null || true
+    return 0
+}
+
 _px_gl_bail() {   # $1=原因行（多行用 \n）
     printf '❌ [gate_lock] %s\n' "$1" >&2
     printf '   ⇒ 本门在负控里会改源码（snapshot/restore），并发运行会让两边的还原互相盖掉\n' >&2
@@ -99,7 +110,16 @@ while :; do
         _px_gl_bail "另一扇门 / 全量门正在跑（PID $_px_gl_own）—— **拒绝并发**。"
     fi
     # 陈旧（持有者已死 或 压根不是门进程）⇒ 清掉重试
-    rm -f "$_PX_GLF" 2>/dev/null || true
+    #   ⚠️ 删不掉必须当场喊出原因（M324 CI 实测）：
+    #   sudo 跑的门会留下 root 属主的 /tmp/.px_gate_lock，/tmp 带 sticky 位
+    #   ⇒ 普通用户 rm 失败 ⇒ 8 次重试后报「抢占锁失败（疑似并发）」，
+    #   把「锁残留」误诊成「并发启动」（m128 就是这么假红的）。
+    if ! rm -f "$_PX_GLF" 2>/dev/null; then
+        _px_gl_ent="$(ls -l "$_PX_GLF" 2>/dev/null || echo 读不到)"
+        _px_gl_bail "陈旧锁文件删不掉（$_px_gl_ent）—— 多半是 sudo/root 跑过的门留下的 root 属主锁（/tmp 带 sticky 位，普通用户无权删）。
+   ⇒ 用 sudo rm -f $_PX_GLF 清掉再跑；
+   ⇒ 写门的人：门内若需 sudo，请在 EXIT/INT/TERM 里调 px_gate_lock_release（本文件提供）把锁带走。否则它会把它后面的每一扇门拖红。"
+    fi
     [ "$_px_gl_tries" -ge 8 ] && break
     sleep 0.02
 done

@@ -34,7 +34,10 @@ SNAP=/tmp/m326_rt_snapshot.c
 cp "$RT" "$SNAP" || { echo "❌ runtime.c 快照失败"; exit 2; }
 SNAP_SHA=$(sha256sum "$SNAP" | cut -d' ' -f1)
 restore_rt() { [ -f "$SNAP" ] && cp "$SNAP" "$RT" 2>/dev/null; }
-trap restore_rt INT TERM HUP
+# sudo 门（CI 用 root 跑）会留下 root 属主的门锁 ⇒ /tmp sticky 位让后续普通用户门删不掉，
+# 整条 CI 被拖红（M324 post-tag CI 实测：m128 因 root 残留锁假红）。故把锁带走。
+trap 'restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' INT TERM HUP
+trap 'type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' EXIT
 
 for _f in "$RT" "$ROOT/runtime/vm.c"; do
     if [ -f "$_f" ] && grep -q 'NEGCTL' "$_f" 2>/dev/null; then
@@ -81,7 +84,15 @@ mk_leaf dns "DNS:wrong.example.com"  "wrong.example.com"
 echo "── ② 构建探针（产品路径：tools/px build --full）"
 PROBEPX="$PWD/probe.px"
 ( cd "$ROOT" && "$PX" build --full "$PROBEPX" ) > "$LOG" 2>&1 || {
-    echo "❌ tools/px build 失败（见 $LOG）"; tail -5 "$LOG"; exit 2; }
+    # CI 红要能一眼定位：M324 post-tag CI 只 tail 5 行，结果只看到 ld 的 libc 链接警告，
+    # 真正的死因被截在中间 ⇒ 白跑一轮 CI。所以把「日志规模 + 末尾 40 行 + 环境证据」一起落盘。
+    echo "❌ tools/px build 失败（见 $LOG）"
+    echo "     log : $(wc -l < "$LOG" 2>/dev/null || echo 0) 行 / $(stat -c %s "$LOG" 2>/dev/null || echo 0) B"
+    echo "     env : uid=$(id -u)/$(id -un) gcc=$(gcc -dumpversion 2>/dev/null || echo none) cache=$(basename "$CACHE" 2>/dev/null)"
+    echo "     disk: $(df -h "$ROOT" 2>/dev/null | tail -1)"
+    echo "     mem : $(free -m 2>/dev/null | sed -n '2p')"
+    tail -40 "$LOG" | sed 's/^/     | /'
+    exit 2; }
 PROBE="$PWD/build/probe"
 [ -x "$PROBE" ] || { echo "❌ 探针未生成：$PROBE"; exit 2; }
 
