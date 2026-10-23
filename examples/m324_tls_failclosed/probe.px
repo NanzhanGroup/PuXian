@@ -1,0 +1,13 @@
+# M324 门探针：args()[1] = 端口；对 127.0.0.1 做 verify=true 的 TLS 连接
+#   输出只有两种：TLS_OK / TLS_FAIL stage=.. errno=..
+#   （CA 由环境变量 PX_TLS_CA_FILE 提供；门负责把它设成测试 CA 或清空）
+def m326_run():
+    var av = args()
+    var port = int(av[1])
+    var r = tls_connect("127.0.0.1", port, {"verify": true, "timeout_ms": 3000})
+    if r["ok"]:
+        print("TLS_OK")
+        tls_close(r["id"])
+    else:
+        print("TLS_FAIL stage=" + str(r["stage"]) + " errno=" + str(r["errno"]))
+m326_run()

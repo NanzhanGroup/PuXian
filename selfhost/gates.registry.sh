@@ -934,6 +934,7 @@ run m245_tls_cert_reload bash examples/m245_tls_cert_reload/verify.sh
 #   面 = 13 个复合赋值运算符 × 14 个类型对 × {复合形态, 展开形态}。
 #   判据 [5] 是**独立真值**（不依赖三轨）：`x op= y` ⇄ `x = x op y` 必须同结果。
 #   负控要重编 C 轨 + 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
+gate_timeout m246_compound_assign 1500
 run m246_compound_assign bash examples/m246_compound_assign/verify.sh
 # M250（第 127 轮 · 缺陷 433）：**ONNX 张量助手族全量对拍 + native 覆盖面台账**。
 #   来历：M248 首算「392 个 native 里 21 个从未被任何门触碰」，顺着这份账证出
@@ -1685,4 +1686,10 @@ run m318_mem_layers bash examples/m318_mem_layers/verify.sh
 #         + 负控 A（注入 continue ⇒ 确定性红）+ 负控 B（忠实撤回 + 还原现场 I/O ⇒ 4 轮至少 1 红）
 #         + 负控 C（判据自伤 ⇒ A 的红消失）。负控要重编 runtime 三次（~60s）⇒ CI 用 --neg-skip。
 run m319_ws_eof_spin bash examples/m319_ws_eof_spin/verify.sh
+# ── M324（第 196 轮 · 缺陷 559 / 560 / 561）：TLS 客户端认证 fail-closed ──
+#   三处 `g_cacert_loaded ? VERIFY_REQUIRED : VERIFY_NONE` ⇒ CA 不可用即**静默不验证**；
+#   IP 字面量作 host 时完全不校名（任何 CA 签发的证书都能冒充该 IP）；CA 加载失败无声。
+#   门用本机回环造 CA + 两张叶子，跑四格矩阵（含 `unshare -m` 把系统 bundle 换 /dev/null）；
+#   负控 N1 关掉校名 ⇒ A2 必绿、N2 退回 fail-open ⇒ A3 必绿。负控要重编 runtime 两次 ⇒ CI --neg-skip。
+run m324_tls_failclosed bash examples/m324_tls_failclosed/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test
