@@ -45,8 +45,8 @@ restore_rt() { [ -f "$SNAP" ] && cp "$SNAP" "$RT" 2>/dev/null; }
 gate_tmp_clean() { [ "${FAIL:-0}" = 0 ] && [ -n "${GATE_TMP:-}" ] && rm -rf "$GATE_TMP"; return 0; }
 # sudo 门（CI 用 root 跑）会留下 root 属主的门锁 ⇒ /tmp sticky 位让后续普通用户门删不掉，
 # 整条 CI 被拖红（M324 post-tag CI 实测：m128 因 root 残留锁假红）。故把锁带走。
-trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' INT TERM HU; gate_tmp_clean' INT TERM HUP
-trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release' EXI; gate_tmp_clean' EXIT
+trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release; gate_tmp_clean' INT TERM HUP
+trap 'type stop_mocks >/dev/null 2>&1 && stop_mocks; restore_rt; type px_gate_lock_release >/dev/null 2>&1 && px_gate_lock_release; gate_tmp_clean' EXIT
 
 for _f in "$RT" "$ROOT/runtime/vm.c"; do
     if [ -f "$_f" ] && grep -q 'NEGCTL' "$_f" 2>/dev/null; then
@@ -59,6 +59,19 @@ ck() {   # ck <名称> <条件>
     if [ "$2" = "0" ]; then echo "  ✅ $1"
     else echo "  ❌ $1"; FAIL=$((FAIL+1)); fi
 }
+
+# 缺陷 574（M324 补 6）：补5 那次手改把上面两条 trap 行改坏了 —— 
+#   形如「…' INT TERM HU; gate_tmp_clean' INT TERM HUP」⇒ bash 把两条并成一条、
+#   还给 trap 喂了不存在的信号名 ⇒ **一个 trap 都没挂上**（bash -n 查不出）。
+#   后果：mock 与门锁都不回收 ⇒ 孤儿 openssl s_server 常驻 1986x/1987x
+#   （实测 6 个，含 m131 硬编码的 19871），后续门撞端口即假红。
+#   判据：EXIT 陷阱必须**真的在位**（四项职责俱全）。
+_tp=$(trap -p EXIT)
+_tp_ok=1
+for _k in stop_mocks restore_rt px_gate_lock_release gate_tmp_clean; do
+    case "$_tp" in *"$_k"*) ;; *) _tp_ok=0 ;; esac
+done
+ck "EXIT 陷阱在位（stop_mocks / restore_rt / 锁释放 / 目录清理 四项俱全）" "$([ "$_tp_ok" = 1 ] && echo 0 || echo 1)"
 
 # ── 找「full」rtcache（必须是含 runtime_ws.o 的那一类；缺 runtime.o 的空目录跳过）──
 pick_cache() {
