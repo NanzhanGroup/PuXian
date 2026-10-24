@@ -271,6 +271,20 @@ jobs:
         run: |
           python3 selfhost/check_defect_refs.py --self-test
           python3 selfhost/check_defect_refs.py
+      - name: 提交前 .px 预警钩子 · 功能自证（M325 · 缺陷 566）
+        #   以前 .git/hooks 里只有 git 自带 *.sample、core.hooksPath 未设 ⇒ 这台机器上
+        #   根本没有任何钩子在跑，「忘了 --freeze」只能等 emitc_freeze 门 2h 后抓（r12 事故）。
+        #   本步真跑钩子：临时仓里摆 6 种现场（新增/改动冻结集 .px 必拦、基准同交放行、
+        #   跳过留痕、合并提交放行、install_hooks.sh 三态），任一不符 ⇒ 红。
+        run: |
+          bash selfhost/check_emitc_hook.sh
+      - name: 就地改写跟踪文件 · 台账门（M325 · 缺陷 575）
+        #   574 的现场：sed 把两行 trap 改坏、bash -n 仍绿、门「绿着」留下 6 个孤儿进程。
+        #   注意本门**不是**「见 sed -i 就红」——首版这么写，真仓 8 处命中全是合法用法
+        #   （负控里就地改源码 + restore_all 逐字节还原）。故改成台账双向核对：
+        #   新增命中未登记 ⇒ 红；台账过期 ⇒ 红；声明 restore 但脚本无还原机制 ⇒ 红。
+        run: |
+          bash selfhost/check_sed_inplace.sh
       - name: 发布就绪裁决的负控自证（M323 · 缺陷 557）
         #   M322 第 5 轮：/tmp 里那版裁决器拿「短 sha 文本相等」当判据
         #     EXPECT_HEAD=9fb6c1cc vs HEAD=cd152820
