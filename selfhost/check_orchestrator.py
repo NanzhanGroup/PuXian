@@ -83,11 +83,39 @@ CACHE = {}
 #      加该条件后**凭空 0 → 7**（7 条全是误伤）⇒ 按「校准到 0 误伤」**撤回**该条，
 #      并删掉那个**定义了却从没用过**的 `OUTPUT_KW` 常量（判据与注释必须一致 —— M214 同族）。
 #   v4（M284s1）只做**两件必需**的事：① 扫描面补 `--untracked`；② 查询工具的调用行也算"查询"。
+#   v5（M325·缺陷 579）扫描面**去掉 pathspec**，改 `is_code_file()` 过滤 —— 扩展名白名单
+#      看不见无扩展名的 git 钩子（`.githooks/pre-commit`），而钩子里恰有真生产者
+#      （`printf '⛔ 提交被拦下：改了「发射冻结集」…'`）⇒ r16 唯一的红就是 O1 把真生产者
+#      判成凭空。**判据的扫描面比判据本身更容易出错**，今夜这是第 3 次。
 CODE_EXT = (".sh", ".py", ".px", ".c", ".h", ".go", ".mk", ".bash")
 # **查询/消费**该串的行不产生它：`grep` 取数、`--probe` / `--count` 是本守卫自己的查询入口。
 QUERY_RE = re.compile(r"\bgrep\b|--probe|--count")
 # 对照档：复现**修前**口径（只看已跟踪）—— 只给门做 A/B，正常运行不得设置。
 TRACKED_ONLY = os.environ.get("ORCH_TRACKED_ONLY") == "1"
+
+
+def is_code_file(rel):
+    """`rel` 算不算「代码文件」（判据的**生产者搜索面**）。
+
+    定义必须**可机器核对**，不能靠「看着像代码」：
+      ① 有扩展名 ⇒ 扩展名 ∈ CODE_EXT；
+      ② **无扩展名** ⇒ 首两字节是 `#!`（git 钩子 `pre-commit`、`tools/px` 这类
+         shebang 脚本）；ELF 等二进制没有 shebang ⇒ 不算（git grep 也默认不输出二进制）。
+    夹具目录（`/fixtures/`）不算 —— 夹具是**故意违例**的样本（M226/M227）。
+
+    已知边界（如实写出来）：无扩展名且无 shebang 的代码（如 `Makefile`）仍不在面内；
+    本仓当前无此形态，将来引入须同步扩这条规则，否则又是一个**静默洞**。
+    """
+    if FIXTURE_SEG in "/" + rel:
+        return False
+    base = rel.rsplit("/", 1)[-1]
+    if "." in base:
+        return any(base.endswith(e) for e in CODE_EXT)
+    try:
+        with open(os.path.join(ROOT, rel), "rb") as fh:
+            return fh.read(2) == b"#!"
+    except Exception:
+        return False
 
 
 def findable(s):
@@ -96,31 +124,41 @@ def findable(s):
         return CACHE[s]
     ok = False
     try:
-        # ⚠️ pathspec 必须是 **glob**（`*.sh`）—— 写成 `.sh` 会被当**字面路径**，
-        #    git grep 找不到任何文件却**返回空**（不报错）⇒ 判据恒假（本仓第 N 次同形）。
         # ⚠️ M284s1：**必须** `--untracked`（缺陷 496①）—— 否则「提交前」与「提交后」
         #    是两个世界、两套结论，而本判据的职责恰恰是**在提交前**拦住。
-        paths = ["*" + e for e in CODE_EXT]
+        # ⚠️ M325（缺陷 579）：**不给 pathspec**，改在 Python 侧按「是不是代码文件」过滤。
+        #    旧写法 `-- '*.sh' '*.py' …` 只能按**扩展名**取面，而 git 钩子必须叫
+        #    `.githooks/pre-commit`（**无扩展名**）⇒ 被整体排除 ⇒ 钩子里那句
+        #    `printf '⛔ 提交被拦下：改了「发射冻结集」内的 .px …'`（真生产者）
+        #    算作「不存在」⇒ O1 把**真生产者**判成凭空判据串（r16 唯一的红）。
+        #    这是同一缺陷族第 3 次：496① 只看已跟踪 → 491 同族 → 579 无扩展名文件。
         cmd = ["git", "-C", ROOT, "grep", "-nF", "-e", s]
         if not TRACKED_ONLY:
             cmd.append("--untracked")
-        cmd += ["--"] + paths
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         for line in (r.stdout or "").split("\n"):
             if ":" not in line:
                 continue
-            _f, _rest = line.split(":", 1)
-            if ":" in _rest:
-                _rest = _rest.split(":", 1)[1]
-            st = _rest.strip()
+            rel, rest = line.split(":", 1)
+            if ":" not in rest:
+                continue                   # 形如 `Binary file … matches` 的行
+            rest = rest.split(":", 1)[1]
+            if not is_code_file(rel):
+                continue                   # 文档/数据/夹具不算「生产者」
+            st = rest.strip()
             if st.startswith(("#", "//", "/*", "*", "--")):
                 continue                       # 注释里的**引用**不产生它
-            if QUERY_RE.search(_rest):
+            if QUERY_RE.search(rest):
                 continue                       # **查询/消费**它的行也不产生它（496③）
             ok = True
             break
-    except Exception:
-        ok = True                      # 出错不判红（宁可漏报，不可假红）
+    except (OSError, subprocess.SubprocessError):
+        # ⚠️ 只吞**环境错误**（git 不存在 / 超时）。**编程错误一律抛出去**：
+        #    v5 改这段时把 `_rest` 写成了 `rest`、旧名残留 ⇒ 每行都抛 NameError
+        #    ⇒ 被 `except Exception` 吞掉 ⇒ findable 恒 True ⇒ O1 当场失去牙
+        #    （`--self-test` 的 bad_o1 立刻判红抓到）。「宁可漏报不可假红」不能
+        #    扩成「代码写错了也当没事」—— 判据自身失效必须响亮（同 check_defect_refs 的 exit 3）。
+        ok = True
     CACHE[s] = ok
     return ok
 
