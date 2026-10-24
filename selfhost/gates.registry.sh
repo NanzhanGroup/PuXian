@@ -1136,6 +1136,14 @@ step "发射冻结门（M153 建立）：253+ 个用例的 --emit-c 输出必须
 # 为什么：`--check`/`prove` 只看 **compiler.px 自己**的产物；"改了 runtime/发射路径却顺手
 #   动摇了别的程序的发射结果"这类回归此前没有任何门看得见（第 34 轮起靠临时脚本手查）。
 run emitc_freeze bash selfhost/emitc_freeze.sh --check
+step "M325 · 提交前 .px 预警 + 就地改写台账（缺陷 566 / 575）"
+# 缺陷 566：新增/改动冻结集 .px 却不 --freeze，此前只能靠上面这道 emitc_freeze 事后抓
+#   （r12 真实事故：231 门唯一红 = 新增 probe.px 未重定基，代价是 2h 全量门 + 40min CI）。
+#   本门**真跑钩子**（临时仓 6 种现场），不靠「文件存在=装好了」——那是 574 的错法。
+run emitc_hook bash selfhost/check_emitc_hook.sh
+# 缺陷 575：就地改写仓库跟踪文件的台账。不是「见 sed -i 就红」（首版这么写，真仓 8 处全误报），
+#   而是「命中集合 ⇄ 台账双向相等 + restore 声明可核对」，真仓 13 处已逐条交代。
+run sed_inplace_ledger bash selfhost/check_sed_inplace.sh
 step "示例编译"
 run ex_fib ./tools/pxc build examples/fib.px
 run ex_match ./tools/pxc build examples/match.px

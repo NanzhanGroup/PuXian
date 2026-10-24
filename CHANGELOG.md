@@ -1,3 +1,55 @@
+## M325 —— 提交前 .px 预警钩子 / 就地改写台账门（第 197 轮 · 缺陷 566 / 575）
+
+> 触发：10-24 03:26 用户问「你为什么用 sed？我们有专门替代 sed 的 wst 工具啊」——
+> 那一刻我在 /tmp 的临时补丁脚本里用 `sed -i` 改 `examples/m324_tls_failclosed/verify.sh`，
+> 吃字符把两行 trap 改坏（574）。这轮把「忘 freeze 只能等门事后抓」（566）和
+> 「就地改写静默出错」（575）两件事，做成**提交时/CI 时就能判**的机制。
+
+### 一 566 提交前预警钩子（`.githooks/pre-commit` + `tools/install_hooks.sh`）
+
+- 根因（实测，不是推断）：`ls .git/hooks` 只有 git 自带 `*.sample`，`git config core.hooksPath`
+  **未设** ⇒ 这台机器上**根本没有任何钩子在跑**。「提交前提示」此前从来没有载体 ——
+  所以 r12 那轮「新增 `probe.px` 未 `--freeze`」只能等 `emitc_freeze` 门 2 小时后抓，
+  代价是 2h 全量门 + 40min CI，只为发现一件**在提交那一刻就确定**的事。
+- 判据（贴契约）：冻结集 glob **从 `selfhost/emitc_freeze.sh` 的 `files()` 同源提取**（不手抄）；
+  提交命中该集合的 `.px` 而 `selfhost/golden/emitc_freeze.sha` **未同交** ⇒ 拦下，并把两条出路写在脸上。
+  出口三选一：① `--freeze` 并同交基准；② `--check` 先确认类别 B（发射回归）为空；
+  ③ `PX_SKIP_FREEZE_HOOK=1` 显式跳过并写 `.git/px-hook-skip.log`（**跳过必须留痕**）。
+- 防「装了但不管用」：`selfhost/check_emitc_hook.sh` **真跑钩子**（临时 git 仓 6 种现场 +
+  install 三态 + glob 提取自证），10 项断言，实测 10/0 通过、612ms。
+  这一步不是仪式：它当场抓到两个 bug ——
+  ① 我的 glob 正则写成 `examples/[A-Za-z0-9_]*/*.px`，**匹配不到门里的 `examples/*/*.px`**
+     ⇒ 提取器只提出 1 条、新增文件根本不会被拦（A8 规模锚点判红）；
+  ② `cnt_new()` 用 `NR==FNR` 判首文件，**首文件为空时该条件恒真** ⇒ 判据空转（自证判红）。
+  两处都已修，并把修法写进注释（防下一个人再踩）。
+
+### 二 575 就地改写台账门（`selfhost/check_sed_inplace.sh` + `selfhost/sed_inplace_allow.txt`）
+
+- **首版做错了，记在这里**：第一版判据是「脚本面见到 `sed -i` 就判红」。真仓实测 14 处命中，
+  逐条查下来 **全是合法用法** —— 门在负控里就地改源码、再靠 `restore_all`/`snapshot`
+  **逐字节还原并自证**（m192/m193/m195/m196/m200/m263），另有把 sed 串当 **fixture 输入**
+  写给 `$W/*.sh` 的（m285）。⇒ 一刀切是「贴表象不贴契约」（CRITERIA ②）：文本里有 sed，
+  不等于它会留下破坏。**判据被真仓推翻，就该改判据**，而不是加一堆例外糊过去。
+- 改后的判据（三件可机器核对的事）：
+  1. 现役命中集合 ⇄ 台账 **双向相等**：新增未登记 ⇒ 红；台账条目过期（不再命中）⇒ 红；
+  2. 台账每条声明 `class=restore` 的，**门真去脚本里 grep 还原机制**
+     （`restore_*`/`snapshot`/`git checkout --`）—— 理由是可核对的事实，不是文字；
+  3. 台账缺失 ⇒ **全部命中算未登记**（首版在这里假绿过一次：缺文件时 awk 报错、
+     计数变量为空、`[ "" -gt 0 ]` 判假 ⇒ 打印「✅ 台账一致」后 exit 0。已修并留注释）。
+- 现役台账 10 条（对应 13 处命中，m192/m193/m196 各有同脚本多行）：restore 9 条、fixture 1 条。
+  自证 9 项（3 正控不误判 + 2 负控必红 + 空转前提 + 台账三态），实测 9/0、354ms；
+  另对真台账做 3 条负控：删一条 ⇒ 红、加过期条 ⇒ 红、把 fixture 谎称 restore ⇒ 红。
+- 诚实边界（写在脚本头部）：这是**台账门**，查的是「有没有交代」，不是「安全证明」；
+  变量间接引用（`sed -i ... "$TARGET"`）是逃逸面；本脚本自身因自证需要内嵌 sed 字串，已排除在扫描面外。
+
+### 三 接线
+
+- `selfhost/gates.registry.sh`：`emitc_freeze` 之后新增 `emitc_hook` / `sed_inplace_ledger` 两门（233 门）。
+- `.github/workflows/ci.yml`：toolchain job 新增同名两步（注释里写明「为什么不是一刀切」）。
+- `tools/install_hooks.sh`：`--check` / `--uninstall` / 无参安装；装完**回读自证**（不靠「我说装好了」）。
+- 本机已装：`core.hooksPath=.githooks`，`--check` rc=0。
+
+
 ## M324 补 8 —— CI 并发组按提交 / sudo 门锁移出 /tmp（缺陷 576 / 577）
 
 > 触发：用户 2026-10-24 03:32 授我自主决定「本机设置类」事项（前一轮我列了三项等他拍板）。

@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# ============================================================================
+# .githooks/pre-commit —— 发射冻结集的**提交前预警**（M325 · 缺陷 566）
+# ----------------------------------------------------------------------------
+# 为什么要有（真实事故，不是假想）：
+#   r12 全量门 231 门里**唯一红** = emitc_freeze rc=1「仅在当前里 1 件（新增文件需 --freeze）」
+#   起因只是新增了一个 examples/m324_tls_failclosed/probe.px 并照常提交。
+#   ⇒ 那一轮的代价是：一整轮全量门（~2h）+ 一整轮 CI（~40min），只为发现「忘了 --freeze」。
+#   这类错误**在提交那一刻就能确定**，不需要等到门跑完才知道。
+#
+# 判据（贴契约，不贴表象）：
+#   冻结集的文件 = selfhost/emitc_freeze.sh 里 files() 的 glob（**同源提取，不手抄**）。
+#   本次提交若命中了这个集合里的 .px，而 selfhost/golden/emitc_freeze.sha **没有一起提交**
+#   ⇒ 台账与基准必然不一致（无论发射是否真的变了，src 指纹列已经越界）
+#   ⇒ 拦下，并把「两条出路」写在脸上。
+#
+# 出口（不许无声跳过）：
+#   ① 有意改发射  → bash selfhost/emitc_freeze.sh --freeze && git add selfhost/golden/emitc_freeze.sha
+#   ② 只是无关修改 → bash selfhost/emitc_freeze.sh --check  先确认类别 B（发射回归）为空
+#   ③ 确要跳过     → PX_SKIP_FREEZE_HOOK=1 git commit ...（写 .git/px-hook-skip.log 留痕）
+#
+# 只在本机生效：需要 tools/install_hooks.sh 装好（core.hooksPath=.githooks）。
+#   没人装也不用慌 —— selfhost/check_emitc_hook.sh 在 CI 里对本钩子做**功能自证**，
+#   装没装都不影响「这个钩子到底会不会拦」这件事被验证。
+# ============================================================================
+set -uo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 0
+
+# 合并提交（MERGE_HEAD 在）：本次提交不是作者手写的内容，预警无意义
+git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && exit 0
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)
+[ -z "$STAGED" ] && exit 0
+
+# ── 冻结集 glob：从门脚本里提取（单一事实源）；提不到才退回内置默认 ──
+GATE=selfhost/emitc_freeze.sh
+PATS=""
+if [ -f "$GATE" ]; then
+    PATS=$(grep -oE 'selfhost/cases/\*\.px|examples/(\*|[A-Za-z0-9_]*)/\*\.px' "$GATE" 2>/dev/null | sort -u)
+fi
+[ -z "$PATS" ] && PATS=$(printf '%s\n%s\n' 'selfhost/cases/*.px' 'examples/*/*.px')
+
+HIT=""
+while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    while IFS= read -r p; do
+        [ -z "$p" ] && continue
+        # shellcheck disable=SC2254  # 这里就是要让 $p 当 glob 展开
+        case "$f" in $p) HIT="${HIT}${f}"$'\n'; break;; esac
+    done <<< "$PATS"
+done <<< "$STAGED"
+
+[ -z "$HIT" ] && exit 0
+
+# 基准同交 ⇒ 放行
+if printf '%s\n' "$STAGED" | grep -qx 'selfhost/golden/emitc_freeze.sha'; then
+    exit 0
+fi
+
+if [ "${PX_SKIP_FREEZE_HOOK:-0}" = "1" ]; then
+    printf '%s skip staged=[%s]\n' "$(date -Is)" "$(printf '%s' "$HIT" | tr '\n' ' ')" \
+        >> .git/px-hook-skip.log
+    echo "⚠ 已按 PX_SKIP_FREEZE_HOOK=1 跳过发射冻结预警（留痕 .git/px-hook-skip.log）"
+    exit 0
+fi
+
+cat >&2 <<EOF
+⛔ 提交被拦下：改了「发射冻结集」内的 .px，但基准没有一起提交（缺陷 566）
+
+   命中文件：
+$(printf '%s' "$HIT" | sed 's/^/     · /')
+
+   冻结集的 --emit-c 产物（含源码指纹列）有基准：selfhost/golden/emitc_freeze.sha
+   只改源、不重定基 ⇒ 全量门的 emitc_freeze 必红（类别 A），白跑一整轮门 + 一整轮 CI。
+
+   两条出路（选一条，别猜）：
+     ① 有意改发射  →  bash selfhost/emitc_freeze.sh --freeze
+                       git add selfhost/golden/emitc_freeze.sha
+                      （提交信息里写明「为什么发射会变」）
+     ② 只是无关修改 →  bash selfhost/emitc_freeze.sh --check
+                       （类别 B 为空 = 没有发射回归；若类别 A 差异非预期，就是真问题，别 freeze）
+
+   确要跳过：PX_SKIP_FREEZE_HOOK=1 git commit ...（会写 .git/px-hook-skip.log 留痕）
+
+EOF
+exit 1

@@ -1,0 +1,16 @@
+# 就地改写仓库跟踪文件的台账（M325 · 缺陷 575）
+# 格式：脚本<TAB>目标<TAB>类别<TAB>理由
+#   类别 restore = 本脚本就地改正式文件，但**自带还原机制**（restore_all/snapshot/trap EXIT 还原），门跑完逐字节还原
+#                  —— 门会真去脚本里 grep 还原机制，理由是可核对的事实，不是文字
+#   类别 fixture = 该行把 sed 串当**输入数据**写给别的脚本（如 printf > $W/x.sh），不执行到正式文件
+# 纪律：新增命中必须在此登记并写清属于哪类；台账条目**过期**（不再命中）同样判红。
+examples/m192_encfamily/verify.sh	runtime/runtime_aes.c	restore	负控 A/B/C：改 R 码与域名；snapshot+restore_all+trap EXIT 还原，每道负控前先 restore 再 snapshot
+examples/m193_errcodes2/verify.sh	runtime/runtime_h3.c	restore	负控 B：改 H3 错误码文案；restore_all/snapshot 还原并自证
+examples/m193_errcodes2/verify.sh	runtime/runtime_quic.c	restore	负控 A：改 QUIC 错误码文案；restore_all/snapshot 还原并自证
+examples/m193_errcodes2/verify.sh	runtime/runtime_xml.c	restore	负控 C：改 XML 错误码文案；restore_all/snapshot 还原并自证
+examples/m195_arg_guards2/verify.sh	examples/m191_error_codes/scan_errcodes.py	restore	负控：删扫描器里的参数守卫条目；restore_all/snapshot 还原并自证
+examples/m196_msg_parity/verify.sh	runtime/runtime.c	restore	负控 3C/3D：改原生侧文案（3D 用范围地址限定 bi_gen_next）；restore_all/snapshot 还原
+examples/m196_msg_parity/verify.sh	selfhost/ibuiltin.px	restore	负控 3A：把解释轨文案改回旧形态；restore_all/snapshot 还原
+examples/m200_ffi_globals/verify.sh	runtime/runtime_ffi.c	restore	负控 NEGCTL-C：把循环边界改成恒假；restore_all/snapshot 还原并自证
+examples/m263_resp_crosstalk/verify.sh	runtime/runtime.c	restore	负控：去掉 http_pend_clear 触发交叉串话；restore_all/snapshot 还原
+examples/m285_gate_assertions/verify.sh	runtime/vm.h	fixture	把 sed 打桩串 printf 成 $W/c_post.sh 当**反例输入**喂静态分析器，never 执行到正式文件
