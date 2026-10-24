@@ -175,6 +175,96 @@ else
     bad '对照失败：骨架 汇总 竟报凭空 —— 探针口径恒假'
 fi
 
+printf '\n══ [4b] 缺陷 579：O1 生产者面（无扩展名钩子）══\n'
+# 579 的形状（r16 唯一的红）：O1 把 `.githooks/pre-commit` 里那句**真 printf**
+#   判成「凭空判据串」。真因不在判据，而在**扫描面**：旧实现用 git grep 的
+#   pathspec `-- '*.sh' '*.py' …` 按**扩展名**取面，而 git 钩子必须叫 `pre-commit`
+#   （**无扩展名**）⇒ 整份文件被排除。这是同一缺陷族第 3 次（496① / 491 / 579）。
+# 下面每条都要能**独立判红**，且前提先自证（CRITERIA ③/④）：
+#   ① 真生产者被扫到（r16 那条红不再复现）
+#   ② 两档覆盖：无扩展名 + shebang 的前缀生产者「造前凭空 / 造后在场 / 删后凭空」
+#   ③ 认**输出**不认**字面**：真生产者改成注释 ⇒ 必须回到凭空（有牙）
+#   ④ 放宽面后仍会判红：垃圾串照样凭空（不是「什么都能找到」）
+#   ⑤ 静态形态：扩展名 pathspec 白名单已移除、is_code_file 在位（防日后被改窄）
+# ⚠️ 骨架一律**运行时拼装**：写成字面量的话，本文件自己就成了它的生产者
+#   （M284s1 的教训：自证当场 5/0 → 4/1）。
+P='发射'; Q='冻结集'; S579="${P}${Q}"
+if python3 "$GUARD" --probe "$S579" >/dev/null 2>&1; then
+    ok '579① 真生产者（.githooks/pre-commit 的 printf 行）被扫到'
+else
+    bad '579① 真生产者未被扫到 —— 扫描面仍按扩展名取面（缺陷 579 未修）'
+fi
+F1='无扩展名'; F2='生产者对照'; S2="${F1}${F2}"
+D579="$ROOT/.m325_579"
+rm -rf "$D579"
+if python3 "$GUARD" --probe "$S2" >/dev/null 2>&1; then
+    bad '579② 前提不成立：对照串在造之前就已在场（负控会是空操作）'
+else
+    ok '579② 前提自证：对照串造之前凭空'
+    mkdir -p "$D579"
+    printf '#!/usr/bin/env bash\necho %s\n' "$S2" > "$D579/prod_noext"
+    if python3 "$GUARD" --probe "$S2" >/dev/null 2>&1; then
+        ok '579② 无扩展名 + shebang 的生产者被扫到（面真覆盖到了）'
+    else
+        bad '579② 无扩展名 + shebang 的生产者仍被漏掉'
+    fi
+    rm -rf "$D579"
+    if python3 "$GUARD" --probe "$S2" >/dev/null 2>&1; then
+        bad '579② 删掉后仍判在场（面内残留 / 判据恒真）'
+    else
+        ok '579② 删掉后回到凭空（两档对照成立）'
+    fi
+fi
+rm -rf "$D579"
+HK='.githooks/pre-commit'
+cp -p "$ROOT/$HK" "$W/hk.snap"
+# 把真生产者那一行改成注释（**不是删掉**：删掉会同时改变「在场」的两个原因）
+python3 - "$ROOT/$HK" <<'PY'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding='utf-8').read()
+anchor = '⛔ 提交被拦下：'
+i = s.find(anchor)
+if i < 0:
+    print('ANCHOR-MISS'); sys.exit(9)
+ls = s.rfind('\n', 0, i) + 1
+io.open(p, 'w', encoding='utf-8').write(s[:ls] + '# ' + s[ls:])
+PY
+if [ $? = 0 ]; then
+    if python3 "$GUARD" --probe "$S579" >/dev/null 2>&1; then
+        bad '579③ 生产者改成注释后仍判在场 —— 认的是字面在场，不是输出'
+    else
+        ok '579③ 生产者改成注释 ⇒ 回到凭空（认输出，有牙）'
+    fi
+    cp -p "$W/hk.snap" "$ROOT/$HK"
+    if python3 "$GUARD" --probe "$S579" >/dev/null 2>&1; then
+        ok '579③ 还原后回到在场（对照的另一档）'
+    else
+        bad '579③ 还原后仍凭空（还原没到位）'
+    fi
+else
+    cp -p "$W/hk.snap" "$ROOT/$HK"
+    bad '579③ 锚点未命中（生产者行已变？锚点必须同步）'
+fi
+if cmp -s "$ROOT/$HK" "$W/hk.snap"; then ok '579 钩子源逐字节还原'; else bad '579 钩子源未还原'; fi
+G1='犇鑫骉'; G2='鑫犇'; SG="${G1}${G2}"
+if python3 "$GUARD" --probe "$SG" >/dev/null 2>&1; then
+    bad '579④ 放宽面后垃圾串也被判在场（面放太宽 ⇒ 判据失去牙）'
+else
+    ok '579④ 放宽面后垃圾串仍凭空（判据仍有牙）'
+fi
+SP="$(grep -c 'is_code_file' "$GUARD" || true)"
+if [ "${SP:-0}" -ge 2 ]; then
+    ok "579⑤ is_code_file 在位（$SP 处：定义 + 调用）"
+else
+    bad "579⑤ is_code_file 缺失或未接线（${SP:-0} 处）"
+fi
+if grep -q 'paths = \["\*"' "$GUARD"; then
+    bad '579⑤ 扩展名 pathspec 白名单仍在（扫描面可能又被改窄）'
+else
+    ok '579⑤ 扩展名 pathspec 白名单已移除'
+fi
+
 printf '\n══ [5] 负控 3 道（各自独立判红 · 源逐字节还原）══\n'
 snap() { cp -p "$1" "$W/$(basename "$1").snap"; }
 rest() { cp -p "$W/$(basename "$1").snap" "$1"; }
@@ -260,6 +350,11 @@ cat <<'TXT'
   · 496 的 `ORCH_TRACKED_ONLY` **只用于 A/B**；正常路径不得设置（本门已两档对照证明有牙）。
   · v3 试过「生产者必须含输出关键词」—— **实测被否**（凭空 0 → 7 全误伤：`.px` 字面量
     赋值 + 别的脚本 echo 出的中文短语）⇒ 已撤回，并把判据注释与实现改成一致。
+  · 579（M325 补 2）把生产者面从「扩展名白名单」改成 `is_code_file()`：有扩展名 ⇒ 查白名单；
+    **无扩展名** ⇒ 首两字节是 `#!`。已知洞（如实写在这里）：**无扩展名且无 shebang** 的代码
+    （`Makefile` 形态）仍不在面内 —— 本仓当前无此形态，将来引入须同步扩规则，否则是**静默洞**。
+  · 579 只改「生产者搜索面」，**不改变** O1 的立论（兜里那条判据仍要求 CJK + 长度 ≥ 4）。
+    面放宽的代价是**漏报**变多（宁可漏报不可假红），所以 ④ 专门反向验「垃圾串仍凭空」。
 TXT
 ok '覆盖边界已登记（见上）'
 
