@@ -1245,6 +1245,16 @@ jobs:
           grep -E '失败 ' /tmp/v_gate_verdict.log | tail -1 || true
           echo "✅ gate_verdict_selftest（13 断言 · 失败优先 · 空行跳过 · 无标记⇒无法判定）PASS"
 
+      - name: shard_gate_verdict_selftest（分片档裁决器自证 · M327 缺陷 578/580）
+        if: always()
+        run: |
+          # 分片档裁决器此前住在树外 ⇒ 守卫扫不到、判据写错没人抓。入仓后仍要**自证**：
+          #   10 条行为断言（2 正控 + 8 负控，每条单独判红）+ 3 条静态防改窄。
+          #   缺陷 580 的形态：判据写成「绿数 != 门清单」⇒ 有红项时恒真 ⇒ 红是对的、理由错了。
+          bash packaging/chain/shard_gate_verdict.sh --self-test > /tmp/v_shard_gate_verdict.log 2>&1 || { echo "❌ 分片档裁决器自证失败"; tail -20 /tmp/v_shard_gate_verdict.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '通过 |失败 ' /tmp/v_shard_gate_verdict.log | tail -1 || true
+          echo "✅ shard_gate_verdict_selftest（13 断言 · 门数平衡 · 两本账 · 判红必须列得出红门）PASS"
+
       - name: m293_h3_robustness（HTTP/3 托管 listener 健壮性 · 晨曦阻塞级 QA 常设化）
         if: always()
         run: |
