@@ -88,6 +88,10 @@ CACHE = {}
 #      （`printf '⛔ 提交被拦下：改了「发射冻结集」…'`）⇒ r16 唯一的红就是 O1 把真生产者
 #      判成凭空。**判据的扫描面比判据本身更容易出错**，今夜这是第 3 次。
 CODE_EXT = (".sh", ".py", ".px", ".c", ".h", ".go", ".mk", ".bash")
+# 无扩展名 + 无 shebang 的构建文件（M326 · 579 收口）：只认**已知名字**，不认「看着像代码」。
+# 名单有限、可核对；新增名字 = 判定口径变更，须同步表面自证 S5。
+NO_EXT_CODE_NAMES = ("Makefile", "makefile", "GNUmakefile",
+                     "Dockerfile", "Containerfile")
 # **查询/消费**该串的行不产生它：`grep` 取数、`--probe` / `--count` 是本守卫自己的查询入口。
 QUERY_RE = re.compile(r"\bgrep\b|--probe|--count")
 # 对照档：复现**修前**口径（只看已跟踪）—— 只给门做 A/B，正常运行不得设置。
@@ -103,14 +107,21 @@ def is_code_file(rel):
          shebang 脚本）；ELF 等二进制没有 shebang ⇒ 不算（git grep 也默认不输出二进制）。
     夹具目录（`/fixtures/`）不算 —— 夹具是**故意违例**的样本（M226/M227）。
 
-    已知边界（如实写出来）：无扩展名且无 shebang 的代码（如 `Makefile`）仍不在面内；
-    本仓当前无此形态，将来引入须同步扩这条规则，否则又是一个**静默洞**。
+    ③ **无扩展名 + 无 shebang** 的构建文件（`Makefile` / `Dockerfile` 形态）——
+       按**文件名白名单**认（M326 补 579 的已知洞）。为什么是白名单而不是「无扩展名一律算」：
+       后者会把 `LICENSE` / `README` / `VERSION` 这类纯文本也算进生产者面
+       ⇒ 判据串在文档里被**引用**一次就「在场」⇒ O1 失去牙（缺陷 495 的形状）。
+       白名单是**可机器核对**的有限集合。本仓当前无此形态，故只加规则 + 三态自证，
+       不新增扫描面文件。将来引入别的构建文件（如 `Justfile`）**必须**同步加名字，
+       否则仍是静默洞 —— 边界写在这里，不靠记性。
     """
     if FIXTURE_SEG in "/" + rel:
         return False
     base = rel.rsplit("/", 1)[-1]
     if "." in base:
         return any(base.endswith(e) for e in CODE_EXT)
+    if base in NO_EXT_CODE_NAMES:      # ②' 无扩展名构建文件（M326）
+        return True
     try:
         with open(os.path.join(ROOT, rel), "rb") as fh:
             return fh.read(2) == b"#!"
@@ -294,6 +305,65 @@ bash selfhost/run_gates.sh > /tmp/g.log 2>&1
 }
 
 
+def surface_self_test():
+    """M326 · 缺陷 579 收口自证：`is_code_file()` 的无扩展名分支。
+
+    为什么必须**三态**（造前凭空 / 造后在场 / 删后凭空）：只断言「造后在场」只测了一半 ——
+    若 is_code_file 退化成恒 True（本仓真发生过：except 吞掉编程错误 ⇒ findable 恒 True），
+    「造后在场」照样绿，只有「造前凭空」会红。再配两条负控：
+      · README（无扩展名、不在白名单、无 shebang）**不算**代码 —— 防「无扩展名一律算」的放宽；
+      · Dockerfile 形态**也算**代码 —— 防「只加了一个名字」的半修。
+    全程在 mktemp 的临时 git 仓库里做，ROOT 临时改指、结束恢复，**不碰真仓**。
+    """
+    import shutil
+    import tempfile
+    global ROOT, CACHE
+    keep_root = ROOT
+    tmp = tempfile.mkdtemp(prefix="px-orch-surface-")
+    key = "守卫扫描面三态自证"
+    res = []
+    try:
+        subprocess.run(["git", "init", "-q", tmp], check=True, capture_output=True)
+        with open(os.path.join(tmp, "README"), "w", encoding="utf-8") as fh:
+            fh.write(key + "\n")
+        for c in (["add", "-A"], ["commit", "-qm", "init"]):
+            subprocess.run(["git", "-C", tmp, "-c", "user.email=t@t",
+                            "-c", "user.name=t"] + c, check=True, capture_output=True)
+        ROOT = tmp
+        CACHE.clear()
+        # ① 造前：仓里只有 README（文档，不是代码）⇒ 判据串必须**凭空**
+        res.append(("S1 造前凭空（无 Makefile）", not findable(key)))
+        # ② 造后：Makefile 里有真生产者（非注释 / 非查询行）⇒ 必须**在场**
+        with open(os.path.join(tmp, "Makefile"), "w", encoding="utf-8") as fh:
+            fh.write("all:\n\t@printf '%s\\n'\n" % key)
+        CACHE.clear()
+        res.append(("S2 造后在场（Makefile 命中）", findable(key)))
+        # ③ 删后：必须回到**凭空**（证明 S2 的红绿来自文件本身，不是缓存/目录残留）
+        os.remove(os.path.join(tmp, "Makefile"))
+        CACHE.clear()
+        res.append(("S3 删后凭空（Makefile 已删）", not findable(key)))
+        # ④ 负控：README 里同样有这串，但它不是代码 ⇒ 不许算成生产者
+        res.append(("S4 负控 README 不算代码（仍凭空）", not findable(key)))
+        # ⑤ 负控：Dockerfile 形态（另一种无扩展名构建文件）必须也认
+        with open(os.path.join(tmp, "Dockerfile"), "w", encoding="utf-8") as fh:
+            fh.write("RUN echo '%s'\n" % key)
+        CACHE.clear()
+        res.append(("S5 负控 Dockerfile 也算代码（在场）", findable(key)))
+    finally:
+        ROOT = keep_root
+        CACHE.clear()
+        shutil.rmtree(tmp, ignore_errors=True)
+    ok = fail = 0
+    for name, good in res:
+        if good:
+            ok += 1
+            print("  ✅ %s" % name)
+        else:
+            fail += 1
+            print("  ❌ %s" % name)
+    return ok, fail
+
+
 def self_test():
     d = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                       "..", "examples", "m284_orchestrator", "fixtures"))
@@ -330,6 +400,9 @@ def self_test():
         fail += 1
         print("  ❌ %-12s 关掉 O1 后仍判红=%s" % ("反转-O1", codes))
     criteria_verdict = keep
+    ok2, fail2 = surface_self_test()
+    ok += ok2
+    fail += fail2
     print("\n自证：通过 %d / 失败 %d" % (ok, fail))
     return fail
 
