@@ -1,3 +1,40 @@
+## M326 —— 守卫扫描面体检 + 579 已知洞收口（第 198 轮）
+
+> 触发：M325 自陈的洞没修 ——「无扩展名且无 shebang 的代码（Makefile/Dockerfile 形态）不在
+> O1 扫描面内」，且「别的守卫是否同类面」**一次都没逐个查过**。同族已第 3 次
+> （496① 只看已跟踪 → 491 同形 → 579 按扩展名取面）⇒ 这轮不再只修一处，而是把
+> **9 个带静态扫描面的守卫**逐个对拍，并把结论落成可复核的表。
+
+### 一 体检表（`docs/GUARDS_SURFACE.md`）
+
+- 每个守卫四列：**现扫描面（源码事实）⇒ 判据应覆盖集合 ⇒ 反例（本仓可复现）⇒ 结论**。
+  缺「反例」的行视为未体检 —— 没有反例就说不清它在防什么。
+- 分档：已完整/已扩面 4（`check_pymain_guard` · `check_neg_residue` · `release_readiness` · `check_gate_paths`）；
+  边界已写明、不改 4（`check_gate_registry` · `check_emitc_hook` · `check_sed_inplace` · `run_gates --only`）；
+  候选 2（`check_defect_refs` 面窄；`packaging/selftest_make_tag.sh` 含 `NEGCTL` 而 `packaging/` 不在残留面内）。
+  候选都带**具体文件名**与代价，留给 M327，不在本轮顺手改。
+
+### 二 579 收口：`is_code_file()` 认无扩展名构建文件
+
+- 旧口径：`扩展名 ∈ CODE_EXT` 或 `无扩展名 + 首两字节 #!` ⇒ **无扩展名且无 shebang** 的
+  `Makefile` / `Dockerfile` 形态整类不在生产者面内（真静默洞）。
+- 新口径：`NO_EXT_CODE_NAMES = (Makefile, makefile, GNUmakefile, Dockerfile, Containerfile)` ——
+  **文件名白名单**，不是「无扩展名一律算」。后者会把 `LICENSE` / `README` / `VERSION` 算进代码面，
+  判据串在文档里被引用一次就「在场」⇒ O1 重新失去牙（缺陷 495 的形状）。
+- 三态 + 双负控自证（`surface_self_test()`，临时 git 仓，不碰真仓）：
+  S1 造前凭空 / S2 造后在场 / S3 删后凭空 / S4 负控 README 不算代码 / S5 负控 Dockerfile 也算代码。
+- **A/B 证据**：删掉新增的两行再跑自证 ⇒ S2/S5 当场判红（8 通过 / 2 失败）；
+  加回 ⇒ 10/0。证明绿是**这条规则**给的，不是别的路径碰巧命中。
+- 本仓当前无此两种形态文件 ⇒ 扫描文件数不变（86 个 `.sh` / 62 个源码文件），
+  不动 `runtime/*.c` ⇒ **无需重烘 14 件**，回滚 = revert 本提交。
+
+### 三 门
+
+`m284_orchestrator` / `gate_registry` / `check_gate_paths` / `check_defect_refs` /
+`neg_residue` / `emitc_hook` / `sed_inplace_ledger` / `release_readiness_selftest` 逐个跑，
+另跑 `check_orchestrator.py --self-test`・`check_neg_residue.sh --self-test`・
+`check_sed_inplace.sh --self-test`・`check_emitc_hook.sh`，结果全绿（门日志不入仓，看提交说明）。
+
 ## M325 —— 提交前 .px 预警钩子 / 就地改写台账门（第 197 轮 · 缺陷 566 / 575 / 579）
 
 > 触发：10-24 03:26 用户问「你为什么用 sed？我们有专门替代 sed 的 wst 工具啊」——
