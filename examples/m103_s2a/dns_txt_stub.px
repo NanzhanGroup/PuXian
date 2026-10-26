@@ -1,0 +1,48 @@
+# ============================================================
+# M103-S2a 桩档断言（缺陷 585 修复新增）
+# ------------------------------------------------------------
+# 被测解析器 = 门内自建 DNS 桩（examples/m116_builtin_semantics/dns_stub.c），
+#   在 unshare -mn 命名空间内把 /etc/resolv.conf 指向 127.0.0.1:53
+#   ⇒ 语义由门自己造，**零外网、确定性**。
+# 桩提供的域名（见 dns_stub.c 头注释）：
+#   trunc.dnsstub.test  3 条长 TXT（每条两段 character-string，客户端必须合并）
+#   plain.dnsstub.test  1 条 "plain-udp"
+#   nx.dnsstub.test     NXDOMAIN ⇒ 空 list（非报错）
+#   empty.dnsstub.test  NOERROR + ANCOUNT=0 ⇒ 空 list
+# 判据：条数 + 逐字节（与桩自己吐的真值比，避免两处手抄）+ dump 供 Go 对拍
+# 运行：bash verify.sh（[3/5] 段，命名空间内）
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name)
+
+let r = dns_txt("trunc.dnsstub.test")
+check("trunc is list", type(r) == "list")
+check("trunc n==3", len(r) == 3)
+
+let p = dns_txt("plain.dnsstub.test")
+check("plain n==1", len(p) == 1)
+if len(p) == 1:
+    check("plain body", p[0] == "plain-udp")
+
+let nx = dns_txt("nx.dnsstub.test")
+check("nxdomain empty list", type(nx) == "list" and len(nx) == 0)
+
+let em = dns_txt("empty.dnsstub.test")
+check("noerror-empty list", type(em) == "list" and len(em) == 0)
+
+let lo = dns_txt("localhost")
+check("localhost empty list", type(lo) == "list" and len(lo) == 0)
+
+# ---- dump 供 verify.sh 比真值 + Go net.LookupTXT 对拍 ----
+print("----TXT-DUMP----")
+for t in r:
+    print(t)
+print("DNS_TXT_STUB:", str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)
