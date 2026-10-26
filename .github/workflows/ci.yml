@@ -1583,6 +1583,10 @@ jobs:
           run_guard rpm_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
           run_guard make_release  bash packaging/selftest_make_release.sh
           run_guard tag_guard     bash packaging/selftest_tag_guard.sh
+          # M335（缺陷 587/588）：releases/latest 必须等于最高版本 tag
+          #   由来：install.sh 取 releases/latest，而 GitHub 的 latest 按创建时间排
+          #   ⇒ 2026-10-26 补历史 tag 时 latest 被 v0.2.327 顶掉，一键安装装旧树。
+          run_guard latest_guard  bash packaging/selftest_latest_guard.sh
           # M248：tag 命名护栏（创建时刻 make_tag.sh + 构建时刻 build_rpm/make_release）
           #   由来：一个 v0.2.0-m245s1 tag 让 gh-pages 出现 puxian-0.2.0-1.m245s1.*.rpm
           #   ⇒ pxrepo_mirror 的 xcheck-rpm-tree 判红 ⇒ 镜像同步停摆（用户报障）。

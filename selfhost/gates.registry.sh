@@ -1126,6 +1126,9 @@ run pkg_guard_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
 run pkg_publish_gh_pages bash packaging/selftest_publish_gh_pages.sh
 run pkg_make_release bash packaging/selftest_make_release.sh
 run pkg_tag_guard bash packaging/selftest_tag_guard.sh
+# M335（缺陷 587/588）：releases/latest 必须等于最高版本 tag —— install.sh 取 latest，
+#   latest 被旧 tag 顶掉 = 一键安装装旧树（2026-10-26 实测）。判据本体发布链里也跑（--fix）。
+run pkg_latest_guard bash packaging/selftest_latest_guard.sh
 # M248（用户令 2026-10-03「tag 不要使用 s1 这样的标签，影响镜像同步」）：
 #   把规则从**事后检查**推到**创建时刻**（make_tag.sh 不合规名打不出来）
 #   + 构建时刻响亮拒绝（build_rpm.sh / make_release.sh 的 MILESTONE 校验）。
