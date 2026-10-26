@@ -18,9 +18,43 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # ============================================================
+  # M331：**补资产入口**（tag push 事件丢失时的重放通道）
+  # ------------------------------------------------------------
+  # 2026-10-26 实况：v0.2.325/326/327/330 四条 tag **推送成功**
+  #   （GitHub 侧 pushed_at=09:24:49Z 有记录、peeled commit 逐个对得上），
+  #   但 `push: tags` 事件**未被派发给本 workflow** —— runs=0、releases/tags/* → 404，
+  #   且此后再无任何运行。仓库侧逐项排查（workflow state=active · 触发条件完好 ·
+  #   release.yml blob 与上次成功发布逐字节相同 · actor 与上次成功同一账户 ·
+  #   GitHub Status 无事件 · main 的 push 正常起 CI/tag-guard）均无异常 ⇒ 派发侧丢事件。
+  # 后果不是「页面缺几条」：tools/install.sh 取 releases/latest ⇒ 一键安装退回旧树。
+  # 此前唯一补救手段是「删 tag 重推」，但那是被禁的（重推会把 Release 转草稿、破坏版本序列）。
+  # 本入口给出一条**合法**的重放路径：
+  #   gh workflow run release.yml -f tag=v0.2.330
+  #   gh workflow run release.yml -f tag=v0.2.325 -f assets_only=true
+  #   （或 POST /repos/{owner}/{repo}/actions/workflows/release.yml/dispatches）
+  # ⚠️ dispatch 时 github.ref_name 是**分支名 main**，不是 tag ⇒ 必须用 input.tag，
+  #   并由下方各 checkout 的 ref 指过去；shell 里一律读 $PX_RELEASE_TAG，不再读 GITHUB_REF_NAME。
+  # ============================================================
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要重建资产的 tag（如 v0.2.330，必须已在远端）'
+        required: true
+        type: string
+      assets_only:
+        description: '只补 Release 资产（跳过 rpm 构建与 gh-pages 发布）'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+# ---- 发布目标 tag 的唯一来源（M331） ----
+# push 路径：github.ref_name = 该 tag；dispatch 路径：取 input.tag（否则会把 main 当 tag 发）
+env:
+  PX_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 # ---- Issue 41-B：串行化发布 ----
 # 根治"较晚完成的旧版本发布覆盖新版本"（2026-09-11 实况：m111 先发、m110 后发覆盖）。
@@ -38,7 +72,29 @@ jobs:
       - name: 检出代码（含 tag 历史，供 git describe 与提交列表）
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0
+
+      - name: 发布目标自证（M331：dispatch 路径必须证明「检出的树 = 该 tag 的树」）
+        # 负控：若 render 接线写错（拿 main 当 tag 发），本步必须变红而不是照发。
+        # 旧行为（无此步）就是 dispatch 时默默把 main 的树当成 tag 发布 —— 比丢失资产更坏。
+        run: |
+          set -euo pipefail
+          TAG="$PX_RELEASE_TAG"
+          echo "发布目标 tag: $TAG（事件=${{ github.event_name }}）"
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) printf '::error::tag 形状不合法（应形如 v0.2.330）：%s\n' "$TAG"; exit 1 ;;
+          esac
+          git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
+            || { printf '::error::远端不存在该 tag：%s\n' "$TAG"; exit 1; }
+          HEAD_SHA="$(git rev-parse HEAD)"
+          TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          echo "HEAD  = $HEAD_SHA"
+          echo "tag^  = $TAG_SHA"
+          [ "$HEAD_SHA" = "$TAG_SHA" ] \
+            || { printf '::error::检出的树不是 %s 指向的提交 ⇒ 拒绝发布（避免把 main 当 tag 发出去）\n' "$TAG"; exit 1; }
+          echo "✅ 发布目标自证通过：HEAD == $TAG"
 
       - name: 构建发布包（版本自 tag 派生 + 内置冒烟自检）
         run: |
@@ -52,15 +108,15 @@ jobs:
           [ -n "$PKG" ] || { echo "❌ 未找到发布包"; exit 1; }
           SHA256SUMS="$(dirname "$PKG")/sha256sums.txt"
           [ -f "$SHA256SUMS" ] || { echo "❌ 未找到 sha256sums.txt（M71-S4 make_release 应生成）"; exit 1; }
-          echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "TAG=${PX_RELEASE_TAG}" >> "$GITHUB_OUTPUT"
           echo "PKG=${PKG}" >> "$GITHUB_OUTPUT"
           echo "PKG_NAME=$(basename "$PKG")" >> "$GITHUB_OUTPUT"
           echo "SHA256SUMS=${SHA256SUMS}" >> "$GITHUB_OUTPUT"
           echo "SHA256=$(sha256sum "$PKG" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           # 提交列表：上一 tag → 本 tag；首个 tag 用最近 40 条
-          PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          PREV="$(git describe --tags --abbrev=0 "${PX_RELEASE_TAG}^" 2>/dev/null || true)"
           if [ -n "$PREV" ]; then
-            RANGE="$PREV..${GITHUB_REF_NAME}"
+            RANGE="$PREV..${PX_RELEASE_TAG}"
           else
             RANGE="HEAD~40..HEAD"
           fi
@@ -161,6 +217,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: 环境自述（宿主 / gcc / libc / 静态 libc —— 取证用）
         run: |
@@ -242,7 +300,7 @@ jobs:
       - name: 打包（bootstrap/ + tools/ + runtime/ + stdlib/ + VERSION）
         run: |
           set -e
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${PX_RELEASE_TAG}"
           STAGE="$RUNNER_TEMP/pkg/puxian-bootstrap-aarch64-${TAG}"
           # 上面「现编 11 件」会把中间产物落在 tools/build/ 与仓库根的 .rtcache/
           #   ⇒ 发布包**不得夹带构建产物**（Issue 56 的同一口径，主包由白名单复制守；
@@ -327,7 +385,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${PX_RELEASE_TAG}"
           cd "$RUNNER_TEMP/pkg"
           PKG="puxian-bootstrap-aarch64-${TAG}.tar.gz"
           ls -l
@@ -375,13 +433,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 1
       - name: 核对发布资产与校验清单（双向）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${PX_RELEASE_TAG}"
           D="$RUNNER_TEMP/assets"; mkdir -p "$D"
           gh release download "$TAG" -D "$D" --repo "$GITHUB_REPOSITORY"
           ls -l "$D"
@@ -446,6 +505,7 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0
 
       - name: 信任工作区（容器内 git safe.directory，规避 dubious ownership）
@@ -602,6 +662,12 @@ jobs:
 
   rpm-build-7:
     name: 构建 el7 RPM + 运行自检（centos:7，未签名，由 el9 job 代签）
+    # M331：补资产路径可一键跳过整条 rpm 链（el7/el9/openEuler 构建 + gh-pages 发布）。
+    # 为何要跳：① 补资产只差 Release 资产，rpm 仓库只保留**最新版**且自带单调性守卫，
+    #   为旧 tag 重发 rpm 会与守卫打架；② 四个历史 tag 各跑一遍 rpm 链纯属浪费。
+    # 下游 rpm-build-9 / rpm-verify-7 / rpm-verify-openeuler / rpm-publish 都以它为前提，
+    # 一处跳过即整链 skipped（skipped 不算失败，与 GPG 未配置时的既有行为同口径）。
+    if: ${{ !inputs.assets_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -622,6 +688,7 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0
 
       - name: 准备 el7 仓库输出目录（挂载给 centos:7 容器）
@@ -678,6 +745,7 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0
 
       - name: 下载 el7+el9 合并签名仓库产物
@@ -739,6 +807,7 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 1
 
       - name: 下载 el7+el9+openEuler 合并签名仓库产物
@@ -798,6 +867,7 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 1
 
       - name: 下载 el7+el9 合并仓库产物

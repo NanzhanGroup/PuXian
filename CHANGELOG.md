@@ -1,3 +1,47 @@
+## M331 —— 发布通道「tag 事件丢失」的补齐入口（第 201 轮）
+
+> 触发：用户令（2026-10-26 17:33 → 17:41「补资产」）。v0.2.325/326/327/330 四条 tag 已打通并推上远端，
+> 但 GitHub **没有派发** `push: tags` 事件给 Release workflow —— tag 在、资产无。
+
+### 一 现象与证据（实查，非推测）
+
+| 项 | 实测 |
+|---|---|
+| tag 侧 | 4 条 annotated tag 均在远端，peeled commit 逐个对上（325→d826e15 · 326→d81bf5c · 327→a21ca50 · 330→ef272a7） |
+| 事件侧 | GitHub 的 `pushed_at` = 09:24:49Z（**收到了**推送）；此后 `release.yml` 的 runs 仍为 247（最新 v0.2.324 / 10-23） |
+| 派发侧 | 按 tag 查 `actions/runs?branch=v0.2.330` → `total_count=0`；`releases/tags/*` → 404；同一时段 main 的 push 正常起了 CI 与 Tag Guard |
+| 仓库配置 | workflow state=active · `on: push: tags ['v*']` 完好 · 4 个 tag 提交上的 release.yml **逐字节相同**（blob 94c9972） · actor 与 10-23 那次成功发布同一账户 · GitHub Status 无事件 |
+| 结论 | **派发侧丢事件**，仓库侧无可改之处。根因未证到 ⇒ 不做因果断言，只做「可重放」。 |
+
+危害不是「页面缺几条」：`tools/install.sh` 取 `releases/latest` ⇒ 一键安装退回 v0.2.324 的树。
+
+### 二 处置：给发布链加一条**合法重放**入口（`release.yml`）
+
+1. `on.workflow_dispatch` 新增两个 input：`tag`（必填，目标 tag）、`assets_only`（布尔，默认 false = 全链）。
+2. workflow 级 `env: PX_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}` —— push 路径取 ref_name，dispatch 路径取 input；
+   **6 处 shell 里原先直接读 `GITHUB_REF_NAME` 的地方全部改读 `PX_RELEASE_TAG`**（否则 dispatch 会把 `main` 当 tag 发布）。
+3. 8 处 `actions/checkout` 全部加 `ref: ${{ github.event.inputs.tag || github.ref_name }}` —— 让检出的树 = 目标 tag 的树。
+4. release job 新增**发布目标自证**步：tag 形状校验 + 远端 tag 存在性 + `HEAD == refs/tags/<tag>^{commit}`，
+   不等即 `::error::` 判红。**负控就是这个错法本身**：接线若写错（拿 main 当 tag 发），本步必须红而不是照发。
+5. `rpm-build-7` 加 `if: ${{ !inputs.assets_only }}` —— 跳过后 el9/el7 校验/openEuler/publish 四个 job 因依赖而整体 skipped（不算失败）。
+   为何要能跳：rpm 仓库只保留**最新版**且自带单调性守卫（`publish_gh_pages.sh` ③），为旧 tag 重发 rpm 会与守卫打架。
+
+发布逻辑（`tools/make_release.sh` / `packaging/publish_gh_pages.sh` / `check_release_assets.sh`）**一行未动**。
+
+### 三 纪律：dispatch 必须**串行**，一次一个
+
+`concurrency.group = Release-publish`、`cancel-in-progress: false` ⇒ GitHub 语义是「一个 in-progress + **一个** pending」，
+**后来的 pending 会取消先前的 pending**（M278 实测事故，`release.yml` 头注与缺陷 578 一族）。
+⇒ 四连发等于自毁。本次发法：先 `tag=v0.2.330`（全链，顺带把 rpm 仓库推到最新），逐条等完成后，
+再按 `assets_only=true` 补 v0.2.325/326/327。
+
+### 四 顺带发现的判据盲点（**待登记，未编号**）
+
+`packaging/release_reconcile.sh` 的 tag 集合取自 `releases ∪ runs`（`tags = sorted(set(relmap)|set(runmap))`）
+⇒ **「既无 Release 又无 run」的 tag 对它是隐形的**。本次实况：4 条 tag 全隐形，工具仍打印
+`对账：8 个版本 tag · 异常 0 个 · RELEASE-RECONCILE-OK`。也就是说「tag 丢了发布」这件事，
+本该由它兜住的场景恰好是它看不见的。这与 CRITERIA「判据要有够牙的负控」直接冲突，下一轮修。
+
 ## M330 —— 分片档「算力 ⇄ 门内并行度 ⇄ 超时」脱钩收口（缺陷 581 / 582）（第 200 轮）
 
 > 触发：用户令（2026-10-26 14:27）「继续 PuXian 开发，先把全量门搞好，让 16 核能按 N=10 来跑」。
