@@ -77,25 +77,54 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# ── M309 阶段B：默认值推导（解析完 N 之后才能切核区间）──
+# ── M330（2026-10-26 · 东月）：默认推导 —— 「算力 / 门内并行度 / 负载」三件事同源 ──
+#   为什么改（r18 实测 · /data/gatevm/r18-N10J1-20261024-220410.log）：
+#     旧推导 `step = c // n` 把**余数全塞给最后一片** —— 16 核 / N=10 实测绑成
+#     「0-0,1-1,…,8-8,9-15」⇒ shard1..9 各 **1 核**，shard10 独吞 **7 核**；
+#     而 LPT 又把负载平分成每片 2437s ⇒ **用 1 核算力去扛 7 核的活**。
+#   为什么「1 核 + SHARD_JOBS=1」是有害档（同轮 5 红全是 rc=124）：
+#     · m260_gc_repro 基线 23s → 该档 900s（×39） · m256_eintr 116s → 900s（×7.8）
+#     · m227/m231/m300 687/642/566s → 全部顶穿 900s
+#     1 核绑定下，门依赖的 **helper 线程（GC / 子进程）拿不到核** ⇒ 不是慢，是饿死。
+#   ⇒ 纪律：**永不把分片绑到少于 2 核**；做不到 2 核就不绑，交内核调度器
+#     （本例 10 片 × JOBS=2 = 20 线程 / 16 核，轻度超订，远好于单核饿死）。
+#   ⇒ SHARD_JOBS 下限 2：JOBS=1 会让「门内并行」的门退化串行（m244/m302 一族）；
+#     JOBS 只影响门内并行度，与「门之间串行」正交（见 run_gates.sh 头注）。
+#   负载均衡口径：分片内的门是**串行链** ⇒ 墙钟 ≈ Σt_g，**不按核数除**（LPT 用纯 Σt 均衡）。
+#     核数只决定「单个门内能用几个线程」，只对 JOBS>1 的门有意义 ⇒ 不拿核数当负载权重
+#     （上一版把「核多 = 能扛更多」当默认，是把串行链当并行池，属判据贴错表象）。
 if [ -z "$SHARD_NO_CLAMP" ]; then
   SHARD_JOBS="${SHARD_JOBS:-2}"
-  if [ -z "$SHARD_CPUS" ]; then
-    SHARD_CPUS="$(python3 -c '
-import os, sys
-n = int(sys.argv[1]); c = os.cpu_count() or 1
-step = max(1, c // n); segs = []
+  SHARD_CPUS="${SHARD_CPUS:-}"
+  _C="$(nproc 2>/dev/null || echo 1)"
+  _BASE=$(( _C / N )); _REM=$(( _C % N ))
+  if [ "$_BASE" -lt 2 ]; then
+    SHARD_BIND=0
+    echo "（M330：N=$N · ${_C} 核 ⇒ 每片 $(( _C / N )) 核 < 2 ⇒ **不绑核**（单核绑定实测饿死 helper 线程：m260 23s→900s）· SHARD_JOBS=$SHARD_JOBS · 退回旧行为 SHARD_NO_CLAMP=1）"
+  else
+    SHARD_BIND=1
+    if [ -z "$SHARD_CPUS" ]; then
+      SHARD_CPUS="$(python3 - "$N" "$_C" <<'PY'
+import sys
+n, c = int(sys.argv[1]), int(sys.argv[2])
+base, rem = c // n, c % n
+segs, a = [], 0
 for i in range(n):
-    a = i * step
-    b = (a + step - 1) if i < n - 1 else (c - 1)
-    if a > c - 1: a = c - 1
-    segs.append("%d-%d" % (a, b))
-print(",".join(segs))' "$N")"
+    k = base + (1 if i < rem else 0)   # 余数**按片均摊**（旧版全塞最后一片 ⇒ 1 核 ×9 + 7 核 ×1）
+    segs.append("%d-%d" % (a, a + k - 1))
+    a += k
+print(",".join(segs))
+PY
+)"
+    fi
+    echo "（M330：N=$N · ${_C} 核 ⇒ 每片 ${_BASE}$( [ "$_REM" -gt 0 ] && printf '/%d' $(( _BASE + 1 )) ) 核 · 绑核 $SHARD_CPUS · SHARD_JOBS=$SHARD_JOBS · 退回旧行为 SHARD_NO_CLAMP=1）"
   fi
-  echo "（M309 默认口径：SHARD_JOBS=$SHARD_JOBS · 绑核 $SHARD_CPUS · 退回旧行为 SHARD_NO_CLAMP=1）"
 else
+  SHARD_BIND=0
   echo "（SHARD_NO_CLAMP=1：不夹门内并行度 / 不绑核 —— 旧行为）"
 fi
+case "$N" in ''|*[!0-9]*) echo "❌ N 必须是正整数（给的是「$N」）" >&2; exit 4 ;; esac
+[ "$N" -ge 1 ] && [ "$N" -le 64 ] || { echo "❌ N 必须在 1..64（给的是 $N）" >&2; exit 4; }
 
 SRC="${PX_SRC:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BASE="${PX_GATEVM:-/data/gatevm}"
@@ -140,8 +169,11 @@ for t,g in rows:
 for i,b in enumerate(bins):
     open('%s/shard%d.txt'%(out,i+1),'w',encoding='utf-8').write('\n'.join(b)+'\n')
 print('分片负载(s):', load)
-print('串行总量 %d s (%.1f min) ⇒ 理论并行 %.1f min（单门下界 %d s）'
+# 墙钟模型（M330）：分片内的门是串行链 ⇒ 墙钟下界 = max(每片 Σt)，**不按核数除**。
+#   旧版把「核数」当吞吐倍数会报出比实际乐观 1.6–2× 的数字（N=10 r18 报 40.6min / 实测 51min）。
+print('串行总量 %d s (%.1f min) ⇒ 墙钟下界 %.1f min（单门下界 %d s）'
       % (sum(load), sum(load)/60.0, max(load)/60.0, max(rows)[0] if rows else 0))
+print('说明：上界受「quiet 串行尾」支配，最终墙钟 = 本值 + quiet 档（见 --dry 末尾）')
 PY
 
 # ── 3b) 出网门：pin 到 shard1（唯一**带宿主网络**的分片）──
@@ -203,8 +235,17 @@ PY
 fi
 
 if [ "$DRY" = 1 ]; then
-  echo "── 各分片门数 ──"
-  for i in $(seq 1 "$N"); do echo "  shard$i: $(wc -l < "$LOG/shard$i.txt") 门"; done
+  echo "── 各分片门数 / 核数 ──"
+  for i in $(seq 1 "$N"); do
+    _cpus=""
+    if [ -n "$SHARD_CPUS" ]; then _cpus="$(printf '%s' "$SHARD_CPUS" | cut -d, -f"$i")"; fi
+    if [ -n "$_cpus" ]; then _cn="$(( $(echo "$_cpus" | awk -F- '{print ($2==""?1:$2-$1+1)}') ))"; else _cn="≈$(printf '%.1f' "$(echo "$(nproc) $N" | awk '{print $1/$2}')")"; fi
+    echo "  shard$i: $(wc -l < "$LOG/shard$i.txt") 门 · 核 ${_cpus:-不绑}（${_cn}）· JOBS=$SHARD_JOBS"
+  done
+  if [ -n "$QUIET_LIST" ]; then
+    _qt="$(awk -F'\t' -v L="$QUIET_LIST" 'BEGIN{n=split(L,a,",");for(i=1;i<=n;i++)w[a[i]]=1} $1 in w {s+=$3} END{printf "%d", s}' "$TIMES" 2>/dev/null)"
+    echo "  quiet 串行尾：$(printf '%s' "$QUIET_LIST" | awk -F, '{print NF}') 门 · 约 $(( ${_qt:-0} / 60 )) min（与分片串行，必须算进墙钟）"
+  fi
   echo "（--dry：不启动）"; exit 0
 fi
 
@@ -317,7 +358,7 @@ for i in $(seq 1 "$N"); do
   SH_OK=$((SH_OK + $(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/shard$i.log" 2>/dev/null || echo 0)))
 done
 if [ "$SH_OK" -eq 0 ]; then
-  echo "  ❌ 空跑：4 个分片一个门都没跑出来（看 $LOG/shard1.log —— 多半是残留锁/建树失败）"
+  echo "  ❌ 空跑：$N 个分片一个门都没跑出来（看 $LOG/shard1.log —— 多半是残留锁/建树失败）"
   exit 6
 fi
 if [ "$TOT_FAIL" != 0 ]; then
