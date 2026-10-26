@@ -1,3 +1,82 @@
+## M333 —— 缺陷 584 收口：m116 D5 改成「本地 DNS 桩判红 + 双通道探针兜环境」，零外网、不改产品代码（第 203 轮）
+
+> 触发：用户令（2026-10-26 22:09）「先 1 后 2，同一轮里全做完」——1=急救（双探针），2=真收口（桩化）。
+> 对象是上一轮 M332 登记的**缺陷 584**：`探针探的通道 ≠ 被测通道`。本轮把 1 和 2 一起做完，
+> 并给出三条负控证明「判据有牙、环境与产品可分」。
+
+### 一 要证的东西（先把判据说清）
+
+D5 要证的只有一句：**UDP 响应置 TC=1（截断）时，`dns_txt` 改走 TCP 53 重发并返回完整记录**。
+它的前提是「UDP 53 可达 **且** TCP 53 可达」。老门的错在于：只拿 `getaddrinfo`（UDP 侧）探网，
+探针过了就把「TCP 通道不通」算成产品红 ⇒ CI run 40308948055 红、连带 31 个 step skipped。
+本轮要证明的三件事，逐件分开：
+1. **产品在「UDP 截断 + TCP 可达」下行为正确**（真值逐字节比对，不是「看着有记录就算过」）；
+2. **判据有牙**：把 TCP 面故意弄坏，判据必须红（否则等于自欺）；
+3. **环境不可用不再判产品红**：通道不可达时门走 SKIP 并**响亮计数**，永不判红。
+
+### 二 做法：三层，全部在门内，零外网
+
+| 层 | 内容 | 判什么 |
+|---|---|---|
+| 桩（新增） | `examples/m116_builtin_semantics/dns_stub.c`：本地 DNS 桩，UDP 面置 TC=1 且塞 1 条诱饵 `decoy`、TCP 面给 3 条长 TXT（每条两段 character-string、合并 190 字节，RDATA 合计 >512 ⇒ 真会截断） | 产品行为 |
+| 隔离 | `unshare -mn` + `ip link set lo up` + `mount --bind` 覆盖 `/etc/resolv.conf`（只在本命名空间内，**不碰宿主 /etc 与真实网卡**）；CI 用 runner 的 `sudo -n`，本地全量门以 root 跑 | 前提构造 |
+| 兜底 | 桩档跑不了（非 root 且无 `sudo -n`）时：先做 **UDP 53 + TCP 53 双通道探针**（同一条通道口径，不是 getaddrinfo），任一不通 ⇒ `[D5-SKIP-LOUD]` SKIP；两通才跑真域名，且只作**观察项**，永不判红 | 环境 |
+
+### 三 判据（每条都可机器核对，不靠叙述）
+
+桩档（判红）：
+- `P1` `trunc.dnsstub.test` 返回 **3 条**，且逐字节 `diff` 等于桩自己吐的真值（`dns_stub expected`）——真值由桩生成，避免两处手抄 600 字节；
+- `P2` `plain.dnsstub.test`（UDP 不置 TC）返回 **1 条** `plain-udp` ⇒ 证明**不是无脑走 TCP**；
+- `P3` `nx.dnsstub.test`（NXDOMAIN）⇒ 空 list，不报错；`P4` `empty.dnsstub.test`（NOERROR/ANCOUNT=0）⇒ 空 list；
+- `回退真的发生`：桩侧日志直读 `udp trunc.*` **恰 1 次** → `tcp trunc.*` **≥1 次**，且 `plain.*` 无 TCP 命中。
+  这是**直接观测**，不是「返回值看着对」的推断。
+
+三条负控：
+- `NC1 判别子存在`：UDP 诱饵（1 条 `decoy`）必须 ≠ TCP 真值（3 条长记录）。若二者可分性不成立，
+  「有没有回退」在返回值上不可观测 ⇒ 判据没有牙（前提自证）。
+- `NC2 判据有牙`：把桩的 TCP 面改成「accept 后立即关」，用**同一判据**判它 ⇒ 必须红。
+  实测红在 `Err(dns: tcp length read failed)`。
+- `NC3 症状定性`：桩只开 UDP（TCP 端口关闭）⇒ 客户端报 `dns: tcp connect() failed` ——
+  与 CI 那次红的原文**同一症状** ⇒ 这句文案属**环境类**，不是产品错。这一条把上一轮「未证的推断」变成可复现的定性。
+
+### 四 实测（本机 · 2026-10-26 22:2x）
+
+```
+bash examples/m116_builtin_semantics/verify.sh
+[3/6] D5：dns_txt UDP 截断 → TCP 回退（本地 DNS 桩 · 零外网）
+  ✅ 桩档：TC=1（UDP）⇒ 回退 TCP ⇒ 3 条长 TXT 逐字节等于桩的 TCP 面（多段 character-string 已合并）
+  ✅ 回退真的发生（桩侧直读）：udp trunc ×1 → tcp trunc ×1；plain 只走 UDP（非无脑 TCP）
+  ✅ NC1 判别子存在：UDP 诱饵（1 条 decoy）≠ TCP 真值（3 条长记录）⇒ 不回退者必然对不上
+  ✅ NC2 判据有牙：TCP 面破损 ⇒ 客户端 ERR Err(dns: tcp length read failed) ⇒ 判据判红
+  ✅ NC3 症状定性：TCP 53 不可达 ⇒ 「dns: tcp connect() failed」（与 CI run 40308948055 红原文同症）
+M116_VERIFY: 14P/0F/0S      ← 缺陷 584 之前是 9P/1F/0S（CI 那次）
+```
+外网档（把桩档能力强制关掉后实测，验证兜底分支不误判）：
+```
+⏭  [D5-SKIP-LOUD] 桩档不可用 ⇒ 仅外网观察（双通道探针已过：UDP:53=ok TCP:53=ok）：
+   OK google.com n=17 OK cloudflare.com n=29  rc=0（观察项不影响结论）
+```
+探针自身的负控（证明它会报不可达，否则它永远是绿的）：关闭端口 ⇒ `UDP:1=down(timeout-3s) TCP:1=down(connect:Connection refused)`；
+黑洞地址 192.0.2.1 ⇒ `down(timeout-3s)/down(connect-timeout-3s)`，rc=2。
+
+### 五 一个设计决定：**不动 runtime**（不引入 `PX_DNS_SERVER`）
+
+上一轮 B2 留的问题是「`dns_txt` 不能指定解析服务器 ⇒ 是否需要加只读环境变量」。
+结论：**不需要**。用挂载命名空间覆盖 `/etc/resolv.conf` + 网络命名空间内绑 53，就能让产品代码
+在**零改动**的前提下被指向本地桩。理由：
+- 改 `runtime/runtime.c` 会触发 bootstrap 14 件重烘、`.rtcache` 失效（下一轮全量门从分钟级变小时级）；
+- 环境变量一旦存在，就是一个「生产可被指向任意解析器」的新口子，得配套校验与文档；
+- 命名空间覆盖是**门侧**的构造，产品面零 diff —— 本轮 `runtime/ stdlib/ tools/` 逐字节未动。
+
+### 六 边界与未做（写明，不粉饰）
+
+- 桩档需要 root（绑 53）+ `unshare -mn`。非 root 且无 `sudo -n` 的环境只能走外网档 ⇒
+  **那种环境下 D5 本轮零观测**（门会打 `[D5-SKIP-LOUD]` 并计入 S 位，不静默）。这是可观测性缺口，不是 green。
+- 未做（下一轮候选，用户清单第 4–6 步）：CI 里加只读探针实测 runner 出站 TCP 53（把上一轮的推断变证据）；
+  同族排查 `m103_s2a/dns_txt_test.px` · `m84_s3_dns/s3_verify.px` · `m96_s3/m96_net_cmp.px`；
+  fail-fast 连带面（一个红吃掉 31 个 step）是否按「外网依赖门 / 纯本地门」拆 job。
+- 本轮只跑 m116 这门（changed-scope）+ 判据元门，未跑全量门。
+
 ## M332 —— m116 D5「探针通道 ≠ 被测通道」把环境不可达判成产品红（登记 584 · 第 202 轮）
 
 > 触发：用户令（2026-10-26 21:43）「登记成缺陷，列出下一步计划」。
