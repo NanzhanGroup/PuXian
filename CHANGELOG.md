@@ -42,6 +42,20 @@
 `对账：8 个版本 tag · 异常 0 个 · RELEASE-RECONCILE-OK`。也就是说「tag 丢了发布」这件事，
 本该由它兜住的场景恰好是它看不见的。这与 CRITERIA「判据要有够牙的负控」直接冲突，下一轮修。
 
+### 五 事故与收尾：`releases/latest` 被旧 tag 顶掉了（我自己踩的，已修）
+
+- 事实：四条补完立刻查 `/releases/latest` → **v0.2.327**，不是 330。
+- 原因：GitHub 的 latest 按 release 的 `created_at` 排，**不看 semver**。我先补 330（10:40Z），再补 325/326/327（11:01/11:07/11:13Z）⇒ 最后创建的那条成了「latest」。
+- 后果：`tools/install.sh` 取 `releases/latest` ⇒ 一键安装**又**退回旧树，与本次要治的病同型。若不复查就收工，等于把缺陷从「没有资产」换成「资产全在但装到旧的」，更难发现。
+- 修：`PATCH /releases/424122232 {"make_latest":"true"}` → 200，复查 `/releases/latest` = **v0.2.330**。
+- **纪律（下次照做）**：补历史 tag 的发布，要么**按升序补**（最后补的恰是最高版本），要么补完**必须 PATCH make_latest**；二者缺一即复现本事故。
+
+### 六 待办（下一轮）
+
+1. `release_reconcile.sh` 看不见「既无 Release 又无 run」的 tag（见四）—— 判据要补，且必须有负控（fixture：tag 有、release 与 run 都无 ⇒ 必须判红）。
+2. `release_reconcile.sh` 不校验 `releases/latest` 是否等于最高里程碑 —— 本次事故之后它对账结果仍是 `RELEASE-RECONCILE-OK`。这两条同源：**对账口径只信 API 返回的集合，不信「应为」的集合**。
+3. 发布链本身没有「补完自动标 latest」的步：本轮是事后手工 PATCH。是否把 make_latest 写进 dispatch 路径末尾（标到最高版本 tag），下一轮定。
+
 ## M330 —— 分片档「算力 ⇄ 门内并行度 ⇄ 超时」脱钩收口（缺陷 581 / 582）（第 200 轮）
 
 > 触发：用户令（2026-10-26 14:27）「继续 PuXian 开发，先把全量门搞好，让 16 核能按 N=10 来跑」。
