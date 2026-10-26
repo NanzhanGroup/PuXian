@@ -321,100 +321,100 @@ jobs:
         #    （两者都在等早已不存在的 0.1.0 版本串，二进制从 M-某 起就是 0.2.0）。
         #    登记：qg-issue 64。⇒ 新增门时**不要**用 `&&` 串联命令。
         run: |
-          bash examples/m63_langfix/verify.sh > /tmp/v_m63_langfix.log 2>&1 || { echo "❌ m63_langfix verify 失败"; tail -40 /tmp/v_m63_langfix.log; exit 1; }
-          bash examples/m64_fmt/verify.sh > /tmp/v_m64_fmt.log 2>&1 || { echo "❌ m64_fmt verify 失败"; tail -40 /tmp/v_m64_fmt.log; exit 1; }
-          bash examples/m64_lint/verify.sh > /tmp/v_m64_lint.log 2>&1 || { echo "❌ m64_lint verify 失败"; tail -40 /tmp/v_m64_lint.log; exit 1; }
+          bash examples/m63_langfix/verify.sh > /tmp/v_m63_langfix.log 2>&1 || { echo "❌ m63_langfix verify 失败"; tail -40 /tmp/v_m63_langfix.log; FAILED="${FAILED:-} v_m63_langfix"; }
+          bash examples/m64_fmt/verify.sh > /tmp/v_m64_fmt.log 2>&1 || { echo "❌ m64_fmt verify 失败"; tail -40 /tmp/v_m64_fmt.log; FAILED="${FAILED:-} v_m64_fmt"; }
+          bash examples/m64_lint/verify.sh > /tmp/v_m64_lint.log 2>&1 || { echo "❌ m64_lint verify 失败"; tail -40 /tmp/v_m64_lint.log; FAILED="${FAILED:-} v_m64_lint"; }
           python3 -c "import sys; assert sys.version_info[0]==3"
-          bash examples/m65_lsp/verify.sh > /tmp/v_m65_lsp.log 2>&1 || { echo "❌ m65_lsp verify 失败"; tail -40 /tmp/v_m65_lsp.log; exit 1; }
-          bash examples/m65_mcp/verify.sh > /tmp/v_m65_mcp.log 2>&1 || { echo "❌ m65_mcp verify 失败"; tail -40 /tmp/v_m65_mcp.log; exit 1; }
-          bash examples/m66_yaml/verify.sh > /tmp/v_m66_yaml.log 2>&1 || { echo "❌ m66_yaml verify 失败"; tail -40 /tmp/v_m66_yaml.log; exit 1; }
-          bash examples/m66_pxml/verify.sh > /tmp/v_m66_pxml.log 2>&1 || { echo "❌ m66_pxml verify 失败"; tail -40 /tmp/v_m66_pxml.log; exit 1; }
-          bash examples/m66_lunar/verify.sh > /tmp/v_m66_lunar.log 2>&1 || { echo "❌ m66_lunar verify 失败"; tail -40 /tmp/v_m66_lunar.log; exit 1; }
-          bash examples/m71_mcp_build/verify.sh > /tmp/v_m71_mcp_build.log 2>&1 || { echo "❌ m71_mcp_build verify 失败"; tail -40 /tmp/v_m71_mcp_build.log; exit 1; }
-          bash examples/m82_http_serve_unix/verify.sh > /tmp/v_m82_http_serve_unix.log 2>&1 || { echo "❌ m82_http_serve_unix verify 失败"; tail -40 /tmp/v_m82_http_serve_unix.log; exit 1; }
-          bash examples/m116_builtin_semantics/verify.sh > /tmp/v_m116_builtin_semantics.log 2>&1 || { echo "❌ m116_builtin_semantics verify 失败"; tail -40 /tmp/v_m116_builtin_semantics.log; exit 1; }
-          bash examples/m117_realworld_defects/verify.sh > /tmp/v_m117_realworld_defects.log 2>&1 || { echo "❌ m117_realworld_defects verify 失败"; tail -40 /tmp/v_m117_realworld_defects.log; exit 1; }
-          bash examples/m118_realworld_defects/verify.sh > /tmp/v_m118_realworld_defects.log 2>&1 || { echo "❌ m118_realworld_defects verify 失败"; tail -40 /tmp/v_m118_realworld_defects.log; exit 1; }
-          bash examples/m119_multiline_expr/verify.sh > /tmp/v_m119_multiline_expr.log 2>&1 || { echo "❌ m119_multiline_expr verify 失败"; tail -40 /tmp/v_m119_multiline_expr.log; exit 1; }
-          bash examples/m120_dict_strict/verify.sh > /tmp/v_m120_dict_strict.log 2>&1 || { echo "❌ m120_dict_strict verify 失败"; tail -40 /tmp/v_m120_dict_strict.log; exit 1; }
-          bash examples/m122_builtin_args/verify.sh > /tmp/v_m122_builtin_args.log 2>&1 || { echo "❌ m122_builtin_args verify 失败"; tail -40 /tmp/v_m122_builtin_args.log; exit 1; }
+          bash examples/m65_lsp/verify.sh > /tmp/v_m65_lsp.log 2>&1 || { echo "❌ m65_lsp verify 失败"; tail -40 /tmp/v_m65_lsp.log; FAILED="${FAILED:-} v_m65_lsp"; }
+          bash examples/m65_mcp/verify.sh > /tmp/v_m65_mcp.log 2>&1 || { echo "❌ m65_mcp verify 失败"; tail -40 /tmp/v_m65_mcp.log; FAILED="${FAILED:-} v_m65_mcp"; }
+          bash examples/m66_yaml/verify.sh > /tmp/v_m66_yaml.log 2>&1 || { echo "❌ m66_yaml verify 失败"; tail -40 /tmp/v_m66_yaml.log; FAILED="${FAILED:-} v_m66_yaml"; }
+          bash examples/m66_pxml/verify.sh > /tmp/v_m66_pxml.log 2>&1 || { echo "❌ m66_pxml verify 失败"; tail -40 /tmp/v_m66_pxml.log; FAILED="${FAILED:-} v_m66_pxml"; }
+          bash examples/m66_lunar/verify.sh > /tmp/v_m66_lunar.log 2>&1 || { echo "❌ m66_lunar verify 失败"; tail -40 /tmp/v_m66_lunar.log; FAILED="${FAILED:-} v_m66_lunar"; }
+          bash examples/m71_mcp_build/verify.sh > /tmp/v_m71_mcp_build.log 2>&1 || { echo "❌ m71_mcp_build verify 失败"; tail -40 /tmp/v_m71_mcp_build.log; FAILED="${FAILED:-} v_m71_mcp_build"; }
+          bash examples/m82_http_serve_unix/verify.sh > /tmp/v_m82_http_serve_unix.log 2>&1 || { echo "❌ m82_http_serve_unix verify 失败"; tail -40 /tmp/v_m82_http_serve_unix.log; FAILED="${FAILED:-} v_m82_http_serve_unix"; }
+          bash examples/m116_builtin_semantics/verify.sh > /tmp/v_m116_builtin_semantics.log 2>&1 || { echo "❌ m116_builtin_semantics verify 失败"; tail -40 /tmp/v_m116_builtin_semantics.log; FAILED="${FAILED:-} v_m116_builtin_semantics"; }
+          bash examples/m117_realworld_defects/verify.sh > /tmp/v_m117_realworld_defects.log 2>&1 || { echo "❌ m117_realworld_defects verify 失败"; tail -40 /tmp/v_m117_realworld_defects.log; FAILED="${FAILED:-} v_m117_realworld_defects"; }
+          bash examples/m118_realworld_defects/verify.sh > /tmp/v_m118_realworld_defects.log 2>&1 || { echo "❌ m118_realworld_defects verify 失败"; tail -40 /tmp/v_m118_realworld_defects.log; FAILED="${FAILED:-} v_m118_realworld_defects"; }
+          bash examples/m119_multiline_expr/verify.sh > /tmp/v_m119_multiline_expr.log 2>&1 || { echo "❌ m119_multiline_expr verify 失败"; tail -40 /tmp/v_m119_multiline_expr.log; FAILED="${FAILED:-} v_m119_multiline_expr"; }
+          bash examples/m120_dict_strict/verify.sh > /tmp/v_m120_dict_strict.log 2>&1 || { echo "❌ m120_dict_strict verify 失败"; tail -40 /tmp/v_m120_dict_strict.log; FAILED="${FAILED:-} v_m120_dict_strict"; }
+          bash examples/m122_builtin_args/verify.sh > /tmp/v_m122_builtin_args.log 2>&1 || { echo "❌ m122_builtin_args verify 失败"; tail -40 /tmp/v_m122_builtin_args.log; FAILED="${FAILED:-} v_m122_builtin_args"; }
           # ── 第 17 轮补：M130–M137 常驻门（此前只在本地跑 ⇒ CI 无防线）──
           # ⚠️ m136 需要 Go（真 encoding/json 产真值），本工作流无 Go 步骤 ⇒ 刻意不列入
           #    （它在 selfhost/m116_gates.sh 的本地全门里跑）。
-          bash examples/m130_flock_chmod/verify.sh > /tmp/v_m130.log 2>&1 || { echo "❌ m130_flock_chmod verify 失败"; tail -40 /tmp/v_m130.log; exit 1; }
-          bash examples/m131_http_stream_post/verify.sh > /tmp/v_m131.log 2>&1 || { echo "❌ m131_http_stream_post verify 失败"; tail -40 /tmp/v_m131.log; exit 1; }
-          bash examples/m132_sse_chunked/verify.sh > /tmp/v_m132.log 2>&1 || { echo "❌ m132_sse_chunked verify 失败"; tail -40 /tmp/v_m132.log; exit 1; }
-          bash examples/m133_http_unix_timeout/verify.sh > /tmp/v_m133.log 2>&1 || { echo "❌ m133_http_unix_timeout verify 失败"; tail -40 /tmp/v_m133.log; exit 1; }
-          bash examples/m134_gc_obj_roots/verify.sh > /tmp/v_m134.log 2>&1 || { echo "❌ m134_gc_obj_roots verify 失败"; tail -40 /tmp/v_m134.log; exit 1; }
-          bash examples/m137_sse_connect_ex/verify.sh > /tmp/v_m137.log 2>&1 || { echo "❌ m137_sse_connect_ex verify 失败"; tail -40 /tmp/v_m137.log; exit 1; }
-          bash examples/m138_regex_go_parity/verify.sh > /tmp/v_m138.log 2>&1 || { echo "❌ m138_regex_go_parity verify 失败"; tail -40 /tmp/v_m138.log; exit 1; }
-          bash examples/m139_bare_ident_stmt/verify.sh > /tmp/v_m139.log 2>&1 || { echo "❌ m139_bare_ident_stmt verify 失败"; tail -40 /tmp/v_m139.log; exit 1; }
-          bash examples/m140_http_conn_errno/verify.sh > /tmp/v_m140.log 2>&1 || { echo "❌ m140_http_conn_errno verify 失败"; tail -40 /tmp/v_m140.log; exit 1; }
-          bash examples/m141_now_ns/verify.sh > /tmp/v_m141.log 2>&1 || { echo "❌ m141_now_ns verify 失败"; tail -40 /tmp/v_m141.log; exit 1; }
-          bash examples/m142_go_json_indent/verify.sh > /tmp/v_m142.log 2>&1 || { echo "❌ m142_go_json_indent verify 失败"; tail -40 /tmp/v_m142.log; exit 1; }
-          bash examples/m143_float32/verify.sh > /tmp/v_m143.log 2>&1 || { echo "❌ m143_float32 verify 失败"; tail -40 /tmp/v_m143.log; exit 1; }
-          bash examples/m144_http_bigbody/verify.sh > /tmp/v_m144.log 2>&1 || { echo "❌ m144_http_bigbody verify 失败"; tail -40 /tmp/v_m144.log; exit 1; }
-          bash examples/m145_cycle_safe/verify.sh > /tmp/v_m145.log 2>&1 || { echo "❌ m145_cycle_safe verify 失败"; tail -40 /tmp/v_m145.log; exit 1; }
-          bash examples/m146_float64_bits/verify.sh > /tmp/v_m146.log 2>&1 || { echo "❌ m146_float64_bits verify 失败"; tail -40 /tmp/v_m146.log; exit 1; }
-          bash examples/m147_fmt_dec/verify.sh > /tmp/v_m147.log 2>&1 || { echo "❌ m147_fmt_dec verify 失败"; tail -40 /tmp/v_m147.log; exit 1; }
-          bash examples/m148_ieee_div/verify.sh > /tmp/v_m148.log 2>&1 || { echo "❌ m148_ieee_div verify 失败"; tail -40 /tmp/v_m148.log; exit 1; }
-          bash examples/m149_tcp_deadline/verify.sh > /tmp/v_m149.log 2>&1 || { echo "❌ m149_tcp_deadline verify 失败"; tail -40 /tmp/v_m149.log; exit 1; }
-          bash examples/m150_tls_crypto/verify.sh > /tmp/v_m150.log 2>&1 || { echo "❌ m150_tls_crypto verify 失败"; tail -40 /tmp/v_m150.log; exit 1; }
-          bash examples/m151_pg_tls_bytes/verify.sh > /tmp/v_m151.log 2>&1 || { echo "❌ m151_pg_tls_bytes verify 失败"; tail -40 /tmp/v_m151.log; exit 1; }
+          bash examples/m130_flock_chmod/verify.sh > /tmp/v_m130.log 2>&1 || { echo "❌ m130_flock_chmod verify 失败"; tail -40 /tmp/v_m130.log; FAILED="${FAILED:-} v_m130"; }
+          bash examples/m131_http_stream_post/verify.sh > /tmp/v_m131.log 2>&1 || { echo "❌ m131_http_stream_post verify 失败"; tail -40 /tmp/v_m131.log; FAILED="${FAILED:-} v_m131"; }
+          bash examples/m132_sse_chunked/verify.sh > /tmp/v_m132.log 2>&1 || { echo "❌ m132_sse_chunked verify 失败"; tail -40 /tmp/v_m132.log; FAILED="${FAILED:-} v_m132"; }
+          bash examples/m133_http_unix_timeout/verify.sh > /tmp/v_m133.log 2>&1 || { echo "❌ m133_http_unix_timeout verify 失败"; tail -40 /tmp/v_m133.log; FAILED="${FAILED:-} v_m133"; }
+          bash examples/m134_gc_obj_roots/verify.sh > /tmp/v_m134.log 2>&1 || { echo "❌ m134_gc_obj_roots verify 失败"; tail -40 /tmp/v_m134.log; FAILED="${FAILED:-} v_m134"; }
+          bash examples/m137_sse_connect_ex/verify.sh > /tmp/v_m137.log 2>&1 || { echo "❌ m137_sse_connect_ex verify 失败"; tail -40 /tmp/v_m137.log; FAILED="${FAILED:-} v_m137"; }
+          bash examples/m138_regex_go_parity/verify.sh > /tmp/v_m138.log 2>&1 || { echo "❌ m138_regex_go_parity verify 失败"; tail -40 /tmp/v_m138.log; FAILED="${FAILED:-} v_m138"; }
+          bash examples/m139_bare_ident_stmt/verify.sh > /tmp/v_m139.log 2>&1 || { echo "❌ m139_bare_ident_stmt verify 失败"; tail -40 /tmp/v_m139.log; FAILED="${FAILED:-} v_m139"; }
+          bash examples/m140_http_conn_errno/verify.sh > /tmp/v_m140.log 2>&1 || { echo "❌ m140_http_conn_errno verify 失败"; tail -40 /tmp/v_m140.log; FAILED="${FAILED:-} v_m140"; }
+          bash examples/m141_now_ns/verify.sh > /tmp/v_m141.log 2>&1 || { echo "❌ m141_now_ns verify 失败"; tail -40 /tmp/v_m141.log; FAILED="${FAILED:-} v_m141"; }
+          bash examples/m142_go_json_indent/verify.sh > /tmp/v_m142.log 2>&1 || { echo "❌ m142_go_json_indent verify 失败"; tail -40 /tmp/v_m142.log; FAILED="${FAILED:-} v_m142"; }
+          bash examples/m143_float32/verify.sh > /tmp/v_m143.log 2>&1 || { echo "❌ m143_float32 verify 失败"; tail -40 /tmp/v_m143.log; FAILED="${FAILED:-} v_m143"; }
+          bash examples/m144_http_bigbody/verify.sh > /tmp/v_m144.log 2>&1 || { echo "❌ m144_http_bigbody verify 失败"; tail -40 /tmp/v_m144.log; FAILED="${FAILED:-} v_m144"; }
+          bash examples/m145_cycle_safe/verify.sh > /tmp/v_m145.log 2>&1 || { echo "❌ m145_cycle_safe verify 失败"; tail -40 /tmp/v_m145.log; FAILED="${FAILED:-} v_m145"; }
+          bash examples/m146_float64_bits/verify.sh > /tmp/v_m146.log 2>&1 || { echo "❌ m146_float64_bits verify 失败"; tail -40 /tmp/v_m146.log; FAILED="${FAILED:-} v_m146"; }
+          bash examples/m147_fmt_dec/verify.sh > /tmp/v_m147.log 2>&1 || { echo "❌ m147_fmt_dec verify 失败"; tail -40 /tmp/v_m147.log; FAILED="${FAILED:-} v_m147"; }
+          bash examples/m148_ieee_div/verify.sh > /tmp/v_m148.log 2>&1 || { echo "❌ m148_ieee_div verify 失败"; tail -40 /tmp/v_m148.log; FAILED="${FAILED:-} v_m148"; }
+          bash examples/m149_tcp_deadline/verify.sh > /tmp/v_m149.log 2>&1 || { echo "❌ m149_tcp_deadline verify 失败"; tail -40 /tmp/v_m149.log; FAILED="${FAILED:-} v_m149"; }
+          bash examples/m150_tls_crypto/verify.sh > /tmp/v_m150.log 2>&1 || { echo "❌ m150_tls_crypto verify 失败"; tail -40 /tmp/v_m150.log; FAILED="${FAILED:-} v_m150"; }
+          bash examples/m151_pg_tls_bytes/verify.sh > /tmp/v_m151.log 2>&1 || { echo "❌ m151_pg_tls_bytes verify 失败"; tail -40 /tmp/v_m151.log; FAILED="${FAILED:-} v_m151"; }
           # M153（第 35 轮）：常量池 / 短串池化（缺陷 145）+ 分配统计 + 缺陷 147。
           # 含三轨语义 / 分配预算硬阈值 / 输出冻结 / 3 道负控（负控会重编 runtime，耗时数分钟）。
-          bash examples/m153_alloc/verify.sh > /tmp/v_m153.log 2>&1 || { echo "❌ m153_alloc verify 失败"; tail -60 /tmp/v_m153.log; exit 1; }
+          bash examples/m153_alloc/verify.sh > /tmp/v_m153.log 2>&1 || { echo "❌ m153_alloc verify 失败"; tail -60 /tmp/v_m153.log; FAILED="${FAILED:-} v_m153"; }
           # M154（第 36 轮）：分配率第二刀 —— 小整数 str() 池 + 多字节 rune 池 + join 字节精确
           # （缺陷 149：内嵌 NUL 不再被 strlen 截断）+ 常量池按指针哈希 + 比较器同一性快路径。
           # 含三轨语义（57 断言）/ 分配预算硬阈值 / 输出冻结 / 3 道负控（负控会重编 runtime）。
-          bash examples/m154_alloc2/verify.sh > /tmp/v_m154.log 2>&1 || { echo "❌ m154_alloc2 verify 失败"; tail -60 /tmp/v_m154.log; exit 1; }
+          bash examples/m154_alloc2/verify.sh > /tmp/v_m154.log 2>&1 || { echo "❌ m154_alloc2 verify 失败"; tail -60 /tmp/v_m154.log; FAILED="${FAILED:-} v_m154"; }
           # M155（第 37 轮）：含内嵌 NUL 的字符串 —— 字面量/常量池/渲染/输出四段（缺陷 148/150/151/152）。
           # 含三轨语义（41 断言 × 3 轨）+ stdout/落盘原始字节逐字节 + 发射形状 + 4 道负控（负控会重编 runtime）。
-          bash examples/m155_nul_bytes/verify.sh > /tmp/v_m155.log 2>&1 || { echo "❌ m155_nul_bytes verify 失败"; tail -60 /tmp/v_m155.log; exit 1; }
+          bash examples/m155_nul_bytes/verify.sh > /tmp/v_m155.log 2>&1 || { echo "❌ m155_nul_bytes verify 失败"; tail -60 /tmp/v_m155.log; FAILED="${FAILED:-} v_m155"; }
           # M156（第 38 轮）：零依赖 ONNX 解析面（结构 + 权重字节）。
-          bash examples/m156_onnx/verify.sh > /tmp/v_m156.log 2>&1 || { echo "❌ m156_onnx verify 失败"; tail -60 /tmp/v_m156.log; exit 1; }
+          bash examples/m156_onnx/verify.sh > /tmp/v_m156.log 2>&1 || { echo "❌ m156_onnx verify 失败"; tail -60 /tmp/v_m156.log; FAILED="${FAILED:-} v_m156"; }
           # M157（第 39 轮）：ONNX 执行面 —— 张量/64 算子/拓扑执行器；三方对拍 + 覆盖率 + 负控。
-          bash examples/m157_onnx_exec/verify.sh > /tmp/v_m157.log 2>&1 || { echo "❌ m157_onnx_exec verify 失败"; tail -60 /tmp/v_m157.log; exit 1; }
+          bash examples/m157_onnx_exec/verify.sh > /tmp/v_m157.log 2>&1 || { echo "❌ m157_onnx_exec verify 失败"; tail -60 /tmp/v_m157.log; FAILED="${FAILED:-} v_m157"; }
           # M158（第 40 轮）：解释轨函数值 → runtime native 桥（缺陷 114）+ type 口径（缺陷 161）。
           # 三轨一致 + 负控会重编解释器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 m116 跑。
-          bash examples/m158_interp_fn/verify.sh --neg-skip > /tmp/v_m158.log 2>&1 || { echo "❌ m158_interp_fn verify 失败"; tail -60 /tmp/v_m158.log; exit 1; }
+          bash examples/m158_interp_fn/verify.sh --neg-skip > /tmp/v_m158.log 2>&1 || { echo "❌ m158_interp_fn verify 失败"; tail -60 /tmp/v_m158.log; FAILED="${FAILED:-} v_m158"; }
           # M160（第 46 轮）：词法闭包 / 函数体内 def —— 缺陷 159（VM 轨 upvalue + 嵌套 FuncDef）
           # 与缺陷 160（C 轨嵌套捕获）收口；三轨一致（13 + 5 + 5 断言）+ 交叉判据（M158 门第 ⑤ 层升格）。
           # 负控会现场重编编译器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m160_closure/verify.sh --neg-skip > /tmp/v_m160.log 2>&1 || { echo "❌ m160_closure verify 失败"; tail -60 /tmp/v_m160.log; exit 1; }
+          bash examples/m160_closure/verify.sh --neg-skip > /tmp/v_m160.log 2>&1 || { echo "❌ m160_closure verify 失败"; tail -60 /tmp/v_m160.log; FAILED="${FAILED:-} v_m160"; }
           # M161（第 47 轮）：生成器捕获（GenExp）—— 缺陷 163（VM 轨合成 lambda 无捕获表）
           # 与 164（C 轨同帧局部已被闭包装箱时退化为引用）收口；语义定为**按值快照**。
           # 三轨一致（13 + 6 + 5 断言）+ 交叉判据（M160 门第 ⑥ 层由此升格为硬判据）。
           # 负控现场重编编译器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m161_genexp_capture/verify.sh --neg-skip > /tmp/v_m161.log 2>&1 || { echo "❌ m161_genexp verify 失败"; tail -60 /tmp/v_m161.log; exit 1; }
-          bash examples/m162_sorted_order/verify.sh --neg-skip > /tmp/v_m162.log 2>&1 || { echo "❌ m162_sorted verify 失败"; tail -60 /tmp/v_m162.log; exit 1; }
+          bash examples/m161_genexp_capture/verify.sh --neg-skip > /tmp/v_m161.log 2>&1 || { echo "❌ m161_genexp verify 失败"; tail -60 /tmp/v_m161.log; FAILED="${FAILED:-} v_m161"; }
+          bash examples/m162_sorted_order/verify.sh --neg-skip > /tmp/v_m162.log 2>&1 || { echo "❌ m162_sorted verify 失败"; tail -60 /tmp/v_m162.log; FAILED="${FAILED:-} v_m162"; }
           # M163（第 49 轮）：字典键类型严格化 —— 字面量 / 推导式非字符串键从**静默丢弃**
           # （VM/C 两轨 `len=0`，静默数据丢失）改为 R1002「字典键必须是字符串，实际是 <t>」；
           # 索引赋值 `d[k]=v` 文案对齐文档（缺陷 171）。三轨一致（16 + 6 断言）
           # + 严格性层 8 用例 × 三轨（rc≠0 + R1002 + 统一词条）。
           # 负控现场重建 runtime/解释器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m163_dict_key_strict/verify.sh --neg-skip > /tmp/v_m163.log 2>&1 || { echo "❌ m163_dict_key verify 失败"; tail -60 /tmp/v_m163.log; exit 1; }
+          bash examples/m163_dict_key_strict/verify.sh --neg-skip > /tmp/v_m163.log 2>&1 || { echo "❌ m163_dict_key verify 失败"; tail -60 /tmp/v_m163.log; FAILED="${FAILED:-} v_m163"; }
           # M164（第 50 轮）：**迭代位置语义与用户索引分离** —— ① 缺陷 170 `d[int]` 读取位置
           # 三轨分叉（解释轨 R1002 / VM+C 返回第 i 个键）；② 缺陷 174 惰性 GenExp 的 seq 只认
           # list/gen ⇒ str/tuple/dict 源**静默空生成器**；③ 缺陷 175 `bc_genexp_caps` 双重去引号
           # ⇒ 形参被当自由变量 ⇒ VM 轨读到同名外层局部。三轨一致（22 + 10 + 4 断言）
           # + 严格性层 5 用例 × 三轨（rc≠0 + R1002 + 统一词条「字典索引键必须是字符串」）。
           # 负控现场重建 runtime/发射器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m164_iter_index_split/verify.sh --neg-skip > /tmp/v_m164.log 2>&1 || { echo "❌ m164_iter_index_split verify 失败"; tail -60 /tmp/v_m164.log; exit 1; }
+          bash examples/m164_iter_index_split/verify.sh --neg-skip > /tmp/v_m164.log 2>&1 || { echo "❌ m164_iter_index_split verify 失败"; tail -60 /tmp/v_m164.log; FAILED="${FAILED:-} v_m164"; }
           # M165（第 51 轮）：**求值顺序 = 词法左→右** —— ① 缺陷 178 C 轨实参顺序（C 标准未定义，
           # gcc 实测右→左 ⇒ `f() + g()` 在 C 轨变 `G,F`、`str(l.pop()) + str(len(l))` 结果值都不同）；
           # ② 缺陷 179 解释轨赋值顺序（`o[k] = v` 解释轨 V,O,K 而 VM 轨 O,K,V）。统一为词法左→右
           # （对齐 Go 规范）：C 轨 ≥2 个含副作用的操作数按序提升为临时变量；解释轨按
           # 「目标对象 → 键 → 右值」求值。三轨一致（24 断言，副作用日志直接观测顺序）。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m165_eval_order/verify.sh --neg-skip > /tmp/v_m165.log 2>&1 || { echo "❌ m165_eval_order verify 失败"; tail -60 /tmp/v_m165.log; exit 1; }
+          bash examples/m165_eval_order/verify.sh --neg-skip > /tmp/v_m165.log 2>&1 || { echo "❌ m165_eval_order verify 失败"; tail -60 /tmp/v_m165.log; FAILED="${FAILED:-} v_m165"; }
           # M166（第 52 轮 · 缺陷 176）：**迭代期间修改被迭代容器 ⇒ R1003**（三轨同码同文）——
           # 修前四类分歧：`l.append` 解释/C 轨活长度多迭代 vs VM 快照；`l.pop` VM 越界 rc=1；
           # `d.set` C 轨活长度迭代到新键；`d.remove` VM 越界 rc=1。统一为「进入循环时快照长度
           # + 迭代期间长度变化（增或减）⇒ R1003」（新指令 ITERLEN / px_iter_ck / i_iter_ck）。
           # 判据：合法侧 18 断言三轨逐字节一致 + 6 类修改用例 × 三轨（rc≠0 + R1003 + 统一词条）。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m166_iter_mutate/verify.sh --neg-skip > /tmp/v_m166.log 2>&1 || { echo "❌ m166_iter_mutate verify 失败"; tail -60 /tmp/v_m166.log; exit 1; }
+          bash examples/m166_iter_mutate/verify.sh --neg-skip > /tmp/v_m166.log 2>&1 || { echo "❌ m166_iter_mutate verify 失败"; tail -60 /tmp/v_m166.log; FAILED="${FAILED:-} v_m166"; }
           # M167（第 53 轮 · 缺陷 180/182）：**解包统一** —— 语句形式 `for a, b in xs`（与推导式同语义）
           # + 三轨解包诊断统一（`R1002 解包需要 list/tuple，实际是 <t>` / `解包需要 N 个元素，实际是 M`）
           # + `dict.items()` + 顺带收口 VM 轨「装箱循环变量直写槽冲掉 cell」（缺陷 182）。
@@ -422,7 +422,7 @@ jobs:
           # 长度不足 ⇒ 解释轨静默 null / VM 与 C 越界（文案还不一致）；长度超出 ⇒ 三轨静默忽略。
           # 判据：合法侧 16 断言三轨逐字节一致 + 8 类严格性用例 × 三轨（rc≠0 + R1002 + 统一词条）。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m167_unpack/verify.sh --neg-skip > /tmp/v_m167.log 2>&1 || { echo "❌ m167_unpack verify 失败"; tail -60 /tmp/v_m167.log; exit 1; }
+          bash examples/m167_unpack/verify.sh --neg-skip > /tmp/v_m167.log 2>&1 || { echo "❌ m167_unpack verify 失败"; tail -60 /tmp/v_m167.log; FAILED="${FAILED:-} v_m167"; }
           # M169（第 54 轮 · 缺陷 181 + 同族 183/184）：**模块体 / 闭包帧的「绑定归属」统一** ——
           # ① 模块体（顶层**含嵌套块**）里的所有绑定 = 模块级全局（模块体没有块作用域）；
           # ② 帧（函数/闭包体）捕获它们 ⇒ 按引用；③ 闭包体也是帧（体内 hoist + 装箱预扫描，
@@ -431,7 +431,7 @@ jobs:
           # `undeclared` 编译失败、VM 轨 `R1002` 索引错、C 轨闭包按值捕获丢写、VM 轨惰性
           # `bc_is_global` 顺序敏感）。判据：15 断言三轨 stdout 逐字节一致 + 3 类严格性用例。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
-          bash examples/m169_toplevel_scope/verify.sh --neg-skip > /tmp/v_m169.log 2>&1 || { echo "❌ m169_toplevel_scope verify 失败"; tail -60 /tmp/v_m169.log; exit 1; }
+          bash examples/m169_toplevel_scope/verify.sh --neg-skip > /tmp/v_m169.log 2>&1 || { echo "❌ m169_toplevel_scope verify 失败"; tail -60 /tmp/v_m169.log; FAILED="${FAILED:-} v_m169"; }
           # M170（第 55 轮 · 用户报障【清歌】缺陷 187 + 同族 188/189/190）：**native 桥的
           # precise GC 根面收口**。病灶：VM 轨产物默认 precise GC（不扫整条 C 栈），桥（bi_*）
           # 里只活在 C 局部的 LXValue 未登记 PX_KEEP ⇒ 在「另一次分配触发 GC」时被误回收 ⇒
@@ -444,51 +444,51 @@ jobs:
           # 新检测器：PX_GC_STRESS=1（**每次分配即 GC**）把「靠阈值凑巧发作」变成「必然发作」。
           # 判据：6 层正判据（三轨一致 / 低阈值长跑 / stress 四桥 / C 轨反例对照 / H3 codec 值完整 /
           # 隔离点归还记录 / http_request 响应头完整性）+ 4 道负控（本地全门跑）。CI 用 --neg-skip。
-          bash examples/m170_gc_bridge_root/verify.sh --neg-skip > /tmp/v_m170.log 2>&1 || { echo "❌ m170_gc_bridge_root verify 失败"; tail -60 /tmp/v_m170.log; exit 1; }
+          bash examples/m170_gc_bridge_root/verify.sh --neg-skip > /tmp/v_m170.log 2>&1 || { echo "❌ m170_gc_bridge_root verify 失败"; tail -60 /tmp/v_m170.log; FAILED="${FAILED:-} v_m170"; }
           # M171（第 56 轮）：lint 作用域模型对齐 spec §17（台账缺陷 116）。
           # 全仓实测：151 个文件 3651 条假 L002 → 21 个文件 801 条；collections.px 46→0。
           # 判据：合法侧 5 例（lint 0/0 **且** 三轨 stdout 逐字节一致）+ 真阳性 2 例
           #   + 仓内 8 个真实文件 0 错误；负控 3 道（本地全门跑，CI --neg-skip）。
-          bash examples/m171_lint_scope/verify.sh --neg-skip > /tmp/v_m171.log 2>&1 || { echo "❌ m171_lint_scope verify 失败"; tail -60 /tmp/v_m171.log; exit 1; }
+          bash examples/m171_lint_scope/verify.sh --neg-skip > /tmp/v_m171.log 2>&1 || { echo "❌ m171_lint_scope verify 失败"; tail -60 /tmp/v_m171.log; FAILED="${FAILED:-} v_m171"; }
           # M172（第 56 轮）：运行期诊断的**通道与措辞统一**（缺陷 186）。
           # 修前：解释轨把 R1001/main→Err 的诊断写 stdout、编译轨写 stderr，且措辞不同。
           # 判据：R1001 三轨（rc≠0 · stdout 恰为程序输出 · stderr 含 R1001 与同引号消息体）
           #   + main→Err 三轨 + 正常程序 stderr 0 字节 + 真·合并流顺序；负控 2 道本地全门跑。
-          bash examples/m172_diag_channel/verify.sh --neg-skip > /tmp/v_m172.log 2>&1 || { echo "❌ m172_diag_channel verify 失败"; tail -60 /tmp/v_m172.log; exit 1; }
+          bash examples/m172_diag_channel/verify.sh --neg-skip > /tmp/v_m172.log 2>&1 || { echo "❌ m172_diag_channel verify 失败"; tail -60 /tmp/v_m172.log; FAILED="${FAILED:-} v_m172"; }
           # M173（第 57 轮 · 晨曦 QA 清单）：HTTP 反代/静态两件 —— P1-2 vhost handler 分支
           # 缺 gzip 判定（vhost 站点文本响应全明文下发）+ P1-1 池连接复用不重设收发超时。
           # 判据：用例 A/B 各双轨（VM+C；HTTP 服务端示例含 spawn，解释轨不支持）+ 负控 2 道（本地跑）。
-          bash examples/m173_http_proxy/verify.sh --neg-skip > /tmp/v_m173.log 2>&1 || { echo "❌ m173_http_proxy verify 失败"; tail -60 /tmp/v_m173.log; exit 1; }
+          bash examples/m173_http_proxy/verify.sh --neg-skip > /tmp/v_m173.log 2>&1 || { echo "❌ m173_http_proxy verify 失败"; tail -60 /tmp/v_m173.log; FAILED="${FAILED:-} v_m173"; }
           # M174（第 57 轮）：`d.get(k[,default])` 语义统一（缺陷 194）—— 默认值只覆盖「键不存在」；
           # 键存在但值 null ⇒ 返回 null（= Go 两值语义 / Python dict.get，与文档一致）。
-          bash examples/m174_dict_get/verify.sh --neg-skip > /tmp/v_m174.log 2>&1 || { echo "❌ m174_dict_get verify 失败"; tail -60 /tmp/v_m174.log; exit 1; }
+          bash examples/m174_dict_get/verify.sh --neg-skip > /tmp/v_m174.log 2>&1 || { echo "❌ m174_dict_get verify 失败"; tail -60 /tmp/v_m174.log; FAILED="${FAILED:-} v_m174"; }
           # M175（第 57 轮）：台账两小项 —— `len(bytes)`（字节数）+ `os_popen` 的 stderr 去向开关
           # （opts.stderr = inherit|pipe|null；不传 opts 时逐字节保持旧行为）。
-          bash examples/m175_bytes_stderr/verify.sh --neg-skip > /tmp/v_m175.log 2>&1 || { echo "❌ m175_bytes_stderr verify 失败"; tail -60 /tmp/v_m175.log; exit 1; }
+          bash examples/m175_bytes_stderr/verify.sh --neg-skip > /tmp/v_m175.log 2>&1 || { echo "❌ m175_bytes_stderr verify 失败"; tail -60 /tmp/v_m175.log; FAILED="${FAILED:-} v_m175"; }
           # M176（第 57 轮 · 晨曦 QA 清单 P1-5）：零停机换二进制（SO_REUSEPORT）——
           # 新旧进程并存同端口 + 700 次高频探测 refused=0；负控本地跑（--neg-skip）。
-          bash examples/m176_reuseport/verify.sh --neg-skip > /tmp/v_m176.log 2>&1 || { echo "❌ m176_reuseport verify 失败"; tail -60 /tmp/v_m176.log; exit 1; }
+          bash examples/m176_reuseport/verify.sh --neg-skip > /tmp/v_m176.log 2>&1 || { echo "❌ m176_reuseport verify 失败"; tail -60 /tmp/v_m176.log; FAILED="${FAILED:-} v_m176"; }
           # M177（第 57 轮）：内置面统一 —— 补 `dict/unique/flatten`（原为解释轨独有）、
           # min/max 单参数可迭代取元素最值（原先编译轨静默返回生成器对象）、sum 收 list/tuple/生成器。
-          bash examples/m177_builtin_parity/verify.sh --neg-skip > /tmp/v_m177.log 2>&1 || { echo "❌ m177_builtin_parity verify 失败"; tail -60 /tmp/v_m177.log; exit 1; }
+          bash examples/m177_builtin_parity/verify.sh --neg-skip > /tmp/v_m177.log 2>&1 || { echo "❌ m177_builtin_parity verify 失败"; tail -60 /tmp/v_m177.log; FAILED="${FAILED:-} v_m177"; }
           # M178（第 57 轮）：可迭代实参统一 —— join/sorted/reversed/contains 收
           # list/tuple/生成器/**字符串**（str 按 rune），拒绝文案三轨同形；
           # `reversed(str)` 修「按字节反转 ⇒ 非法 UTF-8」并统一返回 str。
-          bash examples/m178_iterable_args/verify.sh --neg-skip > /tmp/v_m178.log 2>&1 || { echo "❌ m178_iterable_args verify 失败"; tail -60 /tmp/v_m178.log; exit 1; }
+          bash examples/m178_iterable_args/verify.sh --neg-skip > /tmp/v_m178.log 2>&1 || { echo "❌ m178_iterable_args verify 失败"; tail -60 /tmp/v_m178.log; FAILED="${FAILED:-} v_m178"; }
           # M179（第 57 轮 · 缺陷 195/196）：运算族的「码 + 措辞」统一 + 静默坏值收口 ——
           #   修前 `1.0 * "x"` 在编译轨读 union 的 as.f（UB）⇒ 两轨两个不同垃圾值、
           #   `1 / "x"` ⇒ inf、`1 < "x"` ⇒ true；现在三轨同码（R1002/R1003/R1006）同消息体。
-          bash examples/m179_arith_diag/verify.sh --neg-skip > /tmp/v_m179.log 2>&1 || { echo "❌ m179_arith_diag verify 失败"; tail -60 /tmp/v_m179.log; exit 1; }
+          bash examples/m179_arith_diag/verify.sh --neg-skip > /tmp/v_m179.log 2>&1 || { echo "❌ m179_arith_diag verify 失败"; tail -60 /tmp/v_m179.log; FAILED="${FAILED:-} v_m179"; }
           # M180（第 58 轮 · 晨曦 QA 清单 P0-3/P1-4）：HTTP/2 口径落地 + HTTP/3 能力自证 ——
           #   h2c 升级被**忽略并按 h1.1 服务真实内容**（修前给固定演示页 = 静默错内容）+
           #   h2 prior-knowledge 前导 ⇒ 505 + 说明 + `--no-quic` 下 opts.http3 **响亮报错** +
           #   默认/--no-quic 产物的 ngtcp2 能力自证。口径：docs/HTTP2_DECISION.md。
-          bash examples/m180_h2_h3_stance/verify.sh --neg-skip > /tmp/v_m180.log 2>&1 || { echo "❌ m180_h2_h3_stance verify 失败"; tail -60 /tmp/v_m180.log; exit 1; }
+          bash examples/m180_h2_h3_stance/verify.sh --neg-skip > /tmp/v_m180.log 2>&1 || { echo "❌ m180_h2_h3_stance verify 失败"; tail -60 /tmp/v_m180.log; FAILED="${FAILED:-} v_m180"; }
           # M181（第 59 轮 · 缺陷 193）：帧内绑定「未初始化即读」三轨统一 ——
           #   帧局部槽初值 = **未初始化哨兵**（PX_UNINIT / PXOP_UNINIT），读到⇒ R1001
           #   （修前 VM/C 轨静默给 null）；只在「编译器无法证明声明已执行」的读点发检查
           #   （C 轨 px_chk_uninit / VM 轨 PXOP_CHKINIT）；解释轨帧入口登记「已声明未执行」。
-          bash examples/m181_uninit_read/verify.sh --neg-skip > /tmp/v_m181.log 2>&1 || { echo "❌ m181_uninit_read verify 失败"; tail -60 /tmp/v_m181.log; exit 1; }
+          bash examples/m181_uninit_read/verify.sh --neg-skip > /tmp/v_m181.log 2>&1 || { echo "❌ m181_uninit_read verify 失败"; tail -60 /tmp/v_m181.log; FAILED="${FAILED:-} v_m181"; }
           # M182（第 60 轮 · 缺陷 192 + 同族）：native 桥「**登记窗口**」收口 ——
           #   M170 立了「容器创建后必须登记」，没管住「登记之前的那段窗口」，尤以
           #   **返回值 / out-param** 形态为最（`h_exchange` 返回前已 pop 自己的登记帧 ⇒
@@ -496,50 +496,50 @@ jobs:
           #   「跨分配窗口」之前**。多线程服务模式默认延迟回收 ⇒ 窗口被"稍后的登记"补上
           #   （靠运气遮住）；`PX_GC_INLINE=1` 强制内联 ⇒ 必现（基线/单开皆绿、**双开 3/3 红**）。
           #   本门同时是**本仓第一个 http_unix 成功路径**的门（对端 python3 UDS 应答器）。
-          bash examples/m182_hdr_root/verify.sh --neg-skip > /tmp/v_m182.log 2>&1 || { echo "❌ m182_hdr_root verify 失败"; tail -60 /tmp/v_m182.log; exit 1; }
+          bash examples/m182_hdr_root/verify.sh --neg-skip > /tmp/v_m182.log 2>&1 || { echo "❌ m182_hdr_root verify 失败"; tail -60 /tmp/v_m182.log; FAILED="${FAILED:-} v_m182"; }
           # M183（第 61 轮）：**根栈「交棒窗口」**+ native 桥漏登记（缺陷 197/198/199）。
           #   197 的真形状不在调用方而在**被调用方的收帧**：`px_root_pop()` 的出口安全点恰是
           #   暂停点，而返回值那一刻既不在被调用方帧也不在调用方帧 ⇒ 被回收（修前 1/6 通过）。
           #   修法 = 根栈**收缩延迟**（推迟到调用方 PX_KEEP，且由本帧逻辑基钳制）。
           #   198/199 = `bi_s3_list` / `bi_px_exec` 的容器局部从未登记（新检测器 PX_GC_UAFDET 直指）。
-          bash examples/m183_gc_root_handover/verify.sh --neg-skip > /tmp/v_m183.log 2>&1 || { echo "❌ m183_gc_root_handover verify 失败"; tail -60 /tmp/v_m183.log; exit 1; }
+          bash examples/m183_gc_root_handover/verify.sh --neg-skip > /tmp/v_m183.log 2>&1 || { echo "❌ m183_gc_root_handover verify 失败"; tail -60 /tmp/v_m183.log; FAILED="${FAILED:-} v_m183"; }
           # M184（第 62 轮）：第三方 registry-px 登记的三条缺陷收口（内部编号 200/201/202）。
           #   200（PX-DEF-002）= `int()`/`float()` 宽容前缀解析 ⇒ 静默错值 + `int("")` 三轨分叉；
           #   201（PX-DEF-005）= `mkdir()` 恒返回 null ⇒ `if mkdir(d):` 永远为假；
           #   202（PX-DEF-014）= `list_dir` 无安全变体（不存在目录 ⇒ 终止进程）⇒ 新增 `list_dir_opt`。
           #   本门含 **27 个拒绝用例 × 三轨** 的完整矩阵（负控在本地全门里跑）。
-          bash examples/m184_num_fs_strict/verify.sh --neg-skip > /tmp/v_m184.log 2>&1 || { echo "❌ m184_num_fs_strict verify 失败"; tail -60 /tmp/v_m184.log; exit 1; }
+          bash examples/m184_num_fs_strict/verify.sh --neg-skip > /tmp/v_m184.log 2>&1 || { echo "❌ m184_num_fs_strict verify 失败"; tail -60 /tmp/v_m184.log; FAILED="${FAILED:-} v_m184"; }
           # M185（第 63 轮）：**`bytes` 三面统一**（缺陷 203）+ **严格解析判定器**
           #   `is_int_str`/`is_float_str` + **缺陷 204**（解释轨删掉"原生谓词的翻版"）
           #   + `unwrap_err()`（第三方 PX-DEF-003）+ **缺陷 205**（`px_to_string` 四重病灶：
           #   容器恒 `"<object>"` / 每次调用打到 stdout / `tmpfile()` 漏 fd / 调用方 `xfree` 字面量）。
           # 判据：bytes 三面 25 行 · 判定器 60 行（含判定↔转换等价性）· 渲染收口（**fd 增量=0** +
           #   stdout 行数恰为 12）· 拒绝侧 4 例 × 三轨同码同文；负控 A/B/C/D 在本地全门 m116 跑。
-          bash examples/m185_bytes_face/verify.sh --neg-skip > /tmp/v_m185.log 2>&1 || { echo "❌ m185_bytes_face verify 失败"; tail -60 /tmp/v_m185.log; exit 1; }
+          bash examples/m185_bytes_face/verify.sh --neg-skip > /tmp/v_m185.log 2>&1 || { echo "❌ m185_bytes_face verify 失败"; tail -60 /tmp/v_m185.log; FAILED="${FAILED:-} v_m185"; }
           # M186（第 64 轮）：**解释轨 native 透传完整性**（第三方 PX-DEF-018/019/020）
           #   病根：解释器转发 C 层 native 只透传前 1~3 个实参，而 C 层签名更长 ⇒
           #     `bytes_to_int(b,"little")` 解释轨**静默按大端**（258 vs 编译轨 513）；
           #     `int_to_bytes(-5,2,"big",true)` 的 **signed 被丢弃**（"0.0" vs fffb）；
           #     实参不足时 `args[1]` 越界 ⇒ 晦涩 `R1003`（编译轨是 `R1002` 参数错）。
           #   判据：41 行值语义三轨逐字节一致 + 拒绝侧 4 例 × 三轨同码同文；负控 A/B/C 在本地全门 m116 跑。
-          bash examples/m186_native_passthrough/verify.sh --neg-skip > /tmp/v_m186.log 2>&1 || { echo "❌ m186_native_passthrough verify 失败"; tail -60 /tmp/v_m186.log; exit 1; }
+          bash examples/m186_native_passthrough/verify.sh --neg-skip > /tmp/v_m186.log 2>&1 || { echo "❌ m186_native_passthrough verify 失败"; tail -60 /tmp/v_m186.log; FAILED="${FAILED:-} v_m186"; }
           # M187（第 65 轮）：第三方 registry-px 库**引入官方 registry/**（52 包 / 58 文件逐字节照搬 ·
           #   来源与许可登记在 registry/THIRD_PARTY.md）+ pxpkg **多文件包**支持（<500 行/文件 ⇒ 拆包
           #   是官方规范，registry 原先只认单文件 ⇒ 规范与分发形态冲突）。
           #   判据：登记表逐行 sha256/文件数重算对拍 · 52 包装+import 全通 · 抽样双轨编译（**编译日志
           #   不得出现「找不到模块」**——编译轨缺模块只警告、rc 仍 0）· 多文件包三轨一致 +
           #   `--locked` 查辅助文件篡改；负控 A/B/C 在本地全门 m116 跑。
-          bash examples/m187_registry_import/verify.sh --neg-skip > /tmp/v_m187.log 2>&1 || { echo "❌ m187_registry_import verify 失败"; tail -60 /tmp/v_m187.log; exit 1; }
+          bash examples/m187_registry_import/verify.sh --neg-skip > /tmp/v_m187.log 2>&1 || { echo "❌ m187_registry_import verify 失败"; tail -60 /tmp/v_m187.log; FAILED="${FAILED:-} v_m187"; }
           # M188（第 66 轮）：SHA1 族（`sha1`/`sha1_bytes`）+ 三件「安全替代」
           #   （`sha256_bytes` 破双哈希陷阱 / `bytes_zeros` / `byte`）+ 字符串方法面四别名
           #   （`.find`/`.strip`/`.has_prefix`/`.has_suffix` —— **只加路由不复制实现**）。
           #   判据：NIST 向量 + rune/字节双轴对照 + 方法面⇔函数面⇔stdlib 等价性（三轨逐字节一致）+
           #   拒绝侧三轨同码同文；负控 A/B/C/D 在本地全门 m116 跑。
-          bash examples/m188_std_face/verify.sh --neg-skip > /tmp/v_m188.log 2>&1 || { echo "❌ m188_std_face verify 失败"; tail -60 /tmp/v_m188.log; exit 1; }
+          bash examples/m188_std_face/verify.sh --neg-skip > /tmp/v_m188.log 2>&1 || { echo "❌ m188_std_face verify 失败"; tail -60 /tmp/v_m188.log; FAILED="${FAILED:-} v_m188"; }
           # M189（第 67 轮）：bytes 边界族 —— bytes_get/bytes_set/b[i] 越界同码同文（R1003）、
           #   索引必须是 int（呼应 b[i]，修前 bytes_get 走 int_val 会静默截断 float）、
           #   函数面 ⇔ 索引面全范围等价、拒绝侧 6 例三轨同码同文同正文；负控 A/B/C/D 在本地全门 m116 跑。
-          bash examples/m189_bytes_bounds/verify.sh --neg-skip > /tmp/v_m189.log 2>&1 || { echo "❌ m189_bytes_bounds verify 失败"; tail -60 /tmp/v_m189.log; exit 1; }
+          bash examples/m189_bytes_bounds/verify.sh --neg-skip > /tmp/v_m189.log 2>&1 || { echo "❌ m189_bytes_bounds verify 失败"; tail -60 /tmp/v_m189.log; FAILED="${FAILED:-} v_m189"; }
           # M190（第 68 轮）：**方法族参数面**三轨同一真相（内部缺陷 213-a…213-l）。
           #   病根：每个方法/构造器的「实参个数」在解释轨与 native 侧各写一遍，且**多数只查下限**
           #     ⇒ `l.pop(1)`/`d.set("b")`/`Ok(1).unwrap(2)`/`l.append(1,2)`/`s.upper(9)` 等
@@ -549,12 +549,12 @@ jobs:
           #     与 M162 修掉的 `sorted` 旧 bug 同源）⇒ 改值比较。
           #   判据：合法侧三轨逐字节一致（30 行定点）+ 拒绝侧 23 例 × 三轨 rc≠0 + 同 R 码 + 正文逐字相同；
           #   负控 A/B/E（改 icall.px）/C/D（改 runtime.c）在本地全门 m116 跑。
-          bash examples/m190_arity/verify.sh --neg-skip > /tmp/v_m190.log 2>&1 || { echo "❌ m190_arity verify 失败"; tail -60 /tmp/v_m190.log; exit 1; }
+          bash examples/m190_arity/verify.sh --neg-skip > /tmp/v_m190.log 2>&1 || { echo "❌ m190_arity verify 失败"; tail -60 /tmp/v_m190.log; FAILED="${FAILED:-} v_m190"; }
           # M190 · 上游真实用例回归（上文 M187/M189 把 registry-px 53 库引入 registry/，
           #   这里跑**上游 tests/*.px 全部 53 个用例**，闭合「照搬 ⇒ 可用」）。
           #   三条硬判据：① 用例逐字节照搬（MANIFEST.sha256）② 引用面完整（缺模块只警告不报错 ⇒ 必须前置查）
           #   ③ 与 EXPECTED.tsv **对拍**（期望值是登记的数据，不是"跑出来是什么"；缺登记 ⇒ MISMATCH）。
-          bash selfhost/run_upstream_tests.sh --json /tmp/upstream_tests.json > /tmp/v_upstream_tests.log 2>&1 || { echo "❌ 上游 registry-px 用例回归失败"; tail -40 /tmp/v_upstream_tests.log; exit 1; }
+          bash selfhost/run_upstream_tests.sh --json /tmp/upstream_tests.json > /tmp/v_upstream_tests.log 2>&1 || { echo "❌ 上游 registry-px 用例回归失败"; tail -40 /tmp/v_upstream_tests.log; FAILED="${FAILED:-} upstream_tests"; }
           # M287s2 · 上游回归的「失败确认步 / FLAKE」自证（4 组 11 判据）：
           #   `mock_test` 的桩服务器 `mk_start_server` = `spawn mk_server_loop(...)` 后**立即返回**
           #   ⇒ 客户端靠 `req_retry`（20×20ms）兜住启动竞态；而 `max_conns=10` 会被重试产生的
@@ -562,7 +562,7 @@ jobs:
           #   单独跑 2/2 全绿 = 419/0）⇒ 上游用例的**负载敏感设计**，不是产品缺陷。
           #   本自证用**假 tools/px** 在**真实判据代码**上端到端验证：抖动 ⇒ FLAKE（响亮、不判红）／
           #   两次都失败 ⇒ 仍 FAIL（**不被掩盖**）／`--no-confirm` 关断／正常路径不误报。
-          bash selfhost/selftest_upstream_confirm.sh > /tmp/v_upstream_confirm.log 2>&1 || { echo "❌ 上游回归「确认步」自证失败"; tail -30 /tmp/v_upstream_confirm.log; exit 1; }
+          bash selfhost/selftest_upstream_confirm.sh > /tmp/v_upstream_confirm.log 2>&1 || { echo "❌ 上游回归「确认步」自证失败"; tail -30 /tmp/v_upstream_confirm.log; FAILED="${FAILED:-} upstream_confirm"; }
           # M191（第 69 轮）· 诊断面「三族口径 + 码的单一真相」（docs/ERROR_CODES.md 为权威口径）：
           #   ① native 侧 42 处**语言层**错误补齐 R 码（`切片步长 0`⇒R1006、`此类型不支持切片`⇒R1002…），
           #      域前缀族登记为**闭集**；② `assert` 失败解释轨此前错标 R1003（越界）⇒ 两侧统一 R2001，
@@ -570,7 +570,7 @@ jobs:
           #      拆开 3 处「个数+类型」混写守卫；④ 未收口文件（aes/zip/quic/xml…）立**棘轮基线**（只许减少）。
           #   判据：静态四查（带码/域前缀 · 个数分码 · 混写拆分 · 棘轮）+ 11 探针 × 三轨同码同文；
           #   负控 5 道（4 静态 + 1 动态）在本地全门 m116 跑（此处 --neg-skip）。
-          bash examples/m191_error_codes/verify.sh --neg-skip > /tmp/v_m191.log 2>&1 || { echo "❌ m191_error_codes verify 失败"; tail -60 /tmp/v_m191.log; exit 1; }
+          bash examples/m191_error_codes/verify.sh --neg-skip > /tmp/v_m191.log 2>&1 || { echo "❌ m191_error_codes verify 失败"; tail -60 /tmp/v_m191.log; FAILED="${FAILED:-} v_m191"; }
           # M192（第 70 轮）· 加密/压缩/归档族「错误码面」收口（**棘轮基线第一批**，121 站点）：
           #   ① 语言层（首参类型 / 内置实参个数 / 值域 / dict 形状）⇒ 补 R1002（96 处）；
           #   ② 后端算法失败 ⇒ 域前缀 `aes `（22 处，登记 §3 E7）；zip 自带 `zip `（25 处，**只登记不改文本**，§3 E4）；
@@ -578,7 +578,7 @@ jobs:
           #   ④ `zlib: 参数需要 str/bytes` 是**类型检查**而非环境失败 ⇒ 按 §1 去前缀改判 R1002（§3 明令：不得借域前缀逃避带码）。
           #   判据：静态（扫描器四查 + 五文件「无码 0」+ 未收口合计 264→143）+ 8 错例 × 三轨同码同文
           #   + 合法侧往返（aes/zlib）+ zlib 解释轨专属（编译轨按引用集裁剪 ⇒ 观察项 218）；负控 3 道在本地全门 m116 跑。
-          bash examples/m192_encfamily/verify.sh --neg-skip > /tmp/v_m192.log 2>&1 || { echo "❌ m192_encfamily verify 失败"; tail -60 /tmp/v_m192.log; exit 1; }
+          bash examples/m192_encfamily/verify.sh --neg-skip > /tmp/v_m192.log 2>&1 || { echo "❌ m192_encfamily verify 失败"; tail -60 /tmp/v_m192.log; FAILED="${FAILED:-} v_m192"; }
           # M193（第 71 轮）· 棘轮欠账**第二批**全量收口（143 站点 ⇒ 未收口清单**清零**）：
           #   ① 语言层 ⇒ R1002（102 处）；② 缺形参 ⇒ R1005（2）；③ unwrap 失败 ⇒ R1004（2）；
           #   ④ VM 内部一致性（字节码/元数据越界）⇒ R9001（18）；
@@ -586,14 +586,14 @@ jobs:
           #   ⑥ 转发豁免表（coro.c:804 透传上游已带码消息）。
           #   顺带修 220（xml 错误消息 use-after-free ⇒ 元素名乱码）/ 221（ws_send 缺 data 类型检查）。
           #   判据：静态五查 + 12 文件无码 0 + 9 错例 × 三轨同码同文 + 域前缀侧 + 合法侧；负控 3 道在本地全门 m116 跑。
-          bash examples/m193_errcodes2/verify.sh --neg-skip > /tmp/v_m193.log 2>&1 || { echo "❌ m193_errcodes2 verify 失败"; tail -60 /tmp/v_m193.log; exit 1; }
+          bash examples/m193_errcodes2/verify.sh --neg-skip > /tmp/v_m193.log 2>&1 || { echo "❌ m193_errcodes2 verify 失败"; tail -60 /tmp/v_m193.log; FAILED="${FAILED:-} v_m193"; }
           # M194（第 72 轮）· native **参数类型守卫完备性**（缺陷 222）：26 个「形参 ≥2、只查了个数
           #   或只查首参」的站点 —— 其余实参直接进 `int_val()`（float 静默截断 / `.as.i` 读位模式）
           #   或 `val_cstr()`（int/容器静默串化）。三轨**一致** ⇒ M190 的「rc 分叉」普查看不见。
           #   口径写进 docs/ERROR_CODES.md §6；统一文案 `R1002: <fn> 的 <参数> 需要<类型>，实际是 <t>`。
           #   判据：静态 [S5] 参数守卫完备性（140 个多形参守卫、缺检查 0）+ 12 错例 × 三轨同码同文
           #   + 合法侧 8 例（含 `null` = 未提供的既有写法）+ 4 道负控（2 静态 2 动态，在本地全门 m116 跑）。
-          bash examples/m194_arg_guards/verify.sh --neg-skip > /tmp/v_m194.log 2>&1 || { echo "❌ m194_arg_guards verify 失败"; tail -60 /tmp/v_m194.log; exit 1; }
+          bash examples/m194_arg_guards/verify.sh --neg-skip > /tmp/v_m194.log 2>&1 || { echo "❌ m194_arg_guards verify 失败"; tail -60 /tmp/v_m194.log; FAILED="${FAILED:-} v_m194"; }
           # M195（第 73 轮）· 参数守卫**第二批**：判据从「形参 ≥2」推广到**全部 397 个 native 函数**
           #   —— ① 缺陷 224 单形参 INT 静默截断（range/sleep/chr/bit_count/bits_to_float32/clear_timer/
           #   onnx 族）；② 缺陷 223 元数上界缺失（h3/quic listen 族）；③ 缺陷 225 路径/数据语义
@@ -601,14 +601,14 @@ jobs:
           #   与 native 同码不同文。判据：静态 [S6]（397 函数 · 未豁免缺检查 0 · 豁免 24/24 带理由
           #   且表⇔源码一致 + 总数棘轮）+ 15 错例 × 三轨同码同文 + 合法侧 9 例
           #   + 4 道负控（3 静态 1 动态，在本地全门 m116 跑）。
-          bash examples/m195_arg_guards2/verify.sh --neg-skip > /tmp/v_m195.log 2>&1 || { echo "❌ m195_arg_guards2 verify 失败"; tail -60 /tmp/v_m195.log; exit 1; }
+          bash examples/m195_arg_guards2/verify.sh --neg-skip > /tmp/v_m195.log 2>&1 || { echo "❌ m195_arg_guards2 verify 失败"; tail -60 /tmp/v_m195.log; FAILED="${FAILED:-} v_m195"; }
           # M196（第 74 轮）· 诊断**文案**的三轨单一真相（缺陷 227 + 230）：解释轨的守卫先于原生
           #   触发 ⇒ 它自己的文案会盖住原生那条，而编译轨拿原生那条 ⇒ 同一坏输入三轨两文（不报错、
           #   不崩，只在错误路径显形）。静态普查 180 个「两边都有文案」的函数：批 1 对齐 49 条 +
           #   批 2 对齐 5 条（类型文案带实际类型）；顺带修缺陷 230（gen_next 的守卫顺序）。
           #   判据：静态 [S7]（可比 180 · 不一致 0 · 基线已清空 = 硬判据 · FMT_OK 2 条带理由）
           #   + 13 错例 × 三轨同码同文 + 合法侧 4 例 + 4 道负控（在本地全门 m116 跑）。
-          bash examples/m196_msg_parity/verify.sh --neg-skip > /tmp/v_m196.log 2>&1 || { echo "❌ m196_msg_parity verify 失败"; tail -60 /tmp/v_m196.log; exit 1; }
+          bash examples/m196_msg_parity/verify.sh --neg-skip > /tmp/v_m196.log 2>&1 || { echo "❌ m196_msg_parity verify 失败"; tail -60 /tmp/v_m196.log; FAILED="${FAILED:-} v_m196"; }
           # M197（第 75 轮）· **全内置 0 参探针** ⇄ 原生 arity 文案（缺陷 232 + 233）：M196 的 [S7]
           #   是静态对拍，**看不见用变量拼出来的文案**（`cname + " 需要 1 个参数"` 的字面量 head 是变量）。
           #   193 个内置全跑 0 参 ⇒ ① arity 文案 5 条（sqrt/sin/cos/tan/log 缺说明）；
@@ -616,21 +616,21 @@ jobs:
           #   0 参撞 R1003 索引越界 —— 与 M196 的 gen_next 同族）。
           #   判据：动态 [S8]（193 内置 · 须 R1002 且文案逐字命中原生 arity 文案 · SKIP 24 条带理由）
           #   + 8 错例 × 三轨同码同文 + 合法侧 4 例 + 4 道负控（在本地全门 m116 跑）。
-          bash examples/m197_builtin_arity/verify.sh --neg-skip > /tmp/v_m197.log 2>&1 || { echo "❌ m197_builtin_arity verify 失败"; tail -60 /tmp/v_m197.log; exit 1; }
+          bash examples/m197_builtin_arity/verify.sh --neg-skip > /tmp/v_m197.log 2>&1 || { echo "❌ m197_builtin_arity verify 失败"; tail -60 /tmp/v_m197.log; FAILED="${FAILED:-} v_m197"; }
           # M198（缺陷 234/235 + 229）：native **元数上界**（[S9] 静态全量 386 个 + 14 错例 × 三轨）
           #   ⇄ **时长族数值化**（`set_timeout(fn, 1.5)` 真生效 · `{timeout_ms: 300.0}` 被采纳
           #   · `{"timeout_ms": "300"}` 响亮）· 时长族 5 例 × 三轨 · 4 道负控（本地全门跑）。
-          bash examples/m198_argface/verify.sh --neg-skip > /tmp/v_m198.log 2>&1 || { echo "❌ m198_argface verify 失败"; tail -60 /tmp/v_m198.log; exit 1; }
+          bash examples/m198_argface/verify.sh --neg-skip > /tmp/v_m198.log 2>&1 || { echo "❌ m198_argface verify 失败"; tail -60 /tmp/v_m198.log; FAILED="${FAILED:-} v_m198"; }
           # M199（缺陷 237/238/239）：[S10]「同一操作 × 每一位置 × 错类型」—— 静态逐参守卫声明全量
           #   + 三元兜底登记表 + **自动生成探针 × 三轨**（合成单一驱动器，两次编译覆盖全量）
           #   + 合法侧 LEGAL.tsv + 6 条显式词条；负控 4 道在本地全门 m116 跑。
-          bash examples/m199_argtype/verify.sh --neg-skip > /tmp/v_m199.log 2>&1 || { echo "❌ m199_argtype verify 失败"; tail -60 /tmp/v_m199.log; exit 1; }
+          bash examples/m199_argtype/verify.sh --neg-skip > /tmp/v_m199.log 2>&1 || { echo "❌ m199_argtype verify 失败"; tail -60 /tmp/v_m199.log; FAILED="${FAILED:-} v_m199"; }
           # M200（缺陷 240）：extern def 名的**全局发布** —— 官方 registry/zlib 在编译轨
           #   曾完全不可用（解释轨有 ffi 双表兜底、编译轨 GETG 却无人发布）。判据 [S11] 静态
           #   + 3 条确定性探针 × 三轨 + 负控 3 道（本地全门 m116 跑）。
-          bash examples/m200_ffi_globals/verify.sh --neg-skip > /tmp/v_m200.log 2>&1 || { echo "❌ m200_ffi_globals verify 失败"; tail -60 /tmp/v_m200.log; exit 1; }
-          bash examples/m201_bytes_dec/verify.sh --neg-skip > /tmp/v_m201d.log 2>&1 || { echo "❌ m201_bytes_dec verify 失败"; tail -60 /tmp/v_m201d.log; exit 1; }
-          bash examples/m201_interp_ffi/verify.sh --neg-skip > /tmp/v_m201f.log 2>&1 || { echo "❌ m201_interp_ffi verify 失败"; tail -60 /tmp/v_m201f.log; exit 1; }
+          bash examples/m200_ffi_globals/verify.sh --neg-skip > /tmp/v_m200.log 2>&1 || { echo "❌ m200_ffi_globals verify 失败"; tail -60 /tmp/v_m200.log; FAILED="${FAILED:-} v_m200"; }
+          bash examples/m201_bytes_dec/verify.sh --neg-skip > /tmp/v_m201d.log 2>&1 || { echo "❌ m201_bytes_dec verify 失败"; tail -60 /tmp/v_m201d.log; FAILED="${FAILED:-} v_m201d"; }
+          bash examples/m201_interp_ffi/verify.sh --neg-skip > /tmp/v_m201f.log 2>&1 || { echo "❌ m201_interp_ffi verify 失败"; tail -60 /tmp/v_m201f.log; FAILED="${FAILED:-} v_m201f"; }
           # M202（缺陷 244 + 第三方 PX-DEF-032/033/034）：base32 / hmac_sha1 / sorted key
           #   + `bdata`/`val_cstr` 的共享静态缓冲别名（安全原语静默错值）。
           #   本门依赖 bootstrap/pxi（解释轨）⇒ CI 里必须跑在「工具链自举」步之后。
@@ -734,7 +734,17 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m216.log | tail -30 || true
           echo "✅ m216_float_to_int verify（22 例 × 三轨一致 + Python 独立真值 + 平台指令级举证）PASS"
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
-          bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
+          bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; FAILED="${FAILED:-} emitc_freeze"; }
+          # ── 缺陷 592（M337）：步内**不早退**，先把这一大步里的门全跑完再汇总判红 ──
+          #   病灶（run 40308948055 实测）：本步 40+ 条 verify 用 `|| exit 1` 串联 ⇒ 第 18 步一红，
+          #   ① 同一步里后面的几十个门**一个都没跑**（它们的结果不是"失败"而是"不存在"）；
+          #   ② job 的 fail-fast 再吃掉后面 31 个 step（steps 105 / skipped 31 = 29.5%）。
+          #   本轮只治 ①（低风险）：把 `exit 1` 换成记名累加，步末统一判红。
+          #   ② 要动 step 级 if: always() 或拆 job，属**红语义变更**，留给独立一轮 + 真实 CI 验证。
+          if [ -n "${FAILED:-}" ]; then
+            echo "::error::工具自测失败（步内其余门已全部跑完，不再早退）：$FAILED"
+            exit 1
+          fi
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface / m199_argtype / m200_ffi_globals / m201_bytes_dec / m201_interp_ffi / m202_crypto_ext / m203_iter_index_msg / m204_assign_op / m205_cli_channels / m206_gcroot / m207_gcstress / m208_vm_c_local_roots / m209_gcroot_rules / m210_param_kw / m211_conn_read_eintr / m212_gcroot_derive / m213_gcroot_precision / m214_audit_exempt / m215_int_truth / m216_float_to_int + 上游 registry-px 用例回归（**128 用例 × 双轨** · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       # M219（第 98 轮）：M217–M219 三个门**单独成 step** ——
       #   ① **缺陷 313**：`m217_shift_count` / `m218_logic_value` 在交付时**漏注册**
