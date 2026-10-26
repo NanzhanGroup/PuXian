@@ -862,6 +862,13 @@ step "M227 · 「同名两门」全量对拍（函数面 ⇄ 方法面 · 缺陷
 #     （接收者角色会与 Python 约定相反 ⇒ 静默算错），登记在 XALLOW.tsv（唯一豁免）
 #     341 R 码分歧 3 种形状**不硬判**但逐一登记（两面处于不同检查层）：RCODE.tsv 双向判据
 #   ⚠️ 负控要重编驱动两轨 + 重编解释轨件（~13 min）⇒ CI 用 --neg-skip。
+# M330（2026-10-26 · 东月）：**分片档超时口径必须跟算力走**（缺陷 581）
+#   实测（r18 · N=10 · 单核绑定 · SHARD_JOBS=1 · /data/gatevm/shard-20261024-220411）：
+#     m227 687s / m231 642s（10-24 实测）在该档双双顶穿默认 900s ⇒ rc=124 假红。
+#   声明值 = ceil(1.5 × 实测最坏 / 60) × 60（与 check_gate_timeouts 的 P3「≥1.5× 基线」同源）。
+#   ⚠️ 本声明**不是**为了掩盖慢化：同一轮已把「单核绑定」从装置里去掉（M330 改 shard_run.sh），
+#      此处的裕度是给「并行档固有的 1.3–1.6× 慢化」留的余量，串行权威档同样读它。
+gate_timeout m227_two_faces 1080
 run m227_two_faces bash examples/m227_two_faces/verify.sh
 step "M228 · 成员运算 in / not in 三轨落地 + 「三个门」全量对拍（972 次执行）"
 #   主题：M226 量过方法面、M227 量过同名两门 —— 本轮补**第三个门**（运算符面）。
@@ -879,6 +886,7 @@ run m229_result_tuple bash examples/m229_result_tuple/verify.sh
 run m230_index_slice bash examples/m230_index_slice/verify.sh
 # M231（第 109 轮 · 缺陷 346）：**运算符 × 逐类型组合**全量矩阵（315 例 × 3 轨）。
 #   负控 A/B/C 各要重编解释轨 / 两轨驱动（≈3–8 min/次），本地全量门跑全量档；CI 用 --neg-skip。
+gate_timeout m231_op_matrix 1020   # M330：642s 实测 × 1.5 = 963 ⇒ 1020（缺陷 581，理由见 m227 上方）
 run m231_op_matrix bash examples/m231_op_matrix/verify.sh
 # M232（第 110 轮 · 缺陷 347）：**真值性表 + 短路族**全量对拍（46 例 × 3 轨）。
 #   主题：M231 显式排除的短路族，换「真值性」判据来量同一个面。
