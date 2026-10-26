@@ -79,6 +79,21 @@ pick_cache() {
     for d in "$ROOT"/.rtcache/*/; do
         [ -f "$d/runtime.o" ] || continue
         [ -f "$d/runtime_ws.o" ] || continue          # --full 才有
+        # ⚠️ M330（缺陷 583）：上面两条**只证明"这个缓存目录非空"**，不证明它够本门用。
+        #   实测（r20 · N=10 · /data/gatevm/shard-20261026-143717/shard1.log）：
+        #   pick_cache 按 mtime 选中 .../b7cff9091c725f93（18 个 .o，runtime.o 与 runtime_ws.o 都在），
+        #   但它是**精简档**缓存，缺 10 个扩展内建 ⇒ ④ 负控链接报
+        #   undefined reference to bi_aes_* / bi_sqlite_* / px_route_* ⇒ 两条负控判红，
+        #   而产品一行未动（A1–A5 与还原自证全绿）。偶发的原因：哪个 key 目录最新，取决于
+        #   并发档下上一个门用了哪种构建配置 ⇒ 判据贴表象而非契约。
+        #   修法：按**负控链接真正需要的对象**逐个查（下面这串就是链接的契约）。
+        ok=1
+        for need in runtime_aes.o runtime_rsa.o runtime_sqlite.o runtime_route.o \
+                    runtime_xml.o runtime_zip.o runtime_zlib.o runtime_image.o \
+                    runtime_ed25519.o tweetnacl.o; do
+            [ -f "$d/$need" ] || { ok=0; break; }
+        done
+        [ "$ok" = 1 ] || continue                     # 精简档缓存 ⇒ 不是本门要的
         m=$(stat -c %Y "$d/runtime.o" 2>/dev/null || echo 0)
         if [ "$m" -gt "$best_m" ]; then best_m=$m; best="$d"; fi
     done
