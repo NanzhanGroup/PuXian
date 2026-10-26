@@ -7,7 +7,10 @@
 #   ② D2 负控：**两条轨**跑 dict_missing_key.px 都必须非零退出、stderr 含 R1008
 #      且出错点之后的 "after" 不得出现（两轨同口径 = 修复的核心判据）
 #   ③ D6：mkdir mode 按 umask 折算的绝对权限位断言（在 ① 内）
-#   ④ D5：dns_txt TCP 回退（多记录域名）—— 需外网，离线记 SKIP 不计红
+#   ④ D5：dns_txt UDP 截断（TC=1）→ TCP 回退 —— 门内**自建 DNS 桩**（零外网）：
+#      桩档 = 判红（UDP 面 TC=1 + 诱饵、TCP 面 3 条长 TXT；回退由桩侧计数直接观测）；
+#      桩档不可用（非 root 且无 sudo -n）时才走真域名，且先做 UDP 53 + TCP 53 **双通道探针**，
+#      任一不通 ⇒ SKIP 并响亮计数，**永不判红**。缺陷 584：探针通道 ≠ 被测通道。
 #   ⑤ D7 负控：handler 出错 → **500** + **服务存活**（VM 轨与 C 轨各跑一遍）
 #   ⑥ 门自检负控：把断言值改错必须变红（防门自欺）
 #   ⑦ D7 端口：**区间避开 ephemeral 池 + 先确认空闲再用** —— 门自身竞态
@@ -76,14 +79,104 @@ if [ -x "$DIR/build/dict_missing_key" ]; then
     d2_probe "编译轨(C)" "$TMP/d2c.bin"
 fi
 
-# ---------- ③ D5：dns_txt TCP 回退（需外网） ----------
-echo "[3/6] D5：dns_txt UDP 截断 → TCP 回退（多记录域名）"
-cat > "$TMP/d5.px" <<'PXEOF'
-# 先探网：getaddrinfo 路径（dns_lookup）失败 ⇒ 环境无外网 ⇒ 退出码 2（门记 SKIP）
-let probe = dns_lookup("google.com")
-if type(probe) == "result":
-    print("NET-DOWN: " + str(probe))
-    exit(2)
+# ---------- ③ D5：dns_txt UDP 截断 → TCP 回退（本地桩优先 · 缺陷 584） ----------
+echo "[3/6] D5：dns_txt UDP 截断 → TCP 回退（本地 DNS 桩 · 零外网）"
+# 缺陷 584 的教训：老门只用 getaddrinfo（**UDP 侧**）探网，而被测通道是 **TCP 53** ⇒
+#   探针过、通道不通 ⇒ 把「环境不可用」判成「产品红」（CI run 40308948055，连带 31 个 step skipped）。
+# 现在分层：
+#   【桩档 · 判红】门内自建 DNS 桩（$DIR/dns_stub.c）：
+#       UDP 面置 TC=1 且塞 1 条诱饵 "decoy"，TCP 面给 3 条长 TXT（RDATA 合计 >512 ⇒ 真会截断）
+#       ⇒ 语义由门自己造，零外网、确定性。需要 root（绑 53）+ unshare -mn（网络/挂载命名空间
+#       隔离，绝不碰宿主 /etc 与真实网卡）。CI 用 runner 的 sudo -n，本地全量门以 root 跑。
+#   【外网档 · 观察项】桩档跑不了（非 root 且无 sudo -n）时才走真域名；先做 **UDP 53 + TCP 53
+#       双通道探针**，任一不通 ⇒ SKIP 并**响亮计数**，永不判红 —— 判据不判它无法观测的环境。
+STUB_SRC="$DIR/dns_stub.c"
+STUB_BIN="$TMP/dns_stub"
+D5_CLIENT_SRC="$TMP/d5.px"
+D5_CLIENT="$TMP/build/d5"
+D5_OK=0
+
+# 桩在 TCP 面给出的真值 / UDP 面的诱饵（判据侧真值由桩自己吐，避免两处手抄 600 字节）
+d5_sec()   { awk -v c="$1" '$0=="CASE "c{f=1;next} /^CASE /{f=0} f' "$2"; }
+d5_n()     { d5_sec "$1" "$2" | sed -n 's/^n=//p' | head -1; }
+d5_recs()  { d5_sec "$1" "$2" | grep '^R' || true; }
+
+# 判据本体。**必须能被负控打红**（NC2 拿破损桩验证这一点，否则判据在自欺）
+d5_judge() {   # $1=客户端输出 ⇒ 0=符合
+    local out="$1"
+    grep -q '^ERR ' "$out" && return 1
+    [ "$(d5_n trunc.dnsstub.test "$out")" = "3" ] || return 1
+    diff -q <(d5_recs trunc.dnsstub.test "$out") <("$STUB_BIN" expected) >/dev/null || return 1
+    [ "$(d5_n plain.dnsstub.test "$out")" = "1" ] || return 1
+    [ "$(d5_sec plain.dnsstub.test "$out" | grep -m1 '^R0=')" = "R0=plain-udp" ] || return 1
+    [ "$(d5_n nx.dnsstub.test "$out")" = "0" ] || return 1
+    [ "$(d5_n empty.dnsstub.test "$out")" = "0" ] || return 1
+    return 0
+}
+
+# 「回退真的发生了」的直接观测：桩侧计数（而不是靠返回值看着对推断）
+d5_hits() {    # $1=hits 日志
+    local h="$1"
+    [ "$(grep -c '^udp trunc\.dnsstub\.test$' "$h" 2>/dev/null || true)" = "1" ] || return 1
+    [ "$(grep -c '^tcp trunc\.dnsstub\.test$' "$h" 2>/dev/null || true)" -ge 1 ] || return 1
+    [ "$(grep -c '^udp plain\.dnsstub\.test$' "$h" 2>/dev/null || true)" = "1" ] || return 1
+    [ "$(grep -c '^tcp plain\.dnsstub\.test$' "$h" 2>/dev/null || true)" = "0" ] || return 1
+    return 0
+}
+
+# 桩档的前提：root（绑 53）+ ip（拉起 lo）+ unshare -mn（隔离）
+_M116_SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    _M116_SUDO="sudo -n"
+fi
+# ip 的绝对路径：runner 普通用户的 PATH 里常常没有 /usr/sbin ⇒ 只查 PATH 会把桩档
+#   **静默降级**成外网观察档（那就又回到「看着绿、实则零观测」）。这里显式兜底。
+_M116_IP="$(command -v ip 2>/dev/null || true)"
+for _c in /usr/sbin/ip /sbin/ip /usr/bin/ip /bin/ip; do
+    [ -n "$_M116_IP" ] && break
+    [ -x "$_c" ] && _M116_IP="$_c"
+done
+_m116_dns_ns_ok() {
+    [ -n "$_M116_IP" ] || return 1
+    command -v unshare >/dev/null 2>&1 || return 1
+    [ "$(id -u)" -eq 0 ] || [ -n "$_M116_SUDO" ] || return 1
+    $_M116_SUDO unshare -mn true 2>/dev/null || return 1
+    return 0
+}
+
+cc -O2 -o "$STUB_BIN" "$STUB_SRC" > "$TMP/stub.cc.log" 2>&1
+if [ ! -x "$STUB_BIN" ]; then
+    bad "DNS 桩编译失败（cc $STUB_SRC）—— 桩档是 D5 的唯一判据来源"
+    sed 's/^/       | /' "$TMP/stub.cc.log" | tail -8
+else
+    cat > "$D5_CLIENT_SRC" <<'PXEOF'
+let names = ["trunc.dnsstub.test", "plain.dnsstub.test", "nx.dnsstub.test", "empty.dnsstub.test"]
+for n in names:
+    print("CASE " + n)
+    let r = dns_txt(n)
+    if type(r) == "result":
+        print("ERR " + str(r))
+    else:
+        print("n=" + str(len(r)))
+        var i = 0
+        for x in r:
+            print("R" + str(i) + "=" + x)
+            i += 1
+PXEOF
+    ./tools/px build "$D5_CLIENT_SRC" > "$TMP/d5.build.log" 2>&1
+    if [ ! -x "$D5_CLIENT" ]; then
+        bad "D5 客户端编译失败"; sed 's/^/       | /' "$TMP/d5.build.log" | tail -6
+    elif ! _m116_dns_ns_ok; then
+        # ── 外网档：观察项，永不判红（判据不判它无法观测的环境）──────────────
+        _m116_dns_ns="$(awk '/^[[:space:]]*nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null)"
+        if [ -z "$_m116_dns_ns" ]; then
+            skips "[D5-SKIP-LOUD] 桩档不可用（非 root 且无 sudo -n）且 /etc/resolv.conf 无 nameserver ⇒ D5 本轮**零观测**"
+        else
+            _m116_pr="$("$STUB_BIN" probe "$_m116_dns_ns" 53 2>&1)"; _m116_prc=$?
+            if [ $_m116_prc -ne 0 ]; then
+                skips "[D5-SKIP-LOUD] 外网档通道不可达（$_m116_dns_ns:53）：$_m116_pr ⇒ D5 本轮**零观测**（缺陷 584：这正是以前会被误判成产品红的情形）"
+            else
+                cat > "$TMP/d5ext.px" <<'PXEOF'
 let names = ["google.com", "cloudflare.com"]
 var bad = 0
 for n in names:
@@ -93,18 +186,85 @@ for n in names:
         bad += 1
     else:
         print("OK " + n + " n=" + str(len(r)))
-if bad > 0:
-    exit(1)
 PXEOF
-./tools/px build "$TMP/d5.px" > "$TMP/d5.build.log" 2>&1
-"$TMP/build/d5" > "$TMP/d5.log" 2>&1; d5rc=$?
-if [ $d5rc -eq 0 ]; then
-    ok "TCP 回退生效：$(tr '\n' ' ' < "$TMP/d5.log")"
-elif [ $d5rc -eq 2 ]; then
-    skips "环境无外网（dns_lookup 已失败），跳过：$(tr '\n' ' ' < "$TMP/d5.log")"
-else
-    bad "dns_txt 多记录域名失败（网通则必红）：$(tr '\n' ' ' < "$TMP/d5.log")"
+                ./tools/px build "$TMP/d5ext.px" > "$TMP/d5ext.build.log" 2>&1
+                "$TMP/build/d5ext" > "$TMP/d5ext.out" 2>&1; _m116_erc=$?
+                skips "[D5-SKIP-LOUD] 桩档不可用 ⇒ 仅外网观察（双通道探针已过：$_m116_pr）：$(tr '\n' ' ' < "$TMP/d5ext.out") rc=$_m116_erc（观察项不影响结论）"
+            fi
+        fi
+        D5_OK=0
+    else
+        # ── 桩档：判红 ────────────────────────────────────────────────
+        cat > "$TMP/d5_run.sh" <<'EOS'
+#!/bin/bash
+# 在 unshare -mn 内跑：只碰本命名空间的 lo 与 /etc/resolv.conf（不碰宿主）
+set -u
+mode="$1"; out="$2"; hits="$3"
+"$IP_BIN" link set lo up 2>/dev/null || { echo "NS_FAIL=lo" > "$out"; exit 90; }
+mount --make-rprivate / 2>/dev/null || true
+printf 'nameserver 127.0.0.1\n' > "$RESOLV_TMP" 2>/dev/null || { echo "NS_FAIL=resolv-write" > "$out"; exit 91; }
+mount --bind "$RESOLV_TMP" /etc/resolv.conf 2>/dev/null || { echo "NS_FAIL=resolv-bind" > "$out"; exit 92; }
+grep -q 'nameserver 127.0.0.1' /etc/resolv.conf 2>/dev/null || { echo "NS_FAIL=resolv-visible" > "$out"; exit 93; }
+: > "$hits"
+"$STUB_BIN" serve 53 "$hits" "$mode" 2> "$STUB_ERR" &
+sp=$!
+for _i in $(seq 1 50); do grep -q STUB_READY "$STUB_ERR" 2>/dev/null && break; sleep 0.1; done
+"$D5_CLIENT" > "$out" 2>&1
+rc=$?
+kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+exit $rc
+EOS
+        _m116_ns_run() {   # $1=mode $2=输出 $3=hits
+            $_M116_SUDO env STUB_BIN="$STUB_BIN" D5_CLIENT="$D5_CLIENT" IP_BIN="$_M116_IP" \
+                RESOLV_TMP="$TMP/d5.resolv" STUB_ERR="$TMP/d5.stub.err" \
+                unshare -mn bash "$TMP/d5_run.sh" "$1" "$2" "$3"
+        }
+        _m116_ns_run normal "$TMP/d5.normal.out" "$TMP/d5.hits"; _m116_rc=$?
+        case $_m116_rc in
+            90|91|92|93)
+                bad "桩档命名空间构造失败（$(head -1 "$TMP/d5.normal.out" 2>/dev/null)）—— 桩档是必红判据，不因构造失败判绿"
+                D5_OK=0 ;;
+            *)
+                if d5_judge "$TMP/d5.normal.out"; then
+                    ok "桩档：TC=1（UDP）⇒ 回退 TCP ⇒ 3 条长 TXT 逐字节等于桩的 TCP 面（多段 character-string 已合并）"
+                    D5_OK=1
+                else
+                    bad "桩档：dns_txt 在「UDP 截断 + TCP 可达」下结果不符（产品缺陷判据）"
+                    sed 's/^/       | /' "$TMP/d5.normal.out" | head -12
+                    D5_OK=0
+                fi ;;
+        esac
+        if [ "$D5_OK" = "1" ]; then
+            if d5_hits "$TMP/d5.hits"; then
+                ok "回退真的发生（桩侧直读）：udp trunc ×1 → tcp trunc ×1；plain 只走 UDP（非无脑 TCP）"
+            else
+                bad "回退未按预期发生（桩侧计数）：$(tr '\n' ' ' < "$TMP/d5.hits")"
+            fi
+            # NC1：判别子存在 —— 若诱饵与真值相同，「有没有回退」在返回值上不可分 ⇒ 判据无牙
+            if [ "$("$STUB_BIN" decoy)" != "$("$STUB_BIN" expected | head -1)" ] && \
+               [ "$("$STUB_BIN" decoy | grep -c '^R')" != "$("$STUB_BIN" expected | grep -c '^R')" ]; then
+                ok "NC1 判别子存在：UDP 诱饵（1 条 decoy）≠ TCP 真值（3 条长记录）⇒ 不回退者必然对不上"
+            else
+                bad "NC1 判别子失效：诱饵与真值不可分 ⇒ 判据没有牙"
+            fi
+            # NC2：判据负控 —— TCP 面故意破损（accept 后立即关），判据**必须**红
+            _m116_ns_run tcp-broken "$TMP/d5.broken.out" "$TMP/d5.broken.hits" >/dev/null 2>&1
+            if d5_judge "$TMP/d5.broken.out"; then
+                bad "NC2 判据自欺：TCP 面破损（accept 后立即关）时判据竟仍判绿"
+            else
+                ok "NC2 判据有牙：TCP 面破损 ⇒ 客户端 $(grep -m1 '^ERR ' "$TMP/d5.broken.out" | cut -c1-60) ⇒ 判据判红"
+            fi
+            # NC3：症状定性 —— 通道不可达的可观测症状就是 CI 红原文那句 tcp connect() failed
+            _m116_ns_run udp-only "$TMP/d5.noudp.out" "$TMP/d5.noudp.hits" >/dev/null 2>&1
+            if grep -q 'tcp connect() failed' "$TMP/d5.noudp.out"; then
+                ok "NC3 症状定性：TCP 53 不可达 ⇒ 「dns: tcp connect() failed」（与 CI run 40308948055 红原文同症 ⇒ 该文案属环境类，非产品错）"
+            else
+                bad "NC3 症状不符：TCP 不可达时未见 tcp connect() failed：$(head -3 "$TMP/d5.noudp.out" | tr '\n' ' ')"
+            fi
+        fi
+    fi
 fi
+
 
 # ---------- ④ D7：handler 出错 → 500 + 服务存活 ----------
 echo "[4/6] D7 负控：handler 运行时错误 → 500（且服务不死）"
