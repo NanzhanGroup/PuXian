@@ -139,6 +139,14 @@ GATE_TIMEOUT_DEFAULT="${GATE_TIMEOUT_DEFAULT:-900}"
 #   为什么：只读入口（`--list`）**不得有副作用**。详见下方同名注释块。
 GATE_ALL0=$SECONDS
 
+# ── 缺陷 590（M336）：分片模式下「完整日志」路径必须**打得出来** ──
+#   病灶：分片的每个分片把自己的 /tmp bind 成 $BASE/tmpN（见 packaging/chain/shard_run.sh），
+#   而本脚本打印的仍是 /tmp/gate_<name>.log ⇒ 在分片外**打不开**（那是分片私有的 /tmp），
+#   读的人会以为日志丢了（2026-10-27 01:28 实测：为定位 m150 多花了几分钟，最后靠
+#   mount 参数推断出真路径 $BASE/tmp3/gate_m150_tls_crypto.log）。
+#   ⇒ 分片侧传 GATE_LOG_DIR_HINT=<宿主可见目录>，打印时用它拼**宿主可读**的路径。
+gate_log_path(){ if [ -n "${GATE_LOG_DIR_HINT:-}" ]; then printf '%s/gate_%s.log' "$GATE_LOG_DIR_HINT" "$1"; else printf '/tmp/gate_%s.log' "$1"; fi; }
+
 run() {  # $1=名 $2..=命令
     local name="$1"; shift
     # ── M243：--list 只报门名（check_gate_registry.sh 靠它做清单↔实现对拍）──
@@ -183,7 +191,7 @@ run() {  # $1=名 $2..=命令
         tail -12 "/tmp/gate_$name.log" | sed 's/^/     /'
         # M286s1：**完整日志路径** —— 此前只显示尾部 ⇒ 诊断不了根因
         #   （本轮实测：m260 的根因在 [3] 段，而尾部只有 [5] 覆盖边界 ⇒ 无从下手）。
-        echo "     （完整日志：/tmp/gate_$name.log）"; FAIL=$((FAIL+1))
+        echo "     （完整日志：$(gate_log_path "$name")）"; FAIL=$((FAIL+1))
         _maybe_fail_fast
     fi
 }
@@ -210,7 +218,7 @@ _gate_adjudicate_ok_rc() {   # $1=门名 $2=耗时
     echo "❌ $name（rc=0 但**末行判红** · ${el}s）"
     echo "     末行：$ll"
     echo "     ⇒ 门自身没把 FAIL 反映到退出码（缺陷 506 家族：结尾无条件 exit 0）"
-    echo "     （完整日志：/tmp/gate_$name.log）"
+    echo "     （完整日志：$(gate_log_path "$name")）"
     FAIL=$((FAIL+1))
     _maybe_fail_fast
     return 1

@@ -110,16 +110,44 @@ stop_server() {
     fi
 }
 trap 'stop_server' EXIT
+# 缺陷 589（M336）：**端口可连**判据 —— 只用 bash 内建 /dev/tcp，不引入依赖
+#   $1=端口 $2=尝试次数（每次 0.1s）⇒ 0=可连 1=不可连
+wait_port(){
+    local p="$1" n="${2:-50}" i=0
+    while [ $i -lt "$n" ]; do
+        if ( exec 3<>"/dev/tcp/127.0.0.1/$p" ) 2>/dev/null; then exec 3<&- 2>/dev/null; return 0; fi
+        sleep 0.1; i=$((i + 1))
+    done
+    return 1
+}
+
 start_server() {
-    rm -f /tmp/m150_srv.log
+    rm -f /tmp/m150_srv.log /tmp/m150_srv.out
     setsid nohup python3 tls_server.py "$PORT" /tmp/m150_srv.log > /tmp/m150_srv.out 2>&1 &
     SRV_PID=$!
     local i=0
     while [ $i -lt 50 ]; do
-        if grep -q '^READY' /tmp/m150_srv.out 2>/dev/null; then return 0; fi
+        if grep -q '^READY' /tmp/m150_srv.out 2>/dev/null; then break; fi
         sleep 0.1; i=$((i + 1))
     done
-    echo "FAIL TLS 服务端未就绪"; cat /tmp/m150_srv.out 2>/dev/null | sed 's/^/   /'; return 1
+    if ! grep -q '^READY' /tmp/m150_srv.out 2>/dev/null; then
+        echo "FAIL TLS 服务端未就绪（50×0.1s 内无 READY）"; cat /tmp/m150_srv.out 2>/dev/null | sed 's/^/   /'; return 1
+    fi
+    # ── 缺陷 589（M336）：就绪判据 ≠ 被测通道 ──
+    #   病灶：原来的就绪判据是「日志里有 ^READY」，而被测通道是「TCP 端口可连」。
+    #   两者不是同一件事（同族：缺陷 584「探针通道 ≠ 被测通道」）。
+    #   现场（2026-10-27 01:28 全量门 shard3，4 分片并行）：日志已 READY，紧接着
+    #     truth_tls → `dial tcp 127.0.0.1:19761: connect: connection refused` ⇒ 假红。
+    #   ⇒ READY 之后再等**端口真能连上**（最多 5s）；等不到就把服务端两个日志打出来当证据。
+    i=0
+    while [ $i -lt 50 ]; do
+        if wait_port "$PORT" 1; then return 0; fi
+        sleep 0.1; i=$((i + 1))
+    done
+    echo "FAIL TLS 服务端：日志已 READY 但端口 $PORT 5s 内不可连（就绪判据 ≠ 被测通道 · 缺陷 589）"
+    tail -5 /tmp/m150_srv.out 2>/dev/null | sed 's/^/   /'
+    tail -5 /tmp/m150_srv.log 2>/dev/null | sed 's/^/   /'
+    return 1
 }
 
 build_one() {
@@ -368,6 +396,29 @@ if diff -q /tmp/m150_rt_snapshot.c "$RT" > /dev/null; then
     echo "   PASS runtime/runtime.c 与门开始时的快照逐字节一致（负控已完全还原）"
 else
     echo "FAIL runtime/runtime.c 与快照不一致（负控未完全还原）"; FAIL=$((FAIL+1))
+fi
+
+# ── ⑦ 判据自证（缺陷 589 的负控）：wait_port 必须**能判红** ──
+#   为什么必须有这一段：新加的就绪判据如果是「永远返回 0」，那它等于没加
+#   （同族教训：M333 的 NC1/NC2 就是给「桩档判据」配的牙）。
+echo "== [⑦ 判据自证] wait_port 在「端口不可连」时必须判红（缺陷 589 负控）=="
+# 正面：起一个**临时**监听（不依赖本门主服务端的生命周期），确认 wait_port 会判可连
+TMPP=$((20000 + RANDOM % 2000))
+python3 -c 'import socket,sys,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(4); time.sleep(6)' "$TMPP" 2>/dev/null &
+TPID=$!
+if wait_port "$TMPP" 30; then
+    echo "   PASS wait_port 对**正在监听**的端口判可连（正面自证）"
+else
+    echo "FAIL wait_port 对正在监听的端口也判不可连（判据坏了）"; FAIL=$((FAIL+1))
+fi
+kill "$TPID" 2>/dev/null; wait "$TPID" 2>/dev/null
+# 9 号端口（discard）在本机没有监听；5 次 ×0.1s 足够，不拖慢门
+if wait_port 9 5; then
+    echo "FAIL wait_port 无牙：未监听端口也判可连 ⇒ 就绪判据形同虚设"; FAIL=$((FAIL+1))
+else
+    echo "   PASS wait_port 对未监听端口判不可连（负控 · 判据有牙）"
 fi
 
 echo "════════════════════════════════════════════"
