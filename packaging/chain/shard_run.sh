@@ -308,6 +308,7 @@ for i in $(seq 1 "$N"); do
       ip link set lo up 2>/dev/null
       cd $BASE/wt$i || exit 9
       GATE_TSV=/tmp/times.tsv GATE_TIMEOUT_DEFAULT=900 \
+      GATE_LOG_DIR_HINT=$BASE/tmp$i \
       ${JOBS_ENV}${TSET}bash selfhost/run_gates.sh --only '$ONLY'
     " > "$LOG/shard$i.log" 2>&1
     echo "$?" > "$LOG/shard$i.rc"
