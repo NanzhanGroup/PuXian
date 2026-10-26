@@ -168,9 +168,15 @@ echo
 echo "[6/12] C6 不变量 · list（子协程扩容中被隔离终止，父协程核对对象完好且仍可用）"
 if start_bin C6 1; then :; fi
 if [ -n "$PID" ]; then
-  req_full "/arm?site=list_grow&min=$ARRAY_MIN" /tmp/m128_C6_arm.out > /dev/null
+  AH=$(req_full "/arm?site=list_grow&min=$ARRAY_MIN" /tmp/m128_C6_arm.out)
+  # 缺陷 591（M338）：把「/arm 有没有装上」变成显式判据 —— 原来这一步的响应被丢弃（>/dev/null），
+  #   于是"注入没装上"与"产品没隔离"在现场长得一模一样（都只说「期望 4096 不符」）。
+  case "$AH" in *" 200"*) ok "C6 /arm 请求已受理（200）";; *) bad "C6 /arm 请求未被受理（'$AH'）⇒ 注入没装上";; esac
+  # ⚠️ 别过度解读上一行：/arm 端点**不校验 site**、恒返回 200（见 unlock_grow.px:68-73）
+  #   ⇒ 它只证明「请求被受理」，不证明「注入装上了」。真正的证据是下面这条**命中行**。
   H=$(req_full "/inv?kind=list" /tmp/m128_C6_tgt.out); echo "     /inv?kind=list → '$H'"
   B=$(body_of /tmp/m128_C6_tgt.out); echo "     body=$B"
+  grep -q "px-m128] 注入命中：站点=list_grow" "$LOG" && ok "C6 注入确在站点 list_grow 命中（诊断行在）" || bad "C6 未见 list_grow 注入命中行（注入装上了却没命中 ⇒ 触发条件不符）"
   case "$H" in *" 200"*) ok "C6 父协程未受影响（200）";; *) bad "C6 期望 200，实得 '$H'";; esac
   case "$B" in *"before=4096"*) ok "C6 失败点 = 数组满（len=4096），对象 len 未被改动";; *) bad "C6 body 缺 before=4096";; esac
   case "$B" in *"first=0 last=4095"*) ok "C6 前 4096 项内容完好（未损坏）";; *) bad "C6 body 内容校验失败";; esac
@@ -184,9 +190,11 @@ echo
 echo "[7/12] C7 不变量 · dict（同上；另核对已有键的值完好）"
 if start_bin C7 1; then :; fi
 if [ -n "$PID" ]; then
-  req_full "/arm?site=dict_vals_grow&min=$ARRAY_MIN" /tmp/m128_C7_arm.out > /dev/null
+  AH=$(req_full "/arm?site=dict_vals_grow&min=$ARRAY_MIN" /tmp/m128_C7_arm.out)
+  case "$AH" in *" 200"*) ok "C7 /arm 请求已受理（200）";; *) bad "C7 /arm 请求未被受理（'$AH'）⇒ 注入没装上";; esac
   H=$(req_full "/inv?kind=dict" /tmp/m128_C7_tgt.out); echo "     /inv?kind=dict → '$H'"
   B=$(body_of /tmp/m128_C7_tgt.out); echo "     body=$B"
+  grep -q "px-m128] 注入命中：站点=dict_vals_grow" "$LOG" && ok "C7 注入确在站点 dict_vals_grow 命中（诊断行在）" || bad "C7 未见 dict_vals_grow 注入命中行"
   case "$H" in *" 200"*) ok "C7 父协程未受影响（200）";; *) bad "C7 期望 200，实得 '$H'";; esac
   case "$B" in *"before=4096"*) ok "C7 失败点 = 数组满（len=4096），dict len 未被改动";; *) bad "C7 body 缺 before=4096";; esac
   case "$B" in *"v0=v0 vlast=v4095"*) ok "C7 首位/末位键值完好（未损坏）";; *) bad "C7 键值校验失败";; esac
