@@ -446,6 +446,18 @@ jobs:
           ls -l "$D"
           bash packaging/check_release_assets.sh "$D" "$TAG"
 
+      # M335（缺陷 587/588）：`releases/latest` 必须等于「最高版本 tag」。
+      # 为什么发布链里必须自证：tools/install.sh 取 releases/latest，而 GitHub 的 latest
+      #   按 **Release 创建时间** 排、不看版本号 ⇒ 补历史 tag 时 latest 会被旧版本顶掉
+      #   （2026-10-26 实测：先补 v0.2.330 再补 v0.2.325/326/327 ⇒ latest 变 v0.2.327
+      #     ⇒ 一键安装装旧树，而当时对账工具报 OK）。
+      # --fix 是幂等的：把**最高版本 tag** 的 Release 标成 latest，然后**回读自证**；
+      #   回读仍不一致 ⇒ 整个 job 判红（不靠"PATCH 返回 200 就算成功"）。
+      - name: releases/latest 必须等于最高版本 tag（幂等自愈 + 回读自证）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash packaging/latest_guard.sh --repo "$GITHUB_REPOSITORY" --fix
+
   # ============================================================
   # rpm —— 构建签名 RPM 仓库并发布到 GitHub Pages（M73 dnf + M77 el7 yum）
   # ------------------------------------------------------------
