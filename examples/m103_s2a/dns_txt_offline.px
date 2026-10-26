@@ -1,0 +1,32 @@
+# ============================================================
+# M103-S2a 离线段断言（缺陷 585 修复新增）
+# ------------------------------------------------------------
+# 零 DNS 依赖：只测「非法入参 ⇒ Err 可判定」，不发任何网络包。
+# 为什么单独拆出来：原 verify.sh 的「断网跳过」写在第 [4/4] 步，
+#   而第 [3/4] 步的 px 断言里就含 dns_txt("qq.com") —— 断网时先红，
+#   跳过分支是**死代码**（缺陷 585）。拆出零依赖段后，断网环境
+#   仍有一段**真判据**在跑，而不是整体跳过。
+# 运行：bash verify.sh（[2/5] 段）
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name)
+
+# 非法入参 → Err（不依赖任何解析器：入参校验在发包之前）
+let b = dns_txt("")
+check("empty domain err", b.is_err())
+let b2 = dns_txt("a..b")
+check("bad label err", b2.is_err())
+let b3 = dns_txt("..")
+check("only dots err", b3.is_err())
+# 注：带前置连字符的标签（"-lead-hyphen.test"）实测**返回 list 而非 Err**（M334 量到），
+#   那是「标签语法是否严格」的语义问题、不是本门契约 ⇒ 不在此断言，避免把未定语义写成判据。
+
+print("DNS_TXT_OFFLINE:", str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)

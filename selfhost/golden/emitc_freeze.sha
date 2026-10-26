@@ -6,6 +6,8 @@ examples/m100/m100_daemon.px src=a3be7d4827bbe5e1 rc=0 out=18028f4595922e8e46f03
 examples/m101_s2/m101_s2_daemon.px src=2ee51ceb7be16cdc rc=0 out=b3585c188fa9625a002db5d1cea9e921 err=e3b0c44298fc1c14
 examples/m101_s2/m101_sni_daemon.px src=b4fae16cb874b921 rc=0 out=495ca89e3b321ef15afc4b140516ced0 err=e3b0c44298fc1c14
 examples/m102_s2/s2a_probe.px src=98bb0596c97ed9df rc=0 out=68c928e401a44a02076ddb037a736c72 err=e3b0c44298fc1c14
+examples/m103_s2a/dns_txt_offline.px src=2dd4384b74420aea rc=0 out=25d477e2447e41e13f243399796c5bca err=e3b0c44298fc1c14
+examples/m103_s2a/dns_txt_stub.px src=2998bf2d9126d3f5 rc=0 out=841e76c06ab9b774805f88ed8c0ea41b err=e3b0c44298fc1c14
 examples/m103_s2a/dns_txt_test.px src=09d99ee3ed87b335 rc=0 out=d70bfc5d158bb1992a8dc107e7aec162 err=e3b0c44298fc1c14
 examples/m103_s2b/keygen_test.px src=39e466498034a549 rc=0 out=ba2c9a9176a618b0379db5f0fe78b23a err=e3b0c44298fc1c14
 examples/m103_s2c/yaml_stringify_test.px src=24e819d0e5148b40 rc=0 out=8bf3c7a0dd4268d935e40fc9da29abd1 err=e3b0c44298fc1c14

@@ -46,6 +46,9 @@ cat > "$W/fix/good/runs.json" <<'JSON'
  {"head_branch":"v9.9.2","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id":9002,"status":"completed","conclusion":"success"}]}
 JSON
 printf '# 空豁免表\n' > "$W/fix/good/ignore"
+# 第二源（缺陷 586/587 修复后新增的两个 fixture 文件）：git tag 列表 + releases/latest
+printf '[{"name":"v9.9.3"},{"name":"v9.9.2"}]\n' > "$W/fix/good/tags.json"
+printf '{"tag_name":"v9.9.3"}\n' > "$W/fix/good/latest.json"
 
 mkdir -p "$W/fix/bad"
 cat > "$W/fix/bad/releases.json" <<'JSON'
@@ -60,6 +63,8 @@ cat > "$W/fix/bad/runs.json" <<'JSON'
  {"head_branch":"v9.9.1","head_sha":"1111111111111111111111111111111111111111","id":9001,"status":"in_progress","conclusion":null}]}
 JSON
 printf 'v9.9.3\t历史回填 tag（fixture）· 只为账目 · 不需要发布\n' > "$W/fix/bad/ignore"
+printf '[{"name":"v9.9.5"},{"name":"v9.9.4"},{"name":"v9.9.3"},{"name":"v9.9.2"},{"name":"v9.9.1"}]\n' > "$W/fix/bad/tags.json"
+printf '{"tag_name":"v9.9.5"}\n' > "$W/fix/bad/latest.json"
 
 mkdir -p "$W/fix/stale"
 printf '[]\n' > "$W/fix/stale/releases.json"
@@ -67,6 +72,8 @@ cat > "$W/fix/stale/runs.json" <<'JSON'
 {"workflow_runs":[{"head_branch":"v9.9.7","head_sha":"7777777777777777777777777777777777777777","id":9007,"status":"completed","conclusion":"cancelled"}]}
 JSON
 printf 'v9.9.7\t过期豁免（fixture）：最新 tag 不该被豁免\n' > "$W/fix/stale/ignore"
+printf '[{"name":"v9.9.7"}]\n' > "$W/fix/stale/tags.json"
+printf '{"tag_name":"v9.9.7"}\n' > "$W/fix/stale/latest.json"
 
 run(){ GH_IGNORE="$1/ignore" bash "$SH" --api-fixture "$1" "${@:2}" 2>&1; }
 
@@ -146,6 +153,59 @@ printf '\n【11】规模下限与通道\n'
 L=$(wc -l < "$SH"); [ "$L" -ge 100 ] && ok "脚本行数 $L ≥ 100" || ng "脚本过短 $L"
 bash "$SH" --help >/dev/null 2>&1 && ok "--help rc=0" || ng "--help rc≠0"
 if bash "$SH" --bogus 2>/dev/null | grep -q .; then ng "诊断不该走 stdout"; else ok "诊断走 stderr"; fi
+
+printf '\n【12】缺陷 586：tag 在 git tags 里、但既无 Release 又无 run ⇒ 必须判 NO-RELEASE-NORUN\n'
+mkdir -p "$W/fix/orphan"
+cat > "$W/fix/orphan/releases.json" <<'JSON'
+[{"tag_name":"v9.9.9","draft":false,"prerelease":false,"assets":[{"name":"puxian-9.9.9-abc.tar.gz"},{"name":"puxian-bootstrap-aarch64-v9.9.9.tar.gz"},{"name":"sha256sums.txt"}]},
+ {"tag_name":"v9.9.7","draft":false,"prerelease":false,"assets":[{"name":"puxian-9.9.7-abc.tar.gz"},{"name":"sha256sums.txt"}]}]
+JSON
+cat > "$W/fix/orphan/runs.json" <<'JSON'
+{"workflow_runs":[{"head_branch":"v9.9.9","head_sha":"9999999999999999999999999999999999999999","id":9909,"status":"completed","conclusion":"success"},
+ {"head_branch":"v9.9.7","head_sha":"7777777777777777777777777777777777777777","id":9907,"status":"completed","conclusion":"success"}]}
+JSON
+# 关键：v9.9.8 只存在于 git tag 列表（无 Release、无 run）—— 这正是 2026-10-26 事故的形态；
+#       v9.9.8-m55 是带后缀的开发 tag ⇒ **不该进要求集**（作用域判据）
+printf '[{"name":"v9.9.9"},{"name":"v9.9.8"},{"name":"v9.9.7"},{"name":"v9.9.8-m55"}]\n' > "$W/fix/orphan/tags.json"
+printf '{"tag_name":"v9.9.9"}\n' > "$W/fix/orphan/latest.json"
+printf '# 空豁免表\n' > "$W/fix/orphan/ignore"
+o=$(run "$W/fix/orphan" --limit 10); rc=$?
+chk "rc" "$rc" "1"
+chkg "v9.9.8 判 NO-RELEASE-NORUN" "$o" "v9.9.8"
+if printf '%s' "$o" | grep -q 'v9.9.8 .*NO-RELEASE-NORUN'; then ok "v9.9.8 = NO-RELEASE-NORUN"; else ng "v9.9.8 判定不符"; fi
+if printf '%s' "$o" | grep -q 'v9.9.8-m55'; then ng "带后缀的开发 tag 进了要求集（作用域失效）"; else ok "带后缀开发 tag 不进要求集"; fi
+chkg "异常计数=1" "$o" "异常 1 个"
+# 负控：拿掉第二源（去掉 tags.json）⇒ v9.9.8 消失、异常归零
+#   ⇒ 证明这条红**来自新数据源**，不是别的东西顺手报出来的
+cp -r "$W/fix/orphan" "$W/fix/orphan_nosrc"; rm -f "$W/fix/orphan_nosrc/tags.json"
+o=$(run "$W/fix/orphan_nosrc" --limit 10); rc=$?
+if [ "$rc" = 0 ] && ! printf '%s' "$o" | grep -q 'v9\.9\.8'; then
+  ok "负控：无第二源时看不见 v9.9.8 且 rc=0 ⇒ 红确实来自第二源（判据有牙）"
+else
+  ng "负控失效：无 tags.json 仍报 v9.9.8 或 rc≠0（rc=$rc）"
+fi
+
+printf '\n【13】缺陷 587：releases/latest ≠ 最高版本 tag ⇒ 必须判 LATEST-STALE\n'
+cp -r "$W/fix/orphan" "$W/fix/lateststale"; rm -f "$W/fix/lateststale/tags.json"
+printf '[{"name":"v9.9.9"},{"name":"v9.9.7"}]\n' > "$W/fix/lateststale/tags.json"
+printf '{"tag_name":"v9.9.7"}\n' > "$W/fix/lateststale/latest.json"   # latest 被旧版本顶掉
+o=$(run "$W/fix/lateststale" --limit 10); rc=$?
+chk "rc" "$rc" "1"; chkg "报 LATEST-STALE" "$o" "LATEST-STALE"; chkg "异常计数=1" "$o" "异常 1 个"
+o=$(run "$W/fix/lateststale" --limit 10 --json)
+if printf '%s' "$o" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["latest_stale"]==1 and d["latest"]=="v9.9.7" and d["latest_expected"]=="v9.9.9" and d["bad"]==1; print("OK")' 2>"$W/ls.err" | grep -q OK; then
+  ok "--json 暴露 latest / latest_expected / latest_stale"
+else ng "--json latest 字段：$(cat "$W/ls.err")"; fi
+# 正控：latest = 最高版本 tag ⇒ 不得报
+cp -r "$W/fix/lateststale" "$W/fix/latestok"
+printf '{"tag_name":"v9.9.9"}\n' > "$W/fix/latestok/latest.json"
+o=$(run "$W/fix/latestok" --limit 10); rc=$?
+if [ "$rc" = 0 ] && ! printf '%s' "$o" | grep -q 'LATEST-STALE'; then ok "正控：latest 正确时不报（不造假红）"; else ng "正控失败：latest 正确仍报（rc=$rc）"; fi
+# 负控：去掉 latest.json ⇒ 能力降级，不判红（但必须在 stderr 说清）
+rm -f "$W/fix/latestok/latest.json"
+o=$(GH_IGNORE="$W/fix/latestok/ignore" bash "$SH" --api-fixture "$W/fix/latestok" --limit 10 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$o" | grep -q '\[587\] 拿不到 releases/latest'; then
+  ok "负控：无 latest 数据 ⇒ 降级并响亮告知（不判红也不静默）"
+else ng "负控失败（rc=$rc）：$(printf '%s' "$o" | grep 587 || echo 无提示)"; fi
 
 echo
 echo "release_reconcile 自证：$P 通过 / $F 失败"
