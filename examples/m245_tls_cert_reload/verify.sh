@@ -75,18 +75,28 @@ build_repro() {
     return 0
 }
 
-# ── 一次场景：起服务 → 并发客户端 → 等注册窗口结束 → 收尾判据 ──
-#    结果写 $W/<tag>.res：`n200 nbad alive rc done ready`
+# ── 一次场景：起服务 → 并发客户端 → **客户端就绪后才开注册窗口** → 收尾判据 ──
+#    结果写 $W/<tag>.res：`n200 nbad alive rc done ready conn nwin svline`
+#    ⚠️ M345（缺陷 602）三处修正，全部来自 2026-10-28 06:38 全量门 shard3 的实物：
+#      ① 窗口起点由客户端触发（arg7 启动闸）—— 修前窗口在服务一起来就跑，
+#         就绪探测一慢（分片并发下常见）流量就整体落在窗口之后 ⇒ 负控零失败 / 或 unreached；
+#      ② 就绪探测加硬截止 60s + 服务端猝死即退出 —— 修前 150×5s 能把一轮拖到 340s（历史 4 次红的时长）；
+#      ③ 分开记 `conn`（TCP 连上过）与 `svline`（产品自陈 bind+listen 成功）——
+#         「服务端没起来」与「起来了但一次握手都没成」是两回事，混为一谈就是『判据通道 ≠ 被测通道』。
 run_case() {
-    local tag="$1" i c srv pids p
+    local tag="$1" port="$2" i c srv pids p rc=0
+    local go="$W/$tag.go"; rm -f "$go"
     : > "$W/$tag.codes"
-    PX_TLS_RELOAD_GAP_MS="$GAP" "$BIN" "$PORT" "$CERT" "$KEY" "$SLEEP" "$NREL" \
+    PX_TLS_RELOAD_GAP_MS="$GAP" "$BIN" "$port" "$CERT" "$KEY" "$SLEEP" "$NREL" "$go" \
         > "$W/$tag.srv.log" 2>&1 &
     srv=$!
-    local ready=0
+    local ready=0 conn=0 t0=$SECONDS
     for i in $(seq 1 150); do
-        c=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 "https://127.0.0.1:$PORT/index.txt" 2>/dev/null)
+        c=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 "https://127.0.0.1:$port/index.txt" 2>/dev/null); rc=$?
+        [ "$rc" != 7 ] && conn=1          # 7 = 连接被拒；其余（0/35/28/52…）= TCP 连上过
         if [ "$c" = "200" ]; then ready=1; break; fi
+        kill -0 "$srv" 2>/dev/null || break
+        [ $((SECONDS - t0)) -ge 60 ] && break
         sleep 0.2
     done
 
@@ -97,12 +107,12 @@ run_case() {
             while [ "$n" -lt 400 ]; do
                 if [ $(( i % 2 )) -eq 1 ]; then
                     curl -sk -o /dev/null -m "$CURLTO" --http1.1 \
-                        "https://127.0.0.1:$PORT/index.txt" >/dev/null 2>&1
+                        "https://127.0.0.1:$port/index.txt" >/dev/null 2>&1
                     r=$?
                 else
                     curl -sk -o /dev/null -m "$CURLTO" --http1.1 \
-                        --resolve "localhost:$PORT:127.0.0.1" \
-                        "https://localhost:$PORT/index.txt" >/dev/null 2>&1
+                        --resolve "localhost:$port:127.0.0.1" \
+                        "https://localhost:$port/index.txt" >/dev/null 2>&1
                     r=$?
                 fi
                 echo "$r" >> "$W/$tag.codes"
@@ -112,17 +122,27 @@ run_case() {
         pids="$pids $!"
     done
 
+    # 客户端已在发压 ⇒ 才允许注册窗口开跑（缺陷 602 ①：窗口起点必须由压测侧触发）
+    sleep 0.3
+    : > "$go"
+    local t_go=$SECONDS
+
     local done=0
-    for i in $(seq 1 300); do
+    for i in $(seq 1 600); do
         if grep -q 'M245-RELOAD-DONE' "$W/$tag.srv.log" 2>/dev/null; then done=1; break; fi
         kill -0 "$srv" 2>/dev/null || break
+        [ $((SECONDS - t_go)) -ge 120 ] && break
         sleep 0.2
     done
+
+    # 窗口内真实流量（**杀客户端之前**取）：'判据到底看了几次' 的前提，口径 4
+    local nwin
+    nwin=$(wc -l < "$W/$tag.codes" 2>/dev/null); nwin=${nwin:-0}
 
     for p in $pids; do kill -TERM "$p" 2>/dev/null; done
     wait $pids 2>/dev/null
 
-    local alive=0 rc=0 ntot n200 nbad
+    local alive=0 ntot n200 nbad sv
     kill -0 "$srv" 2>/dev/null && alive=1
     kill -TERM "$srv" 2>/dev/null
     wait "$srv" 2>/dev/null; rc=$?
@@ -130,7 +150,9 @@ run_case() {
     ntot=$(wc -l < "$W/$tag.codes" 2>/dev/null); ntot=${ntot:-0}
     n200=$(grep -c '^0$' "$W/$tag.codes" 2>/dev/null); n200=${n200:-0}
     nbad=$(( ntot - n200 ))
-    echo "$n200 $nbad $alive $rc $done $ready" > "$W/$tag.res"
+    # 产品自陈：这行只在 bind+listen **都成功之后**才打（runtime.c）⇒ 就绪前提读的是产品通道
+    sv=$(grep -c '普贤应用服务器' "$W/$tag.srv.log" 2>/dev/null); sv=${sv:-0}
+    echo "$n200 $nbad $alive $rc $done $ready $conn $nwin $sv" > "$W/$tag.res"
     return 0
 }
 
@@ -188,11 +210,16 @@ chk "总注释不再宣称「tls_server 注册仅持 tls_mu」（口径不落后
 
 # ════════════════════════════════════════════════════════════
 echo "══ [2] 动态正判据：修后 + 放大窗口 + $CPAR 并发客户端 ══"
-run_case fixed
-read -r f_n200 f_nbad f_alive f_rc f_done f_ready < "$W/fixed.res"
-echo "     请求 200=$f_n200 失败=$f_nbad 存活=$f_alive rc=$f_rc 注册跑完=$f_done 就绪=$f_ready"
+run_case fixed "$PORT"
+read -r f_n200 f_nbad f_alive f_rc f_done f_ready f_conn f_nwin f_sv < "$W/fixed.res"
+echo "     请求 200=$f_n200 失败=$f_nbad 存活=$f_alive rc=$f_rc 注册跑完=$f_done 就绪=$f_ready" \
+     "连上过=$f_conn 窗口内请求=$f_nwin 产品自陈监听=$f_sv"
+# 前提断言（口径 4/6）：先证「服务端真的 bind+listen 了」「窗口里真的有流量」，再判症状
+chk "前提：产品自陈 bind+listen 成功（srv.log 有『普贤应用服务器』行）" "[ '$f_sv' = 1 ]"
+chk "前提：窗口起点在客户端就绪之后（repro 打了 RELOAD-START）" "grep -q 'M245-RELOAD-START' $W/fixed.srv.log"
 chk "服务端就绪（重试探测）" "[ '$f_ready' = 1 ]"
 chk "注册风暴真的跑完（判据的窗口终点）" "[ '$f_done' = 1 ]"
+chk "前提：窗口内真实流量 ≥100 次（不是『流量落在窗口之后』）" "[ '$f_nwin' -ge 100 ]"
 chk "样本量下限（≥200 次真实握手尝试）" "[ $(( f_n200 + f_nbad )) -ge 200 ]"
 chk "★ 修后：**失败数 = 0**（握手只排队，不读到悬垂对象）" "[ '$f_nbad' = 0 ]"
 chk "★ 修后：服务端存活" "[ '$f_alive' = 1 ]"
@@ -205,16 +232,28 @@ if [ "$NEG" = 1 ]; then
     restore_all
     if python3 "$HERE/negctl.py" "$RT" > "$W/negctl.log" 2>&1; then
         if build_repro negA; then
-            run_case negA
-            read -r a_n200 a_nbad a_alive a_rc a_done a_ready < "$W/negA.res"
-            echo "     请求 200=$a_n200 失败=$a_nbad 存活=$a_alive rc=$a_rc 注册跑完=$a_done 就绪=$a_ready"
+            run_case negA "$((PORT + 1))"          # 换端口：不与 fixed 轮的 socket 复用面纠缠
+            read -r a_n200 a_nbad a_alive a_rc a_done a_ready a_conn a_nwin a_sv < "$W/negA.res"
+            echo "     请求 200=$a_n200 失败=$a_nbad 存活=$a_alive rc=$a_rc 注册跑完=$a_done 就绪=$a_ready" \
+                 "连上过=$a_conn 窗口内请求=$a_nwin 产品自陈监听=$a_sv"
             # 分类（⚠️ 首版把 `done=0` 一律当「载荷没跑起来」⇒ 把**最强的红**（服务端 SIGSEGV
             #   提前死掉、注册循环自然跑不完）误判成 `unreached` ⇒ 判据反而判红。实测：
             #   `200=19 失败=68 存活=0 rc=139 注册跑完=0` = 崩溃，正是要复现的现象。）
-            if [ "$a_ready" != 1 ]; then
-                negA="unreached"                                   # 连就绪都做不到 ⇒ 载荷本身没跑起来
+            # M345（缺陷 602）：`ready=0` **不再**一律算 unreached —— 先看产品自陈「监听成功」：
+            #   · 没那行 ⇒ 服务端根本没起来（bind 失败等）⇒ premise-listen（环境前提，不是产品的红）
+            #   · 有那行 ⇒ 起来了一个握手都没成 ⇒ red-noserve（这就是要的红，2026-10-28 06:38 那次的实物）
+            #   · 窗口里没流量 **且没红症状** ⇒ premise-traffic（压测侧没发出去，判据没看到任何东西）
+            # ⚠️ 顺序要紧（M345 实测踩过）：症状断言必须先于流量下限。摘锁后握手会**卡住**，
+            #   窗口内只落下 49–56 个样本却是 11–16 个失败（22%~28%）—— 先判流量下限会把它
+            #   误报成 `premise-traffic`（判据把「红了」说成「没看见」，缺陷 601 同族）。
+            if [ "$a_sv" != 1 ]; then
+                negA="premise-listen"
+            elif [ "$a_ready" != 1 ]; then
+                negA="red-noserve"
             elif [ "$a_nbad" != 0 ] || [ "$a_alive" != 1 ]; then
                 negA="red"                                         # 失败 >0 或进程死 ⇒ 正是要的红
+            elif [ "$a_nwin" -lt 100 ]; then
+                negA="premise-traffic"
             elif [ "$a_done" != 1 ]; then
                 negA="partial"                                     # 零失败但窗口没走完 ⇒ 不算绿
             else
@@ -228,22 +267,30 @@ if [ "$NEG" = 1 ]; then
     fi
     restore_all
     chk "负控 A 打桩成功（5 处锚点唯一）" "[ '$negA' != 'anchor' ] && [ '$negA' != 'buildfail' ]"
-    chk "★ 负控 A：摘锁后**必须判红**（失败>0 或进程死）—— 实测 $negA" "[ '$negA' = 'red' ]"
+    chk "★ 负控 A：摘锁后**必须判红**（失败>0 / 进程死 / 起来了却一次握手都没成）—— 实测 $negA" \
+        "case '$negA' in red|red-noserve) true;; *) false;; esac"
 else
     echo "     （--neg-skip：跳过负控 A）"
 fi
 
 # ════════════════════════════════════════════════════════════
 echo "══ [4] 负控 B：判据自伤 ⇒ A 的红必须消失（同一条数据重判）══"
-if [ "$NEG" = 1 ] && [ "$negA" = "red" ]; then
-    read -r b_n200 b_nbad b_alive b_rc b_done b_ready < "$W/negA.res"
-    # 判据自伤：把两条判据换成**永不触发**的极性（`< 0` / `> 1`）⇒ 同一份 negA 数据
-    #   必须**不再**判红。⚠️ 首版写成「两次用同一个条件算两个变量」= 同义反复，
-    #   什么都没关掉（B 自己判红）—— 自伤必须真的**改变判据**，不是重述它。
+if [ "$NEG" = 1 ] && { [ "$negA" = "red" ] || [ "$negA" = "red-noserve" ]; }; then
+    read -r b_n200 b_nbad b_alive b_rc b_done b_ready b_conn b_nwin b_sv < "$W/negA.res"
+    # 判据自伤：把**真正判红的那条**换成永不触发的极性 ⇒ 同一份数据必须不再判红。
+    #   M345：红可能来自两条中的任一条（失败>0/进程死 或 起来了却一次握手都没成），
+    #   自伤必须对着**实际生效的那条**做，否则等于什么都没关（缺陷 602 的同族陷阱）。
     self_red=0
-    if [ "$b_nbad" -lt 0 ] || [ "$b_alive" -gt 1 ]; then self_red=1; fi
     raw=0
-    if [ "$b_nbad" != 0 ] || [ "$b_alive" != 1 ]; then raw=1; fi
+    if [ "$negA" = "red" ]; then
+        echo "     （B 的靶：成功/存活判据 —— 实测 $negA）"
+        if [ "$b_nbad" -lt 0 ] || [ "$b_alive" -gt 1 ]; then self_red=1; fi
+        if [ "$b_nbad" != 0 ] || [ "$b_alive" != 1 ]; then raw=1; fi
+    else
+        echo "     （B 的靶：就绪判据 —— 实测 $negA）"
+        if [ "$b_ready" -gt 1 ]; then self_red=1; fi
+        if [ "$b_ready" != 1 ]; then raw=1; fi
+    fi
     chk "★ 负控 B：判据关掉后同一份数据不再判红（证明红来自判据本身）" "[ '$self_red' = 0 ]"
     chk "★ 负控 B：关掉前**确实**判红（不是数据没产生）" "[ '$raw' = 1 ]"
 else
@@ -278,5 +325,12 @@ v_stale2=0; grep -q 'g_srv_hs_mu' "$RT" || v_stale2=1
 chk "还原后 g_srv_hs_mu 仍在（不是把它删掉了）" "[ '$v_stale2' = 0 ]"
 
 echo "────────────────────────────────────────────"
+# 现场留存（缺陷 590/602 的教训）：判据失败时把现场从 /tmp 搬到持久目录，
+#   否则下一轮一跑就覆盖掉，只剩一行结论——「未证」正是这么来的。
+if [ "$fail" != 0 ]; then
+    KEEP=/data/gatevm/m245-cases/$(date +%Y%m%d-%H%M%S)
+    mkdir -p "$KEEP" 2>/dev/null && cp -f "$W"/*.res "$W"/*.srv.log "$W"/*.codes "$W"/*.log "$KEEP"/ 2>/dev/null && \
+        echo "现场已留存：$KEEP"
+fi
 if [ "$fail" = 0 ]; then echo "M245-VERIFY-OK（$pass 通过）"; exit 0
 else echo "M245-VERIFY-FAIL（$pass 通过 / $fail 失败）"; exit 1; fi
