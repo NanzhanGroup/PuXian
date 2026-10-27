@@ -19,6 +19,8 @@
 #   shard_run.sh [N]            N=分片数（默认 4）
 #   shard_run.sh 4 --dry        只输出分片规划，不跑
 #   shard_run.sh 4 --times F    指定耗时依据 TSV（默认用备份的上一轮全量数据）
+#   shard_run.sh 4 --only a,b,c 只跑子集（M342 · 诊断用）：门名必须在 HEAD 注册清单里，否则 exit 4
+#                               ——「偶发」只在并发+隔离条件下复现，串行重跑复现不出（缺陷 598）
 #   ⭐ M309 阶段B（2026-10-17）起：**默认夹住门内并行度**（档A/档A' 实测口径）
 #     SHARD_JOBS=2（每路 GATE_JOBS）+ 按 N 自动切 N 段连续核区间 taskset 绑核
 #     ⇒ 4×2 = 8 线程恰好占满 8 核（不超订）· 实测 118 min → 87 min（1.36×）
@@ -71,6 +73,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry)   DRY=1 ;;
     --times) shift; TIMES="${1:-}" ;;
+    --only)  shift; ONLY_GATES="${1:-}" ;;
     [0-9]*)  N="$1" ;;
     *) echo "未知参数: $1" >&2; exit 4 ;;
   esac
@@ -144,6 +147,31 @@ echo "═══ 分片调度：N=$N · 日志 $LOG ═══"
 #    没有那个门 ⇒ 分片会去跑一个**不存在的门**。分片跑的是 HEAD，清单就必须与 HEAD 同源。
 #    `--list` 读的是 `gates.registry.sh` 的 `run <name>` 行 ⇒ 直接从 HEAD 提取即可。
 git -C "$SRC" show "HEAD:selfhost/gates.registry.sh" | sed -n 's/^run \([A-Za-z0-9_]*\) .*/\1/p' > "$LOG/gates.txt"
+
+# ── 1b) M342：`--only` 子集（诊断用 · 缺陷 598 的处置）──
+#   为什么加：M342 实测 21 个「单发取样 + 驾驭活进程」的门**串行重跑 63 轮全绿**，
+#   而 6 个已定性偶发**全部只在 4 分片并发下出现**（同树单跑必绿）。
+#   ⇒ 复现偶发必须在**同样的并发+隔离条件**下跑子集，否则观测条件 ≠ 现象发生条件（与缺陷 589 同族）。
+#   ⚠️ 前提自证：请求的每个门名必须**存在于** HEAD 注册清单，否则响亮报错退出
+#      （否则「少跑了几个门」会被读成「这轮全绿」——正是 M336 空跑必红要防的那类假绿）。
+if [ -n "${ONLY_GATES:-}" ]; then
+  : > "$LOG/gates.all.txt"; cp "$LOG/gates.txt" "$LOG/gates.all.txt"
+  MISSING=""
+  : > "$LOG/gates.txt"
+  for g in $(printf '%s' "$ONLY_GATES" | tr ',' ' '); do
+    if grep -qx "$g" "$LOG/gates.all.txt"; then
+      echo "$g" >> "$LOG/gates.txt"
+    else
+      MISSING="$MISSING $g"
+    fi
+  done
+  if [ -n "$MISSING" ]; then
+    echo "❌ --only 里有不在 HEAD 注册清单里的门：$MISSING" >&2
+    echo "   （拒绝降级成「跑剩下的」：那会把少跑当成全绿）" >&2
+    exit 4
+  fi
+  echo "⭐ --only 子集模式：$(wc -l < "$LOG/gates.txt") / $(wc -l < "$LOG/gates.all.txt") 门"
+fi
 NG=$(wc -l < "$LOG/gates.txt")
 echo "门数: $NG（清单取自 HEAD:$(git -C "$SRC" rev-parse --short HEAD)）"
 
@@ -195,6 +223,10 @@ bins = []
 for i in range(1, n + 1):
     p = os.path.join(log, 'shard%d.txt' % i)
     bins.append([l.strip() for l in open(p, encoding='utf-8') if l.strip()])
+# M342：只对**本次真的要跑**的门生效 —— 否则 `--only` 子集会被 net_needed 把 upstream_tests 塞回来
+#       （2026-10-27 实测：`--only m245,m150 --dry` 打出 shard1 有 2 门，实为上游门被追加）
+present = set(g for b in bins for g in b)
+want = set(g for g in want if g in present)
 moved = []
 for b in bins[1:]:
     for g in list(b):
@@ -224,6 +256,13 @@ if [ -s "$BASE/quiet_needed.txt" ]; then
   #   这种**脏门名**传进 --only（A' 的 /tmp/gatevm/m309ab_a2.log 第 17 行可复现）。
   #   本仓纪律：数据文件照写，解析器必须健壮 ⇒ 统一「先剥行内注释、再分列」。
   QUIET_LIST="$(sed -e 's/#.*//' "$BASE/quiet_needed.txt" | tr -d ' \t' | grep -v '^$' | paste -sd,)"
+  # M342：--only 子集模式下，quiet 档也必须收敛到子集内 ——
+  #   否则「跑 21 门」会悄悄多跑 10 个低负载门（多跑不算错，但会让「这轮跑了什么」说不清）。
+  if [ -n "${ONLY_GATES:-}" ]; then
+    _q="$(printf '%s' "$QUIET_LIST" | tr ',' '\n' | grep -Fx -f "$LOG/gates.txt" | paste -sd,)"
+    QUIET_LIST="${_q:-}"
+    echo "  （--only 子集：quiet 档收敛为「${QUIET_LIST:-无}」）"
+  fi
   python3 - "$LOG" "$N" "$BASE/quiet_needed.txt" <<'PY'
 import sys, os
 log, n, qf = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -244,7 +283,9 @@ if [ "$DRY" = 1 ]; then
     _cpus=""
     if [ -n "$SHARD_CPUS" ]; then _cpus="$(printf '%s' "$SHARD_CPUS" | cut -d, -f"$i")"; fi
     if [ -n "$_cpus" ]; then _cn="$(( $(echo "$_cpus" | awk -F- '{print ($2==""?1:$2-$1+1)}') ))"; else _cn="≈$(printf '%.1f' "$(echo "$(nproc) $N" | awk '{print $1/$2}')")"; fi
-    echo "  shard$i: $(wc -l < "$LOG/shard$i.txt") 门 · 核 ${_cpus:-不绑}（${_cn}）· JOBS=$SHARD_JOBS"
+    # M342：`wc -l` 会把「空分片的那个换行」数成 1 门 ⇒ 实打实测到「shard3: 1 门」而实际 0 门（假读数）。
+    #       改成数**非空行**。
+    echo "  shard$i: $(grep -c . "$LOG/shard$i.txt") 门 · 核 ${_cpus:-不绑}（${_cn}）· JOBS=$SHARD_JOBS"
   done
   if [ -n "$QUIET_LIST" ]; then
     _qt="$(awk -F'\t' -v L="$QUIET_LIST" 'BEGIN{n=split(L,a,",");for(i=1;i<=n;i++)w[a[i]]=1} $1 in w {s+=$3} END{printf "%d", s}' "$TIMES" 2>/dev/null)"
@@ -315,7 +356,7 @@ for i in $(seq 1 "$N"); do
   ) &
   PIDS+=($!)
   if [ "$i" = 1 ]; then NSN="· 宿主网络"; else NSN="· net 隔离"; fi
-  echo "  shard$i 启动 pid=${PIDS[-1]}（$(wc -l < "$LOG/shard$i.txt") 门 · $NSN）"
+  echo "  shard$i 启动 pid=${PIDS[-1]}（$(grep -c . "$LOG/shard$i.txt") 门 · $NSN）"
 done
 
 # ── 6) 等待 ──
