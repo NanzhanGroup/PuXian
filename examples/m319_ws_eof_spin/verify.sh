@@ -22,7 +22,9 @@
 #   [2] 动态（正判据）：8 并发「中继协程 + ws_close + C 泵循环」× 3 轮，
 #       压力档 PX_GC_STRESS=1 PX_GC_INLINE=1 ⇒ 每轮 utime 增量必须 < 阈值
 #   [3] 负控 A（确定性灵敏度）：把失败分支改成无条件 continue（等价「errno 判据恒真」）
-#       ⇒ 必须判红 —— 证明判据不是恒绿
+#       ⇒ 必须判红 —— 证明判据不是恒绿。
+#       ⚠️ 缺陷 594（M339 补 1）：**3 轮取样，任一命中即判红**。单轮会把「这一窗里 EOF 还没到」
+#       误判成「判据没有牙」（实测：「14 0」——14 ticks < 阈值 120 且诊断重试 0 次）。
 #   [4] 负控 B（忠实撤回）：**同时**恢复层 1（四处 errno 设置）与层 2（errno == EINTR ⇒ continue）
 #       ⇒ N 轮里**至少 1 轮**判红。⚠️ 忠实态的自旋依赖 errno 残留，是概率性的
 #       （实测 3/4）；所以判据写成「至少 1 次」，**不会**因为「这次没抽中」把门判红
@@ -187,11 +189,26 @@ if [ "$NEG_SKIP" = "1" ]; then
     echo '  ⏭ 已跳过（--neg-skip）'
 else
     python3 "$HERE/negctl.py" --inject "$SNAP" "$ROOT" >/dev/null
-    U=$(dyn_run "inject")
-    case "$(spin_of "$U")" in
-        1) ok "负控 A 复现自旋：「$U」" ;;
-        0) bad "负控 A 未复现：「$U」（期望判自旋）⇒ 判据没有牙" ;;
-        *) bad "负控 A 基础设施异常（$U）" ;;
+    # ── 缺陷 594（M339 补 1）：负控 A 也要**多轮取样**，不能把"这次窗口里没发生 EOF"当成判据没牙 ──
+    #   现场（2026-10-27 10:0x 全量门 shard3，4 分片并发）：
+    #     ❌ 负控 A 未复现：「14 0」（期望判自旋）⇒ 判据没有牙
+    #   14 ticks 远低于阈值 120、诊断重试 0 次 ⇒ 那一刻**注入的 continue 根本没被走到**
+    #   （4s 窗口里客户端还没断开/EOF 没到）。这与 m120/m150 同族：单次取样窗口的偶然性被当成判据结论。
+    #   ⇒ 3 轮取样，任一命中即判红，并把每轮数值打出来（判据有牙 = 至少能证明它能红）。
+    NBA_OK=0; NBA_HITS=""
+    for _r in 1 2 3; do
+        U=$(dyn_run "inject$_r")
+        NBA_HITS="$NBA_HITS [$U]"
+        case "$(spin_of "$U")" in
+            1) NBA_OK=1 ;;
+            2) NBA_OK=9 ;;
+        esac
+        [ "$NBA_OK" = 1 ] && break      # 已经证明能红，不再多跑（省时）
+    done
+    case "$NBA_OK" in
+        1) ok "负控 A 复现自旋（3 轮内命中）：$NBA_HITS" ;;
+        9) bad "负控 A 基础设施异常：$NBA_HITS" ;;
+        *) bad "负控 A 3 轮均未复现自旋：$NBA_HITS（注入的 continue 一次都没走到 ⇒ 先查窗口里有没有真的 EOF）" ;;
     esac
     U_INJECT="$U"
     python3 "$HERE/negctl.py" --restore "$SNAP" "$ROOT" >/dev/null
