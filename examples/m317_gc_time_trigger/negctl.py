@@ -48,9 +48,24 @@ BEAT_OLD = """    if (__atomic_exchange_n(&g_gc_tick_started, 1, __ATOMIC_SEQ_CS
     if (1) return;   /* NEGCTL-317B：撤心跳（不建线程） */
     pthread_t t;"""
 
+# ── 负控 D：[5.3] 的牙口 —— 注入「无心跳配对的 time_run」────────────────────
+#   现实依据（缺陷 599）：time_runs 本来就有**两个**生产者（空闲心跳 + 分配路径），
+#   所以 [5.3] 判的是「差额」而不是严格相等。本负控把差额人为放大（每次心跳多算一轮
+#   没有 idle 配对的 time_run）⇒ [5.3] 必须红，而 [5.1]/[5.2] 仍绿（证明红只来自 [5.3]）。
+IDLE_FIX = """            g_gc_pending = 1;
+            __atomic_fetch_add(&g_gcs_time_runs, 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&g_gcs_idle_runs, 1, __ATOMIC_RELAXED);"""
+
+IDLE_NEG = """            g_gc_pending = 1;
+            __atomic_fetch_add(&g_gcs_time_runs, 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&g_gcs_idle_runs, 1, __ATOMIC_RELAXED);
+            /* NEGCTL-317D：每次心跳多算一轮「没有心跳配对」的 time_run */
+            __atomic_fetch_add(&g_gcs_time_runs, 1, __ATOMIC_RELAXED);"""
+
 RULES = {
     "A": [(NEED_FIX, NEED_OLD), (POLL_FIX, POLL_OLD)],
     "B": [(BEAT_FIX, BEAT_OLD)],
+    "D": [(IDLE_FIX, IDLE_NEG)],
 }
 
 
@@ -61,7 +76,7 @@ def die(msg):
 
 def do_apply(which):
     if which not in RULES:
-        die("未知负控 %s（A=时间/空闲判据 · B=空闲心跳线程）" % which)
+        die("未知负控 %s（A=时间/空闲判据 · B=空闲心跳线程 · D=无心跳配对的 time_run）" % which)
     parts = RULES[which]
     s = open(P, encoding="utf-8").read()
     for _new, old in parts:
@@ -133,13 +148,23 @@ def do_selftest():
         print("  ❌ B 打桩未命中")
         fail += 1
     do_restore()
+    # D 单独自证（[5.3] 的牙口：差额判据）
+    do_apply("D")
+    midd = open(P, encoding="utf-8").read()
+    if "NEGCTL-317D" in midd:
+        print("  ✅ D 打桩命中（time_runs 多算一轮无配对）")
+        ok += 1
+    else:
+        print("  ❌ D 打桩未命中")
+        fail += 1
+    do_restore()
     print("NEGCTL-SELFTEST ok=%d fail=%d" % (ok, fail))
     sys.exit(0 if fail == 0 else 1)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        die("用法：negctl.py --apply A|B | --restore | --selftest")
+        die("用法：negctl.py --apply A|B|D | --restore | --selftest")
     a = sys.argv[1]
     if a == "--selftest":
         do_selftest()
