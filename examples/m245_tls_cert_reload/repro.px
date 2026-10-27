@@ -7,13 +7,23 @@
 # 本程序的作用：**制造并发**（客户端）并把注册循环跑起来（服务端内的 spawn 协程）。
 #   窗口放大由测试钩子 `PX_TLS_RELOAD_GAP_MS` 负责（默认不设 = 完全无感）。
 #
-# 用法：repro <port> <cert> <key> [reload_gap_ms] [n_reload]
-# 输出：stderr 打点；`M245-RELOAD-DONE n=<n>` 表示注册循环跑完（判据的窗口终点）
+# ⚠️ M345（缺陷 602）：注册循环必须**等客户端就绪**再开始（arg7 = 启动闸文件）。
+#   修前：注册循环在服务起来的同一刻开跑，而客户端要等 verify.sh 的就绪探测成功后才发压
+#   ⇒ 就绪探测一旦慢（分片并发下常见），压测流量整体落在窗口**之后** ⇒
+#     ① 负控「摘锁」照样零失败（判据没牙，却报 green）
+#     ② 或探测把时间耗光、客户端还没发出一个请求就被杀（报 unreached，查不出原因）
+#   实测（2026-10-28 06:38 全量门 shard3）：negA 200=0 失败=0 就绪=0 注册跑完=1 —— 就是这一族。
+#   ⇒ 窗口起点由**客户端**触发：verify.sh 起完 8 个客户端后才碰这个文件。
+#
+# 用法：repro <port> <cert> <key> [reload_gap_ms] [n_reload] [start_gate_file]
+# 输出：stderr 打点；`M245-RELOAD-START waited_ms=<n>` 表示窗口真开跑（前提标记）；
+#   `M245-RELOAD-DONE n=<n>` 表示注册循环跑完（判据的窗口终点）
 var m245_port = 18445
 var m245_cert = ""
 var m245_key  = ""
 var m245_gap  = 1
 var m245_n    = 300
+var m245_gate = ""
 
 let m245_av = args()
 if len(m245_av) > 1:
@@ -26,13 +36,21 @@ if len(m245_av) > 4:
     m245_gap = int(m245_av[4])
 if len(m245_av) > 5:
     m245_n = int(m245_av[5])
+if len(m245_av) > 6:
+    m245_gate = m245_av[6]
 
 def m245_handler(req, params):
     return {"status": 200, "body": "M245-OK"}
 
 # 注册循环：**交替**默认证书 / SNI 槽 —— 两条路径的窗口都在面内
 #   （默认证书那条更宽：每一次握手都会在配置阶段读 `g_srv_key`）
+# 起点：等 verify.sh 的启动闸（客户端已发出请求）；最多等 60s（12000 × 5ms）
 def m245_reloader():
+    var w = 0
+    while m245_gate != "" and not exists(m245_gate) and w < 12000:
+        sleep(5)
+        w += 1
+    print("M245-RELOAD-START waited_ms=" + str(w * 5))
     var i = 0
     while i < m245_n:
         if i % 2 == 0:

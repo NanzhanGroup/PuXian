@@ -252,7 +252,7 @@ examples/m236_ws_stream/srv.px src=8db1da303b41b596 rc=0 out=998a39af94307aaff87
 examples/m236_ws_stream/srv_manual.px src=5f66080253da2a3d rc=0 out=7686ab3ce344ef39a4e6911f4945f678 err=e3b0c44298fc1c14
 examples/m239_match_case/drv.px src=d0b89f47db722687 rc=0 out=321cc4c4619a068bb06fbdc5f93f55b7 err=e3b0c44298fc1c14
 examples/m242_table_ptr/srv.px src=ff3b23c770824dda rc=0 out=3ab8f680c1bff400bfb3b2acd470cd1c err=e3b0c44298fc1c14
-examples/m245_tls_cert_reload/repro.px src=df9a90a387b27d75 rc=0 out=cf1ebed2618c9eeef596ad2c9dcc20df err=e3b0c44298fc1c14
+examples/m245_tls_cert_reload/repro.px src=2cd0c9892fdc10df rc=0 out=50a3c98db5b66c7a0bd0ee8f7658fd90 err=e3b0c44298fc1c14
 examples/m246_compound_assign/drv.px src=9d2625fa6f373310 rc=0 out=855d822c3724f52a810ff4f2f748236a err=e3b0c44298fc1c14
 examples/m250_onnx_tensor/surface.px src=5458387bf9a5e86e rc=0 out=b0d9938eb6ccf109252acbe40fce4e99 err=e3b0c44298fc1c14
 examples/m253_bcorpus/surface.px src=8daec923cfcec395 rc=0 out=9222a7deba5a8e6b240f05749b8be721 err=e3b0c44298fc1c14
