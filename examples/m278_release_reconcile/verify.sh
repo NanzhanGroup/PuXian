@@ -36,6 +36,14 @@ chk(){ if [ "$2" = "$3" ]; then ok "$1"; else ng "$1（期望 [$3] 实得 [$2]�
 
 TOOL=packaging/release_reconcile.sh
 IGN=packaging/release_reconcile.ignore
+# ── 缺陷 595（M339 补 2）：静态判据必须读**一个原子快照**，不能反复 cat 工作树 ──
+#   现场（2026-10-27 12:1x 全量门 shard2）：[2] 第 4 条断言报红，而**同一份内容里 needle 明明在**
+#     ❌ 只重跑 cancelled（failed 要人看）（[…  ⚠️ 只重跑 cancelled —— failed 可能是真失败 …] 不含 [只重跑 cancelled]）
+#   同树单跑必绿（本条实测 ✅）。分片里 GATE_JOBS=2 ⇒ **同 worktree 有两个门并发**，
+#   静态断言却对文件做了多次独立读取 ⇒ 任何第三方在这瞬间改这份文件都会被读成「内容缺失」。
+#   ⇒ 统一改为：门开始时**一次**读入快照（优先 `git show HEAD:<path>`：与已提交内容对齐、不受工作树瞬态影响），
+#     之后所有静态断言都判这份快照 —— 同一门内判定自洽，不再有「读到半份」的可能。
+TOOL_SNAP=$(git show "HEAD:$TOOL" 2>/dev/null || cat "$TOOL")
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
 echo "=== M278 发布通道对账门 ==="
@@ -50,11 +58,11 @@ else
 fi
 
 printf '\n[2] 静态判据：缺陷事实与纪律在位（防知识丢失）\n'
-chkg "脚本头记录单通道并发事实" "$(cat $TOOL)" "只允许一个 in-progress"
-chkg "脚本头记录被取消的实测 tag" "$(cat $TOOL)" "v0.2.263/264/265/271"
-chkg "脚本头写明「没有东西会告诉你」" "$(cat $TOOL)" "而没有任何东西会告诉你"
-chkg "只重跑 cancelled（failed 要人看）" "$(cat $TOOL)" "只重跑 cancelled"
-chkg "令牌只走环境变量" "$(cat $TOOL)" "必须来自环境变量"
+chkg "脚本头记录单通道并发事实" "$TOOL_SNAP" "只允许一个 in-progress"
+chkg "脚本头记录被取消的实测 tag" "$TOOL_SNAP" "v0.2.263/264/265/271"
+chkg "脚本头写明「没有东西会告诉你」" "$TOOL_SNAP" "而没有任何东西会告诉你"
+chkg "只重跑 cancelled（failed 要人看）" "$TOOL_SNAP" "只重跑 cancelled"
+chkg "令牌只走环境变量" "$TOOL_SNAP" "必须来自环境变量"
 chkg "豁免表写明「真缺陷不许进表」" "$(cat $IGN)" "真缺陷不许进表"
 chkg "豁免表写明过期判据" "$(cat $IGN)" "STALE-IGNORE"
 n=$(awk -F'\t' '!/^#/ && NF>0' "$IGN" | wc -l)
