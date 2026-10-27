@@ -46,10 +46,18 @@ mk bad1
 printf '[{"name":"v9.9.9"},{"name":"v9.9.8"},{"name":"v9.9.7"}]\n' > "$W/bad1/tags.json"
 printf '{"tag_name":"v9.9.7"}\n' > "$W/bad1/latest.json"
 printf '\n【2】latest 被旧 tag 顶掉（2026-10-26 真实现场）⇒ rc=1\n'
+# M339：STALE 的前提是「期望版本的 Release **已经存在**」；fixture 里用 expected_release.json 表达
+printf '{"tag_name":"v9.9.9","id":999}\n' > "$W/bad1/expected_release.json"
 o=$(bash "$SH" --api-fixture "$W/bad1" 2>&1); rc=$?
 chk "rc" "$rc" "1"; chkg "报 LATEST-STALE" "$o" "LATEST-STALE"
 chkg "指名实到版本" "$o" "v9.9.7"; chkg "指名期望版本" "$o" "v9.9.9"
 chkg "说清后果" "$o" "旧树"
+
+printf '\n【2b】期望版本的 Release **还不存在**（发布中）⇒ 不判红，判 PENDING\n'
+cp -r "$W/bad1" "$W/pending"; rm -f "$W/pending/expected_release.json"
+o=$(bash "$SH" --api-fixture "$W/pending" 2>&1); rc=$?
+chk "rc=0（发布窗口内不该假红）" "$rc" "0"; chkg "报 PENDING" "$o" "PENDING"
+chkg "指向对账工具" "$o" "release_reconcile"
 
 # ── [3] 作用域：带后缀的开发 tag 不进要求集 ──
 mk scope
@@ -102,7 +110,9 @@ else ng "负控 A 未改动脚本（锚点失效）"; fi
 printf '\n【9】负控 B：期望值算成「最低版本 tag」⇒ 一致档必须变红\n'
 sed 's/if best is None or key(n) > key(best): best = n/if best is None or key(n) < key(best): best = n/' "$SH" > "$W/lowexp.sh"
 if ! diff -q "$SH" "$W/lowexp.sh" >/dev/null; then
-  o=$(bash "$W/lowexp.sh" --api-fixture "$W/ok1" 2>&1); rc=$?
+  # ⚠️ 必须让「算错的期望值」也有 Release 标记，否则会走 PENDING（发布中）分支而不是 STALE
+  cp -r "$W/ok1" "$W/okneg"; printf '{"tag_name":"v9.9.7"}\n' > "$W/okneg/expected_release.json"
+  o=$(bash "$W/lowexp.sh" --api-fixture "$W/okneg" 2>&1); rc=$?
   chk "rc" "$rc" "1"; chkg "报 STALE" "$o" "LATEST-STALE"
 else ng "负控 B 未改动脚本（锚点失效）"; fi
 
