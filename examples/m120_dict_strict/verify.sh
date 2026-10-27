@@ -93,17 +93,22 @@ chk_has "解释轨报 R1002" "$WORK/intkey.interp.txt" "R1002"
 chk_has "VM 轨报 R1002" "$WORK/intkey.vm.txt" "R1002"
 
 # ---------------- 用例 5：协程内运行时错误 → 宿主继续，但退出码必须非 0（E1） ----------------
-# 注：等待时长取 1.5s（> 协程错误发生的时刻）——「顶层先返回、协程错误随后才被观测到」
-#     是调度时序窗口（0.3s 实测 rc 抖动），该窗口另由 runtime 的 atexit 兜底，
-#     本门只断言确定性形态。
+# 注（M344 · 缺陷 600）：等待窗口曾写 `sleep(1.5)` 并注释成「1.5 秒」，**单位错**——
+#     sleep 的单位是**毫秒**（同门用例 7 已注明，M304 实测 sleep(100)≈104ms），
+#     即真实窗口只有 1.5ms。子线程从 pthread_create 到跑进协程体要 6~32ms（本机实测
+#     进程总寿命上限），窗口比它小一个数量级 ⇒ 主线程先走、协程根本没启动 ⇒ 没有错误
+#     可报 ⇒ rc=0 完全合法。这就是缺陷 588 记了两轮的「C 轨偶发 rc=0」的真根因。
+#     修法：窗口 200ms（≥ 抖动上限 6 倍；300/300 实测稳定）+ **每轮断言前提「协程真的启动了」**
+#     （台账口径 4：前提断言先于症状断言 —— 协程没跑起来时 rc=0 是空转，不是产品行为）。
 cat > "$WORK/coro.px" <<'PXI'
 def worker():
+    print("worker-start")
     d = {"a": 1}
     print(str(d["nope"]))
 
 def main():
     spawn worker()
-    sleep(1.5)
+    sleep(200)
     print("host-alive")
 PXI
 echo "── 5) 协程内 R1008 → 宿主继续 + rc=1（此前 rc=0 = 假成功）"
@@ -111,9 +116,11 @@ comp --vm "$WORK/coro.px" && { "$WORK/build/coro" > "$WORK/coro.vm.txt" 2>&1; rv
 chk "VM 轨 rc=1" "$rv" "1"
 chk_has "宿主存活" "$WORK/coro.vm.txt" "host-alive"
 chk_has "隔离消息在" "$WORK/coro.vm.txt" "已隔离"
+chk_has "VM 轨协程已启动（前提）" "$WORK/coro.vm.txt" "worker-start"
 comp --c "$WORK/coro.px" && { "$WORK/build/coro" > "$WORK/coro.c.txt" 2>&1; rc=$?; } || rc=99
 chk "C 轨 rc=1" "$rc" "1"
 chk_has "C 轨宿主存活" "$WORK/coro.c.txt" "host-alive"
+chk_has "C 轨协程已启动（前提）" "$WORK/coro.c.txt" "worker-start"
 
 # ---------------- 用例 6：PX_SPAWN_ISOLATE=0 逃生舱（E2） ----------------
 # M335（缺陷 588）：C 轨在本门**偶发** rc=0。实测频次：2026-10-26 全量门（4 分片 + 串行尾）
@@ -122,6 +129,13 @@ chk_has "C 轨宿主存活" "$WORK/coro.c.txt" "host-alive"
 #     · 任一次 rc=0 ⇒ 判红（chk_all_ne）；
 #     · 该次的完整输出与退出码复制到 $EVID（**不做 /tmp 清理**，下次发生时可直接看现场）。
 #   为什么不是「重试到绿」：重试会把偶发掩盖掉。这里要的是把它量化，不是让它消失。
+# M344（缺陷 600）**根因已证**：窗口 `sleep(1.5)` 是 1.5**毫秒**（不是秒），而子线程启动要
+#   6~32ms ⇒ 主线程先退出、协程未启动。实验（本机 --c 产物，PX_SPAWN_ISOLATE=0）：
+#     窗口 1.5ms ⇒ 300 次里 16 次 rc=0（5.3%，全量门并发下更糟）
+#     窗口 200ms ⇒ 300 次 **0** 次 rc=0
+#   失败的 16 次里输出只有 "host-alive"（或 "worker-start" 后就截断），stderr 全空 ⇒
+#   **不是错误被吞**，是协程还没跑到 px_index 进程就退出了。
+#   ⇒ 判据本身没错（rc 必须非 0），错的是它给的窗口太窄 + 没有前提断言。
 K=${M120_ISO_REPEAT:-5}
 EVID_BASE=/tmp/m120_iso_flake
 iso0_run(){   # $1=轨道(vm|c) $2=输出前缀 ⇒ stdout 为每行 "i:rc"
@@ -139,11 +153,22 @@ iso0_run(){   # $1=轨道(vm|c) $2=输出前缀 ⇒ stdout 为每行 "i:rc"
         fi
     done
 }
+iso0_pre(){  # $1=输出前缀 $2=轨道名 ⇒ 缺前提的轮次列表（空 = K 轮都真的启动了协程）
+    local pref="$1" i miss=""
+    for i in $(seq 1 "$K"); do
+        grep -q 'worker-start' "$pref.$i.txt" 2>/dev/null || miss="$miss $i"
+    done
+    printf '%s' "$miss"
+}
 echo "── 6) PX_SPAWN_ISOLATE=0 → 立即终止（不再隔离），两轨都要生效（重复 K=$K 次 · 缺陷 588 留证）"
 VM_RCS=$(iso0_run vm "$WORK/iso0.vm")
 C_RCS=$(iso0_run c "$WORK/iso0.c")
 chk_all_ne "VM 轨退出码非 0" "$VM_RCS" "0" "$K"
 chk_all_ne "C 轨退出码非 0"  "$C_RCS"  "0" "$K"
+# M344（缺陷 600）：前提断言 —— 协程没启动时 rc=0 是空转，不许当产品行为上报
+VM_MISS=$(iso0_pre "$WORK/iso0.vm"); C_MISS=$(iso0_pre "$WORK/iso0.c")
+chk "VM 轨 K 轮协程都已启动（前提）" "${VM_MISS:-ok}" "ok"
+chk "C 轨 K 轮协程都已启动（前提）" "${C_MISS:-ok}" "ok"
 # 隔离消息 / 宿主继续这两条只在首轮产物上判（重复运行的产物同构，逐轮判只是放大噪声）
 chk_not "VM 轨不再打印隔离消息" "$WORK/iso0.vm.1.txt" "已隔离"
 chk_not "VM 轨宿主未继续" "$WORK/iso0.vm.1.txt" "host-alive"
