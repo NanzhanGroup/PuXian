@@ -135,7 +135,26 @@ if [ "$CURRENT" = "$EXPECTED" ]; then
     exit 0
 fi
 
-# ---- ③ 不一致 ----
+# ---- ③ 不一致：先分清「期望版本还没有 Release（发布中/未发布）」与「有 Release 但 latest 指向别处」----
+# 为什么要分（M339 实测踩到）：tag 刚推上去、Release 还在构建时，latest 必然还指向上一个版本。
+#   那不是缺陷（发布链自己会在 assets-verify 末尾把 latest 纠正过来），判红只会制造假红。
+#   真正的缺陷形态是：**期望版本的 Release 已经存在**，latest 却指着旧版本 ⇒ install.sh 装旧树。
+EXPECTED_HAS_RELEASE=0
+if [ -n "$FIXTURE" ]; then
+    [ -f "$FIXTURE/expected_release.json" ] && EXPECTED_HAS_RELEASE=1
+else
+    curl -sS -o "$W/exp.json" -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN:-}" \
+         -H "Accept: application/vnd.github+json" "$API/repos/$REPO/releases/tags/$EXPECTED" 2>/dev/null \
+      | grep -q '^200$' && EXPECTED_HAS_RELEASE=1
+fi
+
+if [ "$EXPECTED_HAS_RELEASE" = 0 ]; then
+    echo "ℹ️ PENDING：$EXPECTED 还没有 Release（可能在发布中）⇒ latest 仍指向 $CURRENT 是预期的；本判据不判红" >&2
+    echo "   （「该有发布却没有」由 release_reconcile.sh 负责，两者不重叠）" >&2
+    emit PENDING
+    exit 0
+fi
+
 echo "❌ LATEST-STALE: releases/latest = $CURRENT ≠ 最高版本 tag $EXPECTED" >&2
 echo "   ⇒ tools/install.sh 取 latest ⇒ 用户会装到 $CURRENT 的树（旧树）" >&2
 
