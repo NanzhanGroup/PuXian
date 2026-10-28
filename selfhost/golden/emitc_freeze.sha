@@ -280,7 +280,7 @@ examples/m294_h3_qpack_share/cli_tag.px src=07ad0b3cc7947c7a rc=0 out=b33d971d92
 examples/m294_h3_qpack_share/srv.px src=fa12421440777786 rc=0 out=5edaed36d2a5264bd41fc8a159a2b699 err=e3b0c44298fc1c14
 examples/m295_quic_slot/pool_bad.px src=e1a35b340bd95e2e rc=1 out=e3b0c44298fc1c149afbf4c8996fb924 err=9cc83a2ad3b15527
 examples/m295_quic_slot/pool_probe.px src=06b316dcad01694e rc=0 out=a6b91dbd1b119d28905a1a3307313abf err=e3b0c44298fc1c14
-examples/m295_quic_slot/slot_cli.px src=f70b5a50726ea2a3 rc=0 out=dce134516dac45226b76e6803b2ca832 err=e3b0c44298fc1c14
+examples/m295_quic_slot/slot_cli.px src=44798effb819571f rc=0 out=92e8382704c831a9b549c22abfc1d359 err=e3b0c44298fc1c14
 examples/m295_quic_slot/srv.px src=fdf64f0854d15f64 rc=0 out=9f8cafe382da619fd254a210f6e3fa2e err=e3b0c44298fc1c14
 examples/m296_quic_accept_reuse/cli.px src=d657fef54513b824 rc=0 out=9689ecf79aa8b04cdb49d843824bf1d0 err=e3b0c44298fc1c14
 examples/m296_quic_accept_reuse/srv.px src=285450c54fefd7f6 rc=0 out=07452f546fca60af4aa1d586496e9288 err=e3b0c44298fc1c14

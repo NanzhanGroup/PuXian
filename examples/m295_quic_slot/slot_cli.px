@@ -12,6 +12,14 @@
 #
 # `M295_CLOSE=0` ⇒ **不调 quic_close**（模拟「进程被杀」：对端收不到 CONNECTION_CLOSE）。
 #   默认（未设或其它值）= 优雅关闭 —— 这正是验证 M295 的 `quic_close` 修复所需的对照。
+# `M295_HOLD_N=<n>` ⇒ **单进程持握 n 条**（M350）：循环建连并**全部保持不关闭**。
+#   为什么是单进程而不是 n 个进程：M350 实测 256 个并发进程会把 loopback UDP 收包压塌
+#   （63/256 握手失败/崩溃），噪声盖过判据；单进程顺序建连把「建立」与「持握」解耦。
+#   此时每条连接的 tag 变为 `<tag>-<k>`（k 从 0 起），**最后一条**仍打印 `TAG <tag> OK`？
+#   不 —— 每条都打印自己的 `TAG <tag>-<k> OK`，门按「OK 条数」计数。
+# `M295_HOLD_GATE=<文件>` ⇒ **持握到该文件出现**（上限 `M295_HOLD_MAX` 毫秒）。
+#   释放时走 `quic_close`（优雅释放），槽位立刻还回。此模式**优先于** `M295_CLOSE`。
+# `M295_READ_MS` ⇒ 读响应超时（默认 8000ms；并发/持握档调大以免把调度延迟判成产品红）。
 # ============================================================
 import "c/ngtcp2"
 
@@ -31,31 +39,96 @@ var tag = "0"
 var tv = env("M295_TAG")
 if tv != null:
     tag = tv
-var want = "q295-ok-" + tag
 
-var c = quic_connect("127.0.0.1", h3p, "h3")
-if c <= 0:
-    print("TAG " + tag + " connect-fail")
-    exit(2)
-if h3_conn_setup(c, 4096) == false:
-    print("TAG " + tag + " setup-fail")
-    exit(2)
-var s = h3_client_open_stream(c)
-if s <= 0:
-    print("TAG " + tag + " open-fail")
-    exit(2)
-h3_client_send_request_stream(c, s, "GET", "https", "localhost", "/q295/" + tag, [], "")
-var r = h3_client_read_response_stream(c, s, 8000)
-if r == null:
-    print("TAG " + tag + " TIMEOUT")
-    exit(3)
-if r["status"] != "200":
-    print("TAG " + tag + " bad-status " + str(r["status"]))
-    exit(4)
-if r["body"] != want:
-    print("TAG " + tag + " CROSSTALK body=[" + str(r["body"]) + "]")
-    exit(5)
-print("TAG " + tag + " OK")
+var readms = 8000
+var rv = env("M295_READ_MS")
+if rv != null:
+    readms = int(rv)
+
+# 单次「建连 + 请求 + 校验」。成功返回 conn id（>0），失败打印契约行并返回**负的退出码**。
+# M350：从内联改成函数，才能在同进程里顺序建 n 条并全部持握。
+def cycle(t) -> int:
+    var want = "q295-ok-" + t
+    var c = quic_connect("127.0.0.1", h3p, "h3")
+    if c <= 0:
+        print("TAG " + t + " connect-fail")
+        return 0 - 2
+    if h3_conn_setup(c, 4096) == false:
+        print("TAG " + t + " setup-fail")
+        quic_close(c)
+        return 0 - 2
+    var s = h3_client_open_stream(c)
+    if s <= 0:
+        print("TAG " + t + " open-fail")
+        quic_close(c)
+        return 0 - 2
+    h3_client_send_request_stream(c, s, "GET", "https", "localhost", "/q295/" + t, [], "")
+    var r = h3_client_read_response_stream(c, s, readms)
+    if r == null:
+        print("TAG " + t + " TIMEOUT")
+        quic_close(c)
+        return 0 - 3
+    if r["status"] != "200":
+        print("TAG " + t + " bad-status " + str(r["status"]))
+        quic_close(c)
+        return 0 - 4
+    if r["body"] != want:
+        print("TAG " + t + " CROSSTALK body=[" + str(r["body"]) + "]")
+        quic_close(c)
+        return 0 - 5
+    print("TAG " + t + " OK")
+    return c
+
+# M350：持握条数（默认 1 = 原行为）
+var holdn = 1
+var nv = env("M295_HOLD_N")
+if nv != null:
+    holdn = int(nv)
+if holdn < 1:
+    holdn = 1
+
+var held = []
+var k = 0
+while k < holdn:
+    var t = tag
+    if holdn > 1:
+        t = tag + "-" + str(k)
+    var c1 = cycle(t)
+    if c1 < 0:
+        exit(0 - c1)
+    held.append(c1)
+    k = k + 1
+
+# ------------------------------------------------------------
+# M350（缺陷 611）：持握模式 —— 连接**不关闭**，一直持有到释放标记出现。
+#   为什么需要它：M349 定向回放证明「串行静默退出 264 次」这个装置假设的前提不成立
+#   （客户端进程退出后，服务端只能靠自己的空闲超时回收槽位，2×h3_idle_ms；串行 264 次
+#   本身就要跑十几秒 ⇒ 早先的连接早被回收 ⇒ 永远到不了第 257 次）。
+#   持握模式下连接**活着**且未发 CONNECTION_CLOSE ⇒ 槽位**必然**被占，与回收时序无关。
+#   M295_HOLD_GATE = 释放标记文件路径
+#   M295_HOLD_MAX  = 持握上限（毫秒；防装置卡死）
+# ------------------------------------------------------------
+var gate = env("M295_HOLD_GATE")
 var cl = env("M295_CLOSE")
-if cl == null or cl != "0":
-    quic_close(c)
+if gate != null:
+    var maxms = 120000
+    var mv = env("M295_HOLD_MAX")
+    if mv != null:
+        maxms = int(mv)
+    var t0 = now_ms()
+    while exists(gate) == false:
+        if now_ms() - t0 >= maxms:
+            break
+        sleep(50)
+    print("HOLD-END " + tag + " n=" + str(holdn) + " held_ms=" + str(now_ms() - t0))
+    var ncl = 0
+    var nbad = 0
+    for c2 in held:
+        if quic_close(c2) == true:
+            ncl = ncl + 1
+        else:
+            nbad = nbad + 1
+    print("HOLD-CLOSE " + tag + " closed=" + str(ncl) + " failed=" + str(nbad))
+elif cl == null or cl != "0":
+    for c2 in held:
+        quic_close(c2)
