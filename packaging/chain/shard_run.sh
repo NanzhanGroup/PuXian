@@ -16,7 +16,8 @@
 #   · 门峰值内存实测 2.0GB（最重门）· 8 核 16G 足够 4 路
 #
 # 用法：
-#   shard_run.sh [N]            N=分片数（默认 4）
+#   shard_run.sh [N]            N=分片数（M351 起**默认 = nproc/SHARD_JOBS**：16 核 ⇒ 8 片，
+#                               8 核 ⇒ 4 片；也可 SHARD_N= 覆盖。旧行为：显式给 4 即 4 片）
 #   shard_run.sh 4 --dry        只输出分片规划，不跑
 #   shard_run.sh 4 --times F    指定耗时依据 TSV（默认用备份的上一轮全量数据）
 #   shard_run.sh 4 --only a,b,c 只跑子集（M342 · 诊断用）：门名必须在 HEAD 注册清单里，否则 exit 4
@@ -51,8 +52,16 @@
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-N=4; DRY=0
-TIMES=/tmp/gatevm/times_m302_full.tsv
+N=""; N_SET=0; DRY=0
+# ── M351（缺陷 613）：耗时表默认值移出 /tmp ──
+#   旧默认 = /tmp/gatevm/times_m302_full.tsv（10-12 手工产物，2026-10-28 实测仍在）。两处病：
+#     ① 住 /tmp ⇒ 重启即被清；被清后 awk 读不到任何门 ⇒ 每门 t 退化成 60，
+#        LPT **静默降级成轮转分配**（日志里一个字都不提示）—— 590 族「判据通道没了就当默认值」。
+#     ② 数字比实测小 3.58×（209 门 6305s vs 10-24 实测 219 门 23473s），86 门偏差 >60s。
+#   ⇒ 新口径：`times_selftuned.tsv`（times_selftune.sh --write 用上一轮实测回灌）
+#             > `times_latest.tsv`（10-24 实测）> 旧表（仅兜底）
+#   **选中哪张表必须打进日志**（可审计）；一张都没有 ⇒ 响亮警告而不是静默 60s。
+TIMES=""
 # ── M309 C1 A/B（2026-10-16）：夹住「门内并行度」的两个旋钮 ──
 #   动机（实测）：分片 4 路 × GATE_JOBS 默认(=本机核数 8) = 32 线程抢 8 核
 #   ⇒ 每路负载被抬高 2.5–3.3× ⇒ 净加速只有 ≈1.0–1.3×（M306 R5 实测 118 min）。
@@ -74,11 +83,32 @@ while [ $# -gt 0 ]; do
     --dry)   DRY=1 ;;
     --times) shift; TIMES="${1:-}" ;;
     --only)  shift; ONLY_GATES="${1:-}" ;;
-    [0-9]*)  N="$1" ;;
+    [0-9]*)  N="$1"; N_SET=1 ;;
     *) echo "未知参数: $1" >&2; exit 4 ;;
   esac
   shift
 done
+
+# ── M351（缺陷 614）：分片数默认值「按核数推导」，不再写死 4 ──
+#   根因（M351 STEP 0 实测）：4 片 × SHARD_JOBS=2 = **8 线程**，是 M309 在 8 核机上设对的；
+#   2026-10 换 16 核机后没人跟着改 ⇒ 起门后 loadavg ≈5.0/16（**一半 CPU 空转**），
+#   墙钟 2h04–2h11 的全部优化空间就在这里。
+#   口径：默认 N = nproc / SHARD_JOBS（默认 2）⇒ 16 核 → 8 片，8 核 → 4 片（**老机行为不变**）；
+#        夹在 2..16；`SHARD_NO_CLAMP=1`（不夹并行度）时退回旧默认 4。
+#   覆盖：位置参数 `shard_run.sh 8` 或环境变量 `SHARD_N=10`。
+if [ -z "$N" ] && [ -n "${SHARD_N:-}" ]; then N="$SHARD_N"; N_SET=1; fi
+if [ "$N_SET" = 0 ]; then
+  if [ -n "$SHARD_NO_CLAMP" ]; then
+    N=4; _N_SRC="旧默认（SHARD_NO_CLAMP=1 ⇒ 不夹门内并行度，核数不参与推导）"
+  else
+    _J="${SHARD_JOBS:-2}"; case "$_J" in ''|*[!0-9]*|0) _J=2 ;; esac
+    _C0="$(nproc 2>/dev/null || echo 8)"
+    N=$(( _C0 / _J ))
+    [ "$N" -lt 2 ] && N=2; [ "$N" -gt 16 ] && N=16
+    _N_SRC="按核数推导 ${_C0} 核 / ${_J} 线程 = ${N} 片"
+  fi
+  echo "（M351：未显式给分片数 ⇒ N=$N（$_N_SRC）· 位置参数或 SHARD_N= 可覆盖）"
+fi
 
 # ── M330（2026-10-26 · 东月）：默认推导 —— 「算力 / 门内并行度 / 负载」三件事同源 ──
 #   为什么改（r18 实测 · /data/gatevm/r18-N10J1-20261024-220410.log）：
@@ -139,6 +169,19 @@ TS=$(date +%Y%m%d-%H%M%S)
 LOG="$BASE/shard-$TS"
 mkdir -p "$LOG"
 
+# ── 1a) 耗时表解析（M351 · 缺陷 613）：显式 --times 优先；否则按「新→旧」三级回落并把选择打进日志 ──
+TIMES_SRC="--times 显式指定"
+if [ -z "$TIMES" ]; then
+  for _cand in "$BASE/times_selftuned.tsv" "$BASE/times_latest.tsv" "$BASE/times_m302_full.tsv" /tmp/gatevm/times_m302_full.tsv; do
+    if [ -s "$_cand" ]; then TIMES="$_cand"; TIMES_SRC="自动回落"; break; fi
+  done
+fi
+if [ -z "$TIMES" ] || [ ! -s "$TIMES" ]; then
+  echo "⚠️ 没有可用的耗时表（找过 $BASE/times_{selftuned,latest,m302_full}.tsv）⇒ **每门按 60s 估计**，LPT 退化为轮转分配"
+  TIMES=/dev/null; TIMES_SRC="无表（退化：每门 60s）"
+fi
+echo "耗时表：$TIMES（$TIMES_SRC）"
+
 echo "═══ 分片调度：N=$N · 日志 $LOG ═══"
 
 # ── 1) 门清单（**取自 HEAD**，而不是主树）──
@@ -177,12 +220,16 @@ echo "门数: $NG（清单取自 HEAD:$(git -C "$SRC" rev-parse --short HEAD)）
 
 # ── 2) 耗时依据 ──
 : > "$LOG/plan.tsv"
+MISS=0
 while read -r g; do
   [ -z "$g" ] && continue
   t=$(awk -F'\t' -v G="$g" '$1==G{print $3}' "$TIMES" 2>/dev/null | head -1)
-  [ -z "$t" ] && t=60          # 未见过的门给保守估计
+  [ -z "$t" ] && { t=60; MISS=$((MISS+1)); }   # 未见过的门给保守估计
   printf '%s\t%s\n' "$t" "$g" >> "$LOG/plan.tsv"
 done < "$LOG/gates.txt"
+# M351：缺表门数必须打出来 —— 旧版静默按 60s 处理，缺得多就等于表没用（跟"没有表"一样）。
+echo "耗时表未覆盖的门：$MISS / $NG（按 60s 保守估计）"
+[ "$MISS" -gt 20 ] && echo "⚠️ 缺表门 $MISS 个 ⇒ 本表区分度不足，均衡全靠缺省 60s"
 
 # ── 3) LPT 分片（最贵的先排）──
 python3 - "$N" "$LOG/plan.tsv" "$LOG" <<'PY'
