@@ -42,6 +42,21 @@ set -uo pipefail
 QUIET=0
 say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
 
+# ── 判据取证助手（缺陷 618 · 2026-10-29 M353）──────────────────────────
+# 为什么不用 `printf ... | grep -qF ...`：本脚本 `set -o pipefail`，而 `grep -q`
+# 命中即退出 ⇒ 上游 printf 的写操作可能失败、返回 **1**（实测 PIPESTATUS=(1 0)，不是 141）
+# ⇒ **管道整体非 0** ⇒ 判据把「命中」读成「未命中」。实测（48 路 CPU 负载 · --self-test
+# 60 轮）4 轮假红：S1 报「判据被删」而同一 $code 里 grep -cF 数到 2 处；
+# NC8 报「理由里没有 VERDICT=GREEN」而那行就在输出里。空机连跑 4000 次 0 例。
+# ⇒ 取证一律走 here-string（没有上游进程，pipefail 无从污染），且把「取证工具失败」
+#   与「未命中」分开报（口径 14：取不到 ≠ 没有）。
+# 用法：match <needle> <haystack> → 0=命中 1=未命中 2=取证工具失败
+match() {
+  local n="$1" t="$2" rc
+  grep -qF -- "$n" <<< "$t"; rc=$?
+  case "$rc" in 0 | 1) return "$rc" ;; *) return 2 ;; esac
+}
+
 # ══════════════════════════════════════════════════════════════════════
 # 裁决主体（CLI 与 --self-test 共用同一份代码 —— 自证的不是副本）
 #   $1 = 门日志；$2 = 分片日志目录（可空）
@@ -138,7 +153,7 @@ run_verdict() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-# --self-test：13 条断言（10 条行为 + 3 条静态防改窄）
+# --self-test：14 条断言（10 条行为 + 1 条抽取前提 + 3 条静态防改窄）
 #   每条负控只扰动一处，且**期望串**指名到判据，避免「红了但不知道红在哪」。
 # ══════════════════════════════════════════════════════════════════════
 self_test() {
@@ -157,9 +172,17 @@ self_test() {
       fail "$name —— rc=$rc（期望 $wantrc）；输出：$(printf '%s' "$out" | tr '\n' '|')"
       return
     fi
-    if [ -n "$wantre" ] && ! printf '%s\n' "$out" | grep -qF -- "$wantre"; then
-      fail "$name —— rc=$rc 对，但理由里没有「$wantre」；输出：$(printf '%s' "$out" | tr '\n' '|')"
-      return
+    if [ -n "$wantre" ]; then
+      local mrc=0
+      match "$wantre" "$out" || mrc=$?
+      if [ "$mrc" -eq 2 ]; then
+        fail "$name —— rc=$rc 对，但**取证工具失败**（grep 异常 · 非结论）；输出：$(printf '%s' "$out" | tr '\n' '|')"
+        return
+      fi
+      if [ "$mrc" -ne 0 ]; then
+        fail "$name —— rc=$rc 对，但理由里没有「$wantre」；输出：$(printf '%s' "$out" | tr '\n' '|')"
+        return
+      fi
     fi
     pass "$name（rc=$rc · 理由含「${wantre:-裁决}」）"
   }
@@ -225,21 +248,40 @@ EOF
   # ⚠️ 扫描面**只取 run_verdict 函数体**，不许扫整文件：
   #   首版扫整文件时 S3 立刻假红 —— 因为 S3 的**判据串本身就写在本函数里**，
   #   判据把自己判红了（与 check_gate_paths.sh 必须跳过自身是同一个坑）。
-  local code
-  code=$(awk '/^run_verdict\(\) \{/{f=1} f&&/^\}$/{print;exit} f' "$0" | grep -vE '^[[:space:]]*#')
+  local code codef mrc
+  # 抽取走文件：awk 写文件、grep 读文件 —— 全程无管道（缺陷 618：pipefail 会污染管道状态）
+  codef="$T/run_verdict.body"
+  awk '/^run_verdict\(\) \{/{f=1} f&&/^\}$/{print;exit} f' "$0" > "$codef" 2>/dev/null
+  code=$(grep -vE '^[[:space:]]*#' "$codef" 2>/dev/null || true)
   printf '== 静态防改窄 ==\n'
-  if printf '%s\n' "$code" | grep -qF 'TG + TR'; then
+  # S0 前提（口径 14）：抽不到函数体必须响亮，不许静默退化成「判据被删」
+  mrc=0; match 'return 0' "$code" || mrc=$?
+  if [ "${#code}" -ge 500 ] && [ "$mrc" -eq 0 ]; then
+    pass "S0 函数体抽取成功（sz=${#code}）"
+  else
+    fail "S0 函数体抽取失败（sz=${#code} · match=$mrc）⇒ 静态判据无从校验（EXTRACTION-FAIL）"
+  fi
+  mrc=0; match 'TG + TR' "$code" || mrc=$?
+  if [ "$mrc" -eq 0 ]; then
     pass "S1 门数平衡判据（绿+红==清单）在"
+  elif [ "$mrc" -eq 2 ]; then
+    fail "S1 —— 取证工具失败（grep 异常 · 非结论）"
   else
     fail "S1 门数平衡判据被删/改窄"
   fi
-  if printf '%s\n' "$code" | grep -qF '"$SR" -ne "$TR"'; then
+  mrc=0; match '"$SR" -ne "$TR"' "$code" || mrc=$?
+  if [ "$mrc" -eq 0 ]; then
     pass "S2 分片红两本账判据在"
+  elif [ "$mrc" -eq 2 ]; then
+    fail "S2 —— 取证工具失败（grep 异常 · 非结论）"
   else
     fail "S2 分片红两本账判据被删"
   fi
-  if printf '%s\n' "$code" | grep -qF '"$TG" -ne "$TK"'; then
+  mrc=0; match '"$TG" -ne "$TK"' "$code" || mrc=$?
+  if [ "$mrc" -eq 0 ]; then
     fail "S3 旧式「绿==门清单」回来了（缺陷 580 复发）"
+  elif [ "$mrc" -eq 2 ]; then
+    fail "S3 —— 取证工具失败（grep 异常 · 非结论）"
   else
     pass "S3 旧式「绿==门清单」不在（缺陷 580 未复发）"
   fi
