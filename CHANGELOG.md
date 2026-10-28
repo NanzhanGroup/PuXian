@@ -1,3 +1,60 @@
+## M346 —— 缺陷 603–606：门绿了却发不出去，四个缺陷串在发布链路上（第 216 轮）
+
+> 接令继续自助推进（T000175 自驱轮）。本轮主线：把 M345 的全量门结果读到结论 → 发布出去 → 收口发布链路本身。
+> 结论先说：**M345 全量门 235 门全绿**（shard1/2/3/4/quiet 分别为 50/73/53/49/10，红 0，跳过 0），
+> 但发布守卫判 NO-GO —— 不是产品问题，是**守卫自己四个判据缺陷**（603–606）把成功的发布标的失败。
+
+### 一 M345 全量门实测（`/data/gatevm/chain-m345-20261028-065546-1028278/`）
+
+```
+shard_run rc=0 · 131.1 min 串行量 ⇒ 墙钟 127 min（06:55 → 09:03）
+shard1 绿 50 · shard2 绿 73 · shard3 绿 53 · shard4 绿 49 · quiet 绿 10
+合计：绿 235 · 红 0（门清单 235 · 跳过 0）
+m245_tls_cert_reload（M344 的唯一红）本轮绿 —— 缺陷 602 的窗口起点修正确认有效
+release_guard 判 NO-GO reason=end-rc= ⇒ 未发布（判定错，见 603）
+```
+
+### 二 四个缺陷（全部「判据通道 ≠ 事实通道」的再复现）
+
+```
+603 判绿要 `rc=` 收尾行，而 shard_run 从不打印（末行是「日志目录：」）⇒ 235 全绿必 NO-GO
+    处置：锚定分片行 `shardN: 绿 x · 红 y · rc=R` 断言；独立 rc 行有则断言、无则按分片判，不取默认值
+604 守调用 `make_tag.sh --push v0.2.345`（位置参数），make_tag 只认 --name ⇒ exit 2（未知选项）
+    处置：改 `--name "$TAG" --push`，先 --dry-run 自证指向再放行
+605 latest 自证要 GH_TOKEN，守卫由 systemd-run 起于干净环境 ⇒ 永远拿不到；且该步在 push 之后不可回滚
+    处置：令牌取自 /data/pat.md（600，只入环境变量）；仍缺则 GREEN-unverified + WARN，不倒标发布
+606 负控脚本 grep 守卫 stdout，而结论写 drive.log ⇒ 六例全「<无输出>」（同族第三次）
+    处置：结论只从 drive.log 读；无汇总行那一例给 90s 走 60s 兜底
+```
+
+### 三 负控回放（`/data/app/ws/data/autodrive/neg603.sh`）
+
+```
+[real    ] VERDICT=GREEN-DRYRUN tag=v0.2.345 head=8de3356   ← 真日志必须判绿
+[n1-red  ] NO-GO red=1
+[n2-rc1  ] NO-GO shard-rc-nonzero: shard2 … rc=1
+[n3-rcq  ] NO-GO shard-rc-unparsable: shard3 … rc=?
+[n4-few  ] NO-GO skipped=232>5
+[n5-trunc] NO-GO gate-log-incomplete(无汇总行且无门进程)
+⇒ 6/6 落在预期原因上（判据有牙，且不会把真绿判红）
+日志：/data/autodrive/logs/neg603-20261028-095103/
+```
+
+### 四 发布结果（M344+M345 同门验收 ⇒ 只打 v0.2.345）
+
+```
+main  7f16c8d → 8de3356（M345 提交）
+tag   v0.2.345（annotated）→ 8de3356，与 main 同一次 push
+ls-remote 自证：refs/heads/main = 8de3356b… · refs/tags/v0.2.345^{} = 8de3356b…
+latest：PENDING（Release 由 CI 构建中，按 latest_guard 口径不判红）
+```
+
+### 五 口径新增（台账第 10 条）
+
+「判绿」与「真的发出去了」是两件事：判据只断言真有数据的通道（不许取默认值猜）；
+发布后以 `git ls-remote` 自证，**不以脚本 rc 为准**（本轮实测 rc=1 判 NO-GO，而 push/tag 已成功）；
+结论性判据不要排在不可回滚动作之后，排了只能降级为 WARN。
+
 ## M345 —— 缺陷 602：m245 的「偶发假红」根因是**观测窗口的起点不是被测事件**（第 215 轮）
 
 > 接令继续自助推进（T000175 自驱轮）。本轮主线：先把 M344 的全量门结果读到结论，再按台账收口。
