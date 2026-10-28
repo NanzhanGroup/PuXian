@@ -16,7 +16,9 @@
 #   [2] 编译 + 强就绪（M293 F1：不写 ready 文件、只认运行时绑定后的那一行）
 #   [3]/[4] 动态契约：`quic_pool_stats()` 键与取值 · 参数校验
 #   [5] 动态行为（优雅关闭）：串行 24 ⇒ **全 OK**
-#   [6] 动态行为（静默退出）：串行 **264** ⇒ **首次失败 @256**（核心行为判据）
+#   [6] 动态行为（**并发持握**）：单进程持握 **256** 条 ⇒ **第 257 条必被拒**（核心行为判据）
+#       ⚠️ M350（缺陷 611）：旧形态是「串行静默退出 264 次 ⇒ 首次失败 @256」，其隐含前提
+#          （进程退出后槽位不回收）被 M349 实测推翻 ⇒ 改为结构确定性装置，见 [6] 段注释。
 #   [7] 负控（3 道，各自独立判红；`--neg-skip` 跳过）
 #   [8] 覆盖边界（如实登记）
 #
@@ -43,10 +45,15 @@ D="examples/m295_quic_slot"
 TMPL="/tmp/m295_gate.$$"
 rm -rf "$TMPL"; mkdir -p "$TMPL/logs"
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; ANOM=0
 chk() { # chk <名> <实际> <期望>
   if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  ✅ %s\n' "$1"
   else FAIL=$((FAIL+1)); printf '  ❌ %s\n      实际=[%s]\n      期望=[%s]\n' "$1" "$2" "$3"; fi
+}
+prem() { # prem <名> <实际> <期望> —— **前提断言**（M350 · 口径 12）
+  #   前提不成立 ⇒ ANOMALY：同样判红（响亮），但措辞必须能区分「装置坏了」与「产品坏了」。
+  if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  ✅ %s\n' "$1"
+  else FAIL=$((FAIL+1)); ANOM=$((ANOM+1)); printf '  ⛔ %s\n      ANOMALY（前提不成立 · 不是产品红）\n      实际=[%s]\n      期望=[%s]\n' "$1" "$2" "$3"; fi
 }
 chk_ge() { # chk_ge <名> <实际> <下界>
   case "$2" in ''|*[!0-9]*) FAIL=$((FAIL+1)); printf '  ❌ %s（非数字：[%s]）\n' "$1" "$2"; return ;; esac
@@ -133,7 +140,14 @@ free_port() {
   return 0
 }
 SRV_PID=""
-cleanup() { [ -n "$SRV_PID" ] && kill -9 "$SRV_PID" 2>/dev/null; free_port "$PORT"; free_port "$((PORT+1))"; rm -rf "$TMPL"; return 0; }
+HPID=""                                        # M350：持握进程（清理时必须收掉，防残留）
+GATE="$TMPL/hold.release"                      # M350：持握释放标记
+cleanup() {
+  [ -n "$GATE" ] && : > "$GATE" 2>/dev/null
+  [ -n "$HPID" ] && kill -9 "$HPID" 2>/dev/null
+  [ -n "$SRV_PID" ] && kill -9 "$SRV_PID" 2>/dev/null
+  free_port "$PORT"; free_port "$((PORT+1))"; rm -rf "$TMPL"; return 0
+}
 trap 'cleanup' EXIT
 
 mkdir -p "$TMPL/src"
@@ -156,7 +170,11 @@ if [ "$BUILD_OK" != "1" ]; then echo "  ⛔ 编译失败 ⇒ 退出"; printf '\n
 # 起服务
 free_port "$PORT"; free_port "$((PORT+1))"
 SRV_LOG="$TMPL/srv.log"
-setsid nohup env M295_HTTP_PORT="$PORT" "$BD/srv" >"$SRV_LOG" 2>&1 </dev/null &
+# M350（缺陷 611）：把服务端 H3 空闲超时**显式**抬到上限 60s（2×idle = 120s 才回收槽位）。
+#   为什么必须显式：默认 8s（2×8s≈16s 回收）远短于「起 256 条并发持握 + 打第 257 条」的窗口，
+#   一旦回收先于断言发生，[6] 的前提（槽位被占）就自己失效 ⇒ 判据必须先把前提**钉死**（口径 12）。
+PX_H3_IDLE_MS_GATE=60000
+setsid nohup env M295_HTTP_PORT="$PORT" PX_H3_IDLE_MS="$PX_H3_IDLE_MS_GATE" "$BD/srv" >"$SRV_LOG" 2>&1 </dev/null &
 disown 2>/dev/null || true
 i=0; while [ "$i" -lt 100 ]; do sleep 0.1; grep -q "普贤应用服务器" "$SRV_LOG" 2>/dev/null && break; i=$((i+1)); done
 SRV_PID="$( (ss -ltnp 2>/dev/null) | grep -E ":${PORT} " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 )"
@@ -213,21 +231,75 @@ chk "此段服务端**从未**报「槽位已满」" "$(grep -c '连接槽位已
 
 # ============================================================
 echo
-echo "[6] 动态行为：**静默退出** 串行 264 次 ⇒ 首次失败 @256（核心判据）"
-EXFUT=0
-FF=""
-for k in $(seq 264); do
-  M295_HTTP_PORT="$PORT" M295_TAG="a${k}" M295_CLOSE=0 timeout -k 5 20 "$BD/slot_cli" >"$TMPL/logs/a$k.out" 2>&1
-  L="$(grep -E '^TAG ' "$TMPL/logs/a$k.out" 2>/dev/null | tail -1)"
-  case "$L" in "TAG a${k} OK") ;; *) [ -z "$FF" ] && FF="$k" ;; esac
+echo "[6] 动态行为：**并发持握** 256 条（连接活着 ⇒ 槽位结构性被占）⇒ 第 257 条必被拒（核心判据）"
+# ------------------------------------------------------------
+# M350（缺陷 611 · 口径 12）：本段从「串行静默退出 264 次」改为「**单进程持握 256 条**」。
+#   为什么必须换（M349 定向回放证据：/data/gatevm/m349_m295_replay/，3 base 绿 + 3 hog 红）：
+#     旧装置的隐含前提是「进程退出后槽位不会被回收」，而服务端只按 2×PX_H3_IDLE_MS 回收；
+#     264 次串行本身就要跑十几秒 ⇒ 早先的连接早被回收 ⇒ 第 257 次**永远到不了**（hog 下假绿）。
+#     失效方向偏向「更绿」= 这类判据最危险的形态（口径 12 就是为它写的）。
+#   新装置的结构确定性：连接**活着**且未发 CONNECTION_CLOSE ⇒ 槽位被占与回收时序**无关**。
+#   为什么是「单进程持握 n 条」而不是「n 个并发进程」：M350 实测 256 个进程会把 loopback
+#     UDP 收包压塌（63/256 握手失败或崩溃，79s 仍未建满）⇒ 噪声盖过判据；单进程顺序建连
+#     把「建立」与「持握」解耦（实测 256 条建立 1.8–2.1s，base/hog 同量级）。
+#   三条**前提断言**（任一不成立 ⇒ ANOMALY，响亮；不许报绿，也不许当产品红）：
+#     P1 256 条持握全部 OK · P2 判据时刻持握进程仍存活 · P3 窗口 < 回收窗口一半
+# ------------------------------------------------------------
+CAP=256
+rm -f "$GATE"
+HOUT="$TMPL/logs/hold.out"
+T60=$(date +%s%3N)
+M295_HTTP_PORT="$PORT" M295_TAG="hold" M295_HOLD_N="$CAP" M295_HOLD_GATE="$GATE" \
+  M295_HOLD_MAX=180000 M295_READ_MS=20000 \
+  timeout -k 5 200 "$BD/slot_cli" >"$HOUT" 2>&1 &
+HPID=$!
+HOK=0; n=0
+while [ "$n" -lt 1200 ]; do                    # 至多 60s（实测 1.8–2.1s ⇒ 裕度 ~28×）
+  HOK=$(grep -cE '^TAG hold-[0-9]+ OK$' "$HOUT" 2>/dev/null || true)
+  [ "$HOK" -ge "$CAP" ] && break
+  kill -0 "$HPID" 2>/dev/null || break
+  sleep 0.05; n=$((n+1))
 done
-# 上限 N 个槽 ⇒ **第 N+1 次**才失败；留 3 的容差吸收「上一条连接尚未回收完」的时序差。
-chk_range "首次失败 ∈ [256,259]（上限已从 64 抬到 256）" "$FF" 256 259
+HALIVE=0; kill -0 "$HPID" 2>/dev/null && HALIVE=1
+prem "P1 持握建立：$CAP/$CAP 条全部 OK（装置前提）" "$HOK" "$CAP"
+prem "P2 判据时刻持握进程仍存活（槽位是**结构**占位，不是靠时序）" "$HALIVE" "1"
+
+M295_HTTP_PORT="$PORT" M295_TAG="h257" M295_READ_MS=5000 \
+  timeout -k 5 60 "$BD/slot_cli" >"$TMPL/logs/h257.out" 2>&1
+L257="$(grep -E '^TAG ' "$TMPL/logs/h257.out" 2>/dev/null | tail -1)"
+T6=$(( $(date +%s%3N) - T60 ))
+case "$L257" in
+  "TAG h257 connect-fail"|"TAG h257 TIMEOUT") R257="rejected" ;;
+  "TAG h257 OK") R257="accepted" ;;
+  *) R257="other[$L257]" ;;
+esac
+# P3：回收窗口 = 2×PX_H3_IDLE_MS = 120000ms ⇒ 判据窗口必须 ≤ 它的一半（60000ms）。
+prem "P3 持握+判据窗口 ${T6}ms < 回收窗口的一半（2×H3_IDLE=${PX_H3_IDLE_MS_GATE}ms ⇒ 一半 60000ms）" \
+     "$([ "$T6" -le $(( PX_H3_IDLE_MS_GATE )) ] && echo yes || echo no)" "yes"
+chk "第 257 条被**拒**（connect-fail/TIMEOUT；实测 [$L257] · ${T6}ms）" "$R257" "rejected"
 FULL_LINE="$(grep -c '连接槽位已满' "$SRV_LOG")"
 chk_ge "服务端**响亮报告**了「槽位已满」（不再静默）" "$(num "$FULL_LINE")" 1
 chk "报告是**限流**的（不刷屏：总计 ≤2 行）" \
     "$([ "$(num "$FULL_LINE")" -le 2 ] && echo 1 || echo 0)" "1"
 chk "日志无 DRAINING 刷屏" "$(grep -c 'ERR_DRAINING' "$SRV_LOG")" "0"
+
+# 释放：持握结束 ⇒ 256 条优雅关闭 ⇒ 槽位必须还回（异步，轮询 10s；实测 26–45ms）
+: > "$GATE"
+REXO=0; n=0
+while [ "$n" -lt 300 ]; do kill -0 "$HPID" 2>/dev/null || { REXO=1; break; }; sleep 0.1; n=$((n+1)); done
+wait "$HPID" 2>/dev/null || true
+HPID=""
+chk "持握按释放标记退出（无残留进程）" "$REXO" "1"
+chk "持握侧 256 条**全部**走 quic_close（优雅释放；输出 closed failed）" \
+    "$(sed -n 's/^HOLD-CLOSE hold closed=\([0-9]*\) failed=\([0-9]*\)$/\1 \2/p' "$HOUT" | tail -1)" "$CAP 0"
+RL0=$(date +%s%3N); ROK=0; n=0
+while [ "$n" -lt 100 ]; do
+  M295_HTTP_PORT="$PORT" M295_TAG="h258" timeout -k 5 20 "$BD/slot_cli" >"$TMPL/logs/h258.out" 2>&1
+  [ "$(grep -E '^TAG ' "$TMPL/logs/h258.out" 2>/dev/null | tail -1)" = "TAG h258 OK" ] && { ROK=1; break; }
+  n=$((n+1)); sleep 0.1
+done
+RCOV=$(( $(date +%s%3N) - RL0 ))
+chk "释放后新连接恢复（槽位确实还回去了；实测 ${RCOV}ms · 轮询 $((n+1)) 次）" "$ROK" "1"
 
 # ============================================================
 echo
@@ -270,6 +342,28 @@ else
   strip_c runtime/runtime.h > "$TMPL/nc_c.h"
   chk "NC-C：还原后静态判据不再红（判据自伤）" \
       "$(grep -cE '^#define[[:space:]]+PX_QUIC_CONN_MAX[[:space:]]+256' "$TMPL/nc_c.h")" "1"
+
+  # ---------- NC-D（M350）：**装置鉴别力** —— 只持握 64 条 ⇒ 第 257 条必须「被接受」 ----------
+  #   为什么必须有这条：[6] 的判据是「第 257 条被拒」。若装置在**任何**持握数下都报「被拒」，
+  #   那这条判据就恒真 = 空判据（口径 9：症状断言必须先证明自己有鉴别力）。
+  #   64 「被接受」+ 256 「被拒绝」⇒ 判据随槽位占用单调变化 ⇒ 断言的确实是「上限」这件事。
+  rm -f "$GATE"
+  M295_HTTP_PORT="$PORT" M295_TAG="nc" M295_HOLD_N=64 M295_HOLD_GATE="$GATE" \
+    M295_HOLD_MAX=60000 M295_READ_MS=20000 timeout -k 5 90 "$BD/slot_cli" >"$TMPL/logs/ncd.out" 2>&1 &
+  HPID=$!
+  n=0; while [ "$n" -lt 400 ]; do
+    [ "$(grep -cE '^TAG nc-[0-9]+ OK$' "$TMPL/logs/ncd.out" 2>/dev/null || true)" -ge 64 ] && break
+    kill -0 "$HPID" 2>/dev/null || break
+    sleep 0.05; n=$((n+1))
+  done
+  M295_HTTP_PORT="$PORT" M295_TAG="nc27" M295_READ_MS=8000 \
+    timeout -k 5 30 "$BD/slot_cli" >"$TMPL/logs/ncd257.out" 2>&1
+  LNCD="$(grep -E '^TAG ' "$TMPL/logs/ncd257.out" 2>/dev/null | tail -1)"
+  chk "NC-D：只持握 64 条 ⇒ 第 257 条**被接受**（证明 [6] 的「被拒」不是恒真）" \
+      "$( [ "${LNCD:-}" = "TAG nc27 OK" ] && echo accepted || echo "other[$LNCD]" )" "accepted"
+  : > "$GATE"
+  n=0; while [ "$n" -lt 200 ]; do kill -0 "$HPID" 2>/dev/null || break; sleep 0.1; n=$((n+1)); done
+  wait "$HPID" 2>/dev/null || true; HPID=""; rm -f "$GATE"
 fi
 
 # ============================================================
@@ -278,8 +372,12 @@ echo "[8] 覆盖边界（如实登记）"
 cat <<'EOF'
   · 本门只覆盖 **H3 托管 listener**（px_serve + opts.http3）这条形态；裸 `quic_listen`
     + `quic_accept` 的 demo 路径共用同一套槽位表（`g_qconns`），但独立路径未单独覆门。
-  · 「首次失败 @256」依赖**连接槽**才是瓶颈：本门用 `M295_CLOSE=0`（静默退出）制造
-    「槽位不释放」；优雅关闭场景由 [5] 覆盖（全 OK，且不再依赖上限）。
+  · 「第 257 条被拒」现在由**并发持握**证明（M350）：256 条连接**活着**且未发
+    CONNECTION_CLOSE ⇒ 槽位被占与「服务端空闲回收」的时序无关。旧形态（串行静默退出 264 次）
+    已被推翻并删除 —— 它的隐含前提「进程退出后槽位不回收」在 hog 下不成立（M349 实测 3/3 假绿）。
+  · **静默退出（进程被杀）之后槽位何时回收**这条行为**本门不再断言**：它由服务端空闲超时
+    （2×PX_H3_IDLE_MS，本段显式抬到 60s ⇒ 120s 才回收）决定，而「等 120s」既慢又不属于
+    M295 的夹具契约（缺陷 508 的病是「满了不吭声」，不是「回收快慢」）。已在 GATE_FLAKINESS.md 登记。
   · 上限值 256 的**内存代价**已量化（`nm -S --size-sort`：g_qds 由静态 64MB 改为按需分配，
     进程 BSS 76.5MB → 9.4MB）—— 该量测在门里**不复现**（需要 nm 与固定构建），只在文档登记。
   · `QUIC_CIDTAB_MAX`（2048）**不是**本轮的瓶颈（实测把 conn 上限抬高后仍是 H3/QD 的 64 先卡住），
@@ -288,6 +386,12 @@ cat <<'EOF'
 EOF
 
 echo
-printf '===== M295-VERIFY-OK · 通过 %s 项 · 失败 %s 项 =====\n' "$PASS" "$FAIL"
-[ "$FAIL" -eq 0 ] || exit 1
-exit 0
+# M350：末行必须与 rc **同向**（缺陷 506 家族：修前不管 FAIL 多少都印 OK）。
+#   例外：ANOMALY 也算不绿 ⇒ 同走 FAIL 分支，但**单独计数**，便于区分「装置坏了」与「产品坏了」。
+if [ "$FAIL" -eq 0 ]; then
+  printf '===== M295-VERIFY-OK · 通过 %s 项 · 失败 0 项 · 异常 0 项 =====\n' "$PASS"
+  exit 0
+fi
+printf '===== M295-VERIFY-FAIL · 通过 %s 项 · 失败 %s 项 · 异常 %s 项 =====\n' "$PASS" "$FAIL" "$ANOM"
+printf '      （异常 = 前提断言不成立/装置故障，不是产品红；逐条见 ⛔ 行）\n'
+exit 1
