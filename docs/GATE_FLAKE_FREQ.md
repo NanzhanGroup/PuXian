@@ -137,3 +137,35 @@ M340 台账第七节第 1 条写的是「对 21 个窄口径门 `flake_rerun.sh 
 
 > 复跑方法：串行 `selfhost/flake_rerun.sh -n 3 -- examples/m245_tls_cert_reload/verify.sh`；
 > 并发 `packaging/chain/shard_run.sh 4 --only m245_tls_cert_reload,m150_tls_crypto`。
+
+---
+
+## 六 M347 复测：19 门 × 10 轮 = 190 次运行，0 命中（口径更宽，结论同向）
+
+> 与第二节（M342，126 次 0 命中）同向，但这次把 N 从 3 提到 10，并把**本门命令写成可复核的一行**
+> （`flake_rerun.sh -n 10 -t 600 -- selfhost/run_gates.sh --only <门>`，串行单跑，逐门按上轮实测耗时升序）。
+
+```
+范围：AUDIT 第七节第 1 步的 21 门，realhost_smoke 不在 registry ⇒ 实扫 19 门
+时间：2026-10-28 12:05:41 → 13:25:26
+结果：逐门 pass=10 fail=0 timeout=0；命中率 0%
+现场：/data/gatevm/flake_sweep_m347/<门>/run-K.log · summary.txt · 终表 FREQ.md（尾部 FREQ-DONE）
+```
+
+边界（与第二节一致，别读成「判据稳定」）：
+
+- 串行单跑测的是**单跑稳定性**；0/10 = 这 10 次没抽中，不是证明；
+- 本轮口径**不覆盖并发偶发**（m120 那类只在并发/重复取样下出现，见第二节）；
+- ⇒ 这 19 门从「高优先级待扫」移出，下一轮换条件（分片并发 + 多轮）才有新信息，禁止同口径重扫。
+
+### 扫描器自身两个缺陷（607/608，M348 修）
+
+```
+607  跨行贪婪解析：s/^.*timeout=\([0-9]*\)/ 无行锚 ⇒ 命中两行 ⇒ $to="600\n0" ⇒
+     summary.tsv 劈行、终表只出 1 行、命中率算出 6000%
+608  完成标记写在表之后 ⇒ 表一坏标记就没了 ⇒ park 探针永假 ⇒ 自驱静默空转 2h20m
+修：/data/autodrive/freq_md_rebuild.sh（行锚定 + 字段去换行 + 无条件 FREQ-DONE + 独立 DONE）
+负控：/data/autodrive/neg607_608.sh ⇒ 7/7 落在预期（PASS）
+```
+
+⇒ 教训写进台账第 11 条：**进度标记由起点写，不由终点写**。
