@@ -377,8 +377,21 @@ done
 
 # ── 5) 启动 ──
 PIDS=()
+SKIPPED=0
 for i in $(seq 1 "$N"); do
   ONLY=$(paste -sd, "$LOG/shard$i.txt")
+  # ── M352（缺陷 615）：**0 门的分片不启动** ──
+  #   实测（2026-10-28 V5 负控）：`--only` 子集只给 4 门、N=8 ⇒ 后 4 片 shard$i.txt 为空
+  #   ⇒ 命令行拼成 `run_gates.sh --only ''`，而 run_gates.sh 把**空值当「不过滤」**
+  #   ⇒ 空片各跑了 30–34 门全量门（shard5..8.log 绿 31/31/32/34），白烧 4 份全量。
+  #   判据口径：0 门就是 0 门，**不启动**比「启动后跑全量」安全；rc 记 0、日志写明原因。
+  if [ -z "${ONLY//[[:space:]]/}" ]; then
+    echo "  ⏭  shard$i：0 门（不启动 —— 空 --only 会被当成「不过滤」跑全量 · 缺陷 615）"
+    echo "shard$i：0 门（跳过 · 缺陷 615）" > "$LOG/shard$i.log"
+    echo 0 > "$LOG/shard$i.rc"
+    SKIPPED=$((SKIPPED+1))
+    continue
+  fi
   # ── M309 C1 A/B：每路的 GATE_JOBS / 绑核（空 = 保持既有行为）──
   JOBS_ENV=""; [ -n "$SHARD_JOBS" ] && JOBS_ENV="GATE_JOBS=$SHARD_JOBS "
   TSET=""
@@ -407,7 +420,7 @@ for i in $(seq 1 "$N"); do
 done
 
 # ── 6) 等待 ──
-echo "── 等待 $N 个分片 ──"
+echo "── 等待 ${#PIDS[@]} 个分片（0 门的片不启动${SKIPPED:+，跳过 $SKIPPED 片}）──"
 for p in "${PIDS[@]}"; do wait "$p"; done
 echo "── 全部分片结束 ──"
 
@@ -448,7 +461,16 @@ echo "  合计：绿 $TOT_OK · 红 $TOT_FAIL（门清单 $NG）"
 #   「合计：绿 3」（那是 quiet 档那 3 个）—— 不细看会以为"绿了"。判据：分片侧合计必须 > 0。
 SH_OK=0
 for i in $(seq 1 "$N"); do
-  SH_OK=$((SH_OK + $(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/shard$i.log" 2>/dev/null || echo 0)))
+  # ── M352（缺陷 616）：**不能写 `$(grep -c … || echo 0)`** ──
+  #   `grep -c` 无匹配时**自身已输出 0 且 rc=1** ⇒ `|| echo 0` 再补一个 ⇒ 子命令两行输出
+  #   ⇒ 算术式变成 `SH_OK + 0\n0` ⇒ `syntax error in expression (error token is "0")`。
+  #   实测（2026-10-28 V5 负控）：shard2 有 0 绿 1 红（m267 判红）⇒ 立刻命中；
+  #   而这条算术之后紧跟的就是「空跑必红」裁决（SH_OK -eq 0 ⇒ exit 6）
+  #   ⇒ 判据通道在出错态下继续求值 = 590 族「通道没了照样往下走」。
+  #   触发条件平凡：**任何一片全红**（真灾难）就会命中。
+  _n=$(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/shard$i.log" 2>/dev/null) || _n=0
+  case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+  SH_OK=$((SH_OK + _n))
 done
 if [ "$SH_OK" -eq 0 ]; then
   echo "  ❌ 空跑：$N 个分片一个门都没跑出来（看 $LOG/shard1.log —— 多半是残留锁/建树失败）"

@@ -85,10 +85,11 @@ GATE_SKIP="${GATE_SKIP:-}"
 GATE_LIST=0
 GATE_FAIL_FAST="${GATE_FAIL_FAST:-0}"
 ALLOW_DIRTY=0
+ONLY_GIVEN=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --allow-dirty) ALLOW_DIRTY=1 ;;
-        --only)        shift; GATE_ONLY="${1:-}" ;;
+        --only)        shift; GATE_ONLY="${1:-}"; ONLY_GIVEN=1 ;;
         --skip)        shift; GATE_SKIP="${1:-}" ;;
         --list)        GATE_LIST=1 ;;
         --fail-fast)   GATE_FAIL_FAST=1 ;;
@@ -97,6 +98,18 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# ── M352（缺陷 615）：**`--only` 给了但值为空 ⇒ 响亮拒绝** ──
+#   实测（2026-10-28 V5 负控）：shard_run.sh 对 0 门的分片仍拼 `--only ''`，
+#   而这里空值等价于「不过滤」⇒ 空片静默跑了全部 235 门（4 片白烧全量），
+#   日志里**一个字都不提示**（590 族：判据/参数通道没了就当默认值）。
+#   口径：显式给了 --only 却给空值 = 用法错误，判死（rc=4）比默默跑全量安全。
+#   「要全量」就**不带** --only；要子集就给门名（不存在的门名走 rc=4 的既有检查）。
+if [ "$ONLY_GIVEN" = 1 ] && [ -z "${GATE_ONLY//[[:space:]]/}" ]; then
+    echo "❌ --only 的值为空 —— 空值等于「不过滤」，会跑全部门（缺陷 615）。" >&2
+    echo "   要跑全量：不要带 --only。要跑子集：给门名（逗号分隔）。" >&2
+    exit 4
+fi
 
 # 「,a,b,」包含判定（门名的逗号分隔表）
 _in_list() { case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
