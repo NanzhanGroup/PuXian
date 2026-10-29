@@ -4,7 +4,7 @@
 > 每次红都换一个门，而同树单跑必绿 ⇒ 「全量门绿」已经不能当信号用。
 > 这比单个门红严重：它会训练人「红 = 又抽中了」—— 而「假红让真红不再被相信」正是缺陷 584 开头写下的失效模式。
 
-## 一 已定性案例（27 条，全部当轮修完或登记；最新三条 620/621 = M354）
+## 一 已定性案例（27 条，全部当轮修完或登记；最新两条 623/624 = M354 收口轮）
 
 > 编号占位：**613 / 614 是成本侧缺陷**（耗时表住 `/tmp` 被清后静默退化成 60s · 分片数不随机型走），
 > 不属「判据不稳定」⇒ 详情登记在 `CHANGELOG.md` M351 与 `docs/GATE_ISOLATION.md` §十.8，本台账只留编号占位。
@@ -45,6 +45,8 @@
 | 620 | 发布装置（GitHub Actions `Release` job） + M352 的 latest 自证装置 | `v0.2.352` 的 tag 与 main 都推了，但 `releases/latest` 一直是 `v0.2.351`；M352-LATEST 装置只写 `LATEST-VERDICT=PENDING`，**不报警**（park 探针照样满足 ⇒ 「发布没发出去」静默 3h） | ① `Release` 的 `release` job `timeout-minutes: 30`，而 `actions/checkout`（`fetch-depth: 0`）在 runner 上跑满 **30:04** 被 cancelled（17:10:45 → 17:40:49），后续 steps 全 skipped；② 自证装置把 **PENDING 当正常终态**写盘，`DONE` 照写 ⇒ 下游只看见「DONE」 | ① 已 `rerun-failed-jobs`（attempt 2）并盯到 `releases/latest == v0.2.352`；② 自证装置判据改「PENDING + 超过 T ⇒ 报 BLOCKED（非 DONE）」，`DONE` 只在拿到确定结论时写（口径 11/14：取不到 ≠ 没有，未证 ≠ 通过）｜**M354 已修（两半都修）**：① 入库装置 `packaging/latest_verify.sh`（三态 OK/STALE/**BLOCKED**，`LV_DEADLINE_SEC` 上限 30min）+ 负控 `packaging/latest_verify_negctl.sh` **6/6**（伪造 tag 不发 Release ⇒ BLOCKED；有 Release 但 latest 指旧版 ⇒ STALE；latest == 期望 ⇒ OK；取不到 API ⇒ BLOCKED，**不许** OK）；② `release_guard.sh` 的 latest 段改为只调该装置并做映射（OK/STALE/**其余⇒VERDICT=BLOCKED exit 3**），删掉「40 次 PENDING 跑完照写 GREEN」的老路 |
 
 | 621 | m278_release_reconcile 的 [2] 静态段 + 离线自证 | 全量门 shard2 判红 2 条「脚本头没写 X」，而**同一份快照里 X 就在**（红信息把整份 13.9KB 快照打出来，肉眼可见）；单跑 400 次全绿 | **618 的同族、未扫的那一半**：判据助手写的是 `printf '%s' "$2" | grep -q -- "$3"`。`grep -q` 命中即退出 ⇒ `printf` 还在写 ⇒ SIGPIPE（`PIPESTATUS` 实测 **141 0**，grep 其实命中了）⇒ 脚本开 `set -o pipefail` ⇒ 整条管道判非 0 ⇒ 「不含」。§595 当时只把「反复 cat」换成原子快照，管道这一层没动 | 两处 `chkg`（`examples/m278_release_reconcile/verify.sh` + `packaging/selftest_reconcile.sh`）全改 **here-string**（`grep -q -- "$3" <<<"$2"`），红信息只留前 200 字；新增装置自证 [2b]：`yes \| grep -q` 必得 141（机制成立）+ 静态守卫「chkg 不许用管道」。**实测：14 并发跑本门，修前 6/14 假红，修后 0/14，14×16 全绿**。证据 `/data/gatevm/m354-m278-evidence/`（含 DBG `pipestatus=141 0`）。**同族扫尾已登记**：全仓仍有 52 个「带 pipefail + `\| grep -q`」的脚本（9 个门各 3–4 处），下一轮逐门改 + 逐门验证 |
+| 623 | 分片编排 `packaging/chain/shard_run.sh` 的**退出码** | 第二遍全量门红 2 条，而 `shard_rc=0`（`/data/gatevm/chain-m354-20261029-103355-2699083/shard_rc` 内容为 `0`）⇒ 任何直接读 rc 的调用者（脚本 / 人 / 将来的 CI）都会把红读成绿 | 尾部只 `echo "  ❌ 有红 ⇒ …"`，**没有** `exit` ⇒ 进程 rc 恒 0；整轮结论全靠链上 `release_guard` 再解析「合计：绿 x · 红 y」那一行 —— 判据第二通道（601/603/610 同族：汇总通道与会话退出码不同向） | 改 `TOT_FAIL != 0 ⇒ exit 1`（码约定 0=全绿 / 1=有红 / 6=空跑 / 3,4,9=自身故障）；**端到端负控**：给一门 1s 预算造**真超时**（`GATE_TIMEOUT_m285_gate_assertions=1`）⇒ 绿 1 红 1、`rc=1`（旧版此处必为 0）；**正控**：两门全绿 ⇒ `rc=0` |
+| 624 | m286_anchor_multi 的 [1] 自证回路（6 个 key 的「自证含/缺」） | 第三遍全量门 shard4 判红 1 项「**自证缺 bad_a4_range2.sh**」，而同一份 `$out` 的原样打印就在上一行（621 现场第三次复刻） | 621/622 同族第 3 处现场：`printf '%s' "$out" \| grep -q -- "$k"` + `set -o pipefail`。strace 实测 bash 的 `printf '%s'` 对这份 672 字节输出做了 **19 次 write**（逐行刷）⇒ 读端一命中就退出，其后的 write 拿 EPIPE ⇒ 写端 rc=141 ⇒ pipefail 判假 ⇒ **命中读成缺** | 改 here-string；新增**静态守卫**「本装置判据不许出现『管道接 grep -q』」（`NPIPE` 必须 0，防回归）；**结构性负控**：把真实 `$out` 在命中行处切成两段 + 段间 `sleep 0.2`（模拟写端被抢占）⇒ 旧形态 rc=**141** 判「缺」、新形态 rc=0 判「含」（同一份数据）；空载 20000 次 × 两档（默认 / SIG_IGN）0 假否；装置 默认 3/3 + SIG_IGN 3/3 全 30 通过 |
 
 ## 二 从这 6 条抽出的四条口径（可直接当 review checklist）
 
@@ -374,3 +376,35 @@ printf '%s\n' "$code" | grep -qF -- 'TG + TR'      # set -o pipefail 下
   全 25 通过。
 - **存量口径不变**：全仓仍有 52 处「pipefail + `| grep -q`」；本轮又撞 1 处（selftest_latest_guard），
   累计已收口 3 文件（m278 verify · selftest_reconcile · selftest_latest_guard）。**扫尾仍按一门一改一验**。
+
+### 二·补 M354 之四：第 19 条口径 —— **编排层的退出码必须与「红」同向**（缺陷 623）
+
+第三遍全量门（2026-10-29 13:30 结束）是 `绿 234 / 红 1`，红门是 m286（624，见上）。收工前顺手查了一眼
+`chain.log` 里那行 `shard_run rc=` —— **`rc=0`**。上一遍（红 2）也是 `rc=0`。也就是说：
+
+```
+分片汇总自己写着「合计：绿 234 · 红 1」
+                                      ↑ 同一个进程的退出码却是 0
+```
+
+整条发布链没被这件事坑到，纯粹因为 `release_guard` 又去**解析那一行合计数**（判据第二通道）。
+任何不走 `release_guard` 的消费者 —— 人肉 `rc=$?`、将来的 CI step、别的脚本 —— 都会把红读成绿。
+这是 601/603/610 同族第 N 次：**汇总通道说得对，会话退出码说得错，而两者都自称「结论」。**
+
+- **口径（第 19 条）**：
+  1. 只要**汇总里出现红**，编排进程的退出码就必须非 0 —— 汇总与 rc **同源同向**，不许一个真一个假；
+  2. 退出码要**分段可读**：`0`=全绿 · `1`=有红 · `6`=空跑（一个门都没跑出来）· `3/4/9`=自身故障（建树/参数/子树）。
+     这样调用方一句话就能判「是不是我该看门日志」；
+  3. 编排层**不许**用「后面还有人替我看」当免罪牌。链上有 `release_guard` 兜住一次，不等于这条通道可以长期失真；
+  4. 改 rc 契约必须配**双向负控**：造红 ⇒ rc 非 0；全绿 ⇒ rc=0。只验一半等于没验（口径 9）。
+
+- **本轮收口**（`packaging/chain/shard_run.sh`）：`TOT_FAIL != 0 ⇒ exit 1`。证据 `/data/gatevm/m355-624-623-evidence/`：
+  - 负控 A（真红路径，不改仓库）：`GATE_TIMEOUT_m285_gate_assertions=1` ⇒ m285 真超时 rc=124 ⇒
+    `合计：绿 1 · 红 1`、`SHARD_RC=1`（旧版此处为 0 —— 现场见第二遍全量门的 `shard_rc` 文件）；
+  - 正控 B：`--only ex_struct,upstream_confirm_selftest` ⇒ 全绿、`SHARD_RC=0`。
+- **顺带记一条机制知识（624 用得上）**：bash 的 `printf '%s'` **不是一次 write** —— strace 实测这份 672 字节
+  输出被拆成 **19 次** write（逐行刷）。所以「小输出不会撞 SIGPIPE」是错的：只要读端先退，剩下的每一次
+  write 都会 EPIPE。**判据里出现「写端进程 + 读端会提前退出」的组合，就必须假定会假红/假绿。**
+
+- **存量口径**：m286 是本轮第 4 个收口文件（m278 verify · selftest_reconcile · selftest_latest_guard ·
+  m286_anchor_multi），全仓「pipefail + `| grep -q`」仍有 ≈50 处，**扫尾仍按一门一改一验**。

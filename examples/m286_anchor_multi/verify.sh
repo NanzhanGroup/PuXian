@@ -65,9 +65,23 @@ printf '%s\n' "$out" | sed 's/^/  | /'
 chk '自证 rc' "$rc" '0'
 n="$(printf '%s' "$out" | grep -c '✅')"
 [ "$n" -ge 15 ] && ok "自证条目 $n ≥ 15" || bad "自证条目过少（$n < 15）"
+# ── M355（缺陷 624 · 621/622 同族）：**判据不许跨管道取数**（口径 18）──
+#   旧写法把 $out 用 printf 喂进管道再接 `grep -q`，在 `set -o pipefail` 下有**竞态**：
+#   grep -q 一命中就退出 ⇒ 若它抢在写端 write 之前退出，写端拿到 EPIPE
+#   ⇒ 写端非 0 ⇒ pipefail 取右端失败 ⇒ `if` 判假 ⇒ **明明匹配却报「自证缺」**。
+#   实测（2026-10-29 12:49 第三遍全量门 shard4）：6 个 key 里只有 bad_a4_range2.sh 判缺，
+#   而同一份 $out 的原样打印就在上一行 —— 门报的「缺」是**观测通道的谎**，不是事实。
+#   机理（strace 实测）：bash 的 `printf '%s'` 对这份 672 字节输出做了 **19 次 write**（逐行刷），
+#   读端 grep -q 一命中就退出 ⇒ 其后的 write 拿 EPIPE ⇒ 写端非 0 ⇒ pipefail 判假。
+#   ⇒ 改成 here-string（数据走 stdin，无写端进程、无 SIGPIPE/EPIPE 面）。
 for k in bad_a4_multi.sh bad_a4_range2.sh bad_a4_miss.sh ok_a4_range.sh ok_a4_whole.sh '反转-A4'; do
-  if printf '%s' "$out" | grep -q -- "$k"; then ok "自证含 $k"; else bad "自证缺 $k"; fi
+  if grep -q -- "$k" <<< "$out"; then ok "自证含 $k"; else bad "自证缺 $k"; fi
 done
+# ── 静态守卫（口径 18）：本装置的判据不许再出现「管道接 grep -q」形态（NPIPE 必须为 0）──
+SELF="${BASH_SOURCE[0]}"
+NPIPE=$(grep -cE '\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' "$SELF" 2>/dev/null) || NPIPE=0
+case "${NPIPE:-x}" in ''|*[!0-9]*) NPIPE=x ;; esac
+chk '静态守卫：判据不跨管道取 grep -q（口径 18）' "${NPIPE:-x}" '0'
 
 printf '\n══ [2] 真仓扫描 + 规模锚点 + 豁免表 ══\n'
 out="$(python3 "$G" --count 2>&1)"; rc=$?
