@@ -56,14 +56,14 @@ while :; do
     case "$res" in
         *LATEST-STALE*) verdict=STALE; reason="latest-not-expected($TAG)"; break;;
         *PENDING*)      : ;;                 # 中间态 ⇒ 继续等（**不是**结论）
-        *) if printf '%s' "$res" | grep -qF "$TAG"; then verdict=OK; break; fi ;;   # 读不出 ⇒ 当 api-error 继续等
+        *) if grep -qF "$TAG" <<< "$res"; then verdict=OK; break; fi ;;   # 读不出 ⇒ 当 api-error 继续等
     esac
     if [ "$(date +%s)" -ge "$t_end" ]; then break; fi
     if [ "$POLL" -gt 0 ]; then sleep "$POLL"; fi
 done
 
 if [ -z "$verdict" ]; then
-    if printf '%s' "$last" | grep -q 'PENDING'; then
+    if grep -q 'PENDING' <<< "$last"; then
         verdict=BLOCKED; reason="tag-exists-but-no-release(轮询 ${i} 次仍 PENDING)"
     else
         verdict=BLOCKED; reason="api-unreadable(最后一次：$(printf '%s' "$last" | head -1))"

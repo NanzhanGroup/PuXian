@@ -55,7 +55,7 @@ echo "── 判据载体自证 ──"
 [ -n "$RE_TG" ] && ok "从 tag_guard.sh 抽到规则: $RE_TG" || bad "tag_guard.sh 里找不到 TAG_NAME_RE"
 chk "H 两道防线的规则逐字符相同" "$RE_MT" "$RE_TG"
 chk "H 规则不接受补丁后缀（负控自证）" \
-    "$(printf 'v0.2.0-m245s1' | grep -qE "$RE_MT" && echo MATCH || echo NOMATCH)" "NOMATCH"
+    "$(grep -qE "$RE_MT" <<< 'v0.2.0-m245s1' && echo MATCH || echo NOMATCH)" "NOMATCH"
 
 echo "── A 正向：构造名（--milestone）──"
 R="$(newrepo a)"; run "$R" --milestone 249
@@ -118,7 +118,7 @@ chk "G **没有**创建 tag" "$(tags "$R")" ""
 echo "── H 续：创建出的名字必须被事后守卫的正则接受 ──"
 R="$(newrepo h)"; run "$R" --milestone 251
 T="$(tags "$R" | tr -d ' ')"
-chk "I 事后守卫的规则接受它" "$(printf '%s' "$T" | grep -qE "$RE_TG" && echo ACCEPT || echo REJECT)" "ACCEPT"
+chk "I 事后守卫的规则接受它" "$(grep -qE "$RE_TG" <<< "$T" && echo ACCEPT || echo REJECT)" "ACCEPT"
 
 echo "── J/K 入口健壮性 ──"
 R="$(newrepo j)"; run "$R" --help
@@ -181,11 +181,11 @@ for f in "$RPM_SH" "$MREL"; do
     chk "Q1 $(basename "$f") 含里程碑判据 $MS_RE" \
         "$(grep -cF "$MS_RE" "$f")" "1"
 done
-chk "Q1 判据接受 m248"      "$(printf 'm248'   | grep -qE "$MS_RE" && echo ACCEPT || echo REJECT)" "ACCEPT"
-chk "Q1 判据拒绝 m245s1"    "$(printf 'm245s1' | grep -qE "$MS_RE" && echo ACCEPT || echo REJECT)" "REJECT"
-chk "Q1 判据拒绝 m245s"     "$(printf 'm245s'  | grep -qE "$MS_RE" && echo ACCEPT || echo REJECT)" "REJECT"
-chk "Q1 判据拒绝 m245."     "$(printf 'm245.'  | grep -qE "$MS_RE" && echo ACCEPT || echo REJECT)" "REJECT"
-chk "Q1 判据拒绝 M245（大写）" "$(printf 'M245'  | grep -qE "$MS_RE" && echo ACCEPT || echo REJECT)" "REJECT"
+chk "Q1 判据接受 m248"      "$(grep -qE "$MS_RE" <<< 'm248'   && echo ACCEPT || echo REJECT)" "ACCEPT"
+chk "Q1 判据拒绝 m245s1"    "$(grep -qE "$MS_RE" <<< 'm245s1' && echo ACCEPT || echo REJECT)" "REJECT"
+chk "Q1 判据拒绝 m245s"     "$(grep -qE "$MS_RE" <<< 'm245s'  && echo ACCEPT || echo REJECT)" "REJECT"
+chk "Q1 判据拒绝 m245."     "$(grep -qE "$MS_RE" <<< 'm245.'  && echo ACCEPT || echo REJECT)" "REJECT"
+chk "Q1 判据拒绝 M245（大写）" "$(grep -qE "$MS_RE" <<< 'M245'  && echo ACCEPT || echo REJECT)" "REJECT"
 
 # Q2 顺序：判据必须在**关键动作**之前（否则等于没有）
 #   ⚠ 锚点要落在**真的动作行**上，不能落在文件头注释里（本轮首版就匹配到注释，报假红）。

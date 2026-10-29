@@ -227,8 +227,8 @@ scan_p3() {
         | sed -E 's/^[[:space:]]*(if|elif|while|until|return)[[:space:]]+//' \
         | sed -E 's/^[[:space:]]*[A-Za-z_][A-Za-z0-9_*|-]*\)[[:space:]]*//')"
       local danger=0
-      printf '%s' "$left" | grep -qE "$DANGER_LEFT_RE" && danger=1
-      printf '%s' "$left" | grep -qE "$DANGER_FILE_RE" && danger=1
+      grep -qE "$DANGER_LEFT_RE" <<< "$left" && danger=1
+      grep -qE "$DANGER_FILE_RE" <<< "$left" && danger=1
       [ "$danger" = 1 ] || continue
       local key="$rel:$num"
       P3_TOTAL=$((P3_TOTAL+1))
@@ -245,7 +245,7 @@ scan_p3() {
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     local sf="${s%%:*}" sn="${s##*:}"
-    if [ ! -f "$ROOT/$sf" ] || ! sed -n "${sn}p" "$ROOT/$sf" 2>/dev/null | grep -qE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'; then
+    if [ ! -f "$ROOT/$sf" ] || ! grep -qE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' <<< "$(sed -n "${sn}p" "$ROOT/$sf" 2>/dev/null)"; then
       EXPIRE=$((EXPIRE+1))
       emit "P3 登记过期：$s 已不再是禁形 ⇒ 请复核 $ALLOW_FILE"
     fi

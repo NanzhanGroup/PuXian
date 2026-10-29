@@ -1,3 +1,58 @@
+## M358 —— 次批小产出收口 37 条（87 → 50）+ 装置替换的一次自证红（第 227 轮）
+
+> 接 M357：大产出 10 条已收口、全量门绿 236/红 0。次批打「变量回显」这一类 ——
+> 形态最小（`printf '%s' "$v" | grep -q`），但 M355 已实测 672B 走 19 次 write：
+> 小不等于安全，`latest_guard` 那处 `curl -w '%{http_code}' | grep -q '^200$'` **只有 3 字节**也一样中。
+
+### 一 收口 37 条（9 文件）
+
+改法与 M357 同：`grep -q PAT <<< "$var"`（here-string）或「命令输出先落变量再比串」。
+
+| 文件 | 前 → 后 | 要点 |
+|---|---|---|
+| `packaging/selftest_pxrepo_mirror.sh` | 19 → 6 | `check` / `chk_tag` / ④ / ⑦ 全部判据 |
+| `packaging/selftest_make_tag.sh` | 7 → 0 | 正则自证 `chk`（含 5 例 Q1 判据） |
+| `selfhost/check_gate_premise.sh` | 5 → 2 | P3 左侧判据 2 + 「登记过期」重扫 1（`<<< "$(sed -n …)"`） |
+| `packaging/make_tag.sh` | 4 → 0 | 含 165/238 **同形两处**（命名合规 + 事后自证） |
+| `selfhost/check_gate_shared_tmp.sh` | 4 → 0 | `echo "$OUT" \| grep -q` 4 处 |
+| `packaging/selftest_reconcile.sh` | 2 → 0 | python3 判据管道 ⇒ `<<< "$(printf … \| python3 …)"` |
+| `packaging/latest_verify.sh` | 2 → 0 | 轮询结论判据 |
+| `packaging/selftest_latest_guard.sh` | 3 → 2 | python3 判据管道 |
+| `packaging/latest_guard.sh` | 1 → 0 | `curl -w '%{http_code}'` **先落变量再比串** |
+
+### 二 逐文件自证（一门一改一验）
+
+| 自证 | 结果 |
+|---|---|
+| `selftest_pxrepo_mirror.sh` | 通过 **53** / 失败 0 |
+| `selftest_make_tag.sh` | 通过 **84** / 失败 0 |
+| `check_gate_premise.sh --self-test` | 通过 **12** / 失败 0 |
+| `check_gate_shared_tmp.sh --self-test` | **6/6** · `GATE-SHARED-TMP-SELFTEST-OK` |
+| `selftest_latest_guard.sh` | 通过 **28** / 失败 0（此处 SIGPIPE=默认，141 可复现 ⇒ here-string 必要） |
+| `selftest_reconcile.sh` | 通过 **42** / 失败 0 |
+| `latest_verify.sh v0.2.357`（联网实测） | `LATEST-VERDICT=OK expected=v0.2.357 reason=none` |
+| `check_pipe_grep.sh --self-test` / `--gate` | 5/5 · `PIPE-GREP-VERDICT=OK remaining=50 files=30` |
+
+### 三 棘轮 + 未动的 10 条（不是债务，是必须保留的夹具/机制文本）
+
+基线 **87 → 50 条 / 36 → 30 文件**（6 个文件清零）。剩 10 条压在 3 个文件里：
+`selftest_pxrepo_mirror.sh` 6（⑥-3/⑥-4 的负控注入夹具 + 判据文案 + 扫描正则本体）、
+`check_gate_premise.sh` 2（P3 报错文案 + P3 自证夹具）、`selftest_latest_guard.sh` 2
+（静态守卫搜索串 + `yes | grep -q y` 的 SIGPIPE 机制自证）。**改掉这些等于拆负控换指标**，
+所以基线里如实保留计数 —— 这是度量偏差，不是待修项。
+
+### 3.1 装置替换踩的坑（一次被自证抓住的真红，记账）
+
+批量替换 `if printf '%s' "$o" | python3 -c '` 时，该串在同一文件出现 **2 处**
+（一处印 `JSONOK`、一处印 `OK`），替换是**全量**语义 ⇒ 第二处变成 `grep -q JSONOK` 却仍印 `OK`
+⇒ `selftest_reconcile` 立刻 **1 红**（`--json latest 字段：` 空）。修回后 42/0。
+教训两条：① 批量改判据助手前 `grep -c` 数 old_text 出现次数，与 `expect` 对表；
+② **只跑 `--gate`（棘轮）会漏** —— 它只看条数，不看行为；改助手必须跑该门的自证。
+
+### 四 全量门（待回填）
+
+### 五 发布（待回填）
+
 ## M357 —— 大产出管道收口 10 条（97 → 87）+ 基线重生成（第 226 轮）
 
 > 接 M356 的风险分层，先打最硬的一层：产出可能 > 64KB 或分多次 write 的生产者。

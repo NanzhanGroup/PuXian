@@ -108,7 +108,7 @@ if [ "$SELFTEST" = 1 ]; then
   # ① 未登记共用 ⇒ 判红并指名
   : > "$W/selfhost/gate_shared_tmp.txt"
   OUT=$(bash "$0" --root "$W" 2>&1); RC=$?
-  if [ "$RC" = 1 ] && echo "$OUT" | grep -q 'shared1'; then n=$((n+1)); echo "  ① 未登记共用 ⇒ rc=1 且指名 shared1  OK"
+  if [ "$RC" = 1 ] && grep -q 'shared1' <<< "$OUT"; then n=$((n+1)); echo "  ① 未登记共用 ⇒ rc=1 且指名 shared1  OK"
   else echo "  ① BAD（rc=$RC）：$OUT"; fi
   # ② 登记 + 理由 ⇒ 通过；白名单里的 solo1（只有 1 门用）⇒ 过期判红
   printf 'shared1\ta 与 b 有意共用（自证夹具）\n' > "$W/selfhost/gate_shared_tmp.txt"
@@ -116,12 +116,12 @@ if [ "$SELFTEST" = 1 ]; then
   [ "$RC" = 0 ] && { n=$((n+1)); echo "  ② 登记后 ⇒ rc=0  OK"; } || echo "  ② BAD（rc=$RC）：$OUT"
   printf 'shared1\t理由甲\nsolo1\tsolo1 只有一门用（应判过期）\n' > "$W/selfhost/gate_shared_tmp.txt"
   OUT=$(bash "$0" --root "$W" 2>&1); RC=$?
-  if [ "$RC" = 1 ] && echo "$OUT" | grep -q '过期'; then n=$((n+1)); echo "  ③ 白名单过期 ⇒ rc=1  OK"
+  if [ "$RC" = 1 ] && grep -q '过期' <<< "$OUT"; then n=$((n+1)); echo "  ③ 白名单过期 ⇒ rc=1  OK"
   else echo "  ③ BAD（rc=$RC）：$OUT"; fi
   # ④ 无理由 ⇒ rc=3
   printf 'shared1\t\n' > "$W/selfhost/gate_shared_tmp.txt"
   OUT=$(bash "$0" --root "$W" 2>&1); RC=$?
-  if [ "$RC" = 3 ] && echo "$OUT" | grep -q '无理由\|理由'; then n=$((n+1)); echo "  ④ 无理由 ⇒ rc=3  OK"
+  if [ "$RC" = 3 ] && grep -q '无理由\|理由' <<< "$OUT"; then n=$((n+1)); echo "  ④ 无理由 ⇒ rc=3  OK"
   else echo "  ④ BAD（rc=$RC）：$OUT"; fi
   # ⑤/⑥ 模板/通配**不算**「固定名」，但同一份夹具里的**固定**形式必须仍被统计
   #   （M287s2：m221 的 grep 模式 + m283 的说明里有 `/tmp/devbuild_${name}.fp` ⇒ 曾被判共用）
@@ -131,7 +131,7 @@ if [ "$SELFTEST" = 1 ]; then
   OUT=$(bash "$0" --root "$W" --verbose 2>&1); RC=$?
   if [ "$RC" = 0 ]; then n=$((n+1)); echo "  ⑤ 模板/通配形式不计 ⇒ rc=0  OK"
   else echo "  ⑤ BAD（rc=$RC）：$OUT"; fi
-  if echo "$OUT" | grep -q 'tpl_fixed' && ! echo "$OUT" | grep -q 'tpl_ '; then
+  if grep -q 'tpl_fixed' <<< "$OUT" && ! grep -q 'tpl_ ' <<< "$OUT"; then
       n=$((n+1)); echo "  ⑥ 反向判据：固定名**仍计** / 模板名**不计**  OK"
   else echo "  ⑥ BAD（判据被改瞎）：$OUT"; fi
   rm -rf "$W"

@@ -121,13 +121,13 @@ else ng "找不到豁免表 $REAL_IGN"; fi
 
 printf '\n【6】--json 可解析且计数一致\n'
 o=$(run "$W/fix/bad" --limit 10 --json)
-if printf '%s' "$o" | python3 -c '
+if grep -q JSONOK <<< "$(printf '%s' "$o" | python3 -c '
 import sys,json
 d=json.load(sys.stdin)
 assert d["bad"]==2, ("bad",d["bad"])
 assert any(i["verdict"]=="KNOWN-NO-RELEASE" for i in d["items"])
 assert len(d["items"])==5, len(d["items"])
-print("JSONOK")' 2>"$W/json.err" | grep -q JSONOK; then ok "--json 结构正确"; else ng "--json：$(cat "$W/json.err")"; fi
+print("JSONOK")' 2>"$W/json.err")"; then ok "--json 结构正确"; else ng "--json：$(cat "$W/json.err")"; fi
 
 printf '\n【7】--rerun 只碰 cancelled（fixture 档不下发请求）\n'
 o=$(run "$W/fix/bad" --limit 10 --rerun)
@@ -198,7 +198,7 @@ printf '{"tag_name":"v9.9.7"}\n' > "$W/fix/lateststale/latest.json"   # latest �
 o=$(run "$W/fix/lateststale" --limit 10); rc=$?
 chk "rc" "$rc" "1"; chkg "报 LATEST-STALE" "$o" "LATEST-STALE"; chkg "异常计数=1" "$o" "异常 1 个"
 o=$(run "$W/fix/lateststale" --limit 10 --json)
-if printf '%s' "$o" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["latest_stale"]==1 and d["latest"]=="v9.9.7" and d["latest_expected"]=="v9.9.9" and d["bad"]==1; print("OK")' 2>"$W/ls.err" | grep -q OK; then
+if grep -q OK <<< "$(printf '%s' "$o" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["latest_stale"]==1 and d["latest"]=="v9.9.7" and d["latest_expected"]=="v9.9.9" and d["bad"]==1; print("OK")' 2>"$W/ls.err")"; then
   ok "--json 暴露 latest / latest_expected / latest_stale"
 else ng "--json latest 字段：$(cat "$W/ls.err")"; fi
 # 正控：latest = 最高版本 tag ⇒ 不得报

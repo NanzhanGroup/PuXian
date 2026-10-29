@@ -140,3 +140,35 @@ tag **v0.2.357**（对象 `376fae3`）→ commit `8f0c792`，latest 自证 OK。
 
 下一批（44 条小产出）开工前先做一件事：把本节的「改法」固化成**改法清单**（`<<<` 吞尾换行、
 多行输出引号、`2>/dev/null` 位置三个坑），批量改时逐条对表。
+
+## 8 M358：次批小产出收口 37 条（87 → 50）
+
+改法与 §7 同（`<<<` / 落盘后 grep），但次批全是 `printf '%s' "$var" | grep -q` 与
+`echo "$OUT" | grep -q` 的**变量回显**形态 —— 正是 M355 实测「672B 走 19 次 write」那一类。
+
+| 文件 | 前 → 后 | 处置 |
+|---|---|---|
+| `packaging/selftest_pxrepo_mirror.sh` | 19 → 6 | 13 条改 here-string（`check`/`chk_tag`/④/⑦ 判据） |
+| `packaging/selftest_make_tag.sh` | 7 → 0 | 7 条改 here-string（正则自证 `chk`） |
+| `selfhost/check_gate_premise.sh` | 5 → 2 | 3 条：P3 左侧判据 2 + 登记过期重扫 1（`<<< "$(sed -n …)"`） |
+| `packaging/make_tag.sh` | 4 → 0 | 4 条（含 165/238 **同形两处**） |
+| `selfhost/check_gate_shared_tmp.sh` | 4 → 0 | 4 条 `echo "$OUT" \| grep -q` ⇒ `<<<` |
+| `packaging/selftest_reconcile.sh` | 2 → 0 | 2 条 python3 管道 ⇒ `<<< "$(printf … \| python3 …)"` |
+| `packaging/latest_verify.sh` | 2 → 0 | 2 条轮询判据 |
+| `packaging/selftest_latest_guard.sh` | 3 → 2 | 1 条 python3 管道 |
+| `packaging/latest_guard.sh` | 1 → 0 | `curl -w '%{http_code}' \| grep -q '^200$'` ⇒ **先落变量再比串**（3 字节也会被提前退出咬到） |
+
+合计 **37 条**，`PIPE-GREP-VERDICT=OK remaining=50 files=30`，`--self-test` 5/5。
+
+**未动的 10 条**（在这 3 个文件里，属口径 19 的度量偏差、不是债务）：`selftest_pxrepo_mirror.sh` 6 条
+（⑥-3/⑥-4 的**负控注入夹具**、判据文案、扫描正则本体）、`check_gate_premise.sh` 2 条（P3 报错文案 +
+P3 自证夹具）、`selftest_latest_guard.sh` 2 条（静态守卫的搜索串 + SIGPIPE 机制自证 `yes | grep -q y`）。
+**这些字符串必须保留原形态**，否则等于把负控拆掉换指标 —— 口径 19 的反面。基线里保留计数即为此。
+
+### 8.1 装置替换踩的坑（记账：一次被自证抓住的真红）
+
+批量替换 `if printf '%s' "$o" | python3 -c '` 时，该串在同一文件出现 **2 处**（一处打印 `JSONOK`、
+一处打印 `OK`），替换是**全量**语义 ⇒ 第二处被改成 `grep -q JSONOK` 而正文仍印 `OK`
+⇒ `selftest_reconcile` 立即 **1 红**（`--json latest 字段：` 空白）。
+教训：批量改判据助手前先 `grep -c` 数一下 old_text 出现次数，与 `expect` 对表；
+**一次红门不是白跑的** —— 若当时只跑 `--gate`（棘轮）就会漏，因为棘轮只看条数。

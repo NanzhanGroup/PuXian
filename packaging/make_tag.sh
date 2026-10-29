@@ -162,11 +162,11 @@ fi
 
 # ---------- 4. 命名合规（第 ① 道防线的核心）----------
 # 先给**已知的错误形态**一句人话，再给通用兜底 —— 用户/后人不该靠猜。
-if ! printf '%s' "$TAG" | grep -qE "$TAG_NAME_RE"; then
+if ! grep -qE "$TAG_NAME_RE" <<< "$TAG"; then
     echo "❌ 拒绝创建不合规 tag: $TAG" >&2
     echo "   规则只有一条: $TAG_NAME_RE（例 v0.2.271）—— 第三段就是**里程碑号**，没有 -m 后缀。" >&2
     # 「补丁后缀」是最常见的错法（我 2026-10-03 就是这么错的）：直接给出合规名。
-    if printf '%s' "$TAG" | grep -qE -- '-m[0-9]+s[0-9]+$'; then
+    if grep -qE -- '-m[0-9]+s[0-9]+$' <<< "$TAG"; then
         # M272：建议名必须是**新形态**（v<次段>.<里程碑>）—— 旧形态自 M272 起不可新建，
         #   否则「按提示照做」还会再被拒一次（把报错引向错误的方向）。
         SUGGEST="$(printf '%s' "$TAG" | sed -nE 's/^v([0-9]+)\.([0-9]+)\.[0-9]+-m([0-9]+)s[0-9]+$/v\1.\2.\3/p')"
@@ -188,7 +188,7 @@ fi
 _SUBJ="$(git log -1 --format=%s "$SHA_FULL" | head -c 80)"
 if [ -n "$MSG" ]; then
     TARGET_TAG_MSG="$MSG"
-elif printf '%s' "$_SUBJ" | grep -qE "^M${MILESTONE}([:：]| |\$)"; then
+elif grep -qE "^M${MILESTONE}([:：]| |\$)" <<< "$_SUBJ"; then
     TARGET_TAG_MSG="$_SUBJ"
 else
     TARGET_TAG_MSG="M${MILESTONE}：${_SUBJ}"
@@ -235,7 +235,7 @@ git tag -a "$TAG" "$SHA_FULL" -m "$TARGET_TAG_MSG" || { EXIT_CODE=3 die "创建 
 say "✅ 已创建 annotated tag $TAG → $SHA"
 
 # ---------- 8. 自证：名字必须能被「事后守卫」的正则接受 ----------
-if ! printf '%s' "$TAG" | grep -qE "$TAG_NAME_RE"; then
+if ! grep -qE "$TAG_NAME_RE" <<< "$TAG"; then
     EXIT_CODE=3 die "自证失败：刚创建的 $TAG 不匹配规则（不该发生）"
 fi
 say "   ✔ 自证：匹配 $TAG_NAME_RE"
