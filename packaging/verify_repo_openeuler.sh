@@ -57,7 +57,7 @@ echo "== [verify-oe] 仓库可见性 =="
 # ⚠️ 用 `dnf list`（核心功能）而**不用** `dnf repoquery` —— 后者在 dnf-plugins-core 里，
 #   精简镜像（含 openeuler 容器）常常没有 ⇒ 会以 "No such command: repoquery" 收场，
 #   看起来像"仓库不可见"，实则是**工具缺件**（2026-09-21 首跑即栽此）。
-if ! dnf -q --repo=puxian-verify list --available puxian 2>&1 | tee /tmp/oe_list.log | grep -q '^puxian'; then
+if ! dnf -q --repo=puxian-verify list --available puxian > /tmp/oe_list.log 2>&1 || ! grep -q '^puxian' /tmp/oe_list.log; then
     echo "❌ dnf list 看不到 puxian（仓库可见性检查失败）"
     echo "── 诊断：repo 配置 ──"; cat /etc/yum.repos.d/puxian-verify.repo
     echo "── 诊断：repodata 实体 ──"; ls -l "$REPO_DIR/repodata" | head

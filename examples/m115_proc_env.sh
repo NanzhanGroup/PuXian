@@ -20,7 +20,7 @@ echo "== M115 验证：$SRC =="
 
 echo "[1/3] 解释轨（px run）"
 $PX run "$SRC" > "$TMP/interp.log" 2>&1; rc=$?
-if [ $rc -eq 0 ] && tail -1 "$TMP/interp.log" | grep -q M115_PROC_ENV_OK; then
+if [ $rc -eq 0 ] && grep -q M115_PROC_ENV_OK <<< "$(tail -1 "$TMP/interp.log")"; then
   ok "解释轨通过（$(grep -c '^\[m115\]' "$TMP/interp.log") 组断言）"
 else
   bad "解释轨失败 rc=$rc"; tail -8 "$TMP/interp.log"
@@ -28,7 +28,7 @@ fi
 
 echo "[2/3] 编译轨（px build）"
 $PX build "$SRC" > "$TMP/build.log" 2>&1 && ./examples/build/m115_proc_env > "$TMP/compiled.log" 2>&1; rc=$?
-if [ $rc -eq 0 ] && tail -1 "$TMP/compiled.log" | grep -q M115_PROC_ENV_OK; then
+if [ $rc -eq 0 ] && grep -q M115_PROC_ENV_OK <<< "$(tail -1 "$TMP/compiled.log")"; then
   ok "编译轨通过（$(grep -c '^\[m115\]' "$TMP/compiled.log") 组断言）"
 else
   bad "编译轨失败 rc=$rc"; tail -8 "$TMP/compiled.log"

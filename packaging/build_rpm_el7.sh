@@ -48,7 +48,7 @@ yum -y install rpm-build createrepo git tar >/dev/null
 echo "   ✅ 工具: $(rpmbuild --version | head -1), createrepo $(createrepo --version 2>&1 | head -1)"
 
 # rpmbuild 打 .el7 后缀依赖 redhat-rpm-config 的 %dist 宏；缺失时兜底
-if ! rpm -E '%{?dist}' 2>/dev/null | grep -q 'el7'; then
+if ! grep -q 'el7' <<< "$(rpm -E '%{?dist}' 2>/dev/null)"; then
     yum -y install redhat-rpm-config >/dev/null
 fi
 echo "   ✅ %{dist} = $(rpm -E '%{?dist}')"

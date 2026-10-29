@@ -56,7 +56,7 @@ W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 api_get(){   # $1=path $2=outfile  ⇒ 0 成功
   curl -sS -H "Authorization: Bearer ${GH_TOKEN:-}" -H "Accept: application/vnd.github+json" \
        "$API/repos/$REPO$1" -o "$2" 2>/dev/null || return 1
-  head -c1 "$2" 2>/dev/null | grep -q '\[' && return 0
+  grep -q '\[' <<< "$(head -c1 "$2" 2>/dev/null)" && return 0
   grep -q '"tag_name"\|"id"' "$2" 2>/dev/null && return 0
   return 1
 }

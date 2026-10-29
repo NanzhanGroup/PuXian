@@ -292,6 +292,6 @@ if [ "$INSTALL" = 1 ]; then
     fi
 fi
 _is_static=0
-if ! readelf -d "$OUTDIR/pxc" 2>/dev/null | grep -q NEEDED; then _is_static=1; fi
+if ! grep -q NEEDED <<< "$(readelf -d "$OUTDIR/pxc" 2>/dev/null)"; then _is_static=1; fi
 _glibc="$(objdump -T "$OUTDIR/pxc" 2>/dev/null | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
 say "NATIVE-BOOTSTRAP-OK host=$HOST_A target=$TA cross=$CROSS no_quic=$([ -n "$NQ" ] && echo 1 || echo 0) static=$_is_static link=$LINK_MODE glibc=${_glibc:-none}"
