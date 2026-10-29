@@ -51,9 +51,37 @@ m269 rc=0 · m116 rc=0（131s）；m222 另跑（`/data/gatevm/m355-m222b.log`�
 判据变成 `grep -q PAT` 无输入（读 stdin）⇒ 门 rc=2，红得**像判据坏了**。
 ⇒ 逐条串行改 + 改完 `grep -n '| grep -q'` 复查 0 残留，再跑门。
 
-### 五 全量门（待回填）
+### 五 全量门：第 1 轮抓到一个**真红**（我的漏项），修后第 2 轮全绿
 
-### 六 发布（待回填）
+**第 1 轮** `chain-m355-20261029-152600-1091607`（head f0e2e90）
+绿 235 · 红 1 · `CHAIN-VERDICT=NO-GO reason=shard-rc-1` · 链墙钟 **82m58s**（分片 5039s）·
+loadavg max 1m **78.53**（498 采样 ⇒ ≈4.9/核，16 核）· memory_peak **未采**（埋点通道不可用，见下）。
+
+唯一红门 = `gate_registry`（shard6 · 0s）：
+`selfhost/check_pipe_grep.sh 在清单里、ci.yml 里没有（M235 缺陷 355 同形）`。
+定性两问 —— 观测通道与被证事实同一条？**是**（两文件静态对拍，无随机性）；看了几次？**1 次即复现** ⇒ **真红**。
+根因：本轮加新门只改了 `selfhost/gates.registry.sh`，漏了 `.github/workflows/ci.yml`。
+修：ci.yml 在「发布就绪裁决的负控自证」前加一步（`--self-test` + `--gate`），YAML 用 pyyaml 解析校验；
+单门复跑 `GATE-REGISTRY-OK`（通过 9 / 失败 0）；commit **c3bd9bd**。
+
+> 埋点失败原因（不是「本机无埋点」）：我按 `/sys/fs/cgroup/ws-debug.slice/<unit>.service` 取，
+> 真实路径带 slice 前缀 `/sys/fs/cgroup/ws.slice/ws-debug.slice/<unit>.service`。
+> wrapper 已改为 `CGP=$(sed -n 's/^0:://p' /proc/self/cgroup)` 反推 + fallback `systemctl show -p MemoryPeak`，并把 `cgroup_path=` 写进日志。
+
+**第 2 轮** `chain-m355-20261029-165208-1901463`（head c3bd9bd）
+**绿 236 · 红 0 · 门清单 236 · 跳过 0 · rc=0**。
+分片段 **4330s**（72m10s，8 片绑核；最晚分片 17:40:41 收）· quiet 串行 ≈1417s · 链墙钟 **4652s（77m32s）**（含 release_guard 322s）。
+loadavg max 1m **93.62**（465 采样 ⇒ ≈5.9/核）· memory_peak **7556.6 MiB**（7923642368 B，
+cgroup_path=`/ws.slice/ws-debug.slice/chain-m355r2.service`）。
+
+### 六 发布：tag v0.2.355 → c3bd9bd，latest 自证 OK
+
+- `release_guard VERDICT=GREEN tag=v0.2.355 head=c3bd9bd`
+- `git ls-remote`：`refs/heads/main = c3bd9bd`；`refs/tags/v0.2.355 = c8f6bb1`（annotated），`^{} = c3bd9bd`
+- latest 自证：release_guard 内 poll 4 → `LATEST-VERDICT=OK`；另独立跑 `packaging/latest_verify.sh v0.2.355` → poll 1 即 `LATEST-VERDICT=OK expected=v0.2.355`（18:12:20）
+
+> 缺陷候选（已实证，代价 83min）：新增门/守卫「漏注册 ci.yml」只有**全量门**才抓到。
+> 待判：给 `gates.registry.sh` 加「新增门必须同轮改 ci.yml」的 pre-commit 检查。
 
 
 > 接 M353 台账里剩下的三条：619（m256 负控 B 靠概率撞）、620 第二半（latest 自证把 PENDING 当终态）、
