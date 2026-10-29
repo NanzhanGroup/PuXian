@@ -87,7 +87,7 @@ check_one() {   # $1=文件 → 0 达标 / 1 判红
         echo "     （发布包里混进别的架构 ⇒ 用户那边就是 Exec format error）"
         return 1
     fi
-    if ! readelf -d "$f" 2>/dev/null | grep -q 'NEEDED'; then
+    if ! grep -q 'NEEDED' <<< "$(readelf -d "$f" 2>/dev/null)"; then
         echo "  ✅ $f：全静态（无 DT_NEEDED）· [$mach]"
         return 0
     fi

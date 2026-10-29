@@ -94,7 +94,7 @@ if command -v objdump >/dev/null 2>&1; then
         "$CC" -O0 -fno-inline -c "$W/$tag.c" -o "$W/$tag.o" 2>/dev/null || continue
         objdump -d "$W/$tag.o" > "$W/$tag.dis" 2>/dev/null || continue
         A=0
-        sed -n '/<shl_rt>:/,/^$/p' "$W/$tag.dis" | grep -qE 'and.*\$0x3f' && A=1
+        grep -qE 'and.*\$0x3f' <<< "$(sed -n '/<shl_rt>:/,/^$/p' "$W/$tag.dis")" && A=1
         if [ "$tag" = old ]; then OLD_AND=$A; else NEW_AND=$A; fi
     done
 fi

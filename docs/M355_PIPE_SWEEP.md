@@ -100,3 +100,33 @@
 - 否定条件不许顺手「简化」成肯定（那是另一个缺陷的入口）；
 - 同一文件的多处替换**不要并发** —— M355 踩过：并行 edit 同一文件互相覆盖，只剩最后一处生效，
   门直接红（rc=2），看着像「改坏了判据」。**逐条串行改 + 改完 grep 复查 0 残留**。
+
+## 7 M357：大产出 10 条收口（97 → 87）
+
+改法统一为「先把产出**落到变量/文件**，再对落盘物 grep」——
+`<<< "$(生产者)"`（here-string，无管道）或 `> 日志文件` 后 `grep 文件`。命中语义不变（都 rc=0），否定分支保持否定。
+
+| 文件:行 | 原形态 | 改法 |
+|---|---|---|
+| `examples/m115_proc_env.sh:23,31` | `tail -1 log \| grep -q` | `grep -q X <<< "$(tail -1 log)"` |
+| `examples/m217_shift_count/ub_proof.sh:97` | `sed -n 范围 dis \| grep -qE` | `grep -qE P <<< "$(sed …)"` |
+| `examples/m271_run_fast/verify.sh:66` | `grep -A12 … \| grep -q` | `grep -q P <<< "$(grep -A12 …)"` |
+| `packaging/build_rpm_el7.sh:51` | `rpm -E dist \| grep -q` | `grep -q 'el7' <<< "$(rpm -E …)"` |
+| `packaging/latest_guard.sh:59` | `head -c1 f \| grep -q '\['` | `grep -q '\[' <<< "$(head -c1 f)"` |
+| `packaging/release_reconcile.sh:97` | `head -c1 f \| grep -q '\['` | 同上 |
+| `packaging/verify_repo_openeuler.sh:60` | `dnf list \| tee log \| grep -q` | `dnf list > log 2>&1 \|\| ! grep -q '^puxian' log`（tee 在中间，grep 提前退出会让 tee 吃 141 ⇒ 假红） |
+| `selfhost/check_bin_portability.sh:90` | `readelf -d f \| grep -q NEEDED` | `grep -q NEEDED <<< "$(readelf -d f)"` |
+| `selfhost/native_bootstrap.sh:295` | 同上 | 同上 |
+
+结果：`PIPE-GREP-VERDICT=OK remaining=87 files=36`（97−10，命中文件 42→36：6 个文件清零被移出基线）。
+
+**未动、属次层的 4 条**（不在大产出层）：`m271:202`（`printf '%s' "$out"`）、`latest_guard:148`（`curl -w http_code` 三字节）、
+`check_bin_portability:66`（`is_elf()` 的 `head -c4 | od | tr | grep -qi`）、`m278_release_reconcile:89/93/100`（装置文本与自证）。
+
+### 7.1 顺带发现的真红（不是本轮引入，登记待判）
+
+`bash examples/m115_proc_env.sh` 单跑 **3/3 全红**，根因不在管道：
+`examples/m115_proc_env.px:28` 等处的 `remove(WORKDIR + "/env.txt")` 对**不存在的文件**报
+`运行时错误 … fs: 删除失败`。`remove()` 是否该容 ENOENT 是**运行时语义问题**，需单独判定（本轮不碰 runtime，避免重烘）。
+另：该门脚本**不在 `gates.registry.sh`**（registry 里无 m115）⇒ 全量门从未跑到它，这是「门清单外的手工脚本」盲区，
+与 M355 漏注册 ci.yml 同族形态。⇒ 待判：① `remove` 容 ENOENT；② 仓内 `examples/*.sh` 是否有其它未注册脚本。

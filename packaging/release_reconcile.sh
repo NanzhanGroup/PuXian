@@ -94,7 +94,7 @@ for pg in 1 2; do
         src="$FIXTURE/tags.json"; [ "$pg" = 2 ] && src="$FIXTURE/tags2.json"
         [ -f "$src" ] && { cp "$src" "$f"; TAG_FILES="$TAG_FILES $f"; }
     elif curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-             "$API/repos/$REPO/tags?per_page=100&page=$pg" > "$f" 2>/dev/null && head -c1 "$f" | grep -q '\['; then
+             "$API/repos/$REPO/tags?per_page=100&page=$pg" > "$f" 2>/dev/null && grep -q '\[' <<< "$(head -c1 "$f" 2>/dev/null)"; then
         TAG_FILES="$TAG_FILES $f"
     fi
 done

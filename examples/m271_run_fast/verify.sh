@@ -63,7 +63,7 @@ else
     bad "[1.2] 顺序不符（subset=$s 查缓存=$p）"
 fi
 
-if grep -A12 '编译失败（脚本在 Mini 子集内' "$PX" | grep -q 'PXI_BIN'; then
+if grep -q 'PXI_BIN' <<< "$(grep -A12 '编译失败（脚本在 Mini 子集内' "$PX")"; then
     bad "[1.3] 编译失败分支调用解释器 ⇒ 回落未禁"
 else
     ok "[1.3] 编译失败分支不回落（窗口内无 PXI_BIN）"
