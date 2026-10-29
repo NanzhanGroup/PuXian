@@ -1730,3 +1730,4 @@ run m319_ws_eof_spin bash examples/m319_ws_eof_spin/verify.sh
 #   负控 N1 关掉校名 ⇒ A2 必绿、N2 退回 fail-open ⇒ A3 必绿。负控要重编 runtime 两次 ⇒ CI --neg-skip。
 run m324_tls_failclosed bash examples/m324_tls_failclosed/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test
+run pkg_pipe_grep bash selfhost/check_pipe_grep.sh --gate

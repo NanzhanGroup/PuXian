@@ -75,7 +75,7 @@ else
     { cat "$BASE"; echo "zzz_fake_bridge_never_exists	misc"; } > "$BASE"
     outA="$(timeout 900 python3 "$TOOL" --root "$ROOT" 2>&1)"; rcA=$?
     cp "$BASE_ORIG" "$BASE"
-    if [ "$rcA" != 0 ] && printf '%s' "$outA" | grep -q '过期'; then
+    if [ "$rcA" != 0 ] && grep -q '过期' <<< "$outA"; then
         ok "NC-A 生效：基线多一条 ⇒ 判红且文案含「过期」"
     else
         bad "NC-A 未生效（rc=$rcA）"
@@ -85,7 +85,7 @@ else
     grep -v '^bi_ws_stream' "$BASE_ORIG" > "$BASE"
     outB="$(timeout 900 python3 "$TOOL" --root "$ROOT" 2>&1)"; rcB=$?
     cp "$BASE_ORIG" "$BASE"
-    if [ "$rcB" != 0 ] && printf '%s' "$outB" | grep -q 'bi_ws_stream'; then
+    if [ "$rcB" != 0 ] && grep -q 'bi_ws_stream' <<< "$outB"; then
         ok "NC-B 生效：基线删一条 ⇒ 判红且**指名**（bi_ws_stream）"
     else
         bad "NC-B 未生效（rc=$rcB）"
@@ -95,7 +95,7 @@ else
     sed 's/^bi_ws_stream\tws$/bi_ws_stream\tno_such_tag/' "$BASE_ORIG" > "$BASE"
     outC="$(timeout 900 python3 "$TOOL" --root "$ROOT" 2>&1)"; rcC=$?
     cp "$BASE_ORIG" "$BASE"
-    if [ "$rcC" != 0 ] && printf '%s' "$outC" | grep -q '未定义的标签'; then
+    if [ "$rcC" != 0 ] && grep -q '未定义的标签' <<< "$outC"; then
         ok "NC-C 生效：标签未定义 ⇒ 判红"
     else
         bad "NC-C 未生效（rc=$rcC）"

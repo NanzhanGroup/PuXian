@@ -49,7 +49,7 @@ chk()  { if [ "$2" = "$3" ]; then ok "$1（$2）"; else bad "$1：期望 $3，�
 printf '\n══ [1] 守卫自证（含反向判据）══\n'
 ST="$(python3 "$GUARD" --self-test 2>&1)"; rc=$?
 printf '%s\n' "$ST" | sed 's/^/     /'
-if [ "$rc" = 0 ] && printf '%s' "$ST" | grep -q '自证：通过 10 / 失败 0'; then
+if [ "$rc" = 0 ] && grep -q '自证：通过 10 / 失败 0' <<< "$ST"; then
     # M326：自证从 5 条扩到 10 条（+S1..S5 扫描面三态/双负控）。数字是**锚点**，
     # 少一条就判红 —— 防「自证被悄悄删掉几条而总数看着还像那么回事」。
     ok '守卫自证 10/0'
@@ -60,7 +60,7 @@ fi
 printf '\n══ [2] 真仓扫描 + 规模下限 ══\n'
 SC="$(timeout 600 python3 "$GUARD" 2>&1)"; rc=$?
 printf '%s\n' "$SC" | tail -3 | sed 's/^/     /'
-if [ "$rc" = 0 ] && printf '%s' "$SC" | grep -q '违例 0'; then
+if [ "$rc" = 0 ] && grep -q '违例 0' <<< "$SC"; then
     ok '真仓 0 违例'
 else
     bad "真仓有违例（rc=$rc）"
@@ -98,7 +98,7 @@ vcheck() {   # $1=名 $2=日志 $3=期望VERDICT $4=期望rc $5…=额外参数
     local nm="$1"; local lg="$2"; local ev="$3"; local erc="$4"; shift 4
     local out; local rc
     out="$(bash "$VB" "$lg" --quiet "$@" 2>&1)"; rc=$?
-    if [ "$rc" = "$erc" ] && printf '%s' "$out" | grep -q "^VERDICT=$ev$"; then
+    if [ "$rc" = "$erc" ] && grep -q "^VERDICT=$ev$" <<< "$out"; then
         ok "裁决/$nm ⇒ $ev (rc=$erc)"
     else
         bad "裁决/$nm：期望 $ev/$erc，实际 $(printf '%s' "$out" | head -1)/$rc"
@@ -117,7 +117,7 @@ printf '\n══ [4] 回归：M283 假警报的形状 ══\n'
 { i=0; while [ "$i" -lt 190 ]; do echo "✅ gate_$i（1s）"; i=$((i+1)); done
   echo ''; echo '══ 汇总：失败 0 项（总耗时 5782s）══'; } > "$W/m283like.log"
 out="$(bash "$VB" "$W/m283like.log" --runner "$CANON" --quiet 2>&1)"
-if printf '%s' "$out" | grep -q '^VERDICT=GREEN$'; then
+if grep -q '^VERDICT=GREEN$' <<< "$out"; then
     ok 'M283 同形绿日志 ⇒ GREEN（旧 watcher 在此判红）'
 else
     bad "M283 同形绿日志未判绿：$(printf '%s' "$out" | head -1)"

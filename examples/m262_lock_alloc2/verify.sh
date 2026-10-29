@@ -65,7 +65,7 @@ fi
 echo
 echo "[2/7] 守卫基线账：待收口 0 + 有意保留 2（M261 的 6 → 2）"
 OUT=$(python3 selfhost/check_lock_alloc.py --root . 2>&1); RC=$?
-if [ "$RC" = 0 ] && echo "$OUT" | grep -q '待收口 0 + 有意保留 2'; then
+if [ "$RC" = 0 ] && grep -q '待收口 0 + 有意保留 2' <<< "$OUT"; then
   ok "$(echo "$OUT" | head -1)"
 else
   bad "基线账不符（rc=$RC）：$OUT"
@@ -116,7 +116,7 @@ echo "[5/7] 负控 A：**忠实退回** route_match 旧实现（锁内构造 par
 python3 "$DIR/negctl2.py" revert-route-match >"$W/ncA.log" 2>&1 \
   && ok "$(cat "$W/ncA.log")" || bad "植入失败：$(tail -2 "$W/ncA.log")"
 OUT=$(python3 selfhost/check_lock_alloc.py --root . 2>&1); RC=$?
-if [ "$RC" = 1 ] && echo "$OUT" | grep -q 'route_match'; then
+if [ "$RC" = 1 ] && grep -q 'route_match' <<< "$OUT"; then
   ok "守卫判红且**指名** route_match（$(echo "$OUT" | grep -c 'route_match') 条）"
 else
   bad "守卫未按预期判红（rc=$RC）：$(echo "$OUT" | head -2 | tr '\n' ' ')"
@@ -132,7 +132,7 @@ python3 "$DIR/negctl2.py" neuter-guard "$W/g_neut.py" >/dev/null 2>&1 \
   && ok "已生成「判据失明」版守卫" || bad "生成失败"
 python3 "$DIR/negctl2.py" revert-route-match >/dev/null 2>&1
 OUT=$(python3 "$W/g_neut.py" --root . 2>&1); RC=$?
-if [ "$RC" = 0 ] && ! echo "$OUT" | grep -q '❌'; then
+if [ "$RC" = 0 ] && ! grep -q '❌' <<< "$OUT"; then
   ok "判据失明后不再判红 ⇒ 证明负控 A 的红**来自判据**（rc=0）"
 else
   bad "判据失明后仍判红（rc=$RC）⇒ 负控 A 的红来路不明"

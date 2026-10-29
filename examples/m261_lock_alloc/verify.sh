@@ -70,7 +70,7 @@ fi
 echo
 echo "[3/7] 基线账（**M262 后：待收口 0 + 有意保留 2**；ACCEPTED 必须带理由）"
 OUT=$(python3 selfhost/check_lock_alloc.py --root . 2>&1); RC=$?
-if [ "$RC" = 0 ] && echo "$OUT" | grep -q '待收口 0 + 有意保留 2'; then
+if [ "$RC" = 0 ] && grep -q '待收口 0 + 有意保留 2' <<< "$OUT"; then
   ok "实测与基线一致：$(echo "$OUT" | head -1)"
 else
   bad "基线账不符（rc=$RC）：$OUT"
@@ -107,7 +107,7 @@ echo "[5/7] 负控 A：**忠实退回** px_conn_pend_put 旧实现（锁内 xrea
 python3 "$DIR/negctl.py" revert-pend-put >"$W/ncA.log" 2>&1 \
   && ok "旧实现已植入（$(grep -c . "$W/ncA.log") 行输出）" || bad "植入失败：$(tail -2 "$W/ncA.log")"
 OUT=$(python3 selfhost/check_lock_alloc.py --root . 2>&1); RC=$?
-if [ "$RC" = 1 ] && echo "$OUT" | grep -q 'px_conn_pend_put'; then
+if [ "$RC" = 1 ] && grep -q 'px_conn_pend_put' <<< "$OUT"; then
   ok "守卫判红且**指名** px_conn_pend_put：$(echo "$OUT" | grep 'px_conn_pend_put' | head -1 | tr -d ' ')"
 else
   bad "守卫未按预期判红（rc=$RC）：$(echo "$OUT" | head -2 | tr '\n' ' ')"
@@ -135,7 +135,7 @@ python3 "$DIR/negctl.py" neuter-guard "$W/guard_neutered.py" >/dev/null 2>&1 \
   && ok "已生成「判据失明」版守卫" || bad "生成失败"
 python3 "$DIR/negctl.py" revert-pend-put >/dev/null 2>&1
 OUT=$(python3 "$W/guard_neutered.py" --root . 2>&1); RC=$?
-if [ "$RC" = 0 ] && ! echo "$OUT" | grep -q '❌'; then
+if [ "$RC" = 0 ] && ! grep -q '❌' <<< "$OUT"; then
   ok "判据失明后不再判红 ⇒ 证明负控 A 的红**来自判据**（rc=0）"
 else
   bad "判据失明后仍判红（rc=$RC）⇒ 负控 A 的红来路不明"
