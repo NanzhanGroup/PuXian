@@ -25,8 +25,11 @@ P=0; F=0
 ok(){ P=$((P+1)); printf '  ✅ %s\n' "$1"; }
 ng(){ F=$((F+1)); printf '  ❌ %s\n' "$1"; }
 chk(){ if [ "$2" = "$3" ]; then ok "$1"; else ng "$1（期望 [$3] 实得 [$2]）"; fi; }
-chkg(){ if printf '%s' "$2" | grep -q -- "$3"; then ok "$1"; else ng "$1（[$2] 不含 [$3]）"; fi; }
-chkn(){ if printf '%s' "$2" | grep -q -- "$3"; then ng "$1（[$2] 不该含 [$3]）"; else ok "$1"; fi; }
+# 缺陷 621（M354）：`printf ... | grep -q` + `set -o pipefail` = 假红装置（SIGPIPE 141 被读成「不含」）。
+#   实测现场：本文件 [2b] 断言「报 PENDING」，输出里明明有 PENDING（分片负载下 24/25）。
+#   修法：here-string（无管道无 SIGPIPE）；反向断言尤其危险（SIGPIPE 会造**假绿**）。
+chkg(){ if grep -q -- "$3" <<<"$2"; then ok "$1"; else ng "$1（[${2:0:200}] 不含 [$3]）"; fi; }
+chkn(){ if grep -q -- "$3" <<<"$2"; then ng "$1（[${2:0:200}] 不该含 [$3]）"; else ok "$1"; fi; }
 
 mk(){ mkdir -p "$W/$1"; }
 
@@ -86,7 +89,7 @@ chk "rc" "$rc" "0"; chkg "降级提示" "$o" "跳过"
 # ── [6] --json ──
 printf '\n【6】--json 结构\n'
 o=$(bash "$SH" --api-fixture "$W/bad1" --json 2>/dev/null)
-if printf '%s' "$o" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["verdict"]=="STALE" and d["expected"]=="v9.9.9" and d["latest"]=="v9.9.7"; print("OK")' 2>"$W/j.err" | grep -q OK; then
+if jout=$(python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["verdict"]=="STALE" and d["expected"]=="v9.9.9" and d["latest"]=="v9.9.7"; print("OK")' <<<"$o" 2>"$W/j.err") && grep -q OK <<<"$jout"; then
   ok "--json 字段正确（verdict/expected/latest）"
 else ng "--json：$(cat "$W/j.err")"; fi
 o=$(bash "$SH" --api-fixture "$W/ok1" --json 2>/dev/null)
@@ -115,6 +118,21 @@ if ! diff -q "$SH" "$W/lowexp.sh" >/dev/null; then
   o=$(bash "$W/lowexp.sh" --api-fixture "$W/okneg" 2>&1); rc=$?
   chk "rc" "$rc" "1"; chkg "报 STALE" "$o" "LATEST-STALE"
 else ng "负控 B 未改动脚本（锚点失效）"; fi
+
+# ── [10] 装置自证：判据读的是内容，不走管道（缺陷 621/622）──
+#   口径 18：只断言「判据在两种取值上给出正确结果」，不断言信号/调度现象的数值；
+#   SIGPIPE 处置只登记不判红（分片 systemd-run 里是 SIG_IGN，此时 yes|grep -q 得 1 而非 141）。
+printf '\n【10】装置自证：判据不走管道（621/622）\n'
+h1=$(grep -q 'needle621' <<< 'xx needle621 xx' && echo hit || echo miss)
+h2=$(grep -q 'absent621' <<< 'xx needle621 xx' || echo miss)
+chk "here-string 判据：命中读成命中" "$h1" "hit"
+chk "here-string 判据：不命中读成不命中" "$h2" "miss"
+_dl=$(grep -n '^chkg()\|^chkn()' "${BASH_SOURCE[0]}"); _bad=$(grep -c '| grep -q' <<< "$_dl")
+chk "静态守卫：chkg/chkn 不许用管道喂 grep -q" "${_bad:-0}" "0"
+if command -v yes >/dev/null 2>&1; then
+  ( set -o pipefail; yes 2>/dev/null | grep -q y ); _sp=$?
+  case "$_sp" in 141) printf '  ℹ️ SIGPIPE=默认（141 可复现）\n';; 1) printf '  ℹ️ SIGPIPE=ignored（分片常态，141 不复现；本判据不用管道，不受影响）\n';; *) printf '  ⚠️ SIGPIPE 处置未知 rc=%s（登记待查）\n' "$_sp";; esac
+fi
 
 echo
 echo "latest_guard 自证：$P 通过 / $F 失败"

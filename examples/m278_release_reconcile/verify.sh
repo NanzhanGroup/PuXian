@@ -74,9 +74,25 @@ n=$(awk -F'\t' '!/^#/ && NF>0' "$IGN" | wc -l)
 [ "$n" -ge 1 ] && ok "豁免表条目 $n 条（每条带理由）" || ng "豁免表为空"
 
 printf '\n[2b] 装置自证：grep -q 不得经管道（缺陷 621 · SIGPIPE + pipefail = 假红）\n'
-# 确定性自证：无限生产者 + grep -q ⇒ 生产者必被 SIGPIPE ⇒ pipefail 下 rc=141（这就是假红的来源）
-( set -o pipefail; yes 2>/dev/null | grep -q y ); sp=$?
-[ "$sp" = 141 ] && ok "自证：管道式 grep -q 会被判 141（假红来源成立）" || ng "自证装置失效：yes|grep -q 得 rc=$sp（期望 141）"
+# 口径 14：前提断言先行。装置自证**不许依赖信号处置**（M354 第二遍全量门实测）：
+#   分片环境里 SIGPIPE 被置 SIG_IGN，此时 `yes|grep -q` 得 1（yes 收 EPIPE 自行 rc=1，pipefail 取右端），
+#   2s 前才在本机得 141 —— 同一行代码随环境漂移，装置本身就是假红源。
+#   且 bash 非交互 shell 对「进入时已 ignore」的信号 `trap - PIPE` **恢复不了**（POSIX 规定），所以
+#   自证分三件：① here-string 判据双向（命中/不命中）② 静态守卫（chkg 不许管道）③ SIGPIPE 处置**登记**（只报不判）。
+t_hit=$(grep -q 'needle621' <<< 'xx needle621 xx' && echo hit || echo miss)
+t_miss=$(grep -q 'absent621' <<< 'xx needle621 xx' || echo miss)
+chk "自证 ①：here-string 判据命中（命中必须读成命中）" "$t_hit" "hit"
+chk "自证 ①：here-string 判据不命中（不命中必须读成不命中）" "$t_miss" "miss"
+if ! command -v yes >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
+    printf '  ⏭ [2c] PREMISE-FAIL：缺 yes/grep，跳过 SIGPIPE 处置登记（不算红也不算绿）\n'
+else
+    ( set -o pipefail; yes 2>/dev/null | grep -q y ); sp=$?
+    case "$sp" in
+        141) printf '  ℹ️ [2c] 本环境 SIGPIPE=默认 ⇒ 管道式 grep -q 会被判 141（621 假红机理可复现）\n';;
+        1)   printf '  ℹ️ [2c] 本环境 SIGPIPE=ignored（分片 systemd-run 实测）⇒ 141 不复现；判据仍只用 here-string，不受影响\n';;
+        *)   printf '  ⚠️ [2c] SIGPIPE 处置未知（yes|grep -q rc=%s）⇒ 登记待查，不影响本门判定\n' "$sp";;
+    esac
+fi
 # 静态守卫：两处判据助手（本门 + 离线自证）都不许退回管道式
 badg=""
 for f in "$HERE/verify.sh" "$ROOT/packaging/selftest_reconcile.sh"; do
