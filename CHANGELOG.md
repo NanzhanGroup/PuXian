@@ -42,9 +42,38 @@
 | `check_pipe_grep.sh --self-test` / `--gate` | **6/6** · `remaining=20 files=8` |
 | `bash -n`（全部 22 个改动文件） | 全部通过 |
 
-### 五 全量门（待回填）
+### 五 全量门（链1 真红 1 → 修复 → 链2 绿）
 
-### 六 发布（待回填）
+**链1** `chain-m359-20261029-231641-1036482`（HEAD `a4f4c62`）：绿 235 · 红 1，
+唯一红 = `pkg_make_tag` rc=4（80 通过 / 4 失败）⇒ 判**真红**（同通道同坏 tag、连跑 2 次同 4 条 ⇒ 确定性）。
+真因：本轮把 `tools/make_release.sh` / `packaging/build_rpm.sh` 的 `printf '%s' | grep -qE '^m[0-9]+$'`
+换成 here-string ⇒ `selftest_make_tag` 的 Q5 负控 **`sed` 锚点写的是 `! printf`（写法锚）** ⇒ 命中 0 ⇒
+负控失牙，Q5a/Q5b「打桩后仍在拦」连带报红。修法（`01d612c`）：Q5 锚点改 **awk 固定串语义锚**
+（行首 `if` 且行含 `^m[0-9]+$` ⇒ 整行换 `if false; then : # NEGCTL-Q5`），与 printf/管道/here-string 形态解耦；
+`grep -c NEGCTL-Q5 == 1` 硬校验保留。自证 `selftest_make_tag.sh` ⇒ **84/0**。台账 `docs/M355_PIPE_SWEEP.md` §9.4。
+
+**链2** `chain-m359-20261030-004017-1840137`（HEAD `01d612c`）：
+
+| 项 | 实测 |
+|---|---|
+| 结论 | **绿 236 · 红 0**（门清单 236；8 分片 226 + quiet 档 10） |
+| 墙钟 | 门 5066s（84m26s，00:40:17→02:04:43）；含 release_guard 全链 **5390s（89m50s）** |
+| loadavg max（1m） | **79.99 ⇒ 5.00/核**（16 vCPU） |
+| memory_peak | **8886.1 MiB** |
+| 日志 | `/data/gatevm/chain-m359-20261030-004017-1840137/` |
+
+> 负载并列历史高位：M356 4.25 · M357 5.02 · M358 5.76 · M359 **5.00/核** ⇒ 连续四轮 ≥4/核，
+> 口径 12 的 ANOMALY 未消（§8.2 待判）。峰值内存同比 M358（9443.8）回落 5.9%。
+> 教训（入 §9.4）：**改「被别的自测打桩的脚本」时，负控锚点是隐式契约** —— 除跑那扇门，
+> 还要全仓 `grep -rn NEGCTL` 复核锚点仍命中；`--only` 抽样（上轮 10 门全绿）不能替代全量链。
+
+### 六 发布
+
+| 项 | 实测 |
+|---|---|
+| tag | `v0.2.359` → 指向 `01d612c` |
+| push | `refs/heads/main = 01d612c` · `refs/tags/v0.2.359 = 25b55b7` |
+| latest 自证 | `LATEST-VERDICT=OK expected=v0.2.359 reason=none`（poll 4，02:10:07） |
 
 ## M358 —— 次批小产出收口 37 条（87 → 50）+ 装置替换的一次自证红（第 227 轮）
 
