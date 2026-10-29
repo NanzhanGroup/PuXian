@@ -155,7 +155,7 @@ M355–M360 的整链埋点（10s 一次 `/proc/loadavg`，路径 `/data/autodri
 ```bash
 # 判据本体（纯读，零成本；可对任意 tsv 复算）
 bash packaging/loadavg_verdict.sh --min-samples 30 /data/autodrive/logs/M36*-loadavg.tsv
-# 自证（30 断言；本机有六轮语料时自动加跑 [7] 回放）
+# 自证（**34 断言**；本机有六轮语料时自动加跑 [7] 回放，[11] 绑核回归需 taskset）
 bash packaging/selftest_loadavg_verdict.sh
 # 真机负控（约 4min）
 pxdbg /bin/bash /data/autodrive/m361_load_negctl.sh
@@ -164,3 +164,42 @@ systemd-run --unit=chain-m361 --slice=ws-debug.slice --collect /bin/bash /data/a
 ```
 
 注册面三处齐改：`selfhost/gates.registry.sh`（`run pkg_loadavg_verdict`）+ `.github/workflows/ci.yml`（`loadavg_verdict_selftest` 步）+ 本节。
+
+### 7.5 M361 首跑假红复盘：判据的**分母与分子不同界**（缺陷 626 · 同轮收口）
+
+首跑全量门（8 分片，`/data/gatevm/chain-m361-20261030-061019-3473903`）判 **NO-GO**：绿 236 / 红 1，
+红的是新门自己 —— `pkg_loadavg_verdict` 报 `SELFTEST FAIL（11 条失败 / 30）`，而**同一份脚本在本机手跑 30/30 PASS**。
+
+11 条失败全在「本应 PASS」的档（[1a][1b][2a][2b][2c][2d][2f][4b][5a][5c][7a]），量纲上看就是**每核值整齐放大 8 倍**：
+
+```
+n=465  median=8.30  median_pc=4.15  p95=8.30  p95_pc=4.15  over=465  over_pct=100.00  verdict=FAIL
+```
+
+`8.30 / 4.15 = 2` ⇒ 判据把核数当成了 **2**。根因链条：
+
+1. 判据默认核数取 `nproc`；`nproc` 读的是 `sched_getaffinity`，**只看本进程能用的核**；
+2. `packaging/chain/shard_run.sh` 每路 `taskset -c` 绑 2 核（16 核 / 8 片）；本机手跑不绑 ⇒ 16；
+3. 分子 `/proc/loadavg` 是**全系统**负载 ⇒ 分母被绑核压到 1/8 ⇒ 每核值 ×8 ⇒ p95 腿、占比腿同时爆。
+
+**这是量具口径错，不是阈值松紧**。修法（不放宽任何阈值）：
+分母改成 `online_cpus()` —— `/sys/devices/system/cpu/online` 解析（`0-15` / `0-3,8-11` 都吃得下）
+→ 回退 `getconf _NPROCESSORS_ONLN` → 最后才 `nproc`；口径原则写进脚本头注释：**分母必须与分子同界**。
+`--nproc` 仍可显式覆盖（宁可显式，不许在受限环境里静默按子集算）。
+
+三层自证/负控（自证 30 → **34 断言**）：
+
+| 项 | 做法 | 结果 |
+|---|---|---|
+| [11a] 回归有牙 | `taskset -c 0,1 nproc` 必须 < 全机核数 | ✅ 2 < 16 |
+| [11b][11c] 绑核回归 | `LVA_SELFTEST_SUB=1 taskset -c 0,1 bash selftest…` 整份重跑 | ✅ rc=0、`SELFTEST PASS` |
+| [11d] 分母同界 | 绑核子进程里判据聚合行仍须报 `核数 16` | ✅ |
+| 结构性负控 | 副本把 `online_cpus` 换回 `nproc`（即首跑现场）跑新自证 | ❌ 3 条失败（[11b][11c][11d]）⇒ 回归能抓住旧写法 |
+
+**附带修**：链尾 `/data/autodrive/m361_chain_wrap.sh` 调判据原不带 `--json`，而默认表格行是
+`p95=0.96/c 越界=2.98%` ⇒ 解析 `p95_pc=`/`over_pct=` 得**空**（首跑 `M361-chain-extra.log` 里
+`p95_percore= over_pct=` 就是这么空的）。已改为 `--json` 再解析，诊断量不再丢。
+
+**教训（进台账）**：判据在「本进程视角」下全绿 ≠ 在「门的运行环境」下全绿。
+凡分母取自系统量（loadavg / 内存 / 文件数），必须显式声明它与分子的**同界口径**，
+并把「受限环境（绑核 / cpuset / 低 JOBS）下重跑一遍」写成自证的一条断言 —— 否则分片门就是它的照妖镜。
