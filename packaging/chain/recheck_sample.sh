@@ -87,7 +87,7 @@ if [ "$SELF_TEST" = "1" ]; then
         mkfx "$d" "$2" "$3"
         local out rc
         out="$(QUIET_FILE="$QF" RECHECK_NO_RUN=1 RECHECK_TOP=1 bash "$0" "$d" 2>&1)"; rc=$?
-        if [ "$rc" = "$4" ] && printf '%s' "$out" | grep -q "$5"; then
+        if [ "$rc" = "$4" ] && grep -q "$5" <<< "$out"; then
             PASS=$((PASS+1)); echo "  ✅ $1：rc=$rc 且命中「$5」"
         else
             FAIL=$((FAIL+1)); echo "  ❌ $1：rc=$rc（期望 $4）· 未见「$5」"; printf '%s\n' "$out" | tail -12 | sed 's/^/       /'

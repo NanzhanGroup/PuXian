@@ -81,9 +81,9 @@ chk "acquire 调用点 ≥2（read/write 各一）" "$([ "$WRAP" -ge 2 ] && echo
 #   原锚点「read 函数起 + 3 行内出现 release」在 M319 给 acquire 失败出口插了 errno 分支后
 #   行号漂移 ⇒ 假红（release 仍在函数体内）。判据强度不降：仍要求包装内确有 release。
 body_of() { awk -v fn="$1" 'index($0, fn "(")==1 {f=1} f {print; if ($0 ~ /^}/) exit}' "$RC"; }
-body_of "ssize_t px_conn_read"  | grep -q "px_conn_release(c)" && R1=1 || R1=0
+grep -q "px_conn_release(c)" <<< "$(body_of "ssize_t px_conn_read")"  && R1=1 || R1=0
 chk "px_conn_read 包装含 release" "$R1" "1"
-body_of "ssize_t px_conn_write" | grep -q "px_conn_release(c)" && R2=1 || R2=0
+grep -q "px_conn_release(c)" <<< "$(body_of "ssize_t px_conn_write")" && R2=1 || R2=0
 chk "px_conn_write 包装含 release" "$R2" "1"
 
 # close 必须无条件 shutdown（只关读方向 —— 不打断正在进行的写）

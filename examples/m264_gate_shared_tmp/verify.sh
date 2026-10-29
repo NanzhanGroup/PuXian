@@ -88,7 +88,7 @@ printf '/tmp/m264_fake_shared\n' > "$T/examples/zz2/verify.sh"
 for _i in $(seq 1 150); do mkdir -p "$T/examples/g$_i"; done
 cp "$WL" "$T/selfhost/gate_shared_tmp.txt"
 OUT=$(bash "$G" --root "$T" 2>&1); RC=$?
-if [ "$RC" = 1 ] && echo "$OUT" | grep -q 'm264_fake_shared'; then
+if [ "$RC" = 1 ] && grep -q 'm264_fake_shared' <<< "$OUT"; then
   ok "守卫判红并指名：$(echo "$OUT" | grep '未登记' | head -1 | cut -c1-70)"
 else
   bad "未按预期判红（rc=$RC）：$(echo "$OUT" | head -2 | tr '\n' ' ')"
@@ -98,7 +98,7 @@ echo
 echo "[6/7] 负控 B（判据自伤）：白名单「只有名字、没有理由」⇒ 必须 rc=3"
 sed 's/\t.*$//' "$WL" > "$WL.tmp" && mv "$WL.tmp" "$WL"
 OUT=$(bash "$G" --root . 2>&1); RC=$?
-if [ "$RC" = 3 ] && echo "$OUT" | grep -q '无理由'; then
+if [ "$RC" = 3 ] && grep -q '无理由' <<< "$OUT"; then
   ok "rc=3 且文案指向真因（无理由豁免 = 把红当绿）"
 else
   bad "未按预期 rc=3（实得 $RC）：$(echo "$OUT" | head -2 | tr '\n' ' ')"

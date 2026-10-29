@@ -79,7 +79,7 @@ if sed -i 's/else { http_pend_clear(fd); close(fd); }/else close(fd);/g' runtime
    && grep -q 'else close(fd);' runtime/runtime.c; then
   ok "已植入缺陷 466 的原始形态"
   OUT=$(python3 "$DIR/check_lifecycle.py" --root . 2>&1); RC=$?
-  if [ "$RC" = 1 ] && echo "$OUT" | grep -q 'L3'; then
+  if [ "$RC" = 1 ] && grep -q 'L3' <<< "$OUT"; then
     ok "生命周期审查判红且指向 L3：$(echo "$OUT" | grep '❌ L3' | cut -c1-80)"
   else
     bad "未按预期判红（rc=$RC）：$(echo "$OUT" | grep '❌' | head -2 | tr '\n' ' ')"

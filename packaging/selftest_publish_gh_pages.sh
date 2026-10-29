@@ -35,7 +35,7 @@ ck() {
     else echo "  ❌ $1：期望 $3，实际 $2"; fail=$((fail+1)); fi
 }
 ckhas() {
-    if printf '%s' "$2" | grep -q -- "$3"; then echo "  ✅ $1（含「$3」）"; pass=$((pass+1))
+    if grep -q -- "$3" <<< "$2"; then echo "  ✅ $1（含「$3」）"; pass=$((pass+1))
     else echo "  ❌ $1：不含「$3」"; printf '%s\n' "$2" | sed 's/^/       | /'; fail=$((fail+1)); fi
 }
 has() {   # 子串判据（不用管道 ⇒ 与退出码解耦；本仓 P3 禁形只针对 `git … | grep -q`）

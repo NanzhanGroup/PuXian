@@ -84,7 +84,7 @@ if [ "$SELFTEST" = 1 ]; then
     local name="$1" want="$2" key="$3" r="$4" ex="$5"; shift 5
     local out rc
     out="$(bash "$0" --root "$r" --exempt "$ex" "$@" 2>&1)"; rc=$?
-    if [ "$rc" = "$want" ] && { [ -z "$key" ] || printf '%s' "$out" | grep -q "$key"; }; then
+    if [ "$rc" = "$want" ] && { [ -z "$key" ] || grep -q "$key" <<< "$out"; }; then
       echo "✅ $name（rc=$rc）"; P=$((P+1))
     else
       echo "❌ $name（rc=$rc 期望 $want；输出: $(printf '%s' "$out" | tr '\n' ' ')）"; F=$((F+1))

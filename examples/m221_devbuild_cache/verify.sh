@@ -97,7 +97,7 @@ check_grep "VM 轨指纹含 pxcdev 的 sha"       'VM_KEY="$DEVB_KEY/$(sha256sum
 #   ⚠️ M223：判据载体从「src_line 里的 for-glob」改为 **SRC_PATTERNS 变量**
 #   —— 指纹由 mtime 三元组改成内容哈希，glob 从函数体提到了模块级；
 #   语义不变（负控篡改 runtime/*.c,h 时缓存必须失效），但锚点必须跟着改。
-if printf '%s' "$src" | grep -q 'SRC_PATTERNS="selfhost/\*\.px runtime/\*\.c runtime/\*\.h tools/\*\.px stdlib/\*\.px"'; then
+if grep -q 'SRC_PATTERNS="selfhost/\*\.px runtime/\*\.c runtime/\*\.h tools/\*\.px stdlib/\*\.px"' <<< "$src"; then
     note "✅ 源码链含 runtime/*.c 与 runtime/*.h（负控篡改它们时缓存必然失效）"
 else
     bad "源码链**未**包含 runtime/*.c,h ⇒ 门内负控的重建会被缓存吃掉（假绿）"

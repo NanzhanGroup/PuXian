@@ -114,7 +114,7 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
     while IFS=$'\t' read -r dname dsec; do
         [ -n "$dname" ] || continue
         case "$dsec" in ''|*[!0-9]*) bad "声明 $dname 的秒数非法：「$dsec」"; hit=$((hit+1)); continue ;; esac
-        if ! printf '%s\n' "$glist" | grep -qxF "$dname"; then
+        if ! grep -qxF "$dname" <<< "$glist"; then
             bad "声明 $dname $dsec 秒 —— **门清单里没有这扇门**（悬空声明 = 静默无效）"
             hit=$((hit+1))
         fi
@@ -177,7 +177,7 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
     local stale=0
     while IFS=$'\t' read -r g s st src; do
         [ -n "$g" ] || continue
-        printf '%s\n' "$glist" | grep -qxF "$g" || { info "基线里的 $g 不在门清单中（改名/删门的残留？）"; stale=$((stale+1)); }
+        grep -qxF "$g" <<< "$glist" || { info "基线里的 $g 不在门清单中（改名/删门的残留？）"; stale=$((stale+1)); }
     done <<< "$base_rows"
     [ "$stale" = 0 ] && ok "基线 ⇄ 门清单：无残留"
 

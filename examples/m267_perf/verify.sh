@@ -258,7 +258,7 @@ run_compare() {
     printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "负载" "基线(s)" "实测(s)" "倍数" "判定" "阈值 warn/fail"
     while read -r name kind unit base note; do
         # ⭐ M305：`only` 支持**空格分隔的多值**（负控用代表性子集 —— 见 NEG_ONLY 的理由）
-        if [ -n "$only" ] && ! printf '%s\n' " $only " | grep -qF " $name "; then continue; fi
+        if [ -n "$only" ] && [[ " $only " != *" $name "* ]]; then continue; fi
         nenv=$((nenv+1))
         local got r
         got=$(measure_one "$name" "$kind")
@@ -444,7 +444,7 @@ _nman=$(onnx_manifest_rows | wc -l)
 #    合成档（CI）从 5 个档取 max ⇒ 任一档缺行都会让该负载在合成档里消失。
 _missbase=""
 for n in $ONNX_LOADS; do
-    read_baseline | grep -qE "^$n[[:space:]]" || _missbase="$_missbase $n"
+    grep -qE "^$n[[:space:]]" <<< "$(read_baseline)" || _missbase="$_missbase $n"
 done
 if [ -z "$_missbase" ]; then ok "清单负载全部登记进选定档（$BASE_LABEL 的测量面覆盖 $ONNX_LOADS）"
 else bad "清单负载未登记进选定档（**永不测量**）：$_missbase"; fi

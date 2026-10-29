@@ -44,11 +44,11 @@ ck() {   # ck <用例名> <期望 rc>
     else echo "  ❌ $1：期望 rc=$2，实际 rc=$RC"; printf '%s\n' "$out" | sed 's/^/       | /'; fail=$((fail+1)); fi
 }
 ckhas() {   # ckhas <用例名> <关键词>
-    if printf '%s\n' "$out" | grep -q -- "$2"; then echo "  ✅ $1（输出含「$2」）"; pass=$((pass+1))
+    if grep -q -- "$2" <<< "$out"; then echo "  ✅ $1（输出含「$2」）"; pass=$((pass+1))
     else echo "  ❌ $1：输出不含「$2」"; printf '%s\n' "$out" | sed 's/^/       | /'; fail=$((fail+1)); fi
 }
 cksame() {  # cksame <用例名> <不期望出现的词>
-    if printf '%s\n' "$out" | grep -q -- "$2"; then
+    if grep -q -- "$2" <<< "$out"; then
         echo "  ❌ $1：不该出现「$2」"; printf '%s\n' "$out" | sed 's/^/       | /'; fail=$((fail+1))
     else echo "  ✅ $1（未受「$2」干扰）"; pass=$((pass+1)); fi
 }

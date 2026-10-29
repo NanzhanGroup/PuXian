@@ -1,3 +1,51 @@
+## M359 —— 三批收口 30 条（50 → 20）+ 量具 `||` 假阳性修正（第 228 轮）
+
+> 接 M358：次批 37 条已收口、全量门绿 236/红 0、`v0.2.358` 已发。
+> 本轮把**剩下的 50 条一次扫完**：27 条真形态改 here-string，3 条是**量具自己的假阳性**
+> （逻辑或 `|| grep -q` 被当成管道）—— 后者比前者的危害更大，因为它让棘轮失真。
+
+### 一 收口 27 条（21 个判据文件）
+
+| 组 | 文件 → 前:后 |
+|---|---|
+| 打包/发布 | `selftest_tag_guard` 2→0 · `selftest_publish_gh_pages` 2→1 · `build_rpm` 1→0 · `bump_version` 1→0 · `chain/recheck_sample` 1→0 · `realhost_smoke` 1→0 · `make_release` 1→0 |
+| 自证/守卫 | `check_gate_timeouts` 2→0 · `gate_time_baseline` 1→0 · `check_bin_portability` 1→0（`is_elf` 链） |
+| tools | `build_zlib` 2→0 · `cross_multiarch` 2→0 · `import_registry_px` 1→0 |
+| 门 | `m221` 1→0 · `m235` 2→0 · `m263` 1→0 · `m264` 2→0 · `m267` 2→0 · `m271` 1→0 · `m309` 1→0 |
+
+改法统一：`producer | grep -q PAT` ⇒ `grep -q PAT <<< "$(producer)"`（或先落变量），
+`echo "$OUT" | grep -q` ⇒ `grep -q … <<< "$OUT"`，纯变量判据改 `[[ … ]]`。
+`m235` 原登记为「shell 函数文本，先辨真假」——实测是真形态（`body_of` 输出无上界），两条都改。
+
+### 二 量具修正：`||` 不是管道（新夹具 F）
+
+`check_pipe_grep.sh` 原正则把 `[ -n "$X" ] || grep -q PAT f` 计成一条残留 ⇒
+**3 处假阳性**（`check_neg_residue:87` · `run_gates:312` · `m258:173`）。现正则 `([^|]|^)\|…`，
+`scan_one`/`scan_one_file`/`--list` 三处同一算法；新增夹具 F 守它，`--self-test` **5 → 6** 条全绿。
+台账：`docs/M355_PIPE_SWEEP.md` §9（含 9.2「剩 20 条全是必须保留」的逐条归属）。
+
+### 三 棘轮重生成
+
+基线 **50 → 20 条 / 30 → 8 文件**；`PIPE-GREP-VERDICT=OK remaining=20 files=8`。
+剩 20 条 100% 是负控夹具 / 机制自证 / 文案 / 行尾注释（§9.2 逐条列明）⇒ **口径 19 的判据侧收口到此为止**。
+
+### 四 逐文件自证
+
+| 自证 | 结果 |
+|---|---|
+| `selftest_publish_gh_pages.sh` | pass=**23** fail=0 |
+| `selftest_tag_guard.sh` | pass=**49** fail=0 |
+| `selftest_make_release.sh` | **11/0** |
+| `check_gate_timeouts.sh --self-test` | **9/0** |
+| `check_bin_portability.sh --self-test` | **7/0** · `CHECK-PORTABILITY-SELFTEST-OK` |
+| `check_neg_residue.sh --self-test` | **11/0** |
+| `check_pipe_grep.sh --self-test` / `--gate` | **6/6** · `remaining=20 files=8` |
+| `bash -n`（全部 22 个改动文件） | 全部通过 |
+
+### 五 全量门（待回填）
+
+### 六 发布（待回填）
+
 ## M358 —— 次批小产出收口 37 条（87 → 50）+ 装置替换的一次自证红（第 227 轮）
 
 > 接 M357：大产出 10 条已收口、全量门绿 236/红 0。次批打「变量回显」这一类 ——

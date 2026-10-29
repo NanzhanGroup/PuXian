@@ -123,7 +123,7 @@ else
   ok '[1e] 无按名清进程'
 fi
 bash "$SYNC" --help >/dev/null 2>&1; chk '[1f] --help rc' "$?" 0
-bash "$SYNC" --help 2>&1 | grep -qF -- '--registry' && ok '[1g] 用法含 --registry' || bad '[1g] 用法缺 --registry'
+grep -qF -- '--registry' <<< "$(bash "$SYNC" --help 2>&1)" && ok '[1g] 用法含 --registry' || bad '[1g] 用法缺 --registry'
 
 # ── [2] 正控（离线夹具）──────────────────────────────────────────────
 echo '[2] 正控'
