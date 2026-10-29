@@ -18,6 +18,17 @@
 #   仍未覆盖（待判，不猜）：单引号字符串里的**夹具文本**（如 printf '… | grep -q …'）、
 #   行尾注释里的历史说明（如 `has() {  # … | grep -q …`）—— 两者仍计入，见 §8.3 台账。
 #
+#   M360 修 · 三个未覆盖形态（§9.1 遗留项），三处仍同一算法（现为**同一个 awk 程序**）：
+#     ⑦ **单引号字面串**（如 `printf '… readelf -d x | grep -q N …'`）：shell 单引号内
+#        不做命令替换 ⇒ 那是**夹具文本/文档文本**，不是管道 ⇒ 剔除后再判。M359 前它被计入，
+#        使 m283 / m285 / check_gate_premise 等**夹具**长期占着棘轮配额（虚高 12 条）。
+#     ⑧ **行尾注释**（`x=1  # 历史：echo hi | grep -q hi`）：只跳整行注释不够 ⇒ 现按
+#        「空白 + #」起截断，与整行注释同口径。
+#     ⑨ **`|&` 形态**：`cmd |& grep -q` 与 `cmd | grep -q` 同样会撞 SIGPIPE（stderr 并入），
+#        原正则只认 `|`。现管道位为 `\|[&]?`；`||`（逻辑或）仍不算（前一字符是 `|`）。
+#     ⚠️ 如实登记：**双引号内不剔除** —— `$(…)` 命令替换里的管道是真管道，宁可虚高不可漏检；
+#        双引号里的纯文本型夹具（6 条，§9.1 台账逐行列出）仍计入，属「待判」不属「已修」。
+#
 #   M358 修 · 缺陷「逻辑或被当管道」：原正则 `\|[[:space:]]*grep -q` 把
 #   `[ -n "$X" ] || grep -q PAT f` 里的「| grep」也算一条 ⇒ 虚高（实测 3 处假阳性：
 #   check_neg_residue / run_gates / m258）。现正则为 `([^|]|^)\|[[:space:]]*grep… -q`，
@@ -40,11 +51,25 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE="$ROOT/selfhost/pipe_grep_baseline.txt"
 # 只看会被 pipefail 咬到的文件：含 pipefail 的 .sh
+# ── 唯一扫描算法（M360）：三处调用（scan_one / scan_one_file / --list）共用本 awk 程序 ──
+#   \$0 原样保留给 list 模式（显示的是**原始行**，不是被清洗后的行 —— 便于人工核对）。
+PIPE_AWK='
+{ raw=$0; line=$0
+  if (line ~ /^[ \t]*#/) next                                  # 整行注释
+  gsub(/\047[^\047]*\047/, "\047\047", line)                    # ⑦ 单引号字面串：剔除内容
+  sub(/[ \t]+#.*$/, "", line)                                   # ⑧ 行尾注释：截断
+  if (line ~ /([^|]|^)\|[&]?[ \t]*grep[ \t]+-[a-zA-Z]*q/) {     # ⑨ 管道含 |&；|| 不算
+    cnt++
+    if (mode == "list") printf "%d:%s\n", NR, raw
+  }
+}
+END { if (mode != "list") print cnt+0 }
+'
+
 scan_one() {   # $1=文件路径（相对 ROOT）→ 输出条数
-  local f="$1" n=0
+  local f="$1"
   grep -q 'pipefail' "$ROOT/$f" 2>/dev/null || { echo 0; return 0; }
-  n=$(grep -vE '^[[:space:]]*#' "$ROOT/$f" 2>/dev/null | grep -cE '([^|]|^)\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' || true)
-  echo "${n:-0}"
+  awk "$PIPE_AWK" "$ROOT/$f" 2>/dev/null || echo 0
 }
 list_files() {
   cd "$ROOT" || exit 9
@@ -55,7 +80,7 @@ emit_baseline() {
   cd "$ROOT" || exit 9
   local total=0 f n
   printf '# 口径 19 棘轮基线：每个 .sh 允许残留的「生产者 | grep -q」条数（只许减少）\n'
-  printf '# 生成：selfhost/check_pipe_grep.sh --emit-baseline · 里程碑 M355\n'
+  printf '# 生成：selfhost/check_pipe_grep.sh --emit-baseline · 里程碑 M360（单引号夹具/行尾注释/|& 口径修正后重生成）\n'
   while IFS= read -r f; do
     n=$(scan_one "$f")
     [ "$n" -gt 0 ] && { printf '%s %s\n' "$n" "$f"; total=$((total+n)); }
@@ -80,25 +105,35 @@ self_test() {
   # 夹具 F（负控 · M358）：`a || grep -q x` 是**逻辑或**不是管道 ⇒ 不得检出
   #   （原正则 `\|[[:space:]]*grep -q` 把 `|| grep` 里的「| grep」也算进去 ⇒ 假阳性）
   printf '#!/bin/bash\nset -uo pipefail\n[ -n "$X" ] || grep -q PAT /etc/hostname\n' > "$tmp/f.sh"
-  local ra rb rc rd re rf
+  # 夹具 G（负控 · M360）：单引号**夹具文本**（写进临时脚本的字面串）⇒ 不得检出
+  printf '#!/bin/bash\nset -uo pipefail\nprintf %%s %s\n' "'#!/bin/bash\\nreadelf -d x | grep -q NEEDED\\n' > \$W/g.sh" > "$tmp/g.sh"
+  # 夹具 H（负控 · M360）：行尾注释里的历史说明 ⇒ 不得检出（整行注释已跳，行尾也要跳）
+  printf '#!/bin/bash\nset -uo pipefail\nx=1  # 历史：echo hi | grep -q hi 会撞 SIGPIPE\necho "$x"\n' > "$tmp/h.sh"
+  # 夹具 I（正控 · M360）：`|&` 形态（stderr 并入管道）⇒ **必须**检出 1
+  printf '#!/bin/bash\nset -uo pipefail\ncmd |& grep -q PAT\n' > "$tmp/i.sh"
+  local ra rb rc rd re rf rg rh ri
   ra=$(scan_one_file "$tmp/a.sh"); rb=$(scan_one_file "$tmp/b.sh")
   rc=$(scan_one_file "$tmp/c.sh"); rd=$(scan_one_file "$tmp/d.sh")
   re=$(scan_one_file "$tmp/e.sh"); rf=$(scan_one_file "$tmp/f.sh")
+  rg=$(scan_one_file "$tmp/g.sh"); rh=$(scan_one_file "$tmp/h.sh")
+  ri=$(scan_one_file "$tmp/i.sh")
   [ "$ra" -eq 1 ] && echo "  ✅ A 生产者接 grep -q ⇒ 检出 1" || { echo "  ❌ A 期望 1，实际 $ra"; fails=$((fails+1)); }
   [ "$rb" -eq 0 ] && echo "  ✅ B here-string ⇒ 不检出" || { echo "  ❌ B 期望 0，实际 $rb"; fails=$((fails+1)); }
   [ "$rc" -eq 0 ] && echo "  ✅ C 文件输入 ⇒ 不检出" || { echo "  ❌ C 期望 0，实际 $rc"; fails=$((fails+1)); }
   [ "$rd" -eq 0 ] && echo "  ✅ D 无 pipefail ⇒ 不在扫描面" || { echo "  ❌ D 期望 0，实际 $rd"; fails=$((fails+1)); }
   [ "$re" -eq 0 ] && echo "  ✅ E 整行注释 ⇒ 不检出（防「删注释降指标」的规避）" || { echo "  ❌ E 期望 0，实际 $re"; fails=$((fails+1)); }
   [ "$rf" -eq 0 ] && echo "  ✅ F 逻辑或 || grep -q ⇒ 不检出（度量不虚高）" || { echo "  ❌ F 期望 0，实际 $rf"; fails=$((fails+1)); }
-  echo "  自证：通过 $((6-fails)) / 失败 $fails"
+  [ "$rg" -eq 0 ] && echo "  ✅ G 单引号夹具文本 ⇒ 不检出（字面串内不执行，非管道）" || { echo "  ❌ G 期望 0，实际 $rg"; fails=$((fails+1)); }
+  [ "$rh" -eq 0 ] && echo "  ✅ H 行尾注释 ⇒ 不检出（不能靠写注释规避棘轮）" || { echo "  ❌ H 期望 0，实际 $rh"; fails=$((fails+1)); }
+  [ "$ri" -eq 1 ] && echo "  ✅ I |& 形态 ⇒ 检出 1（stderr 并入管道同样撞 SIGPIPE）" || { echo "  ❌ I 期望 1，实际 $ri"; fails=$((fails+1)); }
+  echo "  自证：通过 $((9-fails)) / 失败 $fails"
   [ "$fails" -eq 0 ]
 }
 
 scan_one_file() {   # 自证用：绝对路径
-  local f="$1" n
+  local f="$1"
   grep -q 'pipefail' "$f" 2>/dev/null || { echo 0; return 0; }
-  n=$(grep -vE '^[[:space:]]*#' "$f" 2>/dev/null | grep -cE '([^|]|^)\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' || true)
-  echo "${n:-0}"
+  awk "$PIPE_AWK" "$f" 2>/dev/null || echo 0
 }
 
 main() {
@@ -112,8 +147,8 @@ main() {
     --list)
       cd "$ROOT" || exit 9
       while IFS= read -r f; do
-        n=$(scan_one "$f"); [ "$n" -gt 0 ] || continue
-        grep -nE '([^|]|^)\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$ROOT/$f" | grep -vE '^[0-9]+:[[:space:]]*#' | sed "s|^|$f:|"
+        grep -q 'pipefail' "$ROOT/$f" 2>/dev/null || continue
+        awk -v mode=list "$PIPE_AWK" "$ROOT/$f" 2>/dev/null | sed "s|^|$f:|"
       done < <(list_files)
       exit 0 ;;
   esac
