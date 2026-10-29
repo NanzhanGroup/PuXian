@@ -100,3 +100,67 @@ systemd-run --unit=m353-rounds --slice=ws-debug.slice --collect \
 # 结论看：/data/autodrive/logs/M353-ROUNDS.md
 # 单门复核：分片日志 /data/gatevm/m353_fullgate-<ts>/rN/shard-<ts>/shard*.log
 ```
+
+## 七 整链负载判据换量具（M361 · 缺陷 625）
+
+### 7.1 症状：六轮同形「红」，但红的东西没变
+
+M355–M360 的整链埋点（10s 一次 `/proc/loadavg`，路径 `/data/autodrive/logs/M355..M360-loadavg.tsv`）六轮实测：
+
+| 轮 | 样本 | median/核 | p95/核 | max | max/核 | ≥2 核采样占比 |
+|---|---|---|---|---|---|---|
+| M355 | 465 | 0.54 | 0.97 | 93.62 | 5.85 | 2.58% |
+| M356 | 533 | 0.60 | 0.96 | 67.98 | 4.25 | 2.44% |
+| M357 | 507 | 0.62 | 0.97 | 80.34 | 5.02 | 2.96% |
+| M358 | 531 | 0.56 | 0.97 | 92.16 | 5.76 | 1.88% |
+| M359 | 539 | 0.54 | 0.92 | 79.99 | 5.00 | 2.41% |
+| M360 | 457 | 0.57 | 1.14 | 105.50 | 6.59 | 2.63% |
+
+中位数贴地、p95 稳定在 1 每核上下、越界（≥2 核）采样只占 2–3%（每轮 9–15 个点，全在编译 spawn 潮那一两分钟里），
+**而旧判据只看 `loadavg_max_1m`**（单个 10s 采样点）⇒ max 落在尖峰上就红，落在尖峰前 10s 就绿。
+⇒ 这是「通道 ≠ 被证事实」第 5 次同族：**判据选错量具**，不是系统恶化。
+
+### 7.2 新判据（两腿都要过；max 降级为诊断量）
+
+`packaging/loadavg_verdict.sh`：
+
+- **[P] p95(loadavg 1m) ≤ 2.0 / 核**（nearest-rank，centi-load 直方图，不依赖 gawk `asort`）
+- **[R] 越界采样占比（≥2.0/核）≤ 5%**
+- 诊断：`max > 8.0/核` ⇒ 打 `diag=ANOMALY`（**不判红**，只留定位线索）
+- **样本下限 30**：不足 ⇒ `rc=2 INVALID`（不许拿 3 个点判绿 —— 这是防「换判据顺手放水」的第二道门）
+- 退出码：0 全 PASS · 1 有 FAIL · 2 输入无效；`LOADAVG-VERDICT=` 末行供链尾/CI 抓取
+
+**quiet 门内口径 12 的瞬时断言（2.0/核 ⇒ 报 ANOMALY 顺延）不动**，理由写实：那是**逐门前提检查**、
+命中的动作是「顺延」不是「判红」，观察单位是单门；整链判据的观察单位是整轮。两者语义不同，
+合并会把「机器此刻有点忙，把门挪到后面」和「这一轮整体不可信」搅成一件事。
+（§7 待判项「是否要连续 2 次采样越界才报」⇒ 判为**不做**：quiet 档已按门顺延，加跨门状态收益 < 复杂度。）
+
+### 7.3 治的是假红，不是放宽（三层证据）
+
+1. **离线回放**（零成本，`packaging/selftest_loadavg_verdict.sh [7]`）：六轮真实 tsv 新判据 **6/6 PASS**，
+   同一批语料旧 max 判据 **6/6 红** ⇒ 差异全部来自量具选择。
+2. **离线负控**（自证 [3][4][8][9]）：持续压载（2.5/核）⇒ p95 腿红；越界 5.16%（p95 恰在 2.0/核 边界）⇒ 占比腿红；
+   判据自伤（阈值放到 100/核）⇒ 同一压载料变绿（证明红来自判据侧）；占比阈值压 0% ⇒ 尖峰料变红（占比腿有牙）。
+3. **真机负控**（M209 纪律，`/data/autodrive/logs/M361-NEGCTL.md`，2026-10-30 06:05，pxdbg/ws-debug.slice）：
+
+| 阶段 | 样本 | p95/核 | 越界占比 | max/核 | 新判据 | 期望 |
+|---|---|---|---|---|---|---|
+| A 静默 90s | 45 | 0.03 | 0.00% | 0.03 | PASS(rc=0) | PASS |
+| B 64 路 spinner 120s（4 倍超订） | 60 | 3.43 | 66.67% | 3.48 | FAIL(rc=1) | FAIL |
+
+**NEGCTL-VERDICT=PASS**（A=0 且 B=1）。
+
+### 7.4 落地与复跑
+
+```bash
+# 判据本体（纯读，零成本；可对任意 tsv 复算）
+bash packaging/loadavg_verdict.sh --min-samples 30 /data/autodrive/logs/M36*-loadavg.tsv
+# 自证（30 断言；本机有六轮语料时自动加跑 [7] 回放）
+bash packaging/selftest_loadavg_verdict.sh
+# 真机负控（约 4min）
+pxdbg /bin/bash /data/autodrive/m361_load_negctl.sh
+# 整链（新判据参与退出码：负载判红 ⇒ wrapper 非零）
+systemd-run --unit=chain-m361 --slice=ws-debug.slice --collect /bin/bash /data/autodrive/m361_chain_wrap.sh
+```
+
+注册面三处齐改：`selfhost/gates.registry.sh`（`run pkg_loadavg_verdict`）+ `.github/workflows/ci.yml`（`loadavg_verdict_selftest` 步）+ 本节。

@@ -1275,6 +1275,18 @@ jobs:
           grep -E '通过 |失败 ' /tmp/v_shard_gate_verdict.log | tail -1 || true
           echo "✅ shard_gate_verdict_selftest（13 断言 · 门数平衡 · 两本账 · 判红必须列得出红门）PASS"
 
+      - name: loadavg_verdict_selftest（整链负载判据自证 · M361 缺陷 625）
+        if: always()
+        run: |
+          # 由来：M355–M360 六轮拿 `loadavg_max_1m`（10s 采样里的单点最大值）当红绿，
+          #   六轮 max 4.25–6.59/核 ⇒ 六轮全红，而 median 0.53–0.62、p95 0.92–1.14/核、越界 1.9–3.0%
+          #   ⇒ 判的是「编译 spawn 尖峰恰好落在哪个采样点」，不是「机器被持续压」。判据换量具：
+          #   p95 ≤ 2.0/核 **且** 越界采样占比 ≤ 5%（两腿都要过）；max 降级为诊断量（>8/核 打 ANOMALY，不判红）。
+          #   有牙：持续压载必红、占比 5.16% 必红、样本 < 30 必 INVALID（不许拿少数点判绿）。
+          bash packaging/selftest_loadavg_verdict.sh > /tmp/v_loadavg_verdict.log 2>&1 || { echo "❌ 整链负载判据自证失败"; tail -25 /tmp/v_loadavg_verdict.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'SELFTEST' /tmp/v_loadavg_verdict.log | tail -1 || true
+          echo "✅ loadavg_verdict_selftest（30 断言 · 六轮语料回放 + 双负控 + 样本下限）PASS"
+
       - name: m293_h3_robustness（HTTP/3 托管 listener 健壮性 · 晨曦阻塞级 QA 常设化）
         if: always()
         run: |

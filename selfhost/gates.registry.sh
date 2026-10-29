@@ -1129,6 +1129,11 @@ run pkg_tag_guard bash packaging/selftest_tag_guard.sh
 # M335（缺陷 587/588）：releases/latest 必须等于最高版本 tag —— install.sh 取 latest，
 #   latest 被旧 tag 顶掉 = 一键安装装旧树（2026-10-26 实测）。判据本体发布链里也跑（--fix）。
 run pkg_latest_guard bash packaging/selftest_latest_guard.sh
+# M361（缺陷 625）：**整链负载判据**换成 p95 + 越界占比（max 降级为诊断量）。
+#   由来：M355–M360 六轮 max 4.25–6.59/核 全判红，而 median 0.53–0.62、p95 0.92–1.14
+#   ⇒ 判的是「编译 spawn 尖峰恰落在哪个 10s 采样点」。自证含六轮真实语料回放（本机有则跑）
+#   + 双负控（判据自伤必变绿 / 占比阈值压 0 必变红）+ 样本不足必 INVALID（不许拿少数点判绿）。
+run pkg_loadavg_verdict bash packaging/selftest_loadavg_verdict.sh
 # M248（用户令 2026-10-03「tag 不要使用 s1 这样的标签，影响镜像同步」）：
 #   把规则从**事后检查**推到**创建时刻**（make_tag.sh 不合规名打不出来）
 #   + 构建时刻响亮拒绝（build_rpm.sh / make_release.sh 的 MILESTONE 校验）。
