@@ -1,4 +1,51 @@
-## M356 —— `pkg_pipe_grep` 口径修正：整行注释不计入（120 → 97）+ 97 条风险分层（第 225 轮）
+## M357 —— 大产出管道收口 10 条（97 → 87）+ 基线重生成（第 226 轮）
+
+> 接 M356 的风险分层，先打最硬的一层：产出可能 > 64KB 或分多次 write 的生产者。
+> 10 条全部改掉，棘轮基线随之下降；顺带撞见一扇**从未被门跑到过**的手工脚本（见三）。
+
+### 一 收口 10 条（9 文件）
+
+统一改法：**先把产出落到变量/文件，再对落盘物 grep** —— `<<< "$(生产者)"`（here-string，无管道）
+或 `> 日志` 后 `grep 日志`。命中语义不变（都 rc=0），否定分支保持否定（口径 19 的反面不许走）。
+
+| 文件:行 | 原形态 | 改法 |
+|---|---|---|
+| `examples/m115_proc_env.sh:23,31` | `tail -1 log \| grep -q` | `grep -q X <<< "$(tail -1 log)"` |
+| `examples/m217_shift_count/ub_proof.sh:97` | `sed -n 范围 dis \| grep -qE` | `grep -qE P <<< "$(sed …)"` |
+| `examples/m271_run_fast/verify.sh:66` | `grep -A12 … \| grep -q` | `grep -q P <<< "$(grep -A12 …)"` |
+| `packaging/build_rpm_el7.sh:51` | `rpm -E '%{?dist}' \| grep -q` | `grep -q 'el7' <<< "$(rpm -E …)"` |
+| `packaging/latest_guard.sh:59` | `head -c1 f \| grep -q '\['` | `grep -q '\[' <<< "$(head -c1 f)"` |
+| `packaging/release_reconcile.sh:97` | 同上 | 同上 |
+| `packaging/verify_repo_openeuler.sh:60` | `dnf list \| tee log \| grep -q` | `dnf list > log 2>&1 \|\| ! grep -q '^puxian' log` —— **tee 夹在中间是最坏形态**：grep 提前退出 ⇒ tee 吃 SIGPIPE(141) ⇒ pipefail 让 `! pipeline` 判成「仓库不可见」的假红 |
+| `selfhost/check_bin_portability.sh:90` | `readelf -d f \| grep -q NEEDED` | `grep -q NEEDED <<< "$(readelf -d f)"` |
+| `selfhost/native_bootstrap.sh:295` | 同上 | 同上 |
+
+台账明细与「未动、属次层的 4 条」见 `docs/M355_PIPE_SWEEP.md` §7。
+
+### 二 单门自证（7 门全绿 · `run_gates.sh --only`）
+
+| 门 | 耗时 |
+|---|---|
+| m217_shift_count（含 3 条负控重烘） | 435s |
+| m271_run_fast | 20s |
+| pkg_latest_guard | 1s |
+| portability_selftest | 1s |
+| portability_shipped | 1s |
+| m278_release_reconcile | 2s |
+| pkg_pipe_grep（自证 5/5 + 棘轮） | 3s |
+
+### 三 基线重生成 + 顺带撞见的真红
+
+- 棘轮基线 **97 → 87 条 / 42 → 36 文件**（6 个文件清零被移出基线）；`PIPE-GREP-VERDICT=OK remaining=87`；
+- 顺带发现：`bash examples/m115_proc_env.sh` **单跑 3/3 全红**，根因不在管道 —— `.px` 里
+  `remove(WORKDIR + "/env.txt")` 对**不存在**的文件报 `fs: 删除失败`（运行时语义，本轮不碰 runtime，避免重烘）；
+  且该脚本**不在 `gates.registry.sh`** ⇒ 全量门从未跑到它 ⇒ 「门清单外的手工脚本」盲区（与 M355 漏注册 ci.yml 同族）。待判：① `remove` 是否该容 ENOENT；② 还有哪些 `examples/*.sh` 未注册。
+
+### 四 全量门（待回填）
+
+### 五 发布（待回填）
+
+
 
 > 接 M355：全量门绿 236 / 红 0，但「剩余 120 条」这个数字**本身不可信** —— 里面 23 条是注释。
 > 一个会随注释增减漂移的棘轮不是判据，是仪表盘上的假数字。
