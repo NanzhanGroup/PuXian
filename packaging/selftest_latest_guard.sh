@@ -93,7 +93,8 @@ if jout=$(python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["verdict
   ok "--json 字段正确（verdict/expected/latest）"
 else ng "--json：$(cat "$W/j.err")"; fi
 o=$(bash "$SH" --api-fixture "$W/ok1" --json 2>/dev/null)
-if printf '%s' "$o" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["verdict"]=="OK"; print("OK")' 2>/dev/null | grep -q OK; then ok "--json OK 档"; else ng "--json OK 档"; fi
+_jout=$(printf '%s' "$o" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["verdict"]=="OK"; print("OK")' 2>/dev/null)
+if grep -q OK <<< "$_jout"; then ok "--json OK 档"; else ng "--json OK 档"; fi
 
 # ── [7] 用法/环境 ──
 printf '\n【7】用法与环境\n'

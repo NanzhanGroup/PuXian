@@ -61,7 +61,7 @@ tip_msg() { # $1=名 $2=提交信息（模拟「站点同步提交为 tip」）
 check() { # $1=用例名 $2=期望rc $3=期望输出关键词 $4=clone $5=TAG
   local out rc
   out="$(CLONE="$4" TAG="$5" bash "$BLOCK" 2>&1)"; rc=$?
-  if [ "$rc" = "$2" ] && printf '%s' "$out" | grep -q "$3"; then
+  if [ "$rc" = "$2" ] && grep -q "$3" <<< "$out"; then
     echo "✅ $1（rc=$rc，含「$3」）"; PASS=$((PASS+1))
   else
     echo "❌ $1（rc=$rc 期望 $2；输出: $(printf '%s' "$out" | tr '\n' ' ')）"; FAIL=$((FAIL+1))
@@ -170,8 +170,8 @@ chk_tag() { # $1=用例名 $2=ALLTAGS $3=期望rc $4=必须含(可空) $5=必须
   local out rc ok=1
   out="$(ALLTAGS="$2" PXREPO_STRICT_TAGS="${6:-0}" bash "$BLOCK3" 2>&1)"; rc=$?
   [ "$rc" = "$3" ] || ok=0
-  if [ -n "$4" ]; then printf '%s' "$out" | grep -q "$4" || ok=0; fi
-  if [ -n "$5" ]; then printf '%s' "$out" | grep -q "$5" && ok=0; fi
+  if [ -n "$4" ]; then grep -q "$4" <<< "$out" || ok=0; fi
+  if [ -n "$5" ]; then grep -q "$5" <<< "$out" && ok=0; fi
   if [ "$ok" = 1 ]; then echo "✅ $1（rc=$rc）"; PASS=$((PASS+1))
   else echo "❌ $1（rc=$rc 期望 $3；输出: $(printf '%s' "$out" | tr '\n' ' ')）"; FAIL=$((FAIL+1)); fi
 }
@@ -219,7 +219,7 @@ rt_run() { STAGING="$RT" PATH="$RMBIN:$PATH" bash "$BLOCK4" 2>&1; }
 o="$(rt_run)"; rtc=$?
 ok=1
 [ "$rtc" = 0 ] || ok=0
-printf '%s' "$o" | grep -q '目录集合：7 9 openeuler/22.03 openeuler/24.03' || ok=0
+grep -q '目录集合：7 9 openeuler/22.03 openeuler/24.03' <<< "$o" || ok=0
 [ "$(printf '%s' "$o" | grep -c '✅')" = 4 ] || ok=0
 if [ "$ok" = 1 ]; then
   echo "✅ ④ 真实布局（4 dist × arch 层）→ 全过"; PASS=$((PASS+1))
@@ -230,7 +230,7 @@ fi
 # ④b 反向判据：摘掉一个 dist 的 repomd.xml.asc ⇒ **必须**响亮（否则「一律通过」也能让 ④ 变绿）
 mv "$RT/rpm/openeuler/24.03/x86_64/repodata/repomd.xml.asc" "$W/kept.asc"
 o="$(rt_run)"; rtc=$?
-if [ "$rtc" != 0 ] && printf '%s' "$o" | grep -q 'openeuler/24.03/x86_64 缺少 repomd.xml.asc'; then
+if [ "$rtc" != 0 ] && grep -q 'openeuler/24.03/x86_64 缺少 repomd.xml.asc' <<< "$o"; then
   echo "✅ ④b 缺 repomd.xml.asc → 响亮，且路径**含 arch 层**"; PASS=$((PASS+1))
 else
   echo "❌ ④b rc=$rtc；输出: $(printf '%s' "$o" | tr '\n' ' ')"; FAIL=$((FAIL+1))
@@ -512,8 +512,8 @@ fb_case() {   # $1=用例名 $2=表 $3=最新tag $4=候选（空格分隔） $5=
 
 # ⑦-1 最新 tag 有 Release ⇒ **不回落**（回落不能变成常态）
 o="$(fb_case x 'v0.2.277:200' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$o" | grep -q 'RESULT=v0.2.277' \
-   && ! printf '%s' "$o" | grep -q '回落生效\|权威版本回落：'; then
+if [ "$rc" = 0 ] && grep -q 'RESULT=v0.2.277' <<< "$o" \
+   && ! grep -q '回落生效\|权威版本回落：' <<< "$o"; then
   fb_ok "⑦-1 最新 tag 有 Release ⇒ 选它、**不回落**"
 else
   fb_bad "⑦-1 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
@@ -521,8 +521,8 @@ fi
 
 # ⑦-2 最新 tag 404 且次高有 Release ⇒ 回落，且**响亮留痕**
 o="$(fb_case x 'v0.2.277:404,v0.2.276:200' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$o" | grep -q 'RESULT=v0.2.276' \
-   && printf '%s' "$o" | grep -q '权威版本回落：v0.2.277 → v0.2.276'; then
+if [ "$rc" = 0 ] && grep -q 'RESULT=v0.2.276' <<< "$o" \
+   && grep -q '权威版本回落：v0.2.277 → v0.2.276' <<< "$o"; then
   fb_ok "⑦-2 最新 tag 无 Release ⇒ 回落到次高，且日志**指名**（留痕）"
 else
   fb_bad "⑦-2 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
@@ -530,8 +530,8 @@ fi
 
 # ⑦-3 ⭐反向判据：**限流（403）绝不许被当成「未发版」** ⇒ 必须 die
 o="$(fb_case x 'v0.2.277:403,v0.2.276:200' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
-if [ "$rc" != 0 ] && printf '%s' "$o" | grep -q '拒绝回落' \
-   && ! printf '%s' "$o" | grep -q 'RESULT='; then
+if [ "$rc" != 0 ] && grep -q '拒绝回落' <<< "$o" \
+   && ! grep -q 'RESULT=' <<< "$o"; then
   fb_ok "⑦-3 403（限流）⇒ **拒绝回落**并响亮（不把真问题藏起来）"
 else
   fb_bad "⑦-3 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
@@ -539,7 +539,7 @@ fi
 
 # ⑦-4 全部 404 ⇒ 诚实失败（不猜、不降级）
 o="$(fb_case x 'v0.2.277:404' 'v0.2.277' 'v0.2.276 v0.2.275' '')"; rc=$?
-if [ "$rc" != 0 ] && printf '%s' "$o" | grep -q '诚实失败'; then
+if [ "$rc" != 0 ] && grep -q '诚实失败' <<< "$o"; then
   fb_ok "⑦-4 全都没有 Release ⇒ 诚实失败（不猜、不降级）"
 else
   fb_bad "⑦-4 rc=$rc 输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 200)"
@@ -550,7 +550,7 @@ L="$W/fbcnt5"; : > "$L"
 o="$(FB_TBL='v0.2.277:404' FB_TOP='v0.2.277' FB_CANDS='v0.2.276 v0.2.275 v0.2.274 v0.2.273 v0.2.272 v0.2.271' \
       FB_LOG="$L" PXREPO_FB_MAX=2 bash "$W/fbrun.sh" 2>&1)"; rc=$?
 N="$(wc -l < "$L" 2>/dev/null || echo 0)"
-if [ "$N" -le 3 ] && printf '%s' "$o" | grep -q '回看已达上限'; then
+if [ "$N" -le 3 ] && grep -q '回看已达上限' <<< "$o"; then
   fb_ok "⑦-5 探测有界：PXREPO_FB_MAX=2 ⇒ 实测探测 $N 次（≤3）"
 else
   fb_bad "⑦-5 探测 $N 次（期望 ≤3）输出: $(printf '%s' "$o" | tr '\n' ' ' | tail -c 160)"

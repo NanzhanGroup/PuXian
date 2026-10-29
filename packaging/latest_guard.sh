@@ -143,9 +143,9 @@ EXPECTED_HAS_RELEASE=0
 if [ -n "$FIXTURE" ]; then
     [ -f "$FIXTURE/expected_release.json" ] && EXPECTED_HAS_RELEASE=1
 else
-    curl -sS -o "$W/exp.json" -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN:-}" \
-         -H "Accept: application/vnd.github+json" "$API/repos/$REPO/releases/tags/$EXPECTED" 2>/dev/null \
-      | grep -q '^200$' && EXPECTED_HAS_RELEASE=1
+    _code=$(curl -sS -o "$W/exp.json" -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN:-}" \
+         -H "Accept: application/vnd.github+json" "$API/repos/$REPO/releases/tags/$EXPECTED" 2>/dev/null) || _code=""
+    [ "$_code" = "200" ] && EXPECTED_HAS_RELEASE=1
 fi
 
 if [ "$EXPECTED_HAS_RELEASE" = 0 ]; then
