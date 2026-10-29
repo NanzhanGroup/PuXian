@@ -1,11 +1,8 @@
 # 口径 19 棘轮基线：每个 .sh 允许残留的「生产者 | grep -q」条数（只许减少）
-# 生成：selfhost/check_pipe_grep.sh --emit-baseline · 里程碑 M358（|| 假阳性修正后重生成）
-3 examples/m278_release_reconcile/verify.sh
-1 examples/m283_gate_premise/verify.sh
+# 生成：selfhost/check_pipe_grep.sh --emit-baseline · 里程碑 M360（单引号夹具/行尾注释/|& 口径修正后重生成）
+1 examples/m278_release_reconcile/verify.sh
 1 examples/m285_gate_assertions/verify.sh
-2 packaging/selftest_latest_guard.sh
-1 packaging/selftest_publish_gh_pages.sh
-6 packaging/selftest_pxrepo_mirror.sh
-2 selfhost/check_gate_premise.sh
-4 selfhost/check_pipe_grep.sh
-# 残留合计 20 条
+1 packaging/selftest_latest_guard.sh
+4 packaging/selftest_pxrepo_mirror.sh
+1 selfhost/check_gate_premise.sh
+# 残留合计 8 条
