@@ -31,7 +31,12 @@ for a in "$@"; do case "$a" in --neg-skip) NEG=0;; esac; done
 P=0; F=0
 ok(){ P=$((P+1)); printf '  ✅ %s\n' "$1"; }
 ng(){ F=$((F+1)); printf '  ❌ %s\n' "$1"; }
-chkg(){ if printf '%s' "$2" | grep -q -- "$3"; then ok "$1"; else ng "$1（[$2] 不含 [$3]）"; fi; }
+# 缺陷 621（M354）：`printf ... | grep -q` + `set -o pipefail` = **假红装置**
+#   现场（2026-10-29 全量门 shard2）：[2] 连报 2 条静态断言红，而同一份快照里 needle 明明在。
+#   机理：grep -q 命中即退出，printf 还在写 → SIGPIPE(141) → pipefail 把整条管道判失败 → “不含”。
+#   实测：14 并发跑本门 6 次假红，DBG 记到 pipestatus=「141 0」（grep 其实命中了）。
+#   修法：herestring（无管道无 SIGPIPE）；红消息只带前 200 字，不再整份快照刷日志。
+chkg(){ if grep -q -- "$3" <<<"$2"; then ok "$1"; else ng "$1（[${2:0:200}] 不含 [$3]）"; fi; }
 chk(){ if [ "$2" = "$3" ]; then ok "$1"; else ng "$1（期望 [$3] 实得 [$2]）"; fi; }
 
 TOOL=packaging/release_reconcile.sh
@@ -67,6 +72,18 @@ chkg "豁免表写明「真缺陷不许进表」" "$(cat $IGN)" "真缺陷不许
 chkg "豁免表写明过期判据" "$(cat $IGN)" "STALE-IGNORE"
 n=$(awk -F'\t' '!/^#/ && NF>0' "$IGN" | wc -l)
 [ "$n" -ge 1 ] && ok "豁免表条目 $n 条（每条带理由）" || ng "豁免表为空"
+
+printf '\n[2b] 装置自证：grep -q 不得经管道（缺陷 621 · SIGPIPE + pipefail = 假红）\n'
+# 确定性自证：无限生产者 + grep -q ⇒ 生产者必被 SIGPIPE ⇒ pipefail 下 rc=141（这就是假红的来源）
+( set -o pipefail; yes 2>/dev/null | grep -q y ); sp=$?
+[ "$sp" = 141 ] && ok "自证：管道式 grep -q 会被判 141（假红来源成立）" || ng "自证装置失效：yes|grep -q 得 rc=$sp（期望 141）"
+# 静态守卫：两处判据助手（本门 + 离线自证）都不许退回管道式
+badg=""
+for f in "$HERE/verify.sh" "$ROOT/packaging/selftest_reconcile.sh"; do
+    ln=$(grep -m1 '^chkg()' "$f")
+    case "$ln" in *printf*'| grep -q'*) badg="$badg $(basename "$(dirname "$f")")/$(basename "$f")";; esac
+done
+[ -z "$badg" ] && ok "判据助手 chkg 已不用管道喂 grep -q" || ng "chkg 仍是管道式（$badg）"
 
 printf '\n[3] 豁免表纪律：理由为空的条目无效\n'
 printf 'v9.9.9\t\n' > "$W/bad.ignore"
