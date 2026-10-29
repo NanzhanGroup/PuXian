@@ -138,9 +138,16 @@ DBG 行固定为 `pipestatus=141 0`（141 = printf 被 SIGPIPE 杀死，0 = grep
 新增**口径 19**（`docs/GATE_FLAKINESS.md`）：编排层的退出码必须与「红」同向；
 台账 +2 行（623/624，累计 27 条）。证据 `/data/gatevm/m355-624-623-evidence/`。
 
-- 全量门：第四轮跑完回填（绿/红、墙钟、peak）
-- tag：`v0.2.354`（对应 commit 见下方推送自证）
-- latest 自证：回填
+- **全量门（第四遍 · 收口轮 · `chain-m354-20261029-134234-259757`）：绿 235 · 红 0 · 门清单 235 · 跳过 0**
+  （`shard_run rc=0` · `release_guard rc=0`；8 片绑核 + quiet 档 10 门）
+  - 分片墙钟 **5039s（83m59s：13:42:34 → 15:06:33）**；含发布自证的链路总 **5364s（89m20s：→ 15:11:54）**
+  - peak loadavg **本轮未采** ⇒ 记「未采」，不是「无高点」：链侧无 loadavg 采样埋点、本机未装 sar（`/var/log/sa` 空）。
+    按 HONESTY 不许估，M355 起把采样埋进 `shard_run.sh`（口径 12 的 quiet 自断言本来也要它）
+  - 第三遍的红门 m286 在本轮**绿**，与 624 的机理自洽（假否定只在管道形态下发生）；623 的 `exit 1` 在无红路径上不改变结论（rc=0）
+- tag：`v0.2.354`（annotated tag 对象 `48ba09d`）→ commit **`3ead76f`**；
+  `git ls-remote` 自证 `refs/heads/main=3ead76f` · `refs/tags/v0.2.354=48ba09d`
+- latest 自证：**`LATEST-VERDICT=OK expected=v0.2.354 reason=none`**（4 次轮询，前 3 次 PENDING 不计红，15:11:54 命中；
+  与 `release_reconcile` 的分工不变）
 ## M353 —— quiet 档前提核查（三门 3 轮真实分片实测 · 决策不移档）+ 判据装置自身的假红（缺陷 618/619/620）（第 222 轮）
 
 > 接 M352 的遗留问题：M352 的 V5 实测说 m280/m183/m208 在 2.6× 超订下仍绿，而 quiet 档把它们登记为「需要空机」。
