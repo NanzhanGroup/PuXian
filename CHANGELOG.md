@@ -1,3 +1,84 @@
+## M354 —— 把「装置自己骗自己」剩下的两处收口：m256 负控 B 结构性注入（619）+ latest 装置 BLOCKED（620 第二半）+ m183 负控 A 结构性（第 223 轮）
+
+> 接 M353 台账里剩下的三条：619（m256 负控 B 靠概率撞）、620 第二半（latest 自证把 PENDING 当终态）、
+> 以及 M353 那轮最重要的发现 —— m183 负控 A 在分片负载下 **3/3 失效**。
+> 三条共同的病根是**口径 13 的反面**：判据在等一件概率事件，而装置没把现场造出来。
+> 本轮把「等」换成「造」，并给判据补上**第三态**（前提不成立 ≠ 产品红 ≠ 绿）。
+> 判据口径新增**第 16 条**（结构构造 + 前提断言 + 第三态），见 `docs/GATE_FLAKINESS.md`。
+
+### 一 缺陷 619 —— m256 负控 B 改结构性注入（`examples/m256_eintr/`）
+
+现场（M353 · r2 分片）：`判据用尽预算：总迭代 12 次 · 可判 12 次 · 命中 0` ⇒ `FAIL [6B] 未按预期判红`，
+而同轮 `[7] 源逐字节还原 ✓`、负控 A/C/D 全 PASS ⇒ **不是产品回归**，是「包装撤掉后 recvfrom 走错路」
+这个现象在负载下一次都没被走到（观测窗口 < 现象的随机性）。
+
+修法两层：
+
+1. **构造**（`probe_eintr.px`）：新增 `M256_PROBE_INTR=1` —— 探针自装处理器（`signal(10, …)`），
+   在**整个运行期**用 `SIGUSR1` 每 5ms 打自己一次（`os_kill(os_pid(), 10)`）。
+   接收端 socket 带 `SO_RCVTIMEO` ⇒ 落在 signal(7)「**永不重启**」族 ⇒ **与 GC 的 `SIG_GC_STOP`
+   走同一条内核路径、同一个 EINTR**（不是模拟，是同一机制的确定性版本）。
+   首版只覆盖 U2 头 2s，实测**不够** —— 发送端每 100ms 一发，recvfrom 多数时候有包可取（不阻塞 ⇒ 无系统调用可打断）；
+   改成跨全程持续注入后 1 次可判即命中。
+   注入档额外打印 `M256-INTR-SENT/HANDLED` 两行自陈（只在注入档打印 ⇒ `[3]/[4]` 两档 stdout 仍逐字节一致）。
+2. **前提断言 + 第三态**（`verify.sh` 的 `neg_any`）：每轮必须看到 `M256-INTR-HANDLED≥1`，否则该轮**不可判**；
+   可判次数 < `N_min`（默认 3，`M256_NEG_NMIN` 可覆盖）⇒ 返回 **3 = PREMISE-FAIL**：
+   门红，但文案写死「装置侧，非产品回归、也不是绿」。
+
+证据：
+
+| 项 | 修前（M353 r2 分片） | 修后（本轮单门实测） |
+|---|---|---|
+| 负控 B | 可判 12 次 · 命中 0 · **假红** | **第 1 次可判即命中**（`[6B] PASS`），无重试 |
+| 判据自身 | 无「前提不成立」这个态 | `M256_NEG_SELFTEST=1` 回放 2/2：无故障 + `N_min=2` ⇒ rc=1（产品红）；`N_min=999` ⇒ rc=3（PREMISE-FAIL） |
+| 整门 | — | `M256-VERIFY-OK（25/0）`（含自伤回放）· 常规档 `23/0` |
+
+### 二 缺陷 620 第二半 —— latest 自证装置不许把 PENDING 当终态（`packaging/latest_verify.sh` 新增）
+
+现场（M352）：tag 与 main 都推了，但 GitHub 的 `Release` job 因 `actions/checkout`（`fetch-depth: 0`）
+在 runner 上跑满 30min 被 cancelled ⇒ 后续 steps 全 skipped ⇒ `releases/latest` 停在 `v0.2.351`；
+而自证装置 40 次轮询全 `PENDING`，**跑完照写** `VERDICT=GREEN` + `DONE` ⇒ 「发布没发出去」静默 3 小时。
+
+修法：
+
+- 新入库装置 `packaging/latest_verify.sh <tag> [out.md]`：三态 + 硬时限
+  （`LV_DEADLINE_SEC` 默认 30min）——`OK` / `STALE`（有 Release 但 latest 指旧版）/ **`BLOCKED`**
+  （轮询到上限仍 PENDING = 有 tag 没有 Release，或 API 读不到）。`DONE` 只在拿到**确定结论**后写；
+  `BLOCKED` 必须给出下一步（查 Release job 是否 cancelled → `rerun-failed-jobs` → `release_reconcile.sh`）。
+- 负控 `packaging/latest_verify_negctl.sh`（离线·`latest_guard.sh --api-fixture`）**6/6**：
+  伪造 `v0.2.999` 有 tag 无 Release ⇒ **BLOCKED**；有 Release 但 latest 旧 ⇒ **STALE**；
+  latest == 期望 ⇒ **OK**；fixture 空（取不到）⇒ **BLOCKED**（不是 OK）；另断言 BLOCKED 带下一步、
+  且**不得**同时出现 OK/GREEN 结论行。
+- `release_guard.sh`（`/data/app/ws/data/autodrive/`）的 latest 段**只留一处判据**：调该装置并映射
+  （0⇒继续 · 1⇒`NO-GO latest-stale` · 其余⇒`VERDICT=BLOCKED` **exit 3**），删掉「跑完照写 GREEN」的老路。
+
+### 三 m183 负控 A 改结构性（`examples/m183_gc_root_handover/`）
+
+现场（M353 三门 ×3 轮真实分片）：m183 **3/3 红**，失败点固定「恢复缺陷 197 未判红」——
+而缺陷 197 的暴露窗口（pop 出口 vs 返回值仍在根面）在分片负载下压根没被走到。
+
+修法：负控 A 不再等「STW 恰好打断 pop 出口」，改为**在缺陷暴露点强制一次完整收集**：
+
+- 补丁 `PATCH_HOOK` / `PATCH_A_ST`（只在门里打，产品源码不带）：在 `px_root_pop` 末尾插钩子，
+  `PX_GC_FORCE_AT_POP=1` 时 `px_gc_collect()` 并打印 `[M183-POPCOLL] roots_n=<n> mark=<m>`；
+  两者**逐字同款**，唯一差别是收缩时机（`g_px_trunc_pending = mark` ⇄ `g_px_roots_n = mark`）。
+- 判据 `chk_trunc_struct`：① 前提 —— 钩子必须真的触发过（`fires ≥ 1`，否则 **ANOMALY**，不判红也不判绿）；
+  ② 症状 —— 收集发生时 **`roots_n > mark`**（返回值仍在根面）+ `HANDOVER OK`。
+- 新增正控 **②b**（干净源码 + 钩子）与负控 A 对拍，`negcase` 增加 rc=4/5 的 ANOMALY/构建失败分支。
+
+证据（本轮单门实测）：
+
+| 运行 | fires | held（收缩时仍持有） | 结论 |
+|---|---|---|---|
+| ②b 干净源码 + 强制收集 | 8 | **8** | 绿（修法站得住） |
+| 负控 A（立即收缩 + 同一钩子） | 8 | **0** | **判红 ✓**（确定性，不依赖负载） |
+
+整门 `M183-VERIFY-OK`，源逐字节还原 ✓。
+
+### 四 收口（待全量门回填）
+
+- 全量门：待跑
+- tag：`v0.2.354`
 ## M353 —— quiet 档前提核查（三门 3 轮真实分片实测 · 决策不移档）+ 判据装置自身的假红（缺陷 618/619/620）（第 222 轮）
 
 > 接 M352 的遗留问题：M352 的 V5 实测说 m280/m183/m208 在 2.6× 超订下仍绿，而 quiet 档把它们登记为「需要空机」。

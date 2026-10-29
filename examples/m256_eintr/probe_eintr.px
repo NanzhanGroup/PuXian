@@ -67,6 +67,36 @@ let _alt = env("M256_PROBE_EXTRA")
 if _alt != null:
     if _alt != "":
         SEND_ALT = 1
+# ── M354（缺陷 619）：**结构性 EINTR 注入**（只给负控 B 用）─────────────
+#   为什么：缺陷 619 的形态是「负控 B 靠 GC 的 STW **恰好**撞上阻塞中的 recvfrom」，
+#   而那件事是**概率性**的（分片负载下实测 可判 12 次 / 命中 0）⇒ 负控在负载下
+#   失去鉴别力。口径 13：装置的**不利状态要用结构造**，不要「等出来」。
+#   做法：受管信号（SIGUSR1=10）+ 探针自己的处理器 + 接收端 SO_RCVTIMEO
+#   ⇒ 落在 signal(7)「**永不重启**」族，与 GC 的 SIG_GC_STOP 走**同一条内核路径**
+#   （同一个 EINTR，产品语义完全相同）；在 U2 的阻塞窗口内反复投递
+#   ⇒ 撤掉 px_io_recvfrom 的包装后**第一次就必然**返回 -1（不再等自然发生）。
+#   ⚠️ 只在 M256_PROBE_INTR=1 时启用 ⇒ [3]/[4] 两档 stdout 仍逐字节一致。
+var INTR = 0
+let _intr = env("M256_PROBE_INTR")
+if _intr != null:
+    if _intr != "":
+        INTR = 1
+var intr_sent = 0
+var intr_handled = 0
+def on_intr(sig):
+    intr_handled += 1
+# 150ms 后开始、每 5ms 一次、共 3000 次（≈15s 覆盖 T1/U2 全程）——
+#   ⚠️ 实测（M354 首版）：只覆盖 U2 的前 2s **不够** —— 发送端每 100ms 一发，
+#   接收端的 recvfrom 多数时候**有包可取**（不阻塞 ⇒ 没有可打断的系统调用），
+#   注入必须**持续**跨过若干个「队列空」的间隙，才能保证「至少一次打断发生在阻塞期」。
+def intruder():
+    sleep(150)
+    var i = 0
+    while i < 3000:
+        os_kill(os_pid(), 10)
+        intr_sent += 1
+        sleep(5)
+        i += 1
 # TCP 服务端：accept 一次 → 等 1500ms → 发 5 字节 → 关
 def srv():
     let l = tcp_listen(PORT)
@@ -108,6 +138,11 @@ mkdir(D)
 #   实测指纹（CI run 37569198043 · step[36]）：stdout 只有 `T1=…`、没有 U2/DONE
 #   ⇒ 门报「探针未跑完」。绑定提前后这条竞态**在原理上消失**（与下方注释同一意图）。
 let u = udp_open(UPORT)
+# M354（缺陷 619）：结构性注入的起点 —— **在 T1 之前**就开始（见 intruder 注释：
+#   注入必须持续跨过若干个「队列空 ⇒ recvfrom 真阻塞」的间隙，才保证打断落在阻塞期）
+if INTR == 1:
+    signal(10, on_intr)
+    spawn intruder()
 spawn srv()
 spawn usrv()
 spawn press(120000)
@@ -191,5 +226,11 @@ elif foreign != "":
     print("U2=FOREIGN:" + foreign)
 else:
     print("U2=-1")
+# M354（缺陷 619）：注入的**自陈**行（只在注入档打印 ⇒ 不影响两档逐字节对拍）
+#   门据此断言「前提真的发生了」：handler 一次都没进 ⇒ 本次输出不可判（PREMISE-FAIL），
+#   而不是「故障没出现 ⇒ 产品没问题」。口径 14：取不到 ≠ 没有。
+if INTR == 1:
+    print("M256-INTR-SENT=" + str(intr_sent))
+    print("M256-INTR-HANDLED=" + str(intr_handled))
 udp_close(u)
 print("M256-PROBE-DONE")

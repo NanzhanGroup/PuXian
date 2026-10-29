@@ -41,6 +41,10 @@
 #  ④ `PX_GC_DEBUG=1` 的根栈峰值有界（所有线程 max roots ≤ 64）—— 防「延迟收缩」退化成泄漏。
 #  ⑤ 负控 4 道（默认跑；`--neg-skip` 跳过）—— 各自独立判红 + 源逐字节还原：
 #     A `px_root_pop` 退回「立即收缩」          ⇒ ① 必红（恢复缺陷 197）
+#       ⚠️ M354（缺陷 619 同族 · 口径 13）：A 原来靠「STW 恰好打断 pop 出口」这件概率事件，
+#       分片负载下 3/3 报「未判红」⇒ 现场没造出来，不是产品没问题。现改为**结构性**：
+#       在同一处同时装「收缩点强制收集」钩子，并断言「收集时根栈仍持有返回值（roots_n > mark）」；
+#       钩子没触发 ⇒ ANOMALY（不判产品红、也不判绿）。②b 是它的正控（干净源码 + 同一钩子）。
 #     B `bi_s3_list` 去掉 push/KEEP/pop         ⇒ ② 必红（恢复缺陷 198）
 #     C `px_root_keep` 去掉「待收缩应用」        ⇒ ④ 必红（根栈无界增长）
 #     D `bi_px_exec` 去掉 env/srv 登记           ⇒ ③b 必红（恢复缺陷 199，UAFDET 3/3）
@@ -169,8 +173,7 @@ chk_handover_inline() {
     build "$WORK/handover.px" handover || return 1
     runs_ok 3 "$BIN_HO" "HANDOVER OK" PX_GC_UAFDET=1 PX_GC_STRESS=1 PX_GC_INLINE=1
 }
-chk_trace() {        # ③ 硬不变量：登记在根栈里的对象绝不能被回收
-    local f
+chk_trace() {        # ③ 硬不变量：登记在根栈里的对象绝不能被回收    local f
     for f in "$WORK/trace.ho.out" "$WORK/trace.s3.out"; do
         [ -f "$f" ] || return 1
         grep -q 'PX_GC_TRACE' "$f" && return 1
@@ -186,6 +189,73 @@ chk_peak() {         # ④ 根栈峰值有界（防延迟收缩退化成泄漏�
     [ -n "$mx" ] || return 1
     note "根栈峰值（全线程 max roots）= $mx"
     [ "$mx" -le 64 ]
+}
+
+# ─────────────── M354（口径 13）：缺陷 197 的**结构性**判据 ───────────────
+# 缺陷 619/620 同族的病根：负控要等「GC 的 STW **恰好**在 pop 出口打断本线程」这件概率事件
+#   ⇒ 分片负载下 3/3 红在「恢复缺陷 197 未判红」，而那不是产品没问题，是**现场没造出来**。
+# 修法（两层，缺一不可）：
+#   ① **构造**：在 pop 出口（缺陷的暴露点 = 协作式安全点）**强制一次完整收集**
+#      （注入钩子 PX_GC_FORCE_AT_POP=1，只在判据里打补丁，产品源码不带）。
+#   ② **断言**：收集发生时，物理根栈**必须仍持有本帧登记的返回值**
+#      （`roots_n > mark`）。缺陷 197 的定义就是「pop 时已把返回值从根面删掉」
+#      ⇒ 该断言在缺陷态下**必然**不成立（不是概率）。
+# 前提不成立（钩子一次都没触发）⇒ 返回 4 = **ANOMALY**：既不判产品红，也不判绿。
+PATCH_HOOK='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
+old="    g_px_trunc_pending = mark;\n    gc_unblock_stop(&old);\n}"
+assert s.count(old)==1, "anchor HOOK 唯一性（实际 %d）" % s.count(old)
+hook = """    {   /* M354：结构性构造 —— 在缺陷 197 的暴露点（pop 出口）强制一次完整收集 */
+        static int on = -1; static long hits = 0;
+        if (on < 0) { const char* e = getenv(\"PX_GC_FORCE_AT_POP\"); on = (e && e[0]==49) ? 1 : 0; }   /* 49 = ASCII '1' */
+        if (on) {
+            hits++;
+            if (hits <= 8) fprintf(stderr, \"[M183-POPCOLL] roots_n=%d mark=%d hit=%ld\\n\", g_px_roots_n, mark, hits);
+            px_gc_collect();
+        }
+    }
+}"""
+open(p,"w",encoding="utf-8").write(s.replace(old, old[:-1] + hook, 1)); print("PATCH-HOOK-OK")'
+# 负控 A 的新形态：**同一处**同时「恢复缺陷 197（立即收缩）」+「装强制收集钩子」
+#   ⇒ 两个变量只有一个在动（收缩时机），判据翻转必须由它引起（口径 9 的加强版）。
+PATCH_A_ST='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
+old="    g_px_trunc_pending = mark;\n    gc_unblock_stop(&old);\n}"
+assert s.count(old)==1, "anchor A_ST 唯一性（实际 %d）" % s.count(old)
+new = """    g_px_roots_n = mark;             /* M354 负控 A：恢复缺陷 197（立即收缩） */
+    gc_unblock_stop(&old);
+    {   /* M354：结构性构造 —— 与 PATCH_HOOK 逐字同款（唯一差别是上面那行收缩时机） */
+        static int on = -1; static long hits = 0;
+        if (on < 0) { const char* e = getenv(\"PX_GC_FORCE_AT_POP\"); on = (e && e[0]==49) ? 1 : 0; }   /* 49 = ASCII '1' */
+        if (on) {
+            hits++;
+            if (hits <= 8) fprintf(stderr, \"[M183-POPCOLL] roots_n=%d mark=%d hit=%ld\\n\", g_px_roots_n, mark, hits);
+            px_gc_collect();
+        }
+    }
+}"""
+open(p,"w",encoding="utf-8").write(s.replace(old, new, 1)); print("PATCH-A-ST-OK")'
+
+popcoll_stats() {   # → "fires=N held=M"（held = 强制收集时 roots_n > mark 的次数）
+    local f="$WORK/popcoll.out" n h
+    n=$(grep -c '^\[M183-POPCOLL\]' "$f" 2>/dev/null) || n=0
+    h=$(grep '^\[M183-POPCOLL\]' "$f" 2>/dev/null \
+        | awk '{split($2,a,"="); split($3,b,"="); if (a[2]+0 > b[2]+0) c++} END{print c+0}')
+    echo "fires=${n:-0} held=${h:-0}"
+}
+
+chk_trunc_struct() {   # 0=绿 · 1=缺陷复现（判据有牙）· 4=ANOMALY（前提不成立）· 5=构建失败
+    build "$WORK/handover.px" handover || return 5
+    env PX_GC_STRESS=1 PX_GC_FORCE_AT_POP=1 timeout 300 "$BIN_HO" > "$WORK/popcoll.out" 2>&1
+    local st n h
+    st="$(popcoll_stats)"
+    n="${st#fires=}"; n="${n%% *}"
+    h="${st##*held=}"
+    note "结构性判据：$st（fires=强制收集次数 · held=收缩时根栈仍持有返回值的次数）"
+    # 前提断言：钩子必须在**本次运行里真的触发过**（取不到 ≠ 没有 · 口径 14）
+    [ "${n:-0}" -ge 1 ] || return 4
+    # 症状断言：收缩发生时返回值必须仍在根面
+    [ "${h:-0}" -ge 1 ] || return 1
+    grep -q '^HANDOVER OK$' "$WORK/popcoll.out" || return 1
+    return 0
 }
 
 # ───────────────────────── 正判据 ─────────────────────────
@@ -230,15 +300,24 @@ fi
 hdr "⑤ 根栈峰值有界（延迟收缩不得退化成泄漏）"
 if chk_peak; then note "峰值 ≤ 64 ✓"; else bad "根栈峰值超限或运行失败"; fi
 
-# ───────────────────────── 负控 ─────────────────────────
-PATCH_A='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-new="""    g_px_trunc_pending = mark;
-    gc_unblock_stop(&old);"""
-old="""    g_px_roots_n = mark;
-    gc_unblock_stop(&old);"""
-assert new in s, "anchor A"
-open(p,"w",encoding="utf-8").write(s.replace(new,old,1)); print("PATCH-A-OK")'
+# ── M354：②b 缺陷 197 的**结构性**判据（判据自己也要有牙，且牙由结构造）──
+hdr "②b 缺陷 197 结构性判据（M354）：收缩点强制收集 ⇒ 根栈必须仍持有返回值"
+restore_all; snapshot
+if python3 -c "$PATCH_HOOK" >/dev/null 2>&1; then
+    chk_trunc_struct; rc=$?
+    case "$rc" in
+      0) note "收缩点强制收集下仍 HANDOVER OK，且每次收集时 roots_n > mark ✓";;
+      4) bad "[②b] ANOMALY：强制收集钩子**一次都没触发**（前提不成立）⇒ 判据不可判（装置侧，非产品红、非绿）";;
+      5) bad "[②b] 构建失败（钩子补丁后建不出 handover）";;
+      *) bad "[②b] 缺陷 197 复现：收缩发生时返回值已不在根面（roots_n == mark）";;
+    esac
+else
+    bad "[②b] 钩子补丁锚点未命中（`g_px_trunc_pending = mark;` 那处，可能被重构移动）"
+fi
+restore_all
 
+# ───────────────────────── 负控 ─────────────────────────
+# ⚠️ M354：负控 A 的补丁与判据在**上方**（`PATCH_A_ST` / `chk_trunc_struct`，结构性形态）。
 PATCH_B='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
 n1="""    px_root_push_keep(l);
     if (st == 200) {"""
@@ -275,13 +354,18 @@ s=s.replace(n1,o1,1).replace(n2,o2,1).replace(n3,"",1)
 open(p,"w",encoding="utf-8").write(s); print("PATCH-D-OK")'
 
 negcase() {   # $1=标题 $2=python 补丁 $3=应判红的判定函数
-    local title="$1" patch="$2" fn="$3"
+    local title="$1" patch="$2" fn="$3" rc
     restore_all; snapshot; BUILD_FAIL=0
     if ! python3 -c "$patch"; then bad "$title：补丁锚点未命中"; restore_all; return; fi
-    if "$fn"; then
-        bad "$title ⇒ **未判红**（负控失效：该处并非本门覆盖的根因）"
-    elif [ "$BUILD_FAIL" = "1" ]; then
+    "$fn"; rc=$?
+    # M354：判定函数返回 4 = **前提不成立（ANOMALY）** —— 装置没把现场造出来，
+    #   既不能记成「判红 ✓」（那是自欺），也不能记成「负控失效」（会把装置问题算到产品头上）。
+    if [ "$rc" -eq 4 ]; then
+        bad "$title ⇒ **ANOMALY（前提不成立）**：结构性构造未发生 ⇒ 本次不可判（装置侧）"
+    elif [ "$rc" -eq 5 ] || [ "$BUILD_FAIL" = "1" ]; then
         bad "$title ⇒ **构建失败**（判红原因不是本缺陷 ⇒ 负控无效，等于没验证）"
+    elif [ "$rc" -eq 0 ]; then
+        bad "$title ⇒ **未判红**（负控失效：该处并非本门覆盖的根因）"
     else
         note "$title ⇒ 判红 ✓"
     fi
@@ -292,7 +376,7 @@ if [ "$NEG_SKIP" = "1" ]; then
     hdr "⑥ 负控：--neg-skip（CI 用）⇒ 跳过"
 else
     hdr "⑥ 负控 3 道（各自独立判红 + 源逐字节还原）"
-    negcase "负控 A · px_root_pop 退回「立即收缩」（恢复缺陷 197）" "$PATCH_A" chk_197
+    negcase "负控 A · px_root_pop 退回「立即收缩」（恢复缺陷 197）· **结构性**（强制收集 + 根栈非空断言）" "$PATCH_A_ST" chk_trunc_struct
     negcase "负控 B · bi_s3_list 去掉 push/KEEP/pop（恢复缺陷 198）"  "$PATCH_B" chk_198
     negcase "负控 C · px_root_keep 去掉「待收缩应用」（根栈泄漏）"     "$PATCH_C" chk_peak
     negcase "负控 D · bi_px_exec 去掉 env/srv 登记（恢复缺陷 199）"    "$PATCH_D" chk_199

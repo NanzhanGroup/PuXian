@@ -41,8 +41,8 @@
 | 612 | m295_quic_slot 末行 | 门内 `失败 N 项` 时末行仍印 `M295-VERIFY-OK` | **末行措辞与 rc 不同向**（缺陷 506 家族第 N 次）：旧代码 `printf '…M295-VERIFY-OK · 通过 P 项 · 失败 F 项'` 后无条件打印，先印结论再判 F。**这次没造成假绿纯属侥幸** —— 靠 `run_gates` 的末行裁决规则（「失败优先」正则命中 `失败 [1-9]`）兜住；任何只读 banner 不看 `失败 N` 的消费者都会被骗 | M350 改为**先判后印**：`FAIL=0` 才印 `M295-VERIFY-OK`，否则印 `M295-VERIFY-FAIL`（含「异常 N 项」）。负控：本轮 [6] 的前提断言一旦触发即走 FAIL 分支 |
 | 617 | V5 负控装置 `m352_v5_negctl.sh` A 段（**判据整治自己的装置**） | 首跑输出 `A_BAD_COUNT=0 · A_VERDICT=ALL-GREEN`（判「无门判红」），而 `shard2.log:107` 明写 m267_perf ❌ rc=1 555s ⇒ **把「判据有牙」误报成「装置无牙」** | 统计 glob 写 `"$BASE"/shard*.log`，shard_run 的实际落点是 `"$BASE"/shard-<ts>/shard*.log` ⇒ glob 恒空 ⇒ 计数恒 0。**取不到 ≠ 没有**：把「通道不存在」当成了「事实为零」 | 统计改 `"$BASE"/shard-*/shard*.log`，并在产物缺失时**判死**（MISSING-ARTIFACT）而非计 0；`A-verdict.txt` 保留勘误原文（首跑值 / 修正值 / 依据行号）。修正后 `A_VERDICT_FIXED=RED-OK` |
 | 618 | **判据装置自己** `packaging/chain/shard_gate_verdict.sh --self-test`（每个分片都跑） | 负载下假红：`1/20`（原始脚本）· `4/60`（48 路 CPU 负载复跑）；报「S1 门数平衡判据被删/改窄」而同一 `$code` 里 `grep -cF 'TG + TR'` 明明数到 **2 处**；NC8 报「理由里没有 VERDICT=GREEN」而那行就在输出里 | **`set -o pipefail` + 上游写失败**：`printf '%s\n' "$x" \| grep -qF -- "$needle"`，`grep -q` 命中即退出 ⇒ 上游 `printf` 写管道失败返回 **1**（实测 `PIPESTATUS=(1 0)`，不是 141）⇒ `pipefail` 让整条管道非 0 ⇒ 判据把「命中」读成「未命中」。只在负载下出现（写/读的调度交错被拉长） | 取证一律走 **here-string**（无上游进程，`pipefail` 无从污染）；`match()` 把 **0 命中 / 1 未命中 / 2 取证工具失败** 分三态，工具失败单列报「取证工具失败（非结论）」（口径 14）；静态段**抽取走文件**并加 **S0 前提断言**（抽不到函数体 ⇒ `EXTRACTION-FAIL`，不许静默变成「判据被删」）。负控 3/3：改窄 `TG + TR` ⇒ S1 必红；删函数定义 ⇒ S0 必红；假 `grep`（exit 3）⇒ 三态分离生效。修后同一 48 路负载下 **0/150** |
-| 619 | m256_eintr 负控 B（撤回 `bi_udp_recv` 包装） | 分片负载下 r2 红：`判据用尽预算：总迭代 12 次 · 可判 12 次 · 命中 0` ⇒ `FAIL [6B] 未按预期判红`；同轮 [7] 源逐字节还原 ✓、负控 A/C/D 全 PASS | **观测窗口 < 现象的随机性**（口径 5）：负控要等「包装撤掉后 recv 走错路」显形，负载把 12 次可判迭代里的时间片压满 ⇒ 故障窗口内一次都没走到。**不是产品回归**（EINTR 计数与源还原都干净） | 本轮登记；修法（下一轮）：负控 B 改**结构性**（并发持握 + 确定性注入，口径 13），并**断言可判次数下限**（`可判 < N_min` ⇒ 报 PREMISE-FAIL/UNKNOWN，**不许**报产品红，也不许报绿） |
-| 620 | 发布装置（GitHub Actions `Release` job） + M352 的 latest 自证装置 | `v0.2.352` 的 tag 与 main 都推了，但 `releases/latest` 一直是 `v0.2.351`；M352-LATEST 装置只写 `LATEST-VERDICT=PENDING`，**不报警**（park 探针照样满足 ⇒ 「发布没发出去」静默 3h） | ① `Release` 的 `release` job `timeout-minutes: 30`，而 `actions/checkout`（`fetch-depth: 0`）在 runner 上跑满 **30:04** 被 cancelled（17:10:45 → 17:40:49），后续 steps 全 skipped；② 自证装置把 **PENDING 当正常终态**写盘，`DONE` 照写 ⇒ 下游只看见「DONE」 | ① 已 `rerun-failed-jobs`（attempt 2）并盯到 `releases/latest == v0.2.352`；② 自证装置判据改「PENDING + 超过 T ⇒ 报 BLOCKED（非 DONE）」，`DONE` 只在拿到确定结论时写（口径 11/14：取不到 ≠ 没有，未证 ≠ 通过） |
+| 619 | m256_eintr 负控 B（撤回 `bi_udp_recv` 包装） | 分片负载下 r2 红：`判据用尽预算：总迭代 12 次 · 可判 12 次 · 命中 0` ⇒ `FAIL [6B] 未按预期判红`；同轮 [7] 源逐字节还原 ✓、负控 A/C/D 全 PASS | **观测窗口 < 现象的随机性**（口径 5）：负控要等「包装撤掉后 recv 走错路」显形，负载把 12 次可判迭代里的时间片压满 ⇒ 故障窗口内一次都没走到。**不是产品回归**（EINTR 计数与源还原都干净） | 本轮登记；修法（下一轮）：负控 B 改**结构性**（并发持握 + 确定性注入，口径 13），并**断言可判次数下限**（`可判 < N_min` ⇒ 报 PREMISE-FAIL/UNKNOWN，**不许**报产品红，也不许报绿）｜**M354 已修**：探针新增 `M256_PROBE_INTR=1` 结构性注入（SIGUSR1 + 自装处理器 + `SO_RCVTIMEO` ⇒ 与 GC 的 `SIG_GC_STOP` 走**同一条**「永不重启」内核路径），150ms 后每 5ms 一发、覆盖全程；`neg_any` 增加**前提断言**（每轮必须看到 `M256-INTR-HANDLED≥1`）+ **可判次数下限**（默认 `N_min=3`，不足返回 3 = `PREMISE-FAIL`，门红但措辞与产品回归分开）。实测：同一形态从「可判 12 次 · 命中 0」变成**第 1 次可判即命中**；负控自伤回放（`M256_NEG_SELFTEST=1`）2/2：无故障+N_min=2 ⇒ rc=1（产品红）、N_min=999 ⇒ rc=3（PREMISE-FAIL） |
+| 620 | 发布装置（GitHub Actions `Release` job） + M352 的 latest 自证装置 | `v0.2.352` 的 tag 与 main 都推了，但 `releases/latest` 一直是 `v0.2.351`；M352-LATEST 装置只写 `LATEST-VERDICT=PENDING`，**不报警**（park 探针照样满足 ⇒ 「发布没发出去」静默 3h） | ① `Release` 的 `release` job `timeout-minutes: 30`，而 `actions/checkout`（`fetch-depth: 0`）在 runner 上跑满 **30:04** 被 cancelled（17:10:45 → 17:40:49），后续 steps 全 skipped；② 自证装置把 **PENDING 当正常终态**写盘，`DONE` 照写 ⇒ 下游只看见「DONE」 | ① 已 `rerun-failed-jobs`（attempt 2）并盯到 `releases/latest == v0.2.352`；② 自证装置判据改「PENDING + 超过 T ⇒ 报 BLOCKED（非 DONE）」，`DONE` 只在拿到确定结论时写（口径 11/14：取不到 ≠ 没有，未证 ≠ 通过）｜**M354 已修（两半都修）**：① 入库装置 `packaging/latest_verify.sh`（三态 OK/STALE/**BLOCKED**，`LV_DEADLINE_SEC` 上限 30min）+ 负控 `packaging/latest_verify_negctl.sh` **6/6**（伪造 tag 不发 Release ⇒ BLOCKED；有 Release 但 latest 指旧版 ⇒ STALE；latest == 期望 ⇒ OK；取不到 API ⇒ BLOCKED，**不许** OK）；② `release_guard.sh` 的 latest 段改为只调该装置并做映射（OK/STALE/**其余⇒VERDICT=BLOCKED exit 3**），删掉「40 次 PENDING 跑完照写 GREEN」的老路 |
 
 ## 二 从这 6 条抽出的四条口径（可直接当 review checklist）
 
@@ -298,3 +298,24 @@ printf '%s\n' "$code" | grep -qF -- 'TG + TR'      # set -o pipefail 下
 
     附带一条工程细节：修法要**顺手把诊断留在产物里**（本轮 `S0 函数体抽取成功（sz=3300）`、
     `[diag ps=[1 0] rc=1]`）—— 否则下一轮再红，还是得重新造一次负载才能看清。
+
+### 二·补 M354：第 16 条口径 —— **装置的「不利状态」用结构造，并给它一个第三态**
+
+619 / 620 是同一条病根的两种脸：**判据在等一件概率事件，而装置没把现场造出来**（口径 13 的正面）。
+
+```
+619  m256 负控 B：等「GC 的 STW 恰好打断阻塞中的 recvfrom」⇒ 分片负载下 可判 12 次 / 命中 0
+     而它不是产品回归（同轮 EINTR 计数与源还原都干净），也不是判据没牙 —— 是**装置没造现场**。
+620  latest 自证：等「Release 自己出来」⇒ 40 次轮询全 PENDING，装置把 PENDING 当终态写 GREEN/DONE。
+```
+
+16. **结构性构造 + 前提断言 + 第三态**（三件必须同时存在，缺一件就会退化）：
+    - **构造**：把「概率事件」换成「确定性事件」——619 用**受管信号**在阻塞窗口内反复投递
+      （与 GC 的 `SIG_GC_STOP` 同一个 EINTR 内核路径）；m183 负控 A 在缺陷暴露点
+      （`px_root_pop` 出口）**强制一次完整收集**，把「收缩时根栈是否仍持有」变成可断言的事实；
+    - **前提断言**：每轮都必须自证「现场真的造出来了」（`M256-INTR-HANDLED≥1` · `fires≥1`），
+      造不出来报 **PREMISE-FAIL / ANOMALY**（门红，但措辞必须与「产品回归」分开）；
+    - **第三态**：判据只许输出 **通过 / 不通过 / 前提不成立**，第三态既不冒充红也不冒充绿；
+      负控自己也要有负控（`M256_NEG_SELFTEST=1` 回放 N_min 抬高 ⇒ 必 rc=3）。
+    - 附带：把「PENDING / 取不到 / 轮询超时」这类**中间态**与终态**分开编号**（620）——
+      中间态写进日志，**终态才写结论行**；装置的超时必须给出**下一步动作**，不能只写「阻塞了」。
