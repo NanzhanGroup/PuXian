@@ -81,7 +81,7 @@ elif [ "$TVER" != "${TVER%%-*}" ]; then  # 旧形态 v<ver>-m<里程碑>（历�
     #   ⇒ 宁可让 Release 红（可见、可查、不扩散），也不要把污染包名推出去（静默、难查）。
     #   ⚠ 判据用**完整锚定正则**（不用 glob）：首版写 `case … in m[0-9]*`，而 glob 的 `*`
     #     匹配任意串 ⇒ `m245s1` 也命中 ⇒ 闸门形同虚设（自测当场照出）。
-    if ! printf '%s' "$MILESTONE" | grep -qE '^m[0-9]+$'; then
+    if ! grep -qE '^m[0-9]+$' <<< "$MILESTONE"; then
         echo "❌ tag 命名不合规：$TAG ⇒ MILESTONE='$MILESTONE'（规则: v<主版本>-m<里程碑>，无补丁后缀）" >&2
         echo "   后果：rpm 包名会被污染成 puxian-$VER-1.$MILESTONE.el<dist>.x86_64.rpm ⇒ 镜像同步停摆。" >&2
         echo "   整改：把**合规 tag** 重定向到该里程碑最终提交 —— packaging/make_tag.sh --move" >&2

@@ -84,8 +84,8 @@ cp "$ARM_SRC/libz.a" "$ZLIB_DIR/lib-aarch64/libz.a"
 echo "== 架构校验 =="
 TMPC="$(mktemp -d)"
 ( cd "$TMPC" && ar x "$ZLIB_DIR/lib/libz.a" crc32.o && \
-  file crc32.o | grep -q 'x86-64' && echo "x86_64 版: OK" )
+  grep -q 'x86-64' <<< "$(file crc32.o)" && echo "x86_64 版: OK" )
 ( cd "$TMPC" && ar x "$ZLIB_DIR/lib-aarch64/libz.a" crc32.o && \
-  file crc32.o | grep -q 'aarch64' && echo "aarch64 版: OK" )
+  grep -q 'aarch64' <<< "$(file crc32.o)" && echo "aarch64 版: OK" )
 rm -rf "$TMPC" "$TMP"
 echo "== 完成：$ZLIB_DIR/{lib,lib-aarch64,include} =="

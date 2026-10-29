@@ -255,7 +255,7 @@ EOF
 if [ "$DRY" = 1 ]; then say "── 将对 $HOST:$PORT 执行（--dry-run）──"; say "$REMOTE"; exit 0; fi
 
 say "── [0] 连通性 + 远端工作目录 ──"
-if ! "${SSH[@]}" "mkdir -p '$RDIR' && echo READY" 2>/dev/null | grep -q READY; then
+if ! grep -q READY <<< "$("${SSH[@]}" "mkdir -p '$RDIR' && echo READY" 2>/dev/null)"; then
   ck "[0] SSH 可达（$HOST:$PORT）" 0; say ""; say "REALHOST-SMOKE-FAIL（连不上）"; exit 1
 fi
 ck "[0] SSH 可达（$HOST:$PORT）" 1

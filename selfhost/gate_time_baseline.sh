@@ -54,7 +54,7 @@ if [ "$CHECK" = 1 ]; then
         case "$g" in ''|'#'*) continue ;; esac
         # 秒数允许 0（一批门是亚秒级 —— 实测 `check_defect_refs`/`gate_registry` 等就是 0s，
         # 把它们判成「形态错」是判据自己太窄）
-        if ! printf '%s' "$s" | grep -qE '^[0-9]+$'; then
+        if ! grep -qE '^[0-9]+$' <<< "$s"; then
             echo "❌ 形态错：$g 的秒数不是非负整数（「$s」）" >&2; bad=$((bad+1))
         fi
         [ -n "${st:-}" ] || { echo "❌ 形态错：$g 缺状态列" >&2; bad=$((bad+1)); }

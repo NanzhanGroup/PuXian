@@ -309,7 +309,7 @@ if [ "${PX_GATE_LOCK_HELD:-0}" != "1" ]; then
     _pgo="$(cat "$_PGK" 2>/dev/null || true)"
     if [ -n "$_pgo" ] && [ "$_pgo" != "$$" ] && kill -0 "$_pgo" 2>/dev/null \
        && { [ ! -r "/proc/$_pgo/cmdline" ] \
-            || tr '\0' ' ' < "/proc/$_pgo/cmdline" | grep -qE 'verify\.sh|run_gates\.sh|m116_gates\.sh'; }; then
+            || grep -qE 'verify\.sh|run_gates\.sh|m116_gates\.sh' <<< "$(tr '\0' ' ' < "/proc/$_pgo/cmdline")"; }; then
         echo "❌ 有一扇门单跑着（PID $_pgo）—— 全量门与它并发会互相踩掉负控还原，拒绝启动"
         echo "   ⇒ 等它结束；锁文件 ${_PGK}（陈旧时删掉即可，脚本自身也会自愈）"
         exit 1

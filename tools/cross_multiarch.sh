@@ -137,8 +137,8 @@ ok=1
 ( cd "$CHK" && ar x "$MBED_DIR/libmbedcrypto.a" "$(ar t "$MBED_DIR/libmbedcrypto.a" | head -1)" \
     && file *.o > "$CHK/.file.out" && grep -qE "$FILE_RE" "$CHK/.file.out" ) || { echo "mbedtls 架构不符"; ok=0; }
 ( cd "$CHK" && ar x "$ZLIB_DIR/libz.a" crc32.o \
-    && file crc32.o | grep -qE "$FILE_RE" ) || { echo "zlib 架构不符"; ok=0; }
-file "$SQLITE_OBJ" | grep -qE "$FILE_RE" || { echo "sqlite3 架构不符"; ok=0; }
+    && grep -qE "$FILE_RE" <<< "$(file crc32.o)" ) || { echo "zlib 架构不符"; ok=0; }
+grep -qE "$FILE_RE" <<< "$(file "$SQLITE_OBJ")" || { echo "sqlite3 架构不符"; ok=0; }
 rm -rf "$CHK"
 [ "$ok" = 1 ] || { echo "错误: 产物架构校验失败" >&2; exit 1; }
 echo "== 完成：三件套就绪（arch=$ARCH）=="

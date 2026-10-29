@@ -62,7 +62,7 @@ UPSTREAM_REV="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown
 #   规则：只在 userinfo **含 `:`**（= 带口令/token）时剥离；纯 `user@`（如 `git@github.com`）保留原样。
 UPSTREAM_URL_RAW="$(git -C "$SRC" config --get remote.origin.url 2>/dev/null || echo unknown)"
 UPSTREAM_URL="$(printf '%s' "$UPSTREAM_URL_RAW" | sed -E 's|^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]*:[^@/]*@|\1|')"
-if printf '%s' "$UPSTREAM_URL" | grep -qE '(github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|glpat-|x-access-token:|:[^@/]*@)'; then
+if grep -qE '(github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|glpat-|x-access-token:|:[^@/]*@)' <<< "$UPSTREAM_URL"; then
     echo "错误: 上游 URL 清洗后仍呈凭据形状 ⇒ 拒绝写出 THIRD_PARTY.md（缺陷 488 守卫）" >&2
     echo "      处置: 在源检出里执行  git remote set-url origin <不含凭据的 URL>" >&2
     echo "      或改用  git clone https://github.com/<owner>/<repo>.git  （凭据走 credential helper）" >&2

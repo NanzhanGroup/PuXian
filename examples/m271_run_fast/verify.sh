@@ -199,7 +199,7 @@ if [ "$NEG" = 1 ] && [ "$NEG_SKIP" = 0 ]; then
         if ! bash -n "$PX" 2>/dev/null; then echo "  ⚠️ [7-$1] 语法错（负控无效）"; FAIL=$((FAIL+1)); cp "$SRC_SNAP" "$PX"; chmod +x "$PX"; return; fi
         out="$(bash "$0" --neg-skip 2>&1)"
         cp "$SRC_SNAP" "$PX"; chmod +x "$PX"
-        printf '%s' "$out" | grep -q '❌' && echo "  ✅ [7-$1] 判红（有牙）" || { echo "  ❌ [7-$1] 未判红（无牙）"; FAIL=$((FAIL+1)); }
+        grep -q '❌' <<< "$out" && echo "  ✅ [7-$1] 判红（有牙）" || { echo "  ❌ [7-$1] 未判红（无牙）"; FAIL=$((FAIL+1)); }
     }
     # A 撤回「先判源码」⇒ 子集外脚本被编译 ⇒ [3.2]/[3.6] 必红
     neg "A-先判源码" 's#if ! viol="\$(run_subset_ok "\$abs")"; then#if false; then#'

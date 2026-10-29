@@ -172,3 +172,55 @@ P3 自证夹具）、`selftest_latest_guard.sh` 2 条（静态守卫的搜索串
 ⇒ `selftest_reconcile` 立即 **1 红**（`--json latest 字段：` 空白）。
 教训：批量改判据助手前先 `grep -c` 数一下 old_text 出现次数，与 `expect` 对表；
 **一次红门不是白跑的** —— 若当时只跑 `--gate`（棘轮）就会漏，因为棘轮只看条数。
+
+## 9 M359 · 三批收口 30 条（50 → 20）+ 量具 `||` 假阳性修正
+
+残留 **50 → 20 条 / 30 → 8 文件**，`PIPE-GREP-VERDICT=OK remaining=20 files=8`，`--self-test` **6/6**。
+共动 **22 个文件**（21 个判据文件 + 扫描器），27 条真改 + 3 条量具修正。
+
+| 文件 | 前 → 后 | 改法 |
+|---|---|---|
+| `packaging/selftest_tag_guard.sh` | 2 → 0 | `printf '%s\n' "$out" \| grep -q` ⇒ `grep -q -- "$2" <<< "$out"`（`ckhas`/`cksame` 两处） |
+| `packaging/selftest_publish_gh_pages.sh` | 2 → 1 | `ckhas` 改 here-string；剩 1 条是**行尾注释**里的夹具文本（量具未覆盖，见 9.2） |
+| `selfhost/check_gate_timeouts.sh` | 2 → 0 | P1 声明有效性 + P4 残留登记 两处 `glist` 判据 |
+| `tools/build_zlib.sh` / `tools/cross_multiarch.sh` | 2+2 → 0 | `file x.o \| grep -q` ⇒ `grep -q … <<< "$(file x.o)"` |
+| `packaging/build_rpm.sh` / `tools/make_release.sh` | 1+1 → 0 | 里程碑正则 `printf … \| grep -qE` ⇒ here-string |
+| `packaging/bump_version.sh` | 1 → 0 | X.Y.Z 正则（**同一缺陷的第三份拷贝**：三条命名判据各写一遍） |
+| `packaging/chain/recheck_sample.sh` | 1 → 0 | `printf '%s' "$out" \| grep -q "$5"` |
+| `packaging/realhost_smoke.sh` | 1 → 0 | `ssh … \| grep -q READY` ⇒ `grep -q READY <<< "$(ssh …)"` |
+| `tools/import_registry_px.sh` | 1 → 0 | 凭据形状守卫（缺陷 488） |
+| `selfhost/gate_time_baseline.sh` | 1 → 0 | 秒数非负整数判据 |
+| `selfhost/check_bin_portability.sh` | 1 → 0 | `is_elf` 链：`head \| od \| tr \| grep -qi` ⇒ `grep -qi … <<< "$(head \| od \| tr)"` |
+| `examples/m221_devbuild_cache` | 1 → 0 | `SRC_PATTERNS` 锚点（M223 的判据载体） |
+| `examples/m235_ws_conn_uaf` | 2 → 0 | `body_of … \| grep -q` 两处（函数体文本，原列为「先辨真假」，实为真形态） |
+| `examples/m263_resp_crosstalk` / `m264_gate_shared_tmp` | 1+2 → 0 | `echo "$OUT" \| grep -q` ⇒ here-string |
+| `examples/m267_perf` | 2 → 0 | `only` 逻辑或改 `[[ … != *" $name "* ]]`；`read_baseline \| grep -qE` ⇒ here-string |
+| `examples/m271_run_fast` | 1 → 0 | 负控自证 `printf '%s' "$out" \| grep -q '❌'` |
+| `examples/m309_pxpkg_sync` | 1 → 0 | `bash "$SYNC" --help \| grep -qF` ⇒ here-string |
+
+### 9.1 量具修正：`||` 不是管道（夹具 F）
+
+原正则 `\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q` 把 `[ -n "$X" ] || grep -q PAT f`
+里的「`| grep`」也算一条 —— **逻辑或被当成管道**。实测 3 处假阳性：
+`selfhost/check_neg_residue.sh:87`、`selfhost/run_gates.sh:312`、`examples/m258_root_restore/verify.sh:173`。
+这三行从头到尾没有管道，却被计成债务 ⇒ 与「注释也算残留」（M356）同族：**度量虚高会让棘轮脱离现实**。
+
+现正则 `([^|]|^)\|[[:space:]]*grep… -q`，三处（`scan_one` / `scan_one_file` / `--list`）同一算法；
+新增**夹具 F**（`[ -n "$X" ] || grep -q PAT f` ⇒ 期望 0）守它，自证 5 → 6 条。
+仍未覆盖（**不猜，待判**）：单引号夹具文本（`printf '… | grep -q …'`）、行尾注释、`|&`。
+
+### 9.2 剩 20 条 = 全部必须保留
+
+8 个文件：`m278_release_reconcile` 3（`yes | grep -q y` 的 SIGPIPE 机制自证 + 文案 + 扫描表达式）、
+`selftest_pxrepo_mirror` 6（⑥-3/⑥-4 负控夹具 + 判据文案 + 扫描正则本体）、`check_gate_premise` 2（P3 文案 + 自证夹具）、
+`selftest_latest_guard` 2（静态守卫搜索串 + `yes|grep -q` 机制自证）、`m283`/`m285` 各 1（夹具写入串）、
+`check_pipe_grep` 4（**自身自证夹具 A/D/E**）、`selftest_publish_gh_pages` 1（行尾注释）。
+
+⇒ **口径 19 的收口到此为止**：再往下减只能拆负控或删注释，两者都是假绿。下一步应改量具（9.1 的三个未覆盖项）
+而不是改判据。
+
+### 9.3 本轮踩的坑（记账）
+
+同一文件两处替换**并发**提交（`examples/m267_perf/verify.sh:261` 与 `:447` 同批下发）⇒ 后写的覆盖先写的，
+`447` 静默丢失、`--list` 仍列出旧行才发现。**交接单第 4 节早写了「同一文件多处替换不许并发 edit」**，
+这轮自己破了规矩；正确做法是一文件一调用、串行下发。

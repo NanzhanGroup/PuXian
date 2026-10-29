@@ -63,7 +63,7 @@ max_glibc_of() {   # $1=ELF → 打印最高 GLIBC_x.y（取不到则空）
     esac
 }
 ver_le() { [ "$1" = "$2" ] && return 0; [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$2" ]; }
-is_elf()  { head -c 4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n' | grep -qi '^7f454c46'; }
+is_elf()  { grep -qi '^7f454c46' <<< "$(head -c 4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')"; }
 elf_machine() { readelf -h "$1" 2>/dev/null | sed -n 's/^ *Machine: *//p' | head -1; }
 
 arch_ok() {   # $1=readelf Machine 文本 $2=想要的架构名
