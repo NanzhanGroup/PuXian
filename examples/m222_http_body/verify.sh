@@ -69,8 +69,8 @@ chk_post() {   # $1=行 $2=期望种类（mem|spill）$3=期望字节数
     [ "${M222_JUDGE_BLIND:-0}" = "1" ] && return 0
     local line="$1" kind="$2" n="$3"
     case "$kind" in
-      mem)   echo "$line" | grep -q "len=$n " ;;                       # 体在内存且长度对
-      spill) echo "$line" | grep -q 'len=null ' && echo "$line" | grep -q "body_size=$n" ;;
+      mem)   grep -q "len=$n " <<< "$line" ;;                       # 体在内存且长度对
+      spill) grep -q 'len=null ' <<< "$line" && grep -q "body_size=$n" <<< "$line" ;;
     esac
 }
 
@@ -96,7 +96,7 @@ cg "落盘档 body 给 null"      'px_dict_set(req, "body", px_null());'
 cg "落盘档给 body_size"       'px_dict_set(req, "body_size", px_int((int64_t)body_size));'
 # ⚠️ 这条判据要**限定在 px_serve 的落盘分支**内：`runtime.c` 别处（http_serve 那条
 #    `body_buf ? px_str_len(...) : px_str("")`）**合法**地写着同样一串 —— 全局 grep 会假红。
-if grep -A1 'if (body_tmp_path\[0\]) {' "$RC" | grep -q 'px_str("")'; then
+if grep -q 'px_str("")' <<< "$(grep -A1 'if (body_tmp_path\[0\]) {' "$RC")"; then
     bad "旧的『落盘 ⇒ 空串』（**仍在** px_serve 落盘分支内）"
 else
     note "✅ 旧的『落盘 ⇒ 空串』已不在（px_serve 落盘分支内）"
@@ -210,7 +210,7 @@ python3 -c "import sys;sys.stdout.buffer.write(b'B'*2048)" > "$W/mid.bin"
 want=$(sha256sum "$W/mid.bin" | cut -c1-64)
 r=$(curl -s -X POST --data-binary @"$W/mid.bin" "http://127.0.0.1:$PORT/thr" --max-time 30)
 note "阈值=1024, CL=2048 → $r"
-if chk_post "$r" spill 2048 && echo "$r" | grep -q "file_sha=$want"; then
+if chk_post "$r" spill 2048 && grep -q "file_sha=$want" <<< "$r"; then
     note "✅ 阈值可覆盖，且落盘内容与请求体一致"
 else
     bad "阈值覆盖未生效或内容不符：$r（期望 file_sha=$want）"

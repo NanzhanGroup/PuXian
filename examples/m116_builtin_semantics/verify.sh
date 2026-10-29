@@ -39,7 +39,7 @@ echo "== M116 验证（PuXian 缺陷集 D2/D4/D5/D6/D7）=="
 # ---------- ① D4/D6/D2 守卫：双轨 ----------
 echo "[1/6] 双轨语义断言（$DIR/m116_semantics.px）"
 ./tools/px run "$DIR/m116_semantics.px" > "$TMP/i.log" 2>&1; rc_i=$?
-if [ $rc_i -eq 0 ] && tail -1 "$TMP/i.log" | grep -q 'M116_SEMANTICS:.*0F'; then
+if [ $rc_i -eq 0 ] && grep -q 'M116_SEMANTICS:.*0F' <<< "$(tail -1 "$TMP/i.log")"; then
     ok "解释轨（px run）：$(tail -1 "$TMP/i.log")"
 else
     bad "解释轨失败 rc=$rc_i"; tail -12 "$TMP/i.log"
@@ -47,7 +47,7 @@ fi
 ./tools/px build "$DIR/m116_semantics.px" > "$TMP/b.log" 2>&1
 if [ -x "$DIR/build/m116_semantics" ] &&
    ./"$DIR/build/m116_semantics" > "$TMP/c.log" 2>&1 &&
-   tail -1 "$TMP/c.log" | grep -q 'M116_SEMANTICS:.*0F'; then
+   grep -q 'M116_SEMANTICS:.*0F' <<< "$(tail -1 "$TMP/c.log")"; then
     ok "编译轨（px build，VM 默认轨）：$(tail -1 "$TMP/c.log")"
 else
     bad "编译轨失败"; tail -12 "$TMP/c.log" 2>/dev/null; tail -5 "$TMP/b.log"
@@ -288,8 +288,8 @@ else
     [ "$_m116_port_hi" -lt 21000 ] && _m116_port_hi=21000
     _m116_port_span=$(( _m116_port_hi - 20000 + 1 ))
     _m116_port_free() {  # $1=port ⇒ 0=空闲（无 LISTEN、无 TIME_WAIT）
-        ss -H -ltn "sport = :$1" 2>/dev/null | grep -q . && return 1
-        ss -H -tan "sport = :$1" 2>/dev/null | grep -q . && return 1
+        grep -q . <<< "$(ss -H -ltn "sport = :$1" 2>/dev/null)" && return 1
+        grep -q . <<< "$(ss -H -tan "sport = :$1" 2>/dev/null)" && return 1
         return 0
     }
     _m116_pick_port() {
