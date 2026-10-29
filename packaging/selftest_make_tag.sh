@@ -218,8 +218,16 @@ chk "Q4 夹具里零 rpm/仓库产物" \
 
 # Q5 ★负控：拆掉两处判据 ⇒ Q3/Q4 的「拦下」必须消失（证明判据有牙）
 MR_STUB="$TMP/mrel_stub.sh"; RPM_STUB="$TMP/brpm_stub.sh"
-sed 's|^if \[ "\$MILESTONE" != "dev" \] && ! printf .*|if false; then : # NEGCTL-Q5|' "$MREL" > "$MR_STUB"
-sed 's|^    if ! printf .*|    if false; then : # NEGCTL-Q5|' "$RPM_SH" > "$RPM_STUB"
+# ⚠ M359 教训：旧锚点绑死在 `printf '%s' … | grep -qE` 这个**写法**上，判据从管道改 here-string
+#   （`grep -qE '^m[0-9]+$' <<< "$MILESTONE"`）后锚点静默命中 0 ⇒ 负控失牙、只剩下面两条 chk 报红。
+#   ⇒ 锚点改成按**判据语义**定位：行首是 if、行内含固定串 `^m[0-9]+$`；与 printf/管道/here-string 形态无关。
+stub_gate() {   # $1=源文件 $2=输出  —— 把含里程碑判据的那一行 if 整体换成 if false
+    awk 'index($0,"^m[0-9]+$")>0 && /^[[:space:]]*if[[:space:]]/ {
+             match($0,/^[[:space:]]*/); printf "%sif false; then : # NEGCTL-Q5\n", substr($0,1,RLENGTH); next }
+         { print }' "$1" > "$2"
+}
+stub_gate "$MREL"   "$MR_STUB"
+stub_gate "$RPM_SH" "$RPM_STUB"
 chk "Q5 make_release 打桩点命中" "$(grep -c 'NEGCTL-Q5' "$MR_STUB")" "1"
 chk "Q5 build_rpm 打桩点命中"    "$(grep -c 'NEGCTL-Q5' "$RPM_STUB")" "1"
 bash -n "$MR_STUB" || bad "Q5 make_release 打桩后语法错"
