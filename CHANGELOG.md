@@ -34,9 +34,27 @@
 
 明细在 `docs/M355_PIPE_SWEEP.md` §4.1。
 
-### 四 全量门（待回填）
+### 四 全量门：绿 236 / 红 0（一轮即绿）
 
-### 五 发布（待回填）
+链 `chain-m356-20261029-181453-2717841`，head `ceeda7d`，8 分片 + quiet 档 10 门串行。
+
+| 分片 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | quiet |
+|---|---|---|---|---|---|---|---|---|---|
+| 绿/红 | 25/0 | 26/0 | 29/0 | 29/0 | 29/0 | 28/0 | 30/0 | 30/0 | 10/0 |
+
+合计：**绿 236 · 红 0（门清单 236）**，各分片 rc=0，`shard_run rc=0`。改动只碰守卫计数与基线，未触运行时/编译器，故无「需重烘」项。
+
+**成本与埋点**（`/data/autodrive/logs/M356-*`）：
+
+- 墙钟：链 **5330s（1h28m50s）** 18:14:53 → 19:43:43；其中 shard_run 5007s（83m27s，含 quiet）、release_guard 323s；
+- loadavg max **67.98**（533 个 10s 采样，`/proc/loadavg`），16 核 ⇒ **4.25/核**，高于口径 12 的 2.0/核 参考线，本轮如实记；
+- memory_peak **7833.0 MiB**（cgroup v2 `memory.peak`，路径 `/ws.slice/ws-debug.slice/chain-m356.service` 由 `/proc/self/cgroup` 反推，非采样估算）。
+
+### 五 发布：v0.2.356
+
+- `release_guard VERDICT=GREEN tag=v0.2.356 head=ceeda7d`；`ls-remote`：main=`ceeda7d`，tag object `c498684` → commit `ceeda7d`（同一次推）；
+- 独立自证 `packaging/latest_verify.sh v0.2.356` ⇒ **`LATEST-VERDICT=OK`**（19:45:13，poll 1 命中）；
+- 本轮无 BLOCKED（exit 3）、无 rerun-failed-jobs，未走三步走流程。
 
 
 
