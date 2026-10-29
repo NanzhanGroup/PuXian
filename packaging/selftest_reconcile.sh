@@ -30,7 +30,11 @@ P=0; F=0
 ok(){ P=$((P+1)); printf '  ✅ %s\n' "$1"; }
 ng(){ F=$((F+1)); printf '  ❌ %s\n' "$1"; }
 chk(){ if [ "$2" = "$3" ]; then ok "$1"; else ng "$1（期望 [$3] 实得 [$2]）"; fi; }
-chkg(){ if printf '%s' "$2" | grep -q -- "$3"; then ok "$1"; else ng "$1（[$2] 不含 [$3]）"; fi; }
+# 缺陷 621（M354）：`printf ... | grep -q` + `set -o pipefail` = 假红装置
+#   grep -q 命中即退出，printf 还在写 ⇒ SIGPIPE(141) ⇒ pipefail 把整条管道判失败
+#   ⇒ 内容明明在，却报「不含」。实测：14 并发跑 m278，6 次假红，pipestatus=「141 0」。
+#   ⇒ 统一改 herestring（无管道、无 SIGPIPE）；红消息只带前 200 字（原先整份快照刷进日志）
+chkg(){ if grep -q -- "$3" <<<"$2"; then ok "$1"; else ng "$1（[${2:0:200}] 不含 [$3]）"; fi; }
 
 # ── 现造 fixture（自洽：每档自带 ignore 表）──
 mkfix(){
@@ -95,8 +99,8 @@ got=$(printf '%s\n' "$o" | awk -F'[ ]+' '/^v9\./{print $1"="$NF}' | sort)
 chk "逐条判定（双向精确相等）" "$got" "$(printf '%s\n' "$exp" | sort)"
 chkg "异常计数=2" "$o" "异常 2 个"
 chkg "豁免计数=1" "$o" "豁免 1 条"
-if printf '%s' "$o" | grep -qE 'v9\.9\.1.*in_progress'; then ok "在跑状态可见（不是裸 None）"; else ng "在跑状态未体现"; fi
-if printf '%s' "$o" | grep -q 'None'; then ng "输出里出现 None（应显示 status）"; else ok "无 None 占位"; fi
+if grep -qE 'v9\.9\.1.*in_progress' <<<"$o"; then ok "在跑状态可见（不是裸 None）"; else ng "在跑状态未体现"; fi
+if grep -q 'None' <<<"$o"; then ng "输出里出现 None（应显示 status）"; else ok "无 None 占位"; fi
 
 printf '\n【3】过期豁免：豁免表里写着「最新 tag」⇒ 判 STALE-IGNORE（异常）\n'
 o=$(run "$W/fix/stale" --limit 10); rc=$?
@@ -128,7 +132,7 @@ print("JSONOK")' 2>"$W/json.err" | grep -q JSONOK; then ok "--json 结构正确"
 printf '\n【7】--rerun 只碰 cancelled（fixture 档不下发请求）\n'
 o=$(run "$W/fix/bad" --limit 10 --rerun)
 chkg "报已重跑" "$o" "已重跑 cancelled"
-if printf '%s' "$o" | grep -q 'v9.9.3(fixture)'; then ng "不应重跑豁免项"; else ok "豁免项不重跑"; fi
+if grep -q 'v9.9.3(fixture)' <<<"$o"; then ng "不应重跑豁免项"; else ok "豁免项不重跑"; fi
 
 printf '\n【8】用法与环境\n'
 bash "$SH" --bogus >/dev/null 2>&1; chk "未知选项 rc" "$?" "2"
@@ -152,7 +156,9 @@ else ng "负控 B 未改动脚本（锚点失效）"; fi
 printf '\n【11】规模下限与通道\n'
 L=$(wc -l < "$SH"); [ "$L" -ge 100 ] && ok "脚本行数 $L ≥ 100" || ng "脚本过短 $L"
 bash "$SH" --help >/dev/null 2>&1 && ok "--help rc=0" || ng "--help rc≠0"
-if bash "$SH" --bogus 2>/dev/null | grep -q .; then ng "诊断不该走 stdout"; else ok "诊断走 stderr"; fi
+_so=$(bash "$SH" --bogus 2>/dev/null)
+# 不用管道：若真把诊断打到 stdout，管道式会因 SIGPIPE 判 141 ⇒ 走 else ⇒ **假绿**（缺陷 621 的另一面）
+if grep -q . <<<"$_so"; then ng "诊断不该走 stdout"; else ok "诊断走 stderr"; fi
 
 printf '\n【12】缺陷 586：tag 在 git tags 里、但既无 Release 又无 run ⇒ 必须判 NO-RELEASE-NORUN\n'
 mkdir -p "$W/fix/orphan"
@@ -172,14 +178,14 @@ printf '# 空豁免表\n' > "$W/fix/orphan/ignore"
 o=$(run "$W/fix/orphan" --limit 10); rc=$?
 chk "rc" "$rc" "1"
 chkg "v9.9.8 判 NO-RELEASE-NORUN" "$o" "v9.9.8"
-if printf '%s' "$o" | grep -q 'v9.9.8 .*NO-RELEASE-NORUN'; then ok "v9.9.8 = NO-RELEASE-NORUN"; else ng "v9.9.8 判定不符"; fi
-if printf '%s' "$o" | grep -q 'v9.9.8-m55'; then ng "带后缀的开发 tag 进了要求集（作用域失效）"; else ok "带后缀开发 tag 不进要求集"; fi
+if grep -q 'v9.9.8 .*NO-RELEASE-NORUN' <<<"$o"; then ok "v9.9.8 = NO-RELEASE-NORUN"; else ng "v9.9.8 判定不符"; fi
+if grep -q 'v9.9.8-m55' <<<"$o"; then ng "带后缀的开发 tag 进了要求集（作用域失效）"; else ok "带后缀开发 tag 不进要求集"; fi
 chkg "异常计数=1" "$o" "异常 1 个"
 # 负控：拿掉第二源（去掉 tags.json）⇒ v9.9.8 消失、异常归零
 #   ⇒ 证明这条红**来自新数据源**，不是别的东西顺手报出来的
 cp -r "$W/fix/orphan" "$W/fix/orphan_nosrc"; rm -f "$W/fix/orphan_nosrc/tags.json"
 o=$(run "$W/fix/orphan_nosrc" --limit 10); rc=$?
-if [ "$rc" = 0 ] && ! printf '%s' "$o" | grep -q 'v9\.9\.8'; then
+if [ "$rc" = 0 ] && ! grep -q 'v9\.9\.8' <<<"$o"; then
   ok "负控：无第二源时看不见 v9.9.8 且 rc=0 ⇒ 红确实来自第二源（判据有牙）"
 else
   ng "负控失效：无 tags.json 仍报 v9.9.8 或 rc≠0（rc=$rc）"
@@ -199,11 +205,11 @@ else ng "--json latest 字段：$(cat "$W/ls.err")"; fi
 cp -r "$W/fix/lateststale" "$W/fix/latestok"
 printf '{"tag_name":"v9.9.9"}\n' > "$W/fix/latestok/latest.json"
 o=$(run "$W/fix/latestok" --limit 10); rc=$?
-if [ "$rc" = 0 ] && ! printf '%s' "$o" | grep -q 'LATEST-STALE'; then ok "正控：latest 正确时不报（不造假红）"; else ng "正控失败：latest 正确仍报（rc=$rc）"; fi
+if [ "$rc" = 0 ] && ! grep -q 'LATEST-STALE' <<<"$o"; then ok "正控：latest 正确时不报（不造假红）"; else ng "正控失败：latest 正确仍报（rc=$rc）"; fi
 # 负控：去掉 latest.json ⇒ 能力降级，不判红（但必须在 stderr 说清）
 rm -f "$W/fix/latestok/latest.json"
 o=$(GH_IGNORE="$W/fix/latestok/ignore" bash "$SH" --api-fixture "$W/fix/latestok" --limit 10 2>&1); rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$o" | grep -q '\[587\] 拿不到 releases/latest'; then
+if [ "$rc" = 0 ] && grep -q '\[587\] 拿不到 releases/latest' <<<"$o"; then
   ok "负控：无 latest 数据 ⇒ 降级并响亮告知（不判红也不静默）"
 else ng "负控失败（rc=$rc）：$(printf '%s' "$o" | grep 587 || echo 无提示)"; fi
 

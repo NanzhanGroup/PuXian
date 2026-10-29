@@ -4,7 +4,7 @@
 > 每次红都换一个门，而同树单跑必绿 ⇒ 「全量门绿」已经不能当信号用。
 > 这比单个门红严重：它会训练人「红 = 又抽中了」—— 而「假红让真红不再被相信」正是缺陷 584 开头写下的失效模式。
 
-## 一 已定性案例（26 条，全部当轮修完或登记；最新三条 618–620 = M353）
+## 一 已定性案例（27 条，全部当轮修完或登记；最新三条 620/621 = M354）
 
 > 编号占位：**613 / 614 是成本侧缺陷**（耗时表住 `/tmp` 被清后静默退化成 60s · 分片数不随机型走），
 > 不属「判据不稳定」⇒ 详情登记在 `CHANGELOG.md` M351 与 `docs/GATE_ISOLATION.md` §十.8，本台账只留编号占位。
@@ -43,6 +43,8 @@
 | 618 | **判据装置自己** `packaging/chain/shard_gate_verdict.sh --self-test`（每个分片都跑） | 负载下假红：`1/20`（原始脚本）· `4/60`（48 路 CPU 负载复跑）；报「S1 门数平衡判据被删/改窄」而同一 `$code` 里 `grep -cF 'TG + TR'` 明明数到 **2 处**；NC8 报「理由里没有 VERDICT=GREEN」而那行就在输出里 | **`set -o pipefail` + 上游写失败**：`printf '%s\n' "$x" \| grep -qF -- "$needle"`，`grep -q` 命中即退出 ⇒ 上游 `printf` 写管道失败返回 **1**（实测 `PIPESTATUS=(1 0)`，不是 141）⇒ `pipefail` 让整条管道非 0 ⇒ 判据把「命中」读成「未命中」。只在负载下出现（写/读的调度交错被拉长） | 取证一律走 **here-string**（无上游进程，`pipefail` 无从污染）；`match()` 把 **0 命中 / 1 未命中 / 2 取证工具失败** 分三态，工具失败单列报「取证工具失败（非结论）」（口径 14）；静态段**抽取走文件**并加 **S0 前提断言**（抽不到函数体 ⇒ `EXTRACTION-FAIL`，不许静默变成「判据被删」）。负控 3/3：改窄 `TG + TR` ⇒ S1 必红；删函数定义 ⇒ S0 必红；假 `grep`（exit 3）⇒ 三态分离生效。修后同一 48 路负载下 **0/150** |
 | 619 | m256_eintr 负控 B（撤回 `bi_udp_recv` 包装） | 分片负载下 r2 红：`判据用尽预算：总迭代 12 次 · 可判 12 次 · 命中 0` ⇒ `FAIL [6B] 未按预期判红`；同轮 [7] 源逐字节还原 ✓、负控 A/C/D 全 PASS | **观测窗口 < 现象的随机性**（口径 5）：负控要等「包装撤掉后 recv 走错路」显形，负载把 12 次可判迭代里的时间片压满 ⇒ 故障窗口内一次都没走到。**不是产品回归**（EINTR 计数与源还原都干净） | 本轮登记；修法（下一轮）：负控 B 改**结构性**（并发持握 + 确定性注入，口径 13），并**断言可判次数下限**（`可判 < N_min` ⇒ 报 PREMISE-FAIL/UNKNOWN，**不许**报产品红，也不许报绿）｜**M354 已修**：探针新增 `M256_PROBE_INTR=1` 结构性注入（SIGUSR1 + 自装处理器 + `SO_RCVTIMEO` ⇒ 与 GC 的 `SIG_GC_STOP` 走**同一条**「永不重启」内核路径），150ms 后每 5ms 一发、覆盖全程；`neg_any` 增加**前提断言**（每轮必须看到 `M256-INTR-HANDLED≥1`）+ **可判次数下限**（默认 `N_min=3`，不足返回 3 = `PREMISE-FAIL`，门红但措辞与产品回归分开）。实测：同一形态从「可判 12 次 · 命中 0」变成**第 1 次可判即命中**；负控自伤回放（`M256_NEG_SELFTEST=1`）2/2：无故障+N_min=2 ⇒ rc=1（产品红）、N_min=999 ⇒ rc=3（PREMISE-FAIL） |
 | 620 | 发布装置（GitHub Actions `Release` job） + M352 的 latest 自证装置 | `v0.2.352` 的 tag 与 main 都推了，但 `releases/latest` 一直是 `v0.2.351`；M352-LATEST 装置只写 `LATEST-VERDICT=PENDING`，**不报警**（park 探针照样满足 ⇒ 「发布没发出去」静默 3h） | ① `Release` 的 `release` job `timeout-minutes: 30`，而 `actions/checkout`（`fetch-depth: 0`）在 runner 上跑满 **30:04** 被 cancelled（17:10:45 → 17:40:49），后续 steps 全 skipped；② 自证装置把 **PENDING 当正常终态**写盘，`DONE` 照写 ⇒ 下游只看见「DONE」 | ① 已 `rerun-failed-jobs`（attempt 2）并盯到 `releases/latest == v0.2.352`；② 自证装置判据改「PENDING + 超过 T ⇒ 报 BLOCKED（非 DONE）」，`DONE` 只在拿到确定结论时写（口径 11/14：取不到 ≠ 没有，未证 ≠ 通过）｜**M354 已修（两半都修）**：① 入库装置 `packaging/latest_verify.sh`（三态 OK/STALE/**BLOCKED**，`LV_DEADLINE_SEC` 上限 30min）+ 负控 `packaging/latest_verify_negctl.sh` **6/6**（伪造 tag 不发 Release ⇒ BLOCKED；有 Release 但 latest 指旧版 ⇒ STALE；latest == 期望 ⇒ OK；取不到 API ⇒ BLOCKED，**不许** OK）；② `release_guard.sh` 的 latest 段改为只调该装置并做映射（OK/STALE/**其余⇒VERDICT=BLOCKED exit 3**），删掉「40 次 PENDING 跑完照写 GREEN」的老路 |
+
+| 621 | m278_release_reconcile 的 [2] 静态段 + 离线自证 | 全量门 shard2 判红 2 条「脚本头没写 X」，而**同一份快照里 X 就在**（红信息把整份 13.9KB 快照打出来，肉眼可见）；单跑 400 次全绿 | **618 的同族、未扫的那一半**：判据助手写的是 `printf '%s' "$2" | grep -q -- "$3"`。`grep -q` 命中即退出 ⇒ `printf` 还在写 ⇒ SIGPIPE（`PIPESTATUS` 实测 **141 0**，grep 其实命中了）⇒ 脚本开 `set -o pipefail` ⇒ 整条管道判非 0 ⇒ 「不含」。§595 当时只把「反复 cat」换成原子快照，管道这一层没动 | 两处 `chkg`（`examples/m278_release_reconcile/verify.sh` + `packaging/selftest_reconcile.sh`）全改 **here-string**（`grep -q -- "$3" <<<"$2"`），红信息只留前 200 字；新增装置自证 [2b]：`yes \| grep -q` 必得 141（机制成立）+ 静态守卫「chkg 不许用管道」。**实测：14 并发跑本门，修前 6/14 假红，修后 0/14，14×16 全绿**。证据 `/data/gatevm/m354-m278-evidence/`（含 DBG `pipestatus=141 0`）。**同族扫尾已登记**：全仓仍有 52 个「带 pipefail + `\| grep -q`」的脚本（9 个门各 3–4 处），下一轮逐门改 + 逐门验证 |
 
 ## 二 从这 6 条抽出的四条口径（可直接当 review checklist）
 
@@ -319,3 +321,26 @@ printf '%s\n' "$code" | grep -qF -- 'TG + TR'      # set -o pipefail 下
       负控自己也要有负控（`M256_NEG_SELFTEST=1` 回放 N_min 抬高 ⇒ 必 rc=3）。
     - 附带：把「PENDING / 取不到 / 轮询超时」这类**中间态**与终态**分开编号**（620）——
       中间态写进日志，**终态才写结论行**；装置的超时必须给出**下一步动作**，不能只写「阻塞了」。
+
+### 二·补 M354 之二：第 17 条口径 —— **判据读的是「内容」，不是「管道里的那一段」**（缺陷 621）
+
+618（M353）与 621（M354）是同一个装置缺陷的两次撞车，中间隔了一整个里程碑：
+
+```
+618  shard_gate_verdict.sh：printf | grep -qF  ⇒ PIPESTATUS=(1 0)    ⇒ 把「命中」判成「未命中」
+621  m278 的 chkg：        printf '%s' "$2" | grep -q -- "$3" ⇒ PIPESTATUS=(141 0) ⇒ 同一件事
+```
+
+- **机理**：`grep -q` 一命中就 exit ⇒ 写端拿 EPIPE / 被 SIGPIPE ⇒ 管道整体非 0；
+  脚本开了 `set -o pipefail` ⇒ 判据把这当成「内容里没有 needle」。
+- **为什么「单跑必绿」**：撞不撞取决于写/读的调度交错。空载时写端一口气写完（11.7KB 全进管道缓冲），
+  负载下写端还没写完 reader 就退了（621 实测：0/400 空载 → **14 并发 6 次假红**）。
+  这和 618 的 `1/20 → 4/60` 是同一个量级故事：**判据装置的失败率必须用负载下频次来量**。
+- **纪律**：
+  1. 取证一律**不走管道**：here-string（`grep -q -- "$pat" <<<"$hay"`），或先落文件再 grep；
+  2. 需要生产者的退出码时（`cmd | grep -q`），拆开：`out=$(cmd); rc=$?` 再判 `$out`；
+  3. 判据的「装置绿」也要有频次（对照空载 / 并发两档），不接受「我跑了一遍是绿的」；
+  4. 反方向同样致命：`cmd | grep -q X` 放在**否定**分支（「不该出现 X」）时，SIGPIPE 会让判据走 else ⇒
+     **假绿**（621 顺手改了 `bash --bogus | grep -q .` 这处「诊断不该走 stdout」的判据）。
+- **存量**：全仓仍有 **52** 个脚本「带 `pipefail` + `| grep -q`」（9 个门各 3–4 处：m284/m222/m116/m269/m262/m261/m309/m283/m271…）。
+  本轮只收口撞车的 m278 两处；**扫尾按「一门一改一验」做**，不许批量 sed（改错方向会造出假绿）。
