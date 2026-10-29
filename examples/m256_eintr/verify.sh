@@ -23,6 +23,9 @@
 #   [6] 负控 3 道（`--neg-skip` 可跳；各自独立判红，各自干净起点）：
 #       A 撤回 `bi_read` 的包装（退回裸 read）⇒ 压力档 T1 必红（U2 仍绿 ⇒ 独立性）
 #       B 撤回 `bi_udp_recv` 的包装     ⇒ 压力档 U2 必红（T1 仍绿 ⇒ 独立性）
+#         ⚠️ M354（缺陷 619）：B 的故障由**受管信号结构性注入**（`M256_PROBE_INTR=1`），
+#         不再等 GC 的 STW「恰好」撞上；并断言注入真发生 + 可判次数 ≥ N_min，
+#         否则报 PREMISE-FAIL（装置侧，响亮但**不是**产品红、也**不是**绿）。
 #       C **判据自伤**：复用 A 的补丁 + `M256_EXPECT_T1=-1` ⇒ 同一故障**不再判红**
 #   [7] 源逐字节还原断言
 #
@@ -331,7 +334,15 @@ fi
 #      keep **连续 3 次**异常才 rc=2；`gone` 至少命中 1 次才算通过。
 #   ⚠️ **牙还在**：若产品真的回归（udp_recv 被 STW 打断后静默丢包），U2 会**每次**都 -1
 #      ⇒ 连续 3 次异常 ⇒ 仍然 rc=2 判红；`gone` 永不出现 ⇒ rc=1 判红。
-neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=另一键应保持的值
+neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=另一键应保持的值 $5=是否要求结构性注入(1)
+    # ⚠️ M354（缺陷 619 · 口径 13）：负控的**不利状态必须结构性构造**，并**断言前提成立**。
+    #   修前（缺陷 619 现场）：负控 B 靠 GC 的 STW **恰好**打断阻塞中的 recvfrom，而那是概率性的
+    #   （全量门分片负载下实测 `可判 12 次 · 命中 0`）⇒ 报「未按预期判红」——
+    #   可那既不是产品回归，也不是判据没牙，是**装置没把现场造出来**。
+    #   现在两条硬约束：
+    #     ① $5=1 ⇒ 每轮必须看到探针自陈的 `M256-INTR-HANDLED≥1`（注入真发生了），否则该轮**不可判**
+    #     ② 可判轮次 < N_min（默认 3，可 `M256_NEG_NMIN` 覆盖）⇒ 返回 3 = **PREMISE-FAIL**：
+    #        装置侧问题，**响亮**（门红）但措辞与「产品回归」严格分开，绝不冒充绿。
     # ⚠️⚠️ M294 补（缺陷 509）：**预算必须按「可判轮次」算，而且要够大** ——
     #   原写法 `while [ i -lt 6 ]` 把**不可判**的轮次也算进预算，而**复现本身是概率性的**。
     #   实测（本机 · 压力档 · NC-B 形态 20 轮）：`U2=-1`（复现）**9/15 ≈ 60%**，
@@ -341,13 +352,22 @@ neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=�
     #   ⇒ 改成两条独立预算：**可判轮次 ≤ 12**（60% 下漏判 0.4^12 ≈ 0.002%）·
     #     总迭代 ≤ 24（防不可判轮次无限吃时间）。判定不了时把原因打出来。
     local gone="$1" gone_expect="$2" keep="$3" keep_expect="$4" tag hits=0 i=0 v k bk=0 usable=0
-    local MAXIT=24 MAXUSABLE=12 MAXKEEPBAD=4
+    local need_intr="${5:-0}"
+    local MAXIT="${M256_NEG_MAXIT:-24}" MAXUSABLE="${M256_NEG_MAXUSABLE:-12}" MAXKEEPBAD=4
+    local NMIN="${M256_NEG_NMIN:-3}"
+    local INTRENV=""
+    [ "$need_intr" = "1" ] && INTRENV="M256_PROBE_INTR=1"
     while [ "$i" -lt "$MAXIT" ] && [ "$usable" -lt "$MAXUSABLE" ]; do
         i=$((i + 1)); tag="n_${i}"
-        run_once "$tag" PX_GC_STRESS=1 PX_GC_INLINE=1 >/dev/null
+        run_once "$tag" PX_GC_STRESS=1 PX_GC_INLINE=1 ${INTRENV:+"$INTRENV"} >/dev/null
         if ! grep -q 'M256-PROBE-DONE' "$W/out_$tag.txt"; then
             N267=$((N267 + 1))
             echo "  ℹ️ [$tag] 探针未跑完（疑似缺陷 267 家族）⇒ 本次**不可判**，重试（已用 $i 次 · 可判 $usable 次）"
+            continue
+        fi
+        # M354：**前提断言** —— 结构性注入必须真的发生了（口径 14：取不到 ≠ 没有）
+        if [ "$need_intr" = "1" ] && ! grep -qE '^M256-INTR-HANDLED=[1-9]' "$W/out_$tag.txt"; then
+            echo "  ℹ️ [$tag] 结构性注入未成立（无 M256-INTR-HANDLED≥1）⇒ 本次**前提不成立**，重试（可判 $usable 次）"
             continue
         fi
         k="$(get_val "$tag" "$keep")"
@@ -363,21 +383,45 @@ neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=�
         [ "$hits" -ge 1 ] && return 0
     done
     [ "$hits" -ge 1 ] && return 0
-    echo "  ℹ️ 判据用尽预算：总迭代 $i 次 · **可判** $usable 次 · 命中 $hits（gone=$gone）"
+    echo "  ℹ️ 判据用尽预算：总迭代 $i 次 · **可判** $usable 次 · 命中 $hits（gone=$gone · N_min=$NMIN）"
+    # M354：可判次数不足 ⇒ **前提不成立**（装置侧），不许当成「产品没问题」，也不许当成产品红
+    if [ "$usable" -lt "$NMIN" ]; then
+        echo "  ⚠️ PREMISE-FAIL：可判 $usable 次 < N_min=$NMIN ⇒ 负控现场没造出来（装置侧，非产品回归）"
+        return 3
+    fi
     return 1
 }
 
 if [ "$NEG_SKIP" = "1" ]; then
     echo "── [6] 负控：--neg-skip（CI 档）⇒ 跳过 3 道"
 else
+    # ── M354：**判据自己的负控回放**（口径 9/13/14 · M209 纪律）─────────────
+    #   缺陷 619 的修法给负控加了两条新判据（注入前提 / 可判次数下限），那它们自己也得被证。
+    #   默认**不跑**（每次多 2 轮探针 ≈ 1.5min，且给门增加一处分片负载下的抖动面）；
+    #   `M256_NEG_SELFTEST=1` 时跑 —— 回放脚本与结果都入库，别让「我跑过」只留在脑子里。
+    #   ⚠️ 位置在 NC-A 之前：此刻 $BIN 是**未打补丁**的干净件（产品正确 ⇒ U2=4）。
+    #   (a) 注入在、故障不在 + 只跑 2 轮 + N_min=2 ⇒ 期望 rc=1（「注入已发生但门仍绿」= 产品红）
+    #   (b) 同上 + N_min=999 ⇒ 期望 rc=3（**PREMISE-FAIL**：既不判产品红、也不判绿）
+    if [ "${M256_NEG_SELFTEST:-0}" = "1" ]; then
+        echo "── [6] 负控自伤回放（M354）：干净件 + 2 轮预算"
+        M256_NEG_MAXIT=2 M256_NEG_MAXUSABLE=2 M256_NEG_NMIN=1 neg_any U2 4 T1 5 1; _st=$?
+        if [ "$_st" -eq 1 ]; then ok "[6S-a] 无故障时负控报**产品红**（rc=1：判据不会把「门绿」当通过）"
+        elif [ "$_st" -eq 2 ]; then echo "  ℹ️ [6S-a] 独立性被破坏（rc=2）⇒ 本次回放不可判（装置侧），不算通过"
+        else bad "[6S-a] 期望 rc=1（无故障 ⇒ 判红），实测 rc=$_st"; fi
+        M256_NEG_MAXIT=2 M256_NEG_MAXUSABLE=2 M256_NEG_NMIN=999 neg_any U2 4 T1 5 1; _st=$?
+        if [ "$_st" -eq 3 ]; then ok "[6S-b] 可判次数 < N_min ⇒ **PREMISE-FAIL**（rc=3，不冒充产品红、不冒充绿）"
+        elif [ "$_st" -eq 2 ]; then echo "  ℹ️ [6S-b] 独立性被破坏（rc=2）⇒ 本次回放不可判（装置侧），不算通过"
+        else bad "[6S-b] 期望 rc=3（N_min 抬高 ⇒ 前提不成立），实测 rc=$_st"; fi
+    fi
     echo "── [6] 负控 A：撤回 bi_read 的包装（退回裸 read）"
     restore_all; snapshot
     if patch_one '    ssize_t n = px_io_read(fd, buf, (size_t)maxlen);' \
                  '    ssize_t n = read(fd, buf, (size_t)maxlen);' \
        && rebuild "$W/build_na.log"; then
-        neg_any T1 5 U2 4; rc=$?
+        neg_any T1 5 U2 4 0; rc=$?
         if [ $rc -eq 0 ]; then ok "[6A] 预算内 T1 被判红，且 U2 始终绿（独立）"
-        else bad "[6A] 未按预期判红（rc=$rc：1=故障未出现 2=波及 U2 3=补丁/重建失败）"
+        elif [ $rc -eq 3 ]; then bad "[6A] PREMISE-FAIL：可判轮次不足（装置侧，**非产品回归**、也**不是绿**）—— 见上两行预算明细"
+        else bad "[6A] 未按预期判红（rc=$rc：1=故障未出现 2=波及 U2 3=PREMISE-FAIL）"
              echo "       ── 诊断（M294 补 · 让「故障未出现」读得出真因）──"
              echo "         补丁后产物 sha256 = $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)… · rt_key = $( (cd "$ROOT" && ./tools/px rtkey 2>/dev/null) | tail -1)"
              echo "         ⚠️ 若产物的 sha 与**未打补丁**时相同 ⇒ 补丁没进产物（走错了 runtime 缓存）"
@@ -387,14 +431,16 @@ else
         bad "[6A] 补丁或重建失败"
     fi
 
-    echo "── [6] 负控 B：撤回 bi_udp_recv 的包装"
+    echo "── [6] 负控 B：撤回 bi_udp_recv 的包装（**结构性注入** EINTR，缺陷 619）"
     restore_all; snapshot
     if patch_one '    int n = (int)px_io_recvfrom(fd, buf, (size_t)maxlen, 0, (struct sockaddr*)&src, &slen);' \
                  '    int n = (int)recvfrom(fd, buf, (size_t)maxlen, 0, (struct sockaddr*)&src, &slen);' \
        && rebuild "$W/build_nb.log"; then
-        neg_any U2 4 T1 5; rc=$?
-        if [ $rc -eq 0 ]; then ok "[6B] 预算内 U2 被判红，且 T1 始终绿（独立）"
-        else bad "[6B] 未按预期判红（rc=$rc：1=故障未出现 2=波及 T1）"
+        # ⚠️ 末位 1 = 要求结构性注入（`M256_PROBE_INTR=1`）⇒ 不再等 GC 的 STW 自然撞上
+        neg_any U2 4 T1 5 1; rc=$?
+        if [ $rc -eq 0 ]; then ok "[6B] 结构性注入下 U2 被判红，且 T1 始终绿（独立）"
+        elif [ $rc -eq 3 ]; then bad "[6B] PREMISE-FAIL：注入未成立或可判轮次不足（装置侧，**非产品回归**、也**不是绿**）"
+        else bad "[6B] 未按预期判红（rc=$rc：1=注入已发生但门仍绿 2=波及 T1 3=PREMISE-FAIL）"
              echo "       ── 诊断（M294 补）──"
              echo "         补丁后产物 sha256 = $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)… · rt_key = $( (cd "$ROOT" && ./tools/px rtkey 2>/dev/null) | tail -1)"
              echo "         重建日志尾："; tail -4 "$W/build_nb.log" 2>/dev/null | sed 's/^/         | /'
