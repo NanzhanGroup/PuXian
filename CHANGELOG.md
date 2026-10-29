@@ -41,9 +41,28 @@
   `remove(WORKDIR + "/env.txt")` 对**不存在**的文件报 `fs: 删除失败`（运行时语义，本轮不碰 runtime，避免重烘）；
   且该脚本**不在 `gates.registry.sh`** ⇒ 全量门从未跑到它 ⇒ 「门清单外的手工脚本」盲区（与 M355 漏注册 ci.yml 同族）。待判：① `remove` 是否该容 ENOENT；② 还有哪些 `examples/*.sh` 未注册。
 
-### 四 全量门（待回填）
+### 四 全量门 · 绿 236 / 红 0（改法自带回归风险的一轮，结果 0 假红）
 
-### 五 发布（待回填）
+- 编排：`systemd-run --unit=chain-m357 --slice=ws-debug.slice --collect` → `/data/autodrive/m357_chain_wrap.sh 8f0c792`；
+  日志 `/data/gatevm/chain-m357-20261029-195742-3547422/`
+- 汇总：**绿 236 · 红 0 · 门清单 236 · 跳过 0**（8 分片 25/26/29/29/29/28/30/30 + quiet 档 10 门）；
+  `shard_run rc=0` · `release_guard rc=0`
+- 分片墙钟 **4787s（79m47s：19:57:42 → 21:17:29）**；含发布自证的链路总 **5070s（84m30s → 21:22:12）**
+  —— 比 M356 的 5330s 快 **260s**（同 8 片同门清单，快在机器状态而非改动）
+- loadavg max **80.34（507 采样 · 16 核 ⇒ 5.02/核）**，比 M356 的 67.98（4.25/核）**高 18%**；
+  quiet 档自断言阈值 2.0/核 **本轮仍越界**（连续第二轮）⇒ 与 M356 同处置：登记待判，**不判红**（口径 12 只出 ANOMALY）
+- memory_peak **7902.8 MiB**（`memory.peak` · cgroup v2 `/ws.slice/ws-debug.slice/chain-m357.service`）
+- **假红复核**：本轮改的是 9 个脚本的管道形态（`<<<` / 落盘后 grep），语义差异（命令替换吞尾换行、
+  `2>/dev/null` 位置、多行输出引号）是本轮唯一新增风险面 —— 236 门一次跑完 **0 红**，
+  且 7 门单门自证（含 m217 435s 全量重烘）在门内已先过一遍 ⇒ 改法与管道语义差异**未发现**回退。
+
+### 五 发布
+
+- tag **v0.2.357**（annotated tag 对象 `376fae3` → `object 8f0c792`）→ commit **`8f0c792`**
+- `git ls-remote` 自证：`refs/heads/main=8f0c792` · `refs/tags/v0.2.357=376fae3304efe2650a6144065dbc594dce871b57`
+- latest 自证：**`LATEST-VERDICT=OK expected=v0.2.357 reason=none`**
+  （`release_guard` 内 4 次轮询：3 次 PENDING 不计红，21:22:12 命中；另 `packaging/latest_verify.sh v0.2.357`
+  独立复核 21:24:22 一次命中 —— 通道 `/data/autodrive/logs/M357-latest-verify.md`）
 
 
 
