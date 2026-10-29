@@ -138,6 +138,24 @@ echo "── [10] 用法 / 参数错误 ⇒ rc=2"
 "$SH" --p95-percore abc "$W/quiet.tsv" >/dev/null 2>&1; chk "[10c] 非数值阈值 rc=2" "$?" 2
 "$SH" --nproc 0 "$W/quiet.tsv" >/dev/null 2>&1; chk "[10d] 核数 0 rc=2" "$?" 2
 
+# ── [11] 绑核回归（M361 首跑真红现场 · 缺陷 625 复发）──────────────────────
+# 现场：分片门用 taskset 把每路绑在 2 核上跑，判据默认核数取 nproc ⇒ 得 2 ⇒ 每核值虚高 8 倍
+#       ⇒ 本应 PASS 的 [1][2][5][7] 全判红（11 条断言塌）。根因在**量具分母与分子不同界**：
+#       分子 /proc/loadavg 是全系统负载，分母必须是全机核数。
+# 本回归：在 taskset -c 0,1 下重跑整个自证，必须同样全绿；并验证子跑里 nproc 确实变小（证明本回归有牙）。
+if [ -z "${LVA_SELFTEST_SUB:-}" ] && command -v taskset >/dev/null 2>&1 && taskset -c 0,1 true 2>/dev/null; then
+  echo "── [11] 绑核回归：taskset -c 0,1 下整份自证仍须全绿"
+  subpc=$(taskset -c 0,1 nproc 2>/dev/null); subpc=${subpc:-0}
+  chk "[11a] 绑核生效（子跑 nproc=${subpc} < 全机 ${NC}）" "$([ "$subpc" -gt 0 ] && [ "$subpc" -lt "$NC" ] && echo yes || echo no)" "yes"
+  sub=$(LVA_SELFTEST_SUB=1 taskset -c 0,1 bash "$0" 2>&1); subrc=$?
+  chk "[11b] 绑核下自证 rc=0" "$subrc" 0
+  chkg "[11c] 绑核下全绿" "$sub" "SELFTEST PASS"
+  # 反向牙口：判据在绑核环境里报告的分母必须是全机核数，不能是子集核数
+  chkg "[11d] 绑核下分母仍是全机核数" "$(LVA_SELFTEST_SUB=1 taskset -c 0,1 bash "$SH" --quiet "$W/quiet.tsv" 2>&1)" "核数 ${NC}"
+else
+  sk "[11] 无 taskset / 0,1 核不可用 / 已处于子跑 ⇒ 跳过绑核回归"
+fi
+
 echo
 tot=$((P+F))
 if [ "$F" -eq 0 ]; then

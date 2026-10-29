@@ -22,7 +22,8 @@
 # 用法：
 #   loadavg_verdict.sh [选项] <tsv...>
 #     tsv 第 2 列 = loadavg 1m（第 1 列时间戳，其余列忽略）
-#   --nproc N            核数（默认 nproc）
+#   核数默认取 **全机在线核数**，刻意不受 taskset / cgroup cpuset 影响（见 online_cpus 注释）
+#   --nproc N            显式核数（覆盖默认；乱报会直接改变红绿，慎用）
 #   --p95-percore R      p95 上限，每核（默认 2.0）
 #   --over-pct R         越界采样占比上限 %（默认 5）
 #   --anomaly-percore R  max 诊断阈值，每核（默认 8.0）
@@ -34,7 +35,22 @@
 set -uo pipefail
 PROG=${0##*/}
 
-NPROC=$(nproc 2>/dev/null || echo 1)
+NPROC_PIN=0
+# 全机在线核数 —— **刻意不用 nproc**：nproc 读 sched_getaffinity，分片门 taskset 绑 2 核时返回 2，
+# 而 /proc/loadavg 是**全系统**负载 ⇒ 每核值虚高（16/2 = 8 倍）⇒ 判据假红（M361 实测 11 条断言因此塌）。
+# 口径：分母必须与分子同界（全机），故读 /sys/devices/system/cpu/online，回退 getconf，最后才 nproc。
+online_cpus(){
+  local n=''
+  if [ -r /sys/devices/system/cpu/online ]; then
+    n=$(awk -F, '{s=0; for(i=1;i<=NF;i++){ if($i ~ /-/){split($i,a,"-"); s+=a[2]-a[1]+1} else if($i ~ /^[0-9]+$/) s++ } print s}' \
+        /sys/devices/system/cpu/online 2>/dev/null)
+  fi
+  case "$n" in ''|*[!0-9]*|0) n=$(getconf _NPROCESSORS_ONLN 2>/dev/null);; esac
+  case "$n" in ''|*[!0-9]*|0) n=$(nproc 2>/dev/null);; esac
+  case "$n" in ''|*[!0-9]*|0) n=1;; esac
+  printf '%s\n' "$n"
+}
+NPROC=$(online_cpus)
 P95PC=2.0
 OVERPCT=5
 ANOMAX=8.0
