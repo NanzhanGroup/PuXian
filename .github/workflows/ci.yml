@@ -285,6 +285,16 @@ jobs:
         #   新增命中未登记 ⇒ 红；台账过期 ⇒ 红；声明 restore 但脚本无还原机制 ⇒ 红。
         run: |
           bash selfhost/check_sed_inplace.sh
+      - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
+        #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
+        #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。
+        #   机制实测（strace）：bash 的 printf '%s' 对 672 字节输出就做了 19 次 write
+        #   ⇒ 「小输出不会撞 SIGPIPE」是错的。正确形态：`grep -q PAT <<< "$var"` / `grep -q PAT <file>`。
+        #   本守卫是**棘轮**：基线 selfhost/pipe_grep_baseline.txt 只许往下减（当前残留 120 条 / 50 文件）。
+        #   ⚠️ 别写 `--self-test \u0026\u0026 真判`：自证 4 条夹具 + 全仓扫描是同一次调用内的两段，分两次调即可。
+        run: |
+          bash selfhost/check_pipe_grep.sh --self-test
+          bash selfhost/check_pipe_grep.sh --gate
       - name: 发布就绪裁决的负控自证（M323 · 缺陷 557）
         #   M322 第 5 轮：/tmp 里那版裁决器拿「短 sha 文本相等」当判据
         #     EXPECT_HEAD=9fb6c1cc vs HEAD=cd152820
