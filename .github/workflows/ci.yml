@@ -1285,7 +1285,7 @@ jobs:
           #   有牙：持续压载必红、占比 5.16% 必红、样本 < 30 必 INVALID（不许拿少数点判绿）。
           bash packaging/selftest_loadavg_verdict.sh > /tmp/v_loadavg_verdict.log 2>&1 || { echo "❌ 整链负载判据自证失败"; tail -25 /tmp/v_loadavg_verdict.log; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E 'SELFTEST' /tmp/v_loadavg_verdict.log | tail -1 || true
-          echo "✅ loadavg_verdict_selftest（30 断言 · 六轮语料回放 + 双负控 + 样本下限）PASS"
+          echo "✅ loadavg_verdict_selftest（34 断言 · 六轮语料回放 + 双负控 + 样本下限 + 绑核受限档回归）PASS"
 
       - name: m293_h3_robustness（HTTP/3 托管 listener 健壮性 · 晨曦阻塞级 QA 常设化）
         if: always()
