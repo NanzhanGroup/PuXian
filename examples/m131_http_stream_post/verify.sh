@@ -100,24 +100,50 @@ PY
 
 run_track() {   # $1=标签；其余为编译前置（env 形式）
     local label="$1"; shift
+    local SRVLOG="/tmp/m131_srv_$$.log"
+    local attempt=0 srv=0
     echo "== [$label] 编译 =="
     if ! env "$@" "$PX" build stream_post.px > "$LOG" 2>&1; then
         echo "FAIL [$label] 编译失败"; tail -20 "$LOG"; FAIL=$((FAIL+1)); return
     fi
     echo "== [$label] 启动 + 探针 =="
-    ./build/stream_post > /tmp/m131_srv.log 2>&1 &
-    local srv=$!
-    local i=0
-    while [ $i -lt 40 ]; do
-        grep -q M131_READY /tmp/m131_srv.log 2>/dev/null && break
-        sleep 0.1; i=$((i+1))
-    done
-    # 缺陷 572：READY 是 http_serve 之前打的，绑失败也照样出现 ⇒ 单纯等 READY 无牙。
-    # 这里核「服务端进程存活 + READY 已打」，失败就把服务端日志原样吐出来（别只报 Connection refused）。
-    if ! kill -0 "$srv" 2>/dev/null || ! grep -q M131_READY /tmp/m131_srv.log 2>/dev/null; then
-        echo "FAIL [$label] 服务端未就绪（端口 $PORT）"; tail -5 /tmp/m131_srv.log 2>/dev/null | sed 's/^/     | /'
+    while :; do
+        attempt=$((attempt+1))
+        : > "$SRVLOG"
+        ./build/stream_post > "$SRVLOG" 2>&1 &
+        srv=$!
+        local i=0
+        while [ $i -lt 40 ]; do
+            grep -q M131_READY "$SRVLOG" 2>/dev/null && break
+            sleep 0.1; i=$((i+1))
+        done
+        kill -0 "$srv" 2>/dev/null && grep -q M131_READY "$SRVLOG" 2>/dev/null && break
+        # 缺陷 572：READY 是 http_serve 之前打的，绑失败也照样出现 ⇒ 单纯等 READY 无牙。
+        # M364（缺陷 632）留现场：旧版只 tail -5，且日志在 /tmp 会被负控覆盖 ⇒ 红过之后无证可查。
+        # 失败即把「服务端全量输出 + 退出码 + 端口归属」落盘 /data/gatevm/，并原样打印。
+        local srv_rc=0
+        kill -0 "$srv" 2>/dev/null && { echo "  （进程存活但未就绪 ⇒ 收掉）" >&2; kill "$srv" 2>/dev/null; }
+        wait "$srv" 2>/dev/null; srv_rc=$?
+        local evid="/data/gatevm/m131_fail_$(date +%Y%m%d-%H%M%S)_${attempt}.log"
+        {
+            echo "label=$label attempt=$attempt port=$PORT srv_rc=$srv_rc ready=$(grep -c M131_READY "$SRVLOG" 2>/dev/null || true)"
+            echo "--- 服务端全量输出 ---"; cat "$SRVLOG" 2>/dev/null
+            echo "--- 端口归属 ---"; ss -lntp 2>/dev/null | grep ":$PORT " || echo "（$PORT 无监听）"
+        } > "$evid" 2>&1
+        echo "FAIL [$label] 服务端未就绪（端口 $PORT · srv_rc=$srv_rc）"
+        sed 's/^/     | /' "$evid" | head -24
+        echo "     证据：$evid"
+        # 端口争用是**可证的环境问题**（日志明写「绑定端口 N 失败」）⇒ 换空闲端口重试一次，判据一字不改。
+        # 其它原因（信号崩/未打 READY/超时）一律判红，不重试。
+        if [ "$srv_rc" = "1" ] && grep -q "绑定端口.*失败" "$SRVLOG" 2>/dev/null && [ "$attempt" -lt 2 ]; then
+            PORT=$(python3 -c 'import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+            export M131_GATE_PORT="$PORT"
+            echo "  ⚠ 端口争用（绑定失败）⇒ 换空闲端口 $PORT 重试（判据不变）"
+            continue
+        fi
         FAIL=$((FAIL+1)); return
-    fi
+    done
     local out rc
     out=$(python3 /tmp/m131_probe.py "$PORT" 2>&1); rc=$?
     echo "$out"
@@ -136,7 +162,7 @@ run_track "C轨" PX_BUILD_ENGINE=c
 echo "== 负控（门自欺检测）=="
 sed 's|body == expect + b"0\\r\\n\\r\\n"|body == expect|' /tmp/m131_probe.py > /tmp/m131_probe_neg.py
 grep -q 'body == expect,' /tmp/m131_probe_neg.py || { echo "FAIL 负控改写失败"; FAIL=$((FAIL+1)); }
-./build/stream_post > /tmp/m131_srv.log 2>&1 &
+./build/stream_post > /tmp/m131_srv_neg.log 2>&1 &
 srv=$!
 i=0; while [ $i -lt 40 ]; do grep -q M131_READY /tmp/m131_srv.log 2>/dev/null && break; sleep 0.1; i=$((i+1)); done
 if python3 /tmp/m131_probe_neg.py "$PORT" > /tmp/m131_neg.out 2>&1; then
