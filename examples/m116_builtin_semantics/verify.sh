@@ -260,6 +260,18 @@ EOS
                 ok "NC3 症状定性：TCP 53 不可达 ⇒ 「dns: tcp connect() failed」（与 CI run 40308948055 红原文同症 ⇒ 该文案属环境类，非产品错）"
             else
                 bad "NC3 症状不符：TCP 不可达时未见 tcp connect() failed：$(head -3 "$TMP/d5.noudp.out" | tr '\n' ' ')"
+                # 2026-10-30（M364 轮）：判据不放松，但**判红必须留现场**。
+                #   本轮全量门（8 分片并行）实测红过 1 次：客户端连 UDP 应答都没等到
+                #   （Err(dns: …: query timeout)）⇒ 桩要么没起来、要么被拖过 3s 超时。
+                #   当时 $TMP 已被 trap 清掉 ⇒ 无从定性。这里把桩侧证据打进门日志。
+                if grep -q 'STUB_READY' "$STUB_ERR" 2>/dev/null; then
+                    echo "       | 桩已就绪：$(grep -m1 'STUB_READY' "$STUB_ERR" | cut -c1-120)"
+                else
+                    echo "       | 桩未就绪（未见 STUB_READY）—— stderr 末 6 行："
+                    [ -s "$STUB_ERR" ] && sed 's/^/       |   /' "$STUB_ERR" | tail -6
+                fi
+                echo "       | udp-only 桩侧 hits：$(tr '\n' ' ' < "$TMP/d5.noudp.hits" 2>/dev/null)"
+                echo "       | 客户端全量输出：$(tr '\n' ' ' < "$TMP/d5.noudp.out" 2>/dev/null | cut -c1-400)"
             fi
         fi
     fi
