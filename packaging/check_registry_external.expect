@@ -1,0 +1,37 @@
+# packaging/check_registry_external.expect —— 外链 registry 的**状态钉**（M363 · 缺陷 631）
+# 由 packaging/check_registry_external.sh 读取；格式 `键=值`，`#` 开头为注释，值里不要写 `#`。
+#
+# 语义：**钉住的是「此刻已知的真实状态」，不是「我们希望的状态」**。
+#   线上状态与钉不一致（无论变好变坏）⇒ 门判红，逼人同步文档与 version.json。
+#   理由：外链站不是本仓的发布物（归属待定），
+#         若用「必须全 200」当判据，修不好的期间全量门长期常红 ⇒ 门变噪音（本仓反复登记的「把红当绿」）；
+#         若干脆不判，则「官方指引永远跑不通」这种骗三方的事无人看守。
+#         ⇒ 钉状态：坏的时候红不了但**喊得响**，一好转立刻红，逼着删钉 + 改指引。
+#
+# 2026-10-30 实测（M363 第 235 轮 · 证据 /data/autodrive/logs/M363-PROBE-files-sha256.md）：
+#   源站 soft.wsai.chat 与边缘 soft.xiusoft.cn 同病：`.sha256` 后缀**全站** 403（非 404；
+#   连不存在的 zzz.sha256 也 403，而不存在的 .txt / .json 才是 404）⇒ 静态侧按扩展名拦，
+#   **不是**「发布脚本漏生成」。（两站同一现象 ⇒ 归属不在本机，判「发布侧」前先问用户。）
+
+# 探测基址（逗号分隔；每站各判一轮）
+bases=https://soft.wsai.chat/puxian-registry,https://soft.xiusoft.cn/puxian-registry
+
+# 逻辑名 → 相对路径
+path.version_json=version.json
+path.sha256sums=sha256sums.txt
+path.files_manifest=files.sha256
+path.home=
+
+# 逻辑名 → 期望状态（ok=200 · blocked=403 · missing=404 · other:<码>）
+version_json=ok
+sha256sums=ok
+files_manifest=blocked
+home=ok
+
+# 官方指引里的校验命令锚（version.json 的 usage.verify 与首页校验栏都印这条）
+#   若哪天指引不再印它，而 files.sha256 仍是 blocked ⇒ 本钉已过期 ⇒ 门判红，逼人删 known_defect_631。
+guidance_marker=files.sha256
+
+# 已知缺陷登记：处于「非 ok」状态是**已知且已记录**的（缺陷号写在键里）。
+#   若线上变成 ok ⇒ 门判红（钉不符）⇒ 删掉本行 + 改 version.json 的 usage.verify。
+known_defect_631=files_manifest
