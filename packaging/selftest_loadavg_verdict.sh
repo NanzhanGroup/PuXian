@@ -32,7 +32,22 @@ chk(){ if [ "$2" = "$3" ]; then ok "$1"; else ng "$1（期望 [$3] 实得 [$2]�
 chkg(){ if grep -q -- "$3" <<<"$2"; then ok "$1"; else ng "$1（[${2:0:240}] 不含 [$3]）"; fi; }
 chkn(){ if grep -q -- "$3" <<<"$2"; then ng "$1（[${2:0:240}] 不该含 [$3]）"; else ok "$1"; fi; }
 
-NC=$(nproc)
+# 全机核数 —— 口径必须与 loadavg_verdict.sh 的 online_cpus 一致：**不能用 nproc**
+#   nproc 读 sched_getaffinity；分片门 taskset 绑 2 核时返回 2。
+#   缺陷 626（M361r2）只修了判据侧，本自证仍拿 nproc 当「全机」⇒ 分片里 NC=2
+#   ⇒ [11a]「2 < 2」为假、[11d] 期望「核数 2」而不含 ⇒ 门自己假红（缺陷 627，2026-10-30 r2 实测）。
+machine_cpus(){
+  local n=''
+  if [ -r /sys/devices/system/cpu/online ]; then
+    n=$(awk -F, '{s=0; for(i=1;i<=NF;i++){ if($i ~ /-/){split($i,a,"-"); s+=a[2]-a[1]+1} else if($i ~ /^[0-9]+$/) s++ } print s}' \
+        /sys/devices/system/cpu/online 2>/dev/null)
+  fi
+  case "$n" in ''|*[!0-9]*|0) n=$(getconf _NPROCESSORS_ONLN 2>/dev/null);; esac
+  case "$n" in ''|*[!0-9]*|0) n=$(nproc 2>/dev/null);; esac
+  case "$n" in ''|*[!0-9]*|0) n=1;; esac
+  printf '%s\n' "$n"
+}
+NC=$(machine_cpus)
 [ -x "$SH" ] || { echo "❌ 缺 $SH 或不可执行"; exit 1; }
 
 # 造语料：gen <file> <模式> [参数]
