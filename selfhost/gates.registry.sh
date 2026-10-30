@@ -1736,3 +1736,9 @@ run m319_ws_eof_spin bash examples/m319_ws_eof_spin/verify.sh
 run m324_tls_failclosed bash examples/m324_tls_failclosed/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test
 run pkg_pipe_grep bash selfhost/check_pipe_grep.sh --gate
+# ── M362（第 233 轮 · 缺陷 628）：`//` / `%` 逐值对拍门（补 PX_DEF_TRIAGE §14.4 欠账）──
+#   语义是欧几里得对（r∈[0,|b|)），三轨一致，但此前**没有门看守** —— 只靠「实现碰巧一致 + 文档」。
+#   判据：A 三轨逐字节一致 · B 与门侧独立参考值逐字节一致 · C 门侧重算不变量 · D 覆盖度自证。
+#   负控：NC1 参考值扰动 ⇒ B 红 · NC2 q 扰动 ⇒ C 红 · NC3 r 越界 ⇒ C2 红 · NC4 C 截断除法 ⇒ B 红。
+#   注：C 判据第一版写成 if/else，NC3 红不了（r 越界会先命中 a!=q*b+r）⇒ 改两条独立判定才成立。
+run m362_divmod bash examples/m362_divmod/verify.sh

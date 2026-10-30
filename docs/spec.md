@@ -1680,6 +1680,31 @@ def main(args: list[str]) -> int:
 ### 16.3 结构体 + match
 > ⚠️ 本示例是 **data enum（计划中）** 的目标形态，当前不可编译；
 > 现在请用 `struct` + `match` 判类型字段表达（见 §3.8 的状态说明）。
+>
+> ⚠️ **另有一条独立限制（M362 实测，2026-10-30）**：即使把 data enum 换成 `struct`，
+> 下面的 `case ...: return ...` 写法**仍然不可编译** —— 报
+> `E2001: 期望 换行，实际得到 return`。`case` 体**不能与 `case` 同行**（必须换行并缩进，
+> 体本身是表达式）。另外 `Point(kind: 1, ...)` 这种**命名参数构造也未实现**（报
+> `E2001: 期望 ')'`），须用位置参数。
+> 正确写法（M362 双轨实测：解释 `6.0` / 编译 `6.0`，逐字节一致）：
+> ```python
+> struct Point:
+>     kind: int
+>     w: float
+>     h: float
+>
+> def area(s: Point) -> float:
+>     return match s.kind:
+>         case 1:
+>             s.w * s.h
+>         case _:
+>             0.0
+>
+> def main():
+>     let p = Point(1, 2.0, 3.0)
+>     print(str(area(p)))
+> ```
+
 ```python
 enum Shape:
     Circle(radius: float)
