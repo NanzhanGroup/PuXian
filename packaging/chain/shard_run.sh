@@ -261,8 +261,28 @@ PY
 #   为什么只放开**一个**分片：分片之间**靠 netns 互不可见**才不会撞端口（P1 登记的 10 个端口）。
 #     只让 shard1 看宿主网络 ⇒ 它只需与**宿主自身服务**不冲突（门都用自用端口，实测无冲突），
 #     而 shard2..N 之间仍完全隔离 ⇒ 并行性不受影响。
+# ── M364 ①：出网登记表**入仓** ⇒ 读「仓内 ∪ 宿主」合并（2026-10-30 第 237 轮净检） ──
+#   病灶：此前登记表**只**在宿主 $BASE/net_needed.txt（宿主目录，非仓库），
+#     而 gates.registry.sh 里只有一句注释（不是机器可读元数据）⇒ 换机 / 重建 gatevm 后
+#     表就没了 ⇒ M363 那两红（出网门被塞进隔离片、8 次探测全 000）**静默复现**，
+#     且 check_registry_external.sh 只提示、不判红，没有任何门拦得住。
+#   修法：仓内 `selfhost/net_needed.txt` 为权威副本 + 宿主表仍兼容（合并去重，python 侧 set 去重）。
+#   清单同源原则：优先取 HEAD（分片跑的就是 HEAD）；HEAD 无此表则取工作树（首次提交前的自测）。
+NET_EFF="$LOG/net_needed.effective.txt"
+: > "$NET_EFF"
+if git -C "$SRC" cat-file -e "HEAD:selfhost/net_needed.txt" 2>/dev/null; then
+  git -C "$SRC" show "HEAD:selfhost/net_needed.txt" >> "$NET_EFF"
+  echo "（M364 出网表：HEAD:selfhost/net_needed.txt$( [ -s "$BASE/net_needed.txt" ] && echo ' ∪ 宿主 net_needed.txt' )）"
+elif [ -s "$SRC/selfhost/net_needed.txt" ]; then
+  cat "$SRC/selfhost/net_needed.txt" >> "$NET_EFF"
+  echo "（M364 出网表：工作树 selfhost/net_needed.txt（HEAD 尚无）$( [ -s "$BASE/net_needed.txt" ] && echo ' ∪ 宿主 net_needed.txt' )）"
+fi
 if [ -s "$BASE/net_needed.txt" ]; then
-  python3 - "$LOG" "$N" "$BASE/net_needed.txt" <<'PY'
+  cat "$BASE/net_needed.txt" >> "$NET_EFF"
+fi
+
+if [ -s "$NET_EFF" ]; then
+  python3 - "$LOG" "$N" "$NET_EFF" <<'PY'
 import sys, os
 log, n, nn = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 want = set(l.split('#')[0].strip() for l in open(nn, encoding='utf-8') if l.split('#')[0].strip())  # M309 阶段B：剥行内注释

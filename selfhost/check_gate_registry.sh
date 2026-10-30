@@ -131,6 +131,39 @@ while IFS='|' read -r p reason; do
 done < "$T/s_exempt.txt"
 [ "$SEXP" = 0 ] && ok "脚本门例外无过期条目（$NSEX 条 · 仍然成立）"
 
+# ── 6 M364：出网登记表自检（防「换机即静默复现 M363 两红」）──
+#   为什么加（第 237 轮净检）：出网表此前只在宿主 $PX_GATEVM/net_needed.txt，
+#   仓里只有一句注释 ⇒ 换机 / 重建 gatevm 后表没了，没有任何门能发现。
+#   判据：A 仓内 selfhost/net_needed.txt 存在且非空（规模锚点 ≥2），可跨机重建
+#         B 仓内每条（剥行内注释）都必须是**门清单里的门名**（拼错 ⇒ 调度器静默失效）
+#         C 宿主表（若存在）同样逐条在清单内，且**不得**有仓内缺的项（防两表漂移）
+sed -n 's/^[[:space:]]*run[[:space:]]\+\([A-Za-z0-9_]*\)[[:space:]].*/\1/p' "$REG" | sort -u > "$T/gate_names.txt"
+names_src() { grep -v '^[[:space:]]*#' "$1" | sed 's/#.*//' | tr -d '[:blank:]' | grep -v '^$'; }
+NG_FILE="selfhost/net_needed.txt"
+NG_BASE="${PX_GATEVM:-/data/gatevm}/net_needed.txt"
+if [ -s "$NG_FILE" ]; then
+    names_src "$NG_FILE" | sort -u > "$T/ng_repo.txt"
+    NN=$(wc -l < "$T/ng_repo.txt")
+    [ "$NN" -ge 2 ] && ok "出网表入仓且非空（$NN 条 · 规模锚点 ≥2）" \
+        || bad "出网表只 $NN 条 —— 解析器坏了，或表被掏空"
+    MISS=$(comm -23 "$T/ng_repo.txt" "$T/gate_names.txt" | tr '\n' ' ')
+    [ -z "${MISS// /}" ] && ok "仓内出网表逐条都在门清单里" \
+        || bad "仓内出网表有**不在门清单**的项（拼错即静默失效）：$MISS"
+else
+    bad "缺仓内 $NG_FILE —— 出网表只在宿主 ⇒ 换机/重建 gatevm 会静默复现 M363 两红"
+fi
+if [ -s "$NG_BASE" ]; then
+    names_src "$NG_BASE" | sort -u > "$T/ng_host.txt"
+    MISS2=$(comm -23 "$T/ng_host.txt" "$T/gate_names.txt" | tr '\n' ' ')
+    [ -z "${MISS2// /}" ] && ok "宿主出网表逐条都在门清单里" \
+        || bad "宿主出网表有不在门清单的项（$NG_BASE）：$MISS2"
+    DRIFT=$(comm -23 "$T/ng_host.txt" "$T/ng_repo.txt" | tr '\n' ' ')
+    [ -z "${DRIFT// /}" ] && ok "两表未漂移（宿主 ⊆ 仓内）" \
+        || bad "宿主表有仓内表缺的项（请补进 selfhost/net_needed.txt）：$DRIFT"
+else
+    ok "无宿主出网表（只用仓内表 —— 新机/CI 的正常形态）"
+fi
+
 echo
 echo "结果：通过 $PASS / 失败 $FAIL"
 [ "$FAIL" = 0 ] && { echo "GATE-REGISTRY-OK"; exit 0; } || { echo "GATE-REGISTRY-FAIL"; exit 1; }
