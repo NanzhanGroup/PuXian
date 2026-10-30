@@ -260,6 +260,9 @@ done
 # E5 全不可达 ⇒ 无法判定
 if [ "$TOTAL" -gt 0 ] && [ "$UNREACH" -eq "$TOTAL" ]; then
     echo "  ❌ 全部 $TOTAL 次探测传输层失败（000）—— 外链不可达，**无法判定**（不等于绿）"
+    echo "     ⚠️ 先判是「外链真挂了」还是「装置把人关黑屋」：本门要出网，若在分片里跑，"
+    echo "        必须在 \$PX_GATEVM/net_needed.txt（默认 /data/gatevm/net_needed.txt）登记 registry_external，"
+    echo "        否则会被塞进 netns 隔离分片 ⇒ 8 次探测全 000（M363 第 235 轮实测踩过）。"
     echo "══ 结论：UNKNOWN（外链不可达）══"
     exit 3
 fi
