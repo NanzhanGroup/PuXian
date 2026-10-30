@@ -26,6 +26,7 @@
 # 退出码：0=全绿 · 1=有红
 # ============================================================
 set -u
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PX="$ROOT/tools/px"
 WORK="${TMPDIR:-/tmp}/m362_divmod.$$"
