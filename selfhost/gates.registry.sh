@@ -1735,6 +1735,21 @@ run m319_ws_eof_spin bash examples/m319_ws_eof_spin/verify.sh
 #   负控 N1 关掉校名 ⇒ A2 必绿、N2 退回 fail-open ⇒ A3 必绿。负控要重编 runtime 两次 ⇒ CI --neg-skip。
 run m324_tls_failclosed bash examples/m324_tls_failclosed/verify.sh
 run release_assets bash packaging/check_release_assets.sh --self-test
+# ── M363（第 235 轮 · 缺陷 631）：registry **外链可达性自证门** ──
+#   现症：`version.json.usage.verify` 与首页校验栏都印 `sha256sum -c files.sha256`，
+#   而 `files.sha256` 在源站 soft.wsai.chat 与边缘 soft.xiusoft.cn **都 403**（9 字节 forbidden）；
+#   同站 `sha256sums.txt`/`version.json`/首页 200，且**不存在的 zzz.sha256 也 403**、zzz.txt 才是 404
+#   ⇒ 静态侧按扩展名拦，不是「打包脚本漏生成」。146 个文件的逐文件哈希存在但取不到。
+#   判据：钉 `packaging/check_registry_external.expect`（钉「此刻真实状态」而非「希望状态」）
+#     E1 每站 ×4 项状态 == 钉（变好/变坏都红，逼同步 version.json 与文档）
+#     E2 known_defect_631 行必须仍成立（已变 ok ⇒ 红，逼销号）
+#     E3 指引自洽：manifest 取不到时 version.json 不许仍印 guidance_marker
+#     E4 规模锚点（探项≥4 · 站≥2）· E5 全 000 ⇒ rc=3「无法判定」，不当绿
+#   本地跑**实地探测**（本门就是对外可见面的看守）；CI 跑 `--self-test`（7 条，4 个负控，离线确定）。
+#   ⚠️ 刻意不 source gate_lock.sh：本门只发 GET、**不写仓库**（不在其适用面：负控改源码的门）；
+#      且 gate_lock 的存活判据只认 `verify.sh|run_gates.sh|m116_gates.sh`，
+#      本脚本若抢锁，反会被别的门当「陈旧锁」抢走 ⇒ 那是伪保护，不如如实不锁。
+run registry_external bash packaging/check_registry_external.sh
 run pkg_pipe_grep bash selfhost/check_pipe_grep.sh --gate
 # ── M362（第 233 轮 · 缺陷 628）：`//` / `%` 逐值对拍门（补 PX_DEF_TRIAGE §14.4 欠账）──
 #   语义是欧几里得对（r∈[0,|b|)），三轨一致，但此前**没有门看守** —— 只靠「实现碰巧一致 + 文档」。

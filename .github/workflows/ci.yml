@@ -1519,6 +1519,16 @@ jobs:
         run: |
           bash packaging/check_release_assets.sh --self-test
 
+      - name: registry_external（registry 外链可达性自证 · M363 · 缺陷 631）
+        # 现症：官方指引让用户跑 `sha256sum -c files.sha256`，而该件在源站与边缘都 403。
+        # 判据：钉 packaging/check_registry_external.expect（钉真实状态，变化即红）。
+        # CI 跑离线自证（S1 钉一致 · S2 变 200 · S3 变 404 · S4 过期钉 · S5 全不可达 rc=3 ·
+        #   S6 指引不再印 marker · S7 规模锚点）—— 实地探测在本地全量门（runner 出网不可靠，会把噪声当缺陷）。
+        run: |
+          bash packaging/check_registry_external.sh --self-test > /tmp/v_regx.log 2>&1 || { echo "❌ registry_external 自证失败（判据自身失效，结论不可信）"; tail -20 /tmp/v_regx.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^══ 自证' /tmp/v_regx.log | tail -1
+          echo "✅ registry_external（钉表比对 · 指引自洽 · 规模锚点 · 负控 7/0）PASS"
+
       - name: selfwake_guard（禁止自建平行告警/唤醒通道 · 用户令 2026-10-12）
         # 本机侧扫描面（/data/gatevm 的无人值守脚本）在 CI 上不存在 ⇒ 该档记 ℹ️ 跳过，
         # 判据**不因此失效**（J4 规模锚点只锚仓库面）。仓库面在 CI 上有完整牙。
