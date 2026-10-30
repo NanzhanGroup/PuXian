@@ -1746,6 +1746,9 @@ run release_assets bash packaging/check_release_assets.sh --self-test
 #     E3 指引自洽：manifest 取不到时 version.json 不许仍印 guidance_marker
 #     E4 规模锚点（探项≥4 · 站≥2）· E5 全 000 ⇒ rc=3「无法判定」，不当绿
 #   本地跑**实地探测**（本门就是对外可见面的看守）；CI 跑 `--self-test`（7 条，4 个负控，离线确定）。
+#   ⚠️ 本门**要出网** ⇒ 必须在 $PX_GATEVM/net_needed.txt 登记 `registry_external`，
+#      否则分片调度会把它塞进 netns 隔离片 ⇒ 8 次探测全 000 ⇒ rc=3 门清单内判红。
+#      （M363 链首跑实测就是这个装置坑，不是外链二次故障；外链现状仍是 files.sha256 403 —— 缺陷 631 未完）
 #   ⚠️ 刻意不 source gate_lock.sh：本门只发 GET、**不写仓库**（不在其适用面：负控改源码的门）；
 #      且 gate_lock 的存活判据只认 `verify.sh|run_gates.sh|m116_gates.sh`，
 #      本脚本若抢锁，反会被别的门当「陈旧锁」抢走 ⇒ 那是伪保护，不如如实不锁。
