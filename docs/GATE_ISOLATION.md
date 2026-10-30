@@ -316,9 +316,15 @@ m267_perf 则**确实**需要空机（性能基线是空机采的，负载下必
 ### 十.9 出网门（`net_needed.txt`）与 M363 的装置坑（2026-10-30）
 
 分片 2..N 一律 `unshare --net` 隔离 ⇒ **只有 shard1 带宿主网络**。任何**自己要出网**的门必须登记在
-`$PX_GATEVM/net_needed.txt`（默认 `/data/gatevm/net_needed.txt`），调度器会在排完负载后把它 pin 到 shard1。
+`selfhost/net_needed.txt`（**仓内权威副本**，M364 起）或宿主 `$PX_GATEVM/net_needed.txt`（默认 `/data/gatevm`，兼容保留）；
+调度器读「**仓内 ∪ 宿主**」合并后，在排完负载后把它们 pin 到 shard1。
 
 当前登记：`upstream_tests`（dns 用例要 UDP 出网）· `registry_external`（外链可达性探测，M363）。
+
+★ M364（2026-10-30 第 239 轮）为什么入仓：此前表**只在宿主目录**（仓库外），`gates.registry.sh` 里只有一句注释
+⇒ 换机 / 重建 gatevm 后表就没了，M363 那两红会**静默复现**，而 `check_registry_external.sh` 只提示不判红。
+现在 `selfhost/check_gate_registry.sh` 第 6 节自检：① 仓内表存在且非空（规模锚点 ≥2）② 逐条必须是**门清单里的门名**
+（拼错 ⇒ 调度器静默失效 ⇒ 必红）③ 宿主表（若存在）逐条在清单内且 **⊆ 仓内表**（两表不得漂移）。三条各有负控。
 
 ⚠️ 漏登记的**症状与「外链真挂了」同形**：探测全 000 ⇒ 本门判 rc=3 UNKNOWN ⇒ 门清单内算红。
 所以归因第一步不是看外链，而是看**落点分片**（`/data/gatevm/shard-*/plan.tsv`）与分片是否 `--net`。
