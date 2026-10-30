@@ -1496,6 +1496,15 @@ jobs:
           sudo HOME=/root PX_GATE_LOCK="$RUNNER_TEMP/.px_gate_lock" bash examples/m324_tls_failclosed/verify.sh --neg-skip > /tmp/v_m324.log 2>&1 || { echo "❌ m324_tls_failclosed 门失败（fail-closed / IP 校名 / 还原）"; echo "--- v_m324.log 末 40 行（不窄 grep：门锁 bail 行形如「❌ [gate_lock] ...」无缩进，窄模式会全滤掉 ⇒ 缺陷 570）---"; tail -40 /tmp/v_m324.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m324.log | tail -8
           echo "✅ m324_tls_failclosed（A1–A5 · CA 不可用 ⇒ 拒绝 · IP 校名生效）PASS"
+      - name: m362_divmod（`//` / `%` 欧几里得语义逐值对拍 · M362 · 缺陷 628）
+        # 判据：A 三轨逐字节一致（解释 / VM / C）· B 与 bash 依欧几里得定义现算的参考值对拍
+        #       · C 门侧重算 a==q*b+r 与 r∈[0,|b|)（被测程序自报结论不参与判定）· D 覆盖度自证
+        # 负控：NC1 参考值扰动 / NC2 q 扰动 / NC3 r 扰动成负 / NC4 换 C 截断除法（须重编两轨 ⇒ CI 用 --neg-skip）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m362_divmod/verify.sh --neg-skip > /tmp/v_m362.log 2>&1 || { echo "❌ m362_divmod 门失败（欧几里得 // % 语义）"; tail -40 /tmp/v_m362.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m362.log | tail -8
+          echo "✅ m362_divmod（三轨一致 · 逐值对拍 · 余数域 [0,|b|)）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
