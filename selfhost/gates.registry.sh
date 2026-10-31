@@ -1760,3 +1760,9 @@ run pkg_pipe_grep bash selfhost/check_pipe_grep.sh --gate
 #   负控：NC1 参考值扰动 ⇒ B 红 · NC2 q 扰动 ⇒ C 红 · NC3 r 越界 ⇒ C2 红 · NC4 C 截断除法 ⇒ B 红。
 #   注：C 判据第一版写成 if/else，NC3 红不了（r 越界会先命中 a!=q*b+r）⇒ 改两条独立判定才成立。
 run m362_divmod bash examples/m362_divmod/verify.sh
+# ── M365（第 239 轮）：命名参数构造（结构体）三轨对拍门 ────────────────────
+#   兑现 docs/spec.md §3.7 从第一版就写着的 `p = Point(x: 1, y: 2)`（此前实现拒绝 ⇒ 文档说谎）。
+#   判据：A 三轨逐字节一致 · B 与门侧 bash 独立参考对拍（用例表同时生成程序与期望）
+#         · C 7 类错误三轨同码同文 + 关键词谓词 · D 覆盖度自证（≥5 用例 / ≥7 错误类 / 四形态齐）
+#   负控：NC1 期望扰动 ⇒ B 红 · NC2 程序里两个命名值互换 ⇒ B 红 · NC3 错误期望改动 ⇒ C 红。
+run m365_named_args bash examples/m365_named_args/verify.sh

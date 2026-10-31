@@ -1505,6 +1505,16 @@ jobs:
           bash examples/m362_divmod/verify.sh --neg-skip > /tmp/v_m362.log 2>&1 || { echo "❌ m362_divmod 门失败（欧几里得 // % 语义）"; tail -40 /tmp/v_m362.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m362.log | tail -8
           echo "✅ m362_divmod（三轨一致 · 逐值对拍 · 余数域 [0,|b|)）PASS"
+      - name: m365_named_args（命名参数构造 · 三轨对拍 · M365）
+        # 判据：A 三轨逐字节一致（解释 / VM / C）· B 与门侧 bash 独立参考对拍（用例表同时生成程序与期望）
+        #       · C 7 类错误三轨同码同文 + 关键词谓词 · D 覆盖度自证
+        # 负控：NC1 期望扰动 / NC2 命名值互换 / NC3 错误期望改动（均无需重编 ⇒ CI 也跑；
+        #   子门自调用 --neg-skip 防递归，故此处直接跑全量）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m365_named_args/verify.sh > /tmp/v_m365.log 2>&1 || { echo "❌ m365_named_args 门失败（命名参数构造 · 三轨）"; tail -40 /tmp/v_m365.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m365.log | tail -8
+          echo "✅ m365_named_args（三轨一致 · 求值按书写顺序 · 报文同码同文）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

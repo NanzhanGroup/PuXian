@@ -785,6 +785,24 @@ def bc_emit_expr(expr, dst, func):
         # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）/
         # B2 struct/enum 构造（callee Var 为类型名 → NEWSTRUCT/NEWENUM）
         let callee = expr[1]
+        # M365：命名参数（仅结构体构造）—— 装配与报文走 argmap.px（三轨同一份）。
+        #   与 bc_emit_struct_new 的差别只有一处：**先按书写顺序求值到临时槽，
+        #   再 MOV 到字段槽**，保证求值顺序与解释轨逐字对齐（含副作用实参）。
+        if argmap_has_named(expr[2]):
+            var owner = null
+            if callee[0] == "Var":
+                owner = rust_unescape(callee[1])
+            var sti0 = -1
+            if owner != null:
+                sti0 = bc_struct_index(owner)
+            if sti0 < 0:
+                let mn0 = bc_n_add(g_bcm["n_pool"], "R2001: " + argmap_reject(owner))
+                bc_emit_inst(func, "RAISE", 0, mn0, 0)
+                var dz = dst
+                if dz < 0:
+                    dz = bc_tmp(func)
+                return dz
+            return bc_emit_struct_named(owner, sti0, expr[2], dst, func)
         # M112-S0（Issue 46）：E3004 走共享语义层（与 C 轨同一条检查）。
         # M112-S2（Issue 52）：VM 轨 cg_ffi 已由 bc_emit_program 从 ExternDef 填充
         #   ⇒ 此处检查真正生效（此前 cg_ffi 恒空 → no-op）。
@@ -972,6 +990,39 @@ def bc_emit_struct_new(cname, sti, args, dst, func):
     while ai < n:
         bc_emit_expr(args[ai], base + ai, func)
         ai += 1
+    bc_emit_inst(func, "NEWSTRUCT", d, sti, base)
+    return d
+# M365：命名参数的结构体构造 —— 先按**书写顺序**求值到临时槽，再按字段序 MOV。
+#   为什么不能复用 bc_emit_struct_new：它把 args[ai] 直接发射进 base+ai
+#   ⇒ 求值顺序 = 字段顺序，而解释轨是书写顺序 ⇒ 带副作用的实参三轨分叉。
+def bc_emit_struct_named(cname, sti, written_args, dst, func):
+    let sd = g_bcm["structs"][sti]
+    let n = len(sd["fnames"])
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let am = argmap_struct(sd["fnames"], written_args, cname)
+    if am[0] != null:
+        let mn = bc_n_add(g_bcm["n_pool"], "R2001: " + am[0])
+        bc_emit_inst(func, "RAISE", 0, mn, 0)
+        return d
+    let base = bc_tmp(func)
+    while func["next_slot"] < base + n:
+        bc_tmp(func)
+    let temps = []
+    var ai = 0
+    while ai < len(written_args):
+        var vnode = written_args[ai]
+        if vnode[0] == "NamedArg":
+            vnode = vnode[2]
+        let t = bc_tmp(func)
+        bc_emit_expr(vnode, t, func)
+        temps.append(t)
+        ai += 1
+    var fi = 0
+    while fi < n:
+        bc_emit_inst(func, "MOV", base + fi, temps[am[1][fi]], 0)
+        fi += 1
     bc_emit_inst(func, "NEWSTRUCT", d, sti, base)
     return d
 # Color(Red) / Color("Red")：实参=变体名 → NEWENUM dst, N(类型), N(变体)
