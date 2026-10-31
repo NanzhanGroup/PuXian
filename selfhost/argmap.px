@@ -1,0 +1,87 @@
+# ============================================================
+# M365: argmap.px —— 命名参数（结构体构造）装配的**唯一算法**
+# ------------------------------------------------------------
+# 为什么单独成文件：解释 / VM / C 三轨各有一套「实参 → 字段」的
+#   装配代码，历史上同一个特性三轨各写一遍 ⇒ 分叉（M237 缺陷
+#   366/367/368/371 都是「一轨对、另两轨静默或崩」）。
+#   parser.px 导入本文件 ⇒ compiler.px（C 轨 + VM 轨）与
+#   interp.px（解释轨）拿到的是**同一份**装配与报文。
+#
+# 语义定稿（写进 docs/spec.md §3.7 / §16.3）：
+#   · 实参按**书写顺序**求值，再按**字段名**装配
+#     —— 命名参数只决定「装到哪个字段」，不改变求值顺序
+#     （求值顺序可观测：实参里带副作用调用时顺序不同即行为不同）
+#   · 位置参数只填「尚未被命名参数占用的字段」，从左到右
+#   · 位置参数不得出现在命名参数之后（parser 层 E2001，三轨天然一致）
+#   · 命名参数**仅**用于结构体构造；函数 / 方法 / 内置调用一律拒绝
+#     （函数side 命名参数属另一特性，见 MINI_SUBSET §三 表第 5 条）
+#   · 报错一律 R2001（与结构体字段数错同一族），三轨**同码同文**
+# ============================================================
+
+def argmap_has_named(args):
+    var i = 0
+    while i < len(args):
+        if args[i][0] == "NamedArg":
+            return true
+        i += 1
+    return false
+
+def argmap_field_index(field_names, name):
+    var i = 0
+    while i < len(field_names):
+        if field_names[i] == name:
+            return i
+        i += 1
+    return -1
+
+# 返回 [err_body_or_null, order]
+#   err_body：**不带** R 码前缀的报文体（三轨各自套自己的错误通道）
+#   order[i]：第 i 个字段取 args 的哪个下标（无错时是 args 下标的排列）
+#   → 调用方据此「按书写顺序求值、按 order 装字段」
+def argmap_struct(field_names, args, owner):
+    let nf = len(field_names)
+    let order = []
+    var i = 0
+    while i < nf:
+        order.append(-1)
+        i += 1
+    if not argmap_has_named(args):
+        if len(args) != nf:
+            return ["结构体 " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+        var k0 = 0
+        while k0 < nf:
+            order[k0] = k0
+            k0 += 1
+        return [null, order]
+    var pend = 0
+    var ai = 0
+    while ai < len(args):
+        let a = args[ai]
+        if a[0] == "NamedArg":
+            let nm = rust_unescape(a[1])
+            let fi = argmap_field_index(field_names, nm)
+            if fi < 0:
+                return ["结构体 " + owner + " 没有字段「" + nm + "」", order]
+            if order[fi] != -1:
+                return ["结构体 " + owner + " 字段「" + nm + "」重复给出", order]
+            order[fi] = ai
+        else:
+            while pend < nf and order[pend] != -1:
+                pend += 1
+            if pend >= nf:
+                return ["结构体 " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+            order[pend] = ai
+            pend += 1
+        ai += 1
+    var fi2 = 0
+    while fi2 < nf:
+        if order[fi2] == -1:
+            return ["结构体 " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
+        fi2 += 1
+    return [null, order]
+
+# 非结构体目标的统一报文体（三轨同文）
+def argmap_reject(owner):
+    if owner == null:
+        return "命名参数仅支持结构体构造（目标不是结构体）"
+    return "命名参数仅支持结构体构造（「" + owner + "」不是结构体）"

@@ -294,6 +294,44 @@ def i_eval_call(node, env):
     let callee = node[1]
     let args = node[2]
     let pos = node[3]
+    # M365：命名参数（仅结构体构造）。装配与报文走 argmap.px（三轨同一份）。
+    #   ⚠️ 求值顺序：**按书写顺序**算每一个实参，装配只用 order 决定落到哪个字段
+    #   （命名参数若改求值顺序，带副作用的实参三轨就会分叉）。
+    if argmap_has_named(args):
+        var owner = null
+        if callee[0] == "Var":
+            owner = rust_unescape(callee[1])
+        if callee[0] != "Var" or not g_structs.has(owner):
+            return Err(i_r2001(argmap_reject(owner), pos))
+        let sdef = g_structs[owner]
+        let fnames = []
+        var fi = 0
+        while fi < len(sdef["fields"]):
+            fnames.append(sdef["fields"][fi]["name"])
+            fi += 1
+        let am = argmap_struct(fnames, args, owner)
+        if am[0] != null:
+            return Err(i_r2001(am[0], pos))
+        let vals = []
+        var ai0 = 0
+        while ai0 < len(args):
+            var vnode = args[ai0]
+            if vnode[0] == "NamedArg":
+                vnode = vnode[2]
+            let vr0 = i_eval_expr(vnode, env)
+            if vr0.is_err():
+                return Err(vr0.err())
+            vals.append(vr0.unwrap())
+            ai0 += 1
+        let ordered = []
+        var oi = 0
+        while oi < len(am[1]):
+            ordered.append(vals[am[1][oi]])
+            oi += 1
+        let cr0 = i_eval_expr(callee, env)
+        if cr0.is_err():
+            return Err(cr0.err())
+        return i_call_value(cr0.unwrap(), ordered, pos)
     # chan/mutex/rwlock 构造（callee 为 Var）
     if callee[0] == "Var":
         let cname = rust_unescape(callee[1])

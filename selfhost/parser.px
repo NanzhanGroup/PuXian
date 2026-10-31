@@ -7,6 +7,8 @@
 # ============================================================
 import "pxlexer.px"
 import "astdump.px"
+# M365：命名参数装配的唯一算法（三轨共用；本文件被 compiler.px / interp.px 同时导入）
+import "argmap.px"
 # ---------- lex 全局状态（供 pxlexer 函数引用；import 不注册顶层 let） ----------
 var g_src = ""
 var g_len = 0
@@ -59,6 +61,7 @@ let LAYOUT = {
     "Index": ["Index", [["obj", "n"], ["index", "n"], ["pos", "p"]]],
     "Slice": ["Slice", [["obj", "n"], ["start", "o"], ["end", "o"], ["step", "o"], ["pos", "p"]]],
     "Call": ["Call", [["callee", "n"], ["args", "l"], ["pos", "p"]]],
+    "NamedArg": ["NamedArg", [["name", "s"], ["value", "n"], ["pos", "p"]]],
     "Unary": ["Unary", [["op", "r"], ["operand", "n"], ["pos", "p"]]],
     "Binary": ["Binary", [["op", "r"], ["left", "n"], ["right", "n"], ["pos", "p"]]],
     "Pipe": ["Pipe", [["value", "n"], ["func", "n"], ["pos", "p"]]],
@@ -547,6 +550,10 @@ def parse_struct_def():
         expect(":", "':'")
         let fty = parse_type()
         fields.append(["StructField", qstr(fname), fty, fpos])
+        # M365：spec §3.7 示例里写了字段默认值 `timeout: int = 30`，实现没有 ⇒
+        #   修前报 `E2001 结构体字段后期望换行`（指不到真因）。改为可执行指引。
+        if chk("="):
+            perr("E2001", "结构体字段默认值尚未实现（spec §3.7 计划中）—— 请去掉 `= 默认值`，在构造处显式给值")
         if not chk("换行") and not chk("去缩进"):
             perr("E2001", "结构体字段后期望换行")
     if chk("EOF"):
@@ -1036,9 +1043,28 @@ def parse_call_args():
     expect("(", "'('")
     skip_expr_ws()
     let args = []
+    var seen_named = false
     if not chk(")"):
         while true:
-            args.append(parse_expr())
+            # M365：命名参数 `名: 值`（结构体构造）——spec §3.7 早已这么写，
+            #   修前 parser 只吃位置参数 ⇒ 用户照文档写必得
+            #   `E2001 期望 ')'，实际得到 :`（指不到真因，属「文档承诺、实现拒绝」）。
+            #   AST：["NamedArg", name(s), value(n), pos(p)]，由 argmap.px 装配。
+            if pk() == "标识符" and chk2(":"):
+                let apos = ppos()
+                let aname = pv()
+                adv()
+                adv()
+                skip_expr_ws()
+                args.append(["NamedArg", qstr(aname), parse_expr(), apos])
+                seen_named = true
+            else:
+                if seen_named:
+                    perr("E2001", "位置参数不能出现在命名参数之后（把这个参数也写成 `名: 值`）")
+                let av = parse_expr()
+                if chk(":"):
+                    perr("E2001", "命名参数的键必须是单个标识符（不能是表达式），这里得到 " + pk_display())
+                args.append(av)
             skip_expr_ws()
             if chk(","):
                 adv()

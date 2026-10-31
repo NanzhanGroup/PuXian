@@ -458,6 +458,41 @@ def cg_gen_expr(expr):
     if ty == "Call":
         let callee = expr[1]
         let args = expr[2]
+        # M365：命名参数（仅结构体构造）—— 装配与报文走 argmap.px（三轨同一份）。
+        #   求值顺序：cg_seq_join 按**传入顺序**造临时量 ⇒ 传书写顺序 vnodes，
+        #   再按 order 取临时名装字段（与解释轨 / VM 轨逐字对齐）。
+        if argmap_has_named(args):
+            var owner = null
+            if callee[0] == "Var":
+                owner = rust_unescape(callee[1])
+            if owner == null or not cg_structs.has(owner):
+                return cg_err_expr("R2001: " + argmap_reject(owner))
+            let fields0 = cg_structs[owner]
+            let am0 = argmap_struct(fields0, args, owner)
+            if am0[0] != null:
+                return cg_err_expr("R2001: " + am0[0])
+            let vnodes = []
+            let parts = []
+            var ai0 = 0
+            while ai0 < len(args):
+                var vnode = args[ai0]
+                if vnode[0] == "NamedArg":
+                    vnode = vnode[2]
+                vnodes.append(vnode)
+                parts.append(cg_gen_expr(vnode))
+                ai0 += 1
+            let sj0 = cg_seq_join(vnodes, parts)
+            let fnames0 = []
+            var fi0 = 0
+            while fi0 < len(fields0):
+                fnames0.append("\"" + fields0[fi0] + "\"")
+                fi0 += 1
+            let vals0 = []
+            var oi0 = 0
+            while oi0 < len(am0[1]):
+                vals0.append(sj0[1][am0[1][oi0]])
+                oi0 += 1
+            return cg_seq_wrap(sj0[0], "px_struct(\"" + owner + "\", (char*[]){" + join(", ", fnames0) + "}, (LXValue[]){" + join(", ", vals0) + "}, " + str(len(fields0)) + ")")
         if callee[0] == "Var":
             let cname = rust_unescape(callee[1])
             # M42：extern def → FFI 调用（统一走 ffi_call C 桥，双模式一致）
