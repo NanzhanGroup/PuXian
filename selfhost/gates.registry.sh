@@ -1061,6 +1061,16 @@ run gate_anchor_sentinel python3 selfhost/check_gate_anchors.py
 #   是**老版本**烘出的逐字节基准 ⇒ CI 两个 job 红（aarch64 自举自证 / 自举回归）。
 #   本地全量门测不到（`bootstrap_prove(_bc)` 属 CI 独占 · 各约 7 分钟）⇒ 本守卫是**廉价的那一半**。
 run version_golden bash selfhost/check_version_golden.sh
+step "M368 · 版本链还活着没有（bump_version.sh 无人调用 · 缺陷 638）"
+#   来历：`packaging/bump_version.sh` 能改 9 个文件的版本串，但**没有任何一步强制调它**
+#   ⇒ `tools/px` 的 `SELFHOST_VER` 从 0.2.281 一路冻到 v0.2.367（84 个里程碑没涨）：
+#     源码直跑 `--version` 报 0.2.281、发布包是 0.2.367 —— 对外两个数，而所有门全绿
+#     （它们量行为，不量「版本号还活着没有」）。
+#   判据：E0 锚点必须取得到（写法变了即红，避免空对比恒绿）· E1 6 文件 7 锚点取值相同 ·
+#         E2 与最新 tag 里程碑差 ≤ 1（读不到 tag ⇒ **SKIP 明示**，不当绿）。
+#   自证 5 条：1 正控 + 3 负控（单点漂移/锚点失效/停摆 3 个里程碑）+ 1 SKIP。
+#   配套闸门在创建那一刻：`packaging/make_tag.sh` 版本不符 ⇒ 拒绝打 tag（rc=3）。
+run version_drift bash selfhost/check_version_drift.sh
 step "shell 契约守卫（sh 调用脚本 / bashism × shebang · M251s1 · 缺陷 441）"
 #   来历：CI run 37152650582 step7 —— `selfhost/check_version_golden.sh` 的**自证**用
 #   `sh "$SELF"` 调自己，而 ubuntu 的 /bin/sh 是 **dash**：不支持 `set -o pipefail`；

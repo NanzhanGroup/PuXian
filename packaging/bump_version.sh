@@ -52,11 +52,15 @@ echo "=== 版本号：当前 $CUR ==="
 #   与 `compiler.bc.dump` **必须同步**，否则 `bootstrap_prove.sh` 必然失败（CI 实测红：
 #   aarch64 自举自证 + 自举回归两个 job）。基准是**逐字节副本**，而版本串是**字面量**
 #   ⇒ 文本替换与「重编译」等价（下方校验 + `check_version_golden.sh` + CI 的 prove 三重把关）。
+# M368（缺陷 638）：**历史陈述行**不进版本链 —— 注释里「实测（本机 0.2.281）」记的是
+#   当年的测量现场，随版本号一起改就是把真事改成假话。这类行**既不替换、也不算残留**。
+KEEP_RE='#.*实测（本机 '
 FILES="tools/px tools/pxc selfhost/compiler.px selfhost/interp.px tools/pxfmt.px tools/pxlsp.px tools/pxmcp.px selfhost/golden/compiler.c selfhost/golden/compiler.bc.dump"
-printf '  %-24s %s\n' "文件" "含 $CUR 的次数"
+printf '  %-24s %s\n' "文件" "含 $CUR 的次数（已扣历史陈述行）"
 for f in $FILES; do
     [ -f "$f" ] || die "缺文件：$f"
-    n="$(grep -cF "$CUR" "$f" 2>/dev/null || echo 0)"
+    n="$(grep -F "$CUR" "$f" 2>/dev/null | grep -vcE "$KEEP_RE" || true)"
+    n="${n:-0}"
     printf '  %-24s %s\n' "$f" "$n"
     [ "$n" -ge 1 ] || die "$f 里找不到 '$CUR' —— 版本号可能已被改过，或该文件的写法变了"
     case "$f" in
@@ -75,9 +79,11 @@ fi
 BAK="$(mktemp -d)"
 for f in $FILES; do mkdir -p "$BAK/$(dirname "$f")"; cp "$f" "$BAK/$f"; done
 
-if ! python3 - "$CUR" "$NEW" $FILES <<'PY'
-import sys, pathlib, os
+if ! KEEP_RE="$KEEP_RE" python3 - "$CUR" "$NEW" $FILES <<'PY'
+import sys, pathlib, os, re
 cur, new = sys.argv[1], sys.argv[2]
+keep_re = os.environ.get("KEEP_RE", "")
+keep = re.compile(keep_re) if keep_re else None
 # ⚠ 去重：`tools/pxc` 是 `tools/px` 的**符号链接** ⇒ 同一实体。
 #   不去重的话，处理完 px 再处理 pxc 会读到**已替换**的内容
 #   ⇒ 报「找不到旧版本」。（2026-10-03 实测踩到 —— 判据的「找不到」先怀疑判据自己。）
@@ -89,11 +95,18 @@ for fs in sys.argv[3:]:
         continue
     seen.add(rp)
     p = pathlib.Path(fs)
-    s = p.read_text(encoding="utf-8")
-    n = s.count(cur)
+    lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    n = 0
+    for i, ln in enumerate(lines):
+        # M368（缺陷 638）：历史陈述行（注释里的实测版本）原样保留
+        if keep is not None and keep.match(ln):
+            continue
+        if cur in ln:
+            n += ln.count(cur)
+            lines[i] = ln.replace(cur, new)
     if n < 1:
         print("   ❌ %s 里没有 %s" % (fs, cur), file=sys.stderr); sys.exit(1)
-    p.write_text(s.replace(cur, new), encoding="utf-8")
+    p.write_text("".join(lines), encoding="utf-8")
     print("   ✏️  %s：%d 处" % (fs, n))
 PY
 then
@@ -107,7 +120,10 @@ fi
 BAD=0
 for f in $FILES; do
     grep -qF "$NEW" "$f" || { echo "  ❌ $f 里没有新版本 $NEW" >&2; BAD=1; }
-    grep -qF "$CUR" "$f" && { echo "  ❌ $f 里仍有旧版本 $CUR" >&2; BAD=1; }
+    # M368（缺陷 638）：历史陈述行不算残留（见上方 KEEP_RE 说明）
+    if [ "$(grep -F "$CUR" "$f" 2>/dev/null | grep -vcE "$KEEP_RE" || true)" != "0" ]; then
+        echo "  ❌ $f 里仍有旧版本 $CUR（非历史陈述行）" >&2; BAD=1
+    fi
 done
 if [ "$BAD" != 0 ]; then
     for f in $FILES; do cp "$BAK/$f" "$f"; done
@@ -118,7 +134,11 @@ rm -rf "$BAK"
 echo "✅ 已把 $CUR → $NEW 写在 9 个文件里（含 2 份自举基准）"
 echo
 echo "⚠️ 接下来必做（改了 selfhost/*.px ⇒ 源码链变了）："
-echo "   ① 重烘入库件：  ./selfhost/rebake_bin.sh"
+echo "   ① 重烘入库件：  ./selfhost/rebake_bin.sh --rebake-all"
+echo "      ⚠️ **必须 --rebake-all**（缺陷 638 第二层，M368 实测）：默认只烘 pxc / pxc_vm，"
+echo "         而 pxi / pxfmt / pxlsp / pxmcp 也内嵌版本串 ⇒ 只跑默认档时"
+echo "         ./bootstrap/pxi --version 仍印旧版本（实测 0.2.281），bump 等于做了一半；"
+echo "         自证：./selfhost/rebake_bin.sh --check-all（要求 14/14 与当前源码一致）"
 echo "   ② 冻定格验证：  见 CHANGELOG M249 的「重烘 + 冻结门」段"
 echo "   ③ **确认基准未被误改**：cd selfhost && ./bootstrap_prove.sh && ./bootstrap_prove_bc.sh"
 echo "      （版本串是字面量 ⇒ 文本替换与重编译等价；这两条是**最终判据**）"

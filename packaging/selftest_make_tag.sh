@@ -327,6 +327,38 @@ else
     chkn "R6 ★负控：拆掉后**不再**给出 v0.2.247" "$got" "v0.2.247"
 fi
 
+# ── W 段：版本链闸（M368 · 缺陷 638）──
+#   来历：`packaging/bump_version.sh` 存在、能改 9 个文件，但**没有任何一步调它**
+#   ⇒ `tools/px` 的 SELFHOST_VER 从 0.2.281 一路冻到 v0.2.367（84 个里程碑没涨）：
+#     源码直跑 --version 与发布包是两个数，而所有门全绿（它们量行为，不量版本号）。
+#   判据三条：① 不符 ⇒ 拒绝（rc=3）且**不得留下 tag**（副作用判据）
+#             ② 相符 ⇒ 正常建 tag（证明闸不误伤）
+#             ③ SKIP_VER_GATE=1 ⇒ 显式绕过（回补历史 tag 的唯一出口）
+newrepo_withver() {  # newrepo_withver <目录名> <SELFHOST_VER>
+    local d; d="$(newrepo "$1")"
+    mkdir -p "$d/tools"
+    printf '#!/usr/bin/env bash\nSELFHOST_VER="%s"\nSELFHOST_MILESTONE="M-B9a"\n' "$2" > "$d/tools/px"
+    git -C "$d" add -A; git -C "$d" commit -qm "版本串夹具：$2"
+    printf '%s' "$d"
+}
+W1="$(newrepo_withver w1 0.2.100)"
+run "$W1" --milestone 800
+chk "W1 源码版本与 tag 不符 ⇒ rc=3（拒绝打 tag）" "$RC" "3"
+if printf '%s' "$out" | grep -q '版本链闸'; then ok "W1 报文点名「版本链闸」（自己说清为什么拒）"
+else bad "W1 报文没提版本链闸：$(printf '%s' "$out" | head -2 | tr '\n' ' ')"; fi
+chk "W1 拒绝后仓库里**没有**新 tag（副作用判据）" "$(tags "$W1")" ""
+
+W2="$(newrepo_withver w2 0.2.800)"
+run "$W2" --milestone 800
+chk "W2 版本一致 ⇒ rc=0（闸不误伤正常发布）" "$RC" "0"
+chk "W2 tag 已建" "$(tags "$W2")" "v0.2.800 "
+
+W3="$(newrepo_withver w3 0.2.100)"
+out="$(PX_TAG_REPO="$W3" SKIP_VER_GATE=1 bash "$MT" --milestone 800 2>&1)"; RC=$?
+chk "W3 SKIP_VER_GATE=1 ⇒ rc=0（回补历史 tag 的唯一出口）" "$RC" "0"
+if printf '%s' "$out" | grep -q 'SKIP_VER_GATE'; then ok "W3 跳过时**打印**了绕过声明（不静默）"
+else bad "W3 跳过时没有声明"; fi
+
 # ── V 段：packaging 工具链的执行位一致性（M254 · 缺陷 450）──
 #   来历：M249 建 make_tag.sh 时漏了执行位 ⇒ `packaging/make_tag.sh --milestone N` 报
 #   Permission denied，而 bump_version.sh / pxrepo_mirror.sh 是 755、能直接跑 —— **同类工具不一致**

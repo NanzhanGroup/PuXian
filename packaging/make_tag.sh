@@ -184,7 +184,38 @@ else
     TAG="v${VER_BASE}.${MILESTONE}"
 fi
 
-# ---------- 4. 命名合规（第 ① 道防线的核心）----------
+# ---------- 3.5 版本链闸（M368 · 缺陷 638）----------
+# 为什么把这道闸放在**创建那一刻**：
+#   tag 名的 patch 段就是里程碑号 ⇒ 源码里的用户可见版本必须与它一致。
+#   修前 `packaging/bump_version.sh` 存在但**没有任何一步调它** ⇒ `tools/px` 的
+#   `SELFHOST_VER` 从 0.2.281 一路冻到 v0.2.367（84 个里程碑没涨）：源码直跑
+#   `./tools/px --version` 与发布包说**两个数**，而没有任何门看守它。
+#   回补历史 tag（`--at <旧提交>` / `--move` 旧名）时版本必然对不上 ⇒ 需显式
+#   `SKIP_VER_GATE=1`（**故意要人写出来**，不设默认绕过）。
+if grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$TAG"; then
+    _WANTVER="${TAG#v}"
+    _VERFILE="$REPO/tools/px"
+    _CURVER="$(grep -oE '^SELFHOST_VER="[0-9]+\.[0-9]+\.[0-9]+"' "$_VERFILE" 2>/dev/null \
+        | head -1 | sed -E 's/^SELFHOST_VER="(.*)"$/\1/')"
+    if [ ! -f "$_VERFILE" ]; then
+        # 夹具仓（selftest_make_tag.sh 造的假仓库）没有源码树 ⇒ 判不了，**明示跳过**
+        say "⏭  版本链闸 SKIP：$REPO 里没有 tools/px（夹具仓/裸仓），这条没有验到"
+    elif [ "${SKIP_VER_GATE:-0}" = "1" ]; then
+        say "⚠️ SKIP_VER_GATE=1 ⇒ **跳过**版本链闸（源码 $_CURVER ⇄ tag $TAG），仅限回补历史 tag"
+    elif [ -z "$_CURVER" ]; then
+        EXIT_CODE=3 die "读不到 tools/px 的 SELFHOST_VER ⇒ 拒绝打 $TAG（判据失效时不放行）"
+    elif [ "$_CURVER" != "$_WANTVER" ]; then
+        echo "❌ 拒绝打 tag $TAG：源码版本串是 $_CURVER，tag 要求 $_WANTVER（缺陷 638 的闸）" >&2
+        echo "   tag 的 patch 段就是里程碑号 ⇒ 两者必须一致，否则发布包与源码对外的版本号分叉。" >&2
+        echo "   修法：packaging/bump_version.sh $_WANTVER  → ./selfhost/rebake_bin.sh → 提交后再打 tag" >&2
+        echo "   （确需回补历史 tag：SKIP_VER_GATE=1 显式绕过）" >&2
+        EXIT_CODE=3 die "版本链闸拒绝"
+    else
+        say "✓ 版本链闸：源码 $_CURVER == tag $TAG"
+    fi
+fi
+
+
 # 先给**已知的错误形态**一句人话，再给通用兜底 —— 用户/后人不该靠猜。
 if ! grep -qE "$TAG_NAME_RE" <<< "$TAG"; then
     echo "❌ 拒绝创建不合规 tag: $TAG" >&2
