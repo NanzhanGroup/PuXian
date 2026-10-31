@@ -1897,6 +1897,45 @@ def main():
 4. 帧内绑定归属：**声明式**绑定（`var/let/const`、嵌套 `def`、`for` 变量）⇒ **帧局部**
    （遮蔽同名模块全局）；**赋值式**绑定（`x = …`，无声明）⇒ 名字是模块绑定则写**模块全局**，
    否则也是帧局部（解释轨同判）。
+5. **类型名（`enum` / `struct`）与变量同名时，变量胜**（M369 · 缺陷 635）：同一作用域内
+   （模块体或帧，都按上一条的函数级口径），**变量绑定优先于类型名**，与二者**声明先后无关**；
+   类型名不覆盖已存在的值绑定（`let Color = {…}` 在 `enum Color:` 之前声明时，之后仍按变量解）。
+   解释轨本来就是这个结果（类型名是放进同一个 env 的普通绑定，变量遮蔽它）；编译两轨修前
+   **按名字查类型表先命中** ⇒ `let Color = {"Red": 7}` 之后 `Color.Red` 在 VM/C 轨仍取枚举值
+   （实测三轨分叉：解释轨 `7` · VM/C 轨 `Color.Red`；同族 `let Shape = Box(1)` + `Shape.Circle(2)`
+   是解释轨 `102` · VM/C 轨 `R1005`）。**遮蔽按帧生效**（声明在块内/分支内也算），
+   函数内「先用后声明」仍按 §17.14 报 `R1001`（三轨同码同文）。
+
+```python
+enum Color:
+    Red
+
+def shadowed() -> int:
+    let Color = {"Red": 7}     # 变量遮蔽类型名（本帧内）
+    return Color.Red           # 7
+
+def plain():
+    print(Color.Red)           # Color.Red（另一帧，未被遮蔽）
+
+enum Shape:
+    Circle
+
+struct Box:
+    n: int
+
+impl Box:
+    def Circle(self, k: int) -> int:
+        return k + 100
+
+def main():
+    let Shape = Box(1)
+    print(Shape.Circle(2))     # 102（方法调用，不是枚举变体）
+    print(shadowed())          # 7
+    plain()
+main()
+```
+
+门：`examples/m369_name_shadow/`（6 正控 × 三轨逐字节一致 + 错误面同码同文 + 跨函数回归 + 覆盖度自证 + 3 道负控）。
 
 ```python
 for p in [1, 2, 3]:

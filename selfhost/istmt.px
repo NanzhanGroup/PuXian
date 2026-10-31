@@ -258,6 +258,20 @@ def i_exec_block(body, env):
             return Ok(fl)
         i += 1
     return Ok(null)
+# ---------- 类型名绑定（M369 · 缺陷 635：变量优先）----------
+#   解释轨把类型名当**绑定**放进 env（it_typeref），用时按 env 解析 ⇒ 同名变量天然遮蔽它。
+#   修前 `enum Color:` / `struct P:` 直接 env_define **覆盖**已有值绑定 ⇒
+#   「先声明变量、后声明同名类型」时类型反过来把变量顶掉（实测：let Color = {"Red": 9}
+#   在后置的 enum Color 之后只能拿到枚举值），与「变量优先」这条定稿口径相反。
+#   ⇒ 只有当前绑定**不是值**（查无此名 / 已 unbound / 本身就是 typeref）时才绑类型名。
+def i_bind_typeref(env, name, kind):
+    let r = env_get(env, name)
+    if r["found"] and not r.has("unbound"):
+        let v = r["value"]
+        if not (type(v) == "dict" and v.has("__typeref__")):
+            return Ok(null)  # 已被值绑定占用 ⇒ 变量优先，不覆盖
+    env_define(env, name, it_typeref(kind, name))
+    return Ok(null)
 # ---------- struct 定义 ----------
 def i_exec_struct(stmt, env):
     # ["StructDef", name, fields, pos]  fields: [["StructField", name, ty, pos]]
@@ -269,7 +283,7 @@ def i_exec_struct(stmt, env):
         fields.append({"name": rust_unescape(f[1]), "ty": f[2]})
         i += 1
     g_structs[name] = {"fields": fields}
-    env_define(env, name, it_typeref("struct", name))
+    i_bind_typeref(env, name, "struct")
     return Ok(null)
 # ---------- enum 定义 ----------
 def i_exec_enum(stmt, env):
@@ -281,7 +295,7 @@ def i_exec_enum(stmt, env):
         vs.append(rust_unescape(stmt[2][i][1]))
         i += 1
     g_enums[name] = vs
-    env_define(env, name, it_typeref("enum", name))
+    i_bind_typeref(env, name, "enum")
     return Ok(null)
 # ---------- impl 定义（对齐 exec_stmt ImplDef：closure=globals） ----------
 def i_exec_impl(stmt, env):

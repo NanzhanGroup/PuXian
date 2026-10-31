@@ -1796,3 +1796,15 @@ run m366_tagmsg bash examples/m366_tagmsg/verify.sh
 #        · D 旧位置写法 `V(float)` 不回归 · E 多字段全在 · F 覆盖度自证。
 #   负控：NC-ast ⇒ B1 红 · NC-legacy ⇒ D1 红。
 run m367_enum_parse bash examples/m367_enum_parse/verify.sh
+step "M369 · 名字解析优先级：变量 > 类型名（缺陷 635 · 三轨分叉）"
+#   来历：enum Color: Red + let Color = {"Red": 7} + Color.Red
+#     解释轨 7（env 里变量遮蔽了类型名绑定）· VM/C 轨 Color.Red（按名字查类型表先命中）。
+#     同族的 let Shape = Box(1) + Shape.Circle(2)：解释轨 102 · 编译两轨 R1005。
+#     M366 之前即如此，M366 只把报文改准，判据面没动（当时写在门头「覆盖边界」里）。
+#   定稿：同一作用域内**变量绑定（帧局部/模块级）优先于类型名**，与声明先后无关；
+#     作用域是函数级（spec §17.8）。三处同改：VM Field/Call-Field 守卫 · C 同两处 ·
+#     解释轨类型名绑定不覆盖已有值绑定（istmt.px i_bind_typeref）。
+#   判据：A 三轨逐字节一致（6 正控）· B 门侧独立参考 · C 错误面同码同文（R1001 先用后声明）
+#        · D 跨函数回归（遮蔽不串帧）· E 覆盖度自证（「变量胜」四族 + 回归族）。
+#   负控：NC-expect ⇒ B 红 · NC-invert ⇒ A 红 · NC-empty ⇒ E 红。
+run m369_name_shadow bash examples/m369_name_shadow/verify.sh

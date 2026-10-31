@@ -149,6 +149,15 @@ def cg_var_of(name):
     if cg_vars.has(name):
         return cg_vars[name]
     return null
+# ── M369（缺陷 635）：**名字解析优先级 = 变量（局部/全局）> 类型名** ────────────
+#   解释轨把类型名绑进 env，局部变量遮蔽它 ⇒ 值优先；C 轨此前按名字查 cg_enums 先命中
+#   ⇒ 同名变量被整段跳过（实测 let Color = {"Red": 7} + Color.Red：解释轨 7 / C 轨枚举值）。
+#   cg_vars 在函数入口已用 cg_collect_hoist_vars 预登记本帧全部声明名（含块内/分支内）
+#   ⇒ cg_var_of 非空即「本帧已声明」，与解释轨 M181 unbound 标记同口径。
+def cg_name_is_value(name):
+    if cg_var_of(name) != null:
+        return true
+    return contains(cg_globals, name)
 # ── M129（qg-issue 87 缺陷 21）：编译轨真词法闭包（upvalue cell）──
 # 读：cell 变量自动解引用；写：cell 变量写回 cell。二者必须成对使用，
 # 否则会出现"声明成 list 却当普通值用"的 C 类型错误（好在是**响的**，不是静默）。

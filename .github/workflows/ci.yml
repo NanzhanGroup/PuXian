@@ -1551,6 +1551,16 @@ jobs:
           bash examples/m367_enum_parse/verify.sh --neg-skip > /tmp/v_m367p.log 2>&1 || { echo "❌ m367_enum_parse 门失败（data enum 语法/AST）"; tail -40 /tmp/v_m367p.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m367p.log | tail -8
           echo "✅ m367_enum_parse（EnumField 进 AST · 旧位置写法不回归）PASS"
+      - name: m369_name_shadow（名字解析优先级：变量 > 类型名 · M369 · 缺陷 635）
+        # 判据：A 三轨逐字节一致（6 正控：局部遮蔽+方法调用/字段 · 模块级 · 块内 · 参数 · 先变量后类型）
+        #       · B 门侧独立参考（期望值门内写死，不抄实现）· C 错误面 R1001 三轨同码同文
+        #       · D 跨函数回归（遮蔽不串帧、枚举仍可用）· E 覆盖度自证
+        # 负控：NC-expect ⇒ B 红 · NC-invert ⇒ A 红 · NC-empty ⇒ E 红（要重编三轨 ⇒ CI 用 --neg-skip）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m369_name_shadow/verify.sh --neg-skip > /tmp/v_m369s.log 2>&1 || { echo "❌ m369_name_shadow 门失败（变量/类型名同名解析）"; tail -40 /tmp/v_m369s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m369s.log | tail -8
+          echo "✅ m369_name_shadow（变量 > 类型名 · 三轨一致 · 跨帧回归）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

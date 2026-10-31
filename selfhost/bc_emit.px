@@ -101,6 +101,18 @@ def bc_is_global(name):
     if g_bcm == null:
         return false
     return contains(g_bcm["globals"], name)
+# ── M369（缺陷 635）：**名字解析优先级 = 变量（局部/全局）> 类型名** ────────────
+#   解释轨把类型名绑进 env（env_define / it_typeref），局部变量遮蔽它 ⇒ 值优先；
+#   编译两轨此前**按名字查类型表**先命中 ⇒ 同名变量被整段跳过，实测三轨分叉：
+#     let Shape = Box(1) + Shape.Circle(2)   解释轨 102 / VM · C 轨 R1005
+#     let Color = {"Red": 7} + Color.Red     解释轨 7   / VM · C 轨 Color.Red（枚举值）
+#   本帧 hoist 名在**帧入口**就进了 smap（bc_emit_func_body 预占槽，含块内声明与
+#   分支内声明）⇒ smap.has 即「本帧已声明该名」，与解释轨 M181 的 unbound 标记同口径
+#   （实测：函数内「先用后声明」解释轨报 R1001，本守卫选值路径后由 CHKINIT 同样报 R1001）。
+def bc_name_is_value(func, name):
+    if func["smap"].has(name):
+        return true
+    return bc_is_global(name)
 # 新建空 BCModule
 def bc_new_module(name):
     let m = bc_new_dict()
@@ -749,9 +761,10 @@ def bc_emit_expr(expr, dst, func):
                     d = bc_tmp(func)
                 bc_emit_expr(ce, d, func)
                 return d
-            if g_bcm["enums"].has(oname):
+            if not bc_name_is_value(func, oname) and g_bcm["enums"].has(oname):
                 # M237（缺陷 368）：是枚举类型名 ⇒ 变体必须存在（修前：不存在时落普通 Field
                 #   访问 ⇒ GETG(类型名) ⇒ 「R1001 未定义变量: 'Color'」—— 方向错）
+                # M369（缺陷 635）：**同名变量在就先走值路径**（见 bc_name_is_value）
                 var d = dst
                 if d < 0:
                     d = bc_tmp(func)
@@ -820,7 +833,7 @@ def bc_emit_expr(expr, dst, func):
             #   （指错对象）。定稿与 Field 访问同口径：变体存在 ⇒ R1005；不存在 ⇒ R1008。
             #   ⚠️ 实参**不求值**（编译期已定），与解释轨 / C 轨一致。
             let bobj = callee[1]
-            if bobj[0] == "Var" and g_bcm["enums"].has(rust_unescape(bobj[1])):
+            if bobj[0] == "Var" and not bc_name_is_value(func, rust_unescape(bobj[1])) and g_bcm["enums"].has(rust_unescape(bobj[1])):
                 let en0 = rust_unescape(bobj[1])
                 let vn0 = rust_unescape(callee[2])
                 var d634 = dst

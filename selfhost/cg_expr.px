@@ -420,7 +420,7 @@ def cg_gen_expr(expr):
         # enum 变体访问：Color.Red
         if obj[0] == "Var":
             let oname = rust_unescape(obj[1])
-            if cg_enums.has(oname):
+            if not cg_name_is_value(oname) and cg_enums.has(oname):
                 # M237（缺陷 368）：变体名**编译期**校验 —— 修前 `Color.Nope` 静默造出假枚举值
                 var vk = 0
                 if contains(cg_enums[oname], fname):
@@ -546,7 +546,7 @@ def cg_gen_expr(expr):
             #   修前落到 px_field(Shape, "Circle") 求值 ⇒ GETG(Shape) ⇒
             #   「R1001 未定义变量: 'Shape'」（指错对象）。定稿与 Field 访问同口径：
             #   变体存在 ⇒ R1005；不存在 ⇒ R1008。实参**不求值**（与另两轨一致）。
-            if obj[0] == "Var" and cg_enums.has(rust_unescape(obj[1])):
+            if obj[0] == "Var" and not cg_name_is_value(rust_unescape(obj[1])) and cg_enums.has(rust_unescape(obj[1])):
                 let en1 = rust_unescape(obj[1])
                 if contains(cg_enums[en1], mname):
                     return cg_err_expr("R1005: 枚举变体 " + en1 + "." + mname + " 不接受参数（data enum 未实现；请写 " + en1 + "." + mname + "）")
