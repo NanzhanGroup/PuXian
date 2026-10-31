@@ -151,19 +151,29 @@ fi
 if [ "$NEG_SKIP" = "0" ]; then
     echo "[4][5] 负控（检测器灵敏度 · 双向）"
     # [4] 必崩侧：替身进程自杀（SIGSEGV）⇒ 检测必须报「已崩」
-    ( exec sh -c 'kill -SEGV $$' > "$W/crash.log" 2>&1 ) &
+    #   ⚠️ 判据不能用 kill -0 判死活：进程 SIGSEGV 后若父 bash 尚未 reap，会停在**僵尸**态，
+    #      kill -0 对僵尸仍返回 0 ⇒ 重负载下（8 分片并发）随机假红（M369 实测：
+    #      链 chain-m369-20261101-054957 shard3 唯一红 = 本条，#231 同样症状）。
+    #   ⇒ 改判「退出码是否信号致死」：替身子 shell 自己把内层 rc 落盘，父进程只认 rc≥128。
+    #      这比原判据更硬（原来只证「不存活」，现在证「确实死于信号」）。
+    rm -f "$W/crash.rc"
+    ( sh -c 'kill -SEGV $$' > "$W/crash.log" 2>&1; echo "$?" > "$W/crash.rc" ) &
     FAKE_PID=$!
-    sleep 0.5
-    if kill -0 "$FAKE_PID" 2>/dev/null; then
-        bad "4 · 必崩替身仍存活 ⇒ 检测器或替身有问题"
-        kill -9 "$FAKE_PID" 2>/dev/null
-    else
-        wait "$FAKE_PID" 2>/dev/null; rc=$?
-        if [ "$rc" -ge 128 ]; then
+    for _ in $(seq 1 50); do          # 最多等 5s 落盘，不靠固定 sleep
+        [ -s "$W/crash.rc" ] && break
+        sleep 0.1
+    done
+    wait "$FAKE_PID" 2>/dev/null
+    if [ -s "$W/crash.rc" ]; then
+        rc=$(cat "$W/crash.rc")
+        if [ "$rc" -ge 128 ] 2>/dev/null; then
             ok "4 · 必崩替身被检出（rc=$rc ≥128 ⇒ 信号致死）"
         else
             bad "4 · 必崩替身 rc=$rc（期望 ≥128）"
         fi
+    else
+        bad "4 · 必崩替身未崩（crash.rc 未落盘）⇒ 检测器或替身有问题"
+        kill -9 "$FAKE_PID" 2>/dev/null
     fi
     FAKE_PID=""
     # [5] 必活侧：替身存活 ⇒ 检测必须报「存活」
