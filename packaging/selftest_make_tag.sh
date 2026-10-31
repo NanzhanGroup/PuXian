@@ -344,7 +344,7 @@ newrepo_withver() {  # newrepo_withver <目录名> <SELFHOST_VER>
 W1="$(newrepo_withver w1 0.2.100)"
 run "$W1" --milestone 800
 chk "W1 源码版本与 tag 不符 ⇒ rc=3（拒绝打 tag）" "$RC" "3"
-if printf '%s' "$out" | grep -q '版本链闸'; then ok "W1 报文点名「版本链闸」（自己说清为什么拒）"
+if grep -q '版本链闸' <<< "$out"; then ok "W1 报文点名「版本链闸」（自己说清为什么拒）"
 else bad "W1 报文没提版本链闸：$(printf '%s' "$out" | head -2 | tr '\n' ' ')"; fi
 chk "W1 拒绝后仓库里**没有**新 tag（副作用判据）" "$(tags "$W1")" ""
 
@@ -356,7 +356,7 @@ chk "W2 tag 已建" "$(tags "$W2")" "v0.2.800 "
 W3="$(newrepo_withver w3 0.2.100)"
 out="$(PX_TAG_REPO="$W3" SKIP_VER_GATE=1 bash "$MT" --milestone 800 2>&1)"; RC=$?
 chk "W3 SKIP_VER_GATE=1 ⇒ rc=0（回补历史 tag 的唯一出口）" "$RC" "0"
-if printf '%s' "$out" | grep -q 'SKIP_VER_GATE'; then ok "W3 跳过时**打印**了绕过声明（不静默）"
+if grep -q 'SKIP_VER_GATE' <<< "$out"; then ok "W3 跳过时**打印**了绕过声明（不静默）"
 else bad "W3 跳过时没有声明"; fi
 
 # ── V 段：packaging 工具链的执行位一致性（M254 · 缺陷 450）──

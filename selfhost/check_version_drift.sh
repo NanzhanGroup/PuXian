@@ -108,35 +108,35 @@ selftest() {
     echo "【T1】正控：六处一致 0.2.368 · tag v0.2.367 ⇒ 必须绿"
     mkfix "$T/t1" 0.2.368
     PASS=0; FAIL=0; out="$( run_q "$T/t1" v0.2.367 )" || true
-    if printf '%s' "$out" | grep -q 'VERSION-DRIFT=OK'; then s_ok "T1 绿（负控基线）"
+    if grep -q 'VERSION-DRIFT=OK' <<< "$out"; then s_ok "T1 绿（负控基线）"
     else s_bad "T1 应绿实非绿：$(printf '%s' "$out" | tail -1)"; fi
 
     echo "【N1】负控：selfhost/interp.px 单独改成 0.2.367 ⇒ 必须红"
     mkfix "$T/n1" 0.2.368
     printf 'let PXI_VER = "0.2.367"\n' > "$T/n1/selfhost/interp.px"
     PASS=0; FAIL=0; out="$( run_q "$T/n1" v0.2.367 )" || true
-    if printf '%s' "$out" | grep -q 'VERSION-DRIFT=RED'; then s_ok "N1 红（E1 抓到单点漂移）"
+    if grep -q 'VERSION-DRIFT=RED' <<< "$out"; then s_ok "N1 红（E1 抓到单点漂移）"
     else s_bad "N1 应红实绿 ⇒ E1 无鉴别力"; fi
 
     echo "【N2】负控：tools/pxfmt.px 锚点写法被改（取不到）⇒ 必须红，且不许判 OK"
     mkfix "$T/n2" 0.2.368
     printf 'print("pxfmt v0.2.368")\n' > "$T/n2/tools/pxfmt.px"
     PASS=0; FAIL=0; out="$( run_q "$T/n2" v0.2.367 )" || true
-    if printf '%s' "$out" | grep -q 'VERSION-DRIFT=RED' && printf '%s' "$out" | grep -q '锚点取不到'; then
+    if grep -q 'VERSION-DRIFT=RED' <<< "$out" && grep -q '锚点取不到' <<< "$out"; then
         s_ok "N2 红（E0 锚点失效即红，不静默空对比）"
     else s_bad "N2 应红实绿 ⇒ E0 无鉴别力"; fi
 
     echo "【N3】负控：版本停在 0.2.364 而最新 tag v0.2.367（差 3）⇒ 必须红"
     mkfix "$T/n3" 0.2.364
     PASS=0; FAIL=0; out="$( run_q "$T/n3" v0.2.367 )" || true
-    if printf '%s' "$out" | grep -q 'VERSION-DRIFT=RED'; then s_ok "N3 红（E2 抓到版本链停摆）"
+    if grep -q 'VERSION-DRIFT=RED' <<< "$out"; then s_ok "N3 红（E2 抓到版本链停摆）"
     else s_bad "N3 应红实绿 ⇒ E2 无鉴别力"; fi
 
     echo "【N4】负控：读不到 tag ⇒ 必须 SKIP（既不是 OK 也不许红）"
     mkfix "$T/n4" 0.2.368
     PASS=0; FAIL=0; out="$( run_q "$T/n4" " " )" || true
-    if printf '%s' "$out" | grep -q 'VERSION-DRIFT=SKIP(no-tags)' \
-       && ! printf '%s' "$out" | grep -q 'VERSION-DRIFT=OK'; then
+    if grep -q 'VERSION-DRIFT=SKIP(no-tags)' <<< "$out" \
+       && ! grep -q 'VERSION-DRIFT=OK' <<< "$out"; then
         s_ok "N4 SKIP（明示「没有验到」）"
     else s_bad "N4 期望 SKIP，实得 $(printf '%s' "$out" | tail -1)"; fi
 

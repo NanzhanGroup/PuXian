@@ -41,6 +41,58 @@ CI run `41207162858`（SHA `a3895db`）job「aarch64 自举件」step「原生�
 - docs 口径同步（`spec.md` §16.3 · `MINI_SUBSET.md` 第 3 行 · `PUXIAN_CHEATSHEET.md`）：从「parser 会拒绝」
   改为「**语法已收 · 载荷未实现**」，与 §3.8 一致；`PX_DEF_TRIAGE` §17 记 644。
 
+### 五 全量门回填（r2 · 链 `chain-m367-20261101-001022-3577951`）
+
+| 量 | 值 |
+|---|---|
+| HEAD / tag | `3100478` / **v0.2.367**（tag = commit，同一次推） |
+| 门数 | **243**（清单取自 HEAD） |
+| 结果 | 绿 **243** · 红 0 · `CHAIN-VERDICT=GREEN`（r1 是 241 绿 / 2 红） |
+| 墙钟 | 00:10:22 → 01:45:49 = **95.5 min**（分片段 88.6 min；8 分片 + quiet 档 11 门串行） |
+| 负载 | load1 p95 **19.61**（16 核 ⇒ 1.23/核；判据 p95 ≤ 2.0/核 且越界 ≤ 5%）· 570 采样点 |
+| 内存 | cgroup peak **9103 MiB**（`ws-debug.slice`，上限 11G） |
+| 发布自证 | `releases/latest = v0.2.367`（poll 4 命中 · `LATEST-VERDICT=OK`）· prune `deleted=0 released=0MB` |
+
+r1 那两条红在 r2 上各自被证实：`m237_field_enum` 改成 S1 契约判据 + 修 VM 轨（644）后不再红；
+`m312_gc_lock_order` 只在 quiet 档串行跑 ⇒ 不再被分片负载污染（判据仍是 0 容忍，**没有**放松）。
+
+CI 侧同步证据：run `41225833374`（`3100478`）的「原生 aarch64 自举自证 + 裸 build」**转绿**
+⇒ 643 的 golden 重定基在远端成立（同一 run 的 `自举回归` 也随之绿）。
+
+## M368 —— 版本链断了 84 个里程碑（缺陷 638 收口）+ 判据自身的两处回摆（第 242 轮）
+
+> **令源**：`./tools/px --version` 报 `0.2.281`，而刚发布的是 `v0.2.367` —— 对外两个数，
+> 而 243 门全绿。**门量行为，不量「版本号还活着没有」。**
+
+### 一 症状：bump 脚本在，没人调它
+
+`packaging/bump_version.sh` 能改 9 个文件的版本串（含两份 golden 基准），但它**只被手工调用**。
+从 M283 起无人调 ⇒ `SELFHOST_VER` 冻在 0.2.281 走过 84 个里程碑。判据缺失的形态与 643（golden 停摆
+65 个里程碑）同族：**「改代码 → 重烘入库件」有门，「改代码 → 提升版本号 / 重定基基准」没有门。**
+
+### 二 三处收口
+
+| 位置 | 收口 |
+|---|---|
+| 版本串本身 | 六文件七锚点 0.2.281 → **0.2.368**（`tools/px` · `compiler.px` · `interp.px` · `pxlsp.px` · `pxmcp.px`×2 · `pxfmt.px`），`bootstrap/px*` 重烘 |
+| 打 tag 那一刻 | `packaging/make_tag.sh` §3.5 **版本链闸**：源码版本 ⇄ tag 版本不符 ⇒ **rc=3 拒绝建 tag**；`SKIP_VER_GATE=1` 是回补历史 tag 的唯一显式出口（会打印绕过声明，不静默） |
+| 常驻守卫 | `selfhost/check_version_drift.sh`（新门 `version_drift`）：E0 锚点必须取得到（写法变了即红，防「空对比恒绿」）· E1 七锚点同值 · E2 与最新 tag 里程碑差 ≤ 1（读不到 tag ⇒ `SKIP(no-tags)` 明示，**不当绿**）。自证 5 条 = 1 正控 + 3 负控 + 1 SKIP |
+
+第二层坑（实测踩到）：`bump_version.sh` 默认**只烘 pxc / pxc_vm 两件**，改完版本串后
+`bootstrap/pxi --version` 仍印旧号 ⇒ 必须在提示里要求 `--rebake-all`，否则「版本已升」是假象。
+
+第三层口径：注释里的**历史陈述行**（如「实测（本机 0.2.281）」）记的是当年现场，随版本号一起改
+就是把真事改成假话 ⇒ `KEEP_RE` 认这类行：既不替换，也不算残留。
+
+### 三 r1 全量门判 NO-GO（绿 242 / 红 2）——两条红都是**本轮新加的判据自己**
+
+| 红门 | 真相 | 处置 |
+|---|---|---|
+| `pkg_pipe_grep`（`PIPE-GREP-VERDICT=REGRESS`） | 本轮新增的两个脚本里 8 处 `printf '%s' "$out" \| grep -q PAT`（`selftest_make_tag.sh` 2 处 · `check_version_drift.sh` 6 处）⇒ 新判据自己违反口径 19 的棘轮（基线 0） | 全改 here-string `grep -q PAT <<< "$out"`；复跑 `PIPE-GREP-VERDICT=OK remaining=8`（回到基线 8 条 / 5 文件） |
+| `gate_registry`（`GATE-REGISTRY-FAIL`） | `selfhost/check_version_drift.sh` 进了门清单却**没进 ci.yml**（M235 缺陷 355 同形：本地绿、CI 无人跑） | ci.yml 增「版本链漂移守卫」步（自证 + 真判）；复跑 `GATE-REGISTRY-OK` 13/0 |
+
+两条同源：**新判据没有先被自己的守卫咬一遍**。这也是本任务（判据稳定性整治）的常态成本。
+
 ## M366 —— 枚举「带参构造」三轨同码同文（缺陷 634）+ 发布装置两修（636/637）+ docs 归档 65 份（第 241 轮）
 
 > **令源**：spec §3.8 承诺 data enum（`Circle(radius: f64)`），实现只做了「变体名」没做「载荷」。

@@ -246,6 +246,15 @@ jobs:
           ./bootstrap/pxi --version 2>&1 | head -1 || echo "pxi 执行失败 rc=$?"
           bash selfhost/check_version_golden.sh --self-test
           bash selfhost/check_version_golden.sh
+      - name: 版本链漂移守卫（M368 · 缺陷 638：bump 脚本存在但无人调用 ⇒ 版本冻 84 个里程碑）
+        #   来历：`packaging/bump_version.sh` 能改 9 个文件，但**没有任何一步强制调它** ⇒
+        #   `tools/px SELFHOST_VER` 从 0.2.281 一路冻到 v0.2.367，而所有门全绿（它们量行为，不量版本号）。
+        #   判据：E0 锚点必须取得到（写法变了就红，否则空对比 = 恒绿）· E1 六文件七锚点同值 ·
+        #         E2 与最新 tag 的里程碑差 ≤ 1（允许「本轮正在建的那一版」）。
+        #   ⚠️ CI 浅克隆可能读不到 tag ⇒ 该档打印 SKIP(no-tags) 而**不**判绿（明示「没有验到」）。
+        run: |
+          bash selfhost/check_version_drift.sh --self-test
+          bash selfhost/check_version_drift.sh
       - name: 门注册一致性（清单 ⇄ ci.yml 双向 · M243 / M247 补）
         #   M247 实测：本守卫**没被 CI 跑过** —— 于是「registry 里加了、ci.yml 忘了加」
         #   这一类（M235 缺陷 355 同形）在 CI 上无人发现。本步补上。
