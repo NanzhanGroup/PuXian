@@ -1779,3 +1779,10 @@ run m366_enum_payload bash examples/m366_enum_payload/verify.sh
 #   判据：J1 max(两源) · J2 消息严格 UTF-8 · J3 反向回落 + 不一致明示 · J4 tag 名合规。
 #   负控：NC-old 旧法复现非法 UTF-8 · NC-nosub 去前缀必须回落 CHANGELOG。
 run m366_tagmsg bash examples/m366_tagmsg/verify.sh
+# ── M367-S1（缺陷 364 收口）：data enum 语法收口门 ─────────────────────────
+#   spec §3.8 的 `Circle(radius: float)` 自 M237 起被 parser 拒（E2001），本轮真收下：
+#   `名: 类型` → `EnumField{name, ty, pos}` 进 AST（载荷语义留 S2/S3）。
+#   判据：A 三轨一致（无括号访问不回归）· B AST 真存（名/类型/行号）· C 不再 E2001
+#        · D 旧位置写法 `V(float)` 不回归 · E 多字段全在 · F 覆盖度自证。
+#   负控：NC-ast ⇒ B1 红 · NC-legacy ⇒ D1 红。
+run m367_enum_parse bash examples/m367_enum_parse/verify.sh

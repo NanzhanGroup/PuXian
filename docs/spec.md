@@ -235,19 +235,20 @@ enum Color:
     Green
     Blue
 
-# 携带数据（data enum）—— ⚠️ 计划中，尚未实现（见下）
+# 携带数据（data enum）—— 语法已收（M367-S1），载荷语义仍在做
 enum Shape:
     Circle(radius: float)
     Rect(w: float, h: float)
 ```
 
-> ⚠️ **data enum 状态：计划中（M237 核实 · M365 复核）**。`Circle(radius: float)` 这种「字段名: 类型」
-> 形态目前会被 parser 拒绝，并给出可执行指引（`E2001`）；写成 `Circle(float)` 虽可解析，
-> 但变体**不携带数据**（`Shape.Circle(1.5)` 报 `R1005`，须写 `Shape.Circle`）。
+> ⚠️ **data enum 状态：语法已收 · 载荷未实现（M367-S1 核实）**。
+> `Circle(radius: float)` 这种「字段名: 类型」形态**已能解析**（M367-S1 之前是 `E2001`），
+> 字段名与类型都进 AST（`EnumField{name, ty, pos}`），旧写法 `Circle(float)` 继续接受。
+> 但**变体仍不携带数据**：`Shape.Circle(1.5)` 报 `R1005`（不接受参数），要取值只能写 `Shape.Circle`。
+> 余下两件：载荷值的三轨构造（S2 解释轨 / S3 VM+C）与 `match` 解构（S3）。
 > ⚠️ **M365 更正一条旧口径**：原先写「§16.3 的命名参数构造 + `match` 解构同属该特性」——
-> 其中**命名参数构造已独立实现**（见 §3.7，限结构体），data enum 剩余的是
-> 「变体携带载荷 + 载荷的 `match` 解构」两件，实现面为 parser/AST/三轨构造/解构。
-> **在此之前请用 `struct` + 可空字段表达。**
+> 其中**命名参数构造已独立实现**（见 §3.7，限结构体）。
+> **在 S3 落地之前请用 `struct` + 可空字段表达。**
 
 #### 3.8.1 简化枚举（type X const 一行式带值枚举，M44）
 ```python
