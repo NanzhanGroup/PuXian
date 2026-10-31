@@ -1,6 +1,6 @@
 # ============================================================
 # 普贤标准库：std.edge（边缘设备：GPIO V2 line / I2C / 串口 / PWM sysfs）
-# M60-S3 交付（docs/M60_PLAN.md §三.2）——第 4 个 stdlib，与 collections/semver/webroute 并列
+# M60-S3 交付（docs/archive/M60_PLAN.md §三.2）——第 4 个 stdlib，与 collections/semver/webroute 并列
 # 依赖 builtin：open/close/read/write/ioctl/os_errno/tty_config/fd_wait/sleep_us/
 #   exists/type/len/str/int_to_bytes/bytes_to_int/bytes_slice/bytes_concat/bytes_set/bytes
 # 用法：import std.edge

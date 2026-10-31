@@ -1,7 +1,7 @@
 # ============================================================
 # M60 S3 dev_s3.px —— std.edge 库单测（x86 可跑，无设备依赖）
 # ------------------------------------------------------------
-# 验证点（docs/M60_PLAN.md §三.2 + §四 S3 verify）：
+# 验证点（docs/archive/M60_PLAN.md §三.2 + §四 S3 verify）：
 #   A. 内部工具：_zeros / _put_u32 / _put_u64 / _put_ascii 字节级写入正确（小端）
 #   B. GPIO V2 request 布局常量断言（C offsetof 实测对照）：
 #      gpio_v2_line_request = 592B；offsets@0 / consumer@256 / config.flags@288 /

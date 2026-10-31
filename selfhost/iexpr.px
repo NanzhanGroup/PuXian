@@ -397,6 +397,24 @@ def i_eval_call(node, env):
         let or_ = i_eval_expr(callee[1], env)
         if or_.is_err():
             return Err(or_.err())
+        let recv0 = or_.unwrap()
+        let mname0 = rust_unescape(callee[2])
+        # ── M366（缺陷 634）：枚举**类型名**上的成员「调用」= 带载荷变体构造 ────────
+        #   修前三轨三种结果（实测）：
+        #     解释轨 R1007 类型 type 没有方法 'Circle'（**指错方向**：让人去找方法）
+        #     VM/C 轨 编译成功 → 运行期 R1001 未定义变量 'Shape'（**指错对象**：Shape 不是变量）
+        #     spec §3.8 却早已承诺 R1005 ⇒ 文档与三轨全不符。
+        #   定稿（与 Field 访问同口径，见 ival.px i_field）：
+        #     变体存在 ⇒ R1005「不接受参数」（data enum 载荷未实现，须写 X.Y）
+        #     变体不存在 ⇒ R1008「枚举 X 没有变体 'Y'」（与 `Shape.Nope` 无括号形态同码同文）
+        #   ⚠️ 必须在**求值实参之前**返回：编译两轨在本处直接发报错表达式，实参不求值；
+        #     解释轨若先求值就会三轨分叉（带副作用实参时可见）。
+        if i_type_name(recv0) == "type" and recv0.has("__typeref__") and recv0["__typeref__"] == "enum":
+            let en0 = recv0["name"]
+            if g_enums.has(en0):
+                if not contains(g_enums[en0], mname0):
+                    return Err(i_r1008("枚举 " + en0 + " 没有变体 '" + mname0 + "'", pos))
+                return Err(i_r1005("枚举变体 " + en0 + "." + mname0 + " 不接受参数（data enum 未实现；请写 " + en0 + "." + mname0 + "）", pos))
         let arg_vals = []
         var ai = 0
         while ai < len(args):
@@ -405,7 +423,7 @@ def i_eval_call(node, env):
                 return Err(ar.err())
             arg_vals.append(ar.unwrap())
             ai += 1
-        return i_call_method(or_.unwrap(), rust_unescape(callee[2]), arg_vals, pos)
+        return i_call_method(recv0, mname0, arg_vals, pos)
     # 普通调用
     let cr = i_eval_expr(callee, env)
     if cr.is_err():

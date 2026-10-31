@@ -1,7 +1,7 @@
 # ============================================================
 # M89-S3-A1: bc_emit.px —— AST → 字节码 发射器（PuXian 自举）
 # ------------------------------------------------------------
-# 定位（docs/M89_vm_design.md D1/D4/D8）：单一执行引擎 —— 现 codegen
+# 定位（docs/archive/M89_vm_design.md D1/D4/D8）：单一执行引擎 —— 现 codegen
 # （AST→C 文本 fn_*）平行开发的目标=「把 C 文本换成字节码指令 + 登记
 # 常量/名字/槽」。本文件 = 发射器（PuXian，纯 importable，无 main/全局
 # 声明/import —— 由主文件 bc_cli.px 或将来 compiler.px import，运行时
@@ -815,6 +815,25 @@ def bc_emit_expr(expr, dst, func):
             if g_bcm["enums"].has(cname):
                 return bc_emit_enum_new(cname, expr[2], dst, func)
         if callee[0] == "Field":
+            # ── M366（缺陷 634）：枚举**类型名**上的成员调用 = 带载荷变体构造 ──────
+            #   修前落到 bc_emit_methodcall ⇒ GETG(Shape) ⇒ 「R1001 未定义变量: 'Shape'」
+            #   （指错对象）。定稿与 Field 访问同口径：变体存在 ⇒ R1005；不存在 ⇒ R1008。
+            #   ⚠️ 实参**不求值**（编译期已定），与解释轨 / C 轨一致。
+            let bobj = callee[1]
+            if bobj[0] == "Var" and g_bcm["enums"].has(rust_unescape(bobj[1])):
+                let en0 = rust_unescape(bobj[1])
+                let vn0 = rust_unescape(callee[2])
+                var d634 = dst
+                if d634 < 0:
+                    d634 = bc_tmp(func)
+                var msg0 = ""
+                if bc_enum_has(en0, vn0):
+                    msg0 = "R1005: 枚举变体 " + en0 + "." + vn0 + " 不接受参数（data enum 未实现；请写 " + en0 + "." + vn0 + "）"
+                else:
+                    msg0 = "R1008: 枚举 " + en0 + " 没有变体 '" + vn0 + "'"
+                let mn0 = bc_n_add(g_bcm["n_pool"], msg0)
+                bc_emit_inst(func, "RAISE", 0, mn0, 0)
+                return d634
             return bc_emit_methodcall(callee[1], rust_unescape(callee[2]), expr[2], dst, func)
         return bc_emit_call(callee, expr[2], dst, func)
     if ty == "Constructor":

@@ -1,4 +1,4 @@
-# M95-S4 daemon —— sse_serve handler 协程化验证（D8-② 二期，docs/M95_PLAN.md §五 S4）
+# M95-S4 daemon —— sse_serve handler 协程化验证（D8-② 二期，docs/archive/M95_PLAN.md §五 S4）
 # 服务端 sse_serve handler（VM def）执行 = 帧协程：handler 内 sleep/chan/spawn 让出
 # 占协程不占 fserve worker。路由（handler req["path"]）：
 #   /health -> sse_send ok + close（就绪探测）

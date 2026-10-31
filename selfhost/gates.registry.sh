@@ -1766,3 +1766,16 @@ run m362_divmod bash examples/m362_divmod/verify.sh
 #         · C 7 类错误三轨同码同文 + 关键词谓词 · D 覆盖度自证（≥5 用例 / ≥7 错误类 / 四形态齐）
 #   负控：NC1 期望扰动 ⇒ B 红 · NC2 程序里两个命名值互换 ⇒ B 红 · NC3 错误期望改动 ⇒ C 红。
 run m365_named_args bash examples/m365_named_args/verify.sh
+# ── M366（第 240 轮 · 缺陷 634）：枚举变体带载荷构造三轨对拍门 ──────────────
+#   修前 `Shape.Circle(1.5)` 三轨三种结果：解释轨 R1007「类型 type 没有方法」·
+#   VM/C 轨编译成功→运行期 R1001「未定义变量 Shape」· spec §3.8 却承诺 R1005。
+#   定稿与 Field 访问同口径：变体存在 ⇒ R1005；不存在 ⇒ R1008；实参**不求值**。
+#   判据：A 三轨一致 · B 门侧独立参考 · C 错误面同码同文+谓词 · D 副作用不求值 · E 覆盖度自证。
+#   负控：NC-code/NC-text ⇒ C 红 · NC-pos ⇒ B 红 · NC-side ⇒ D 红（首版侧控打不出 ❌ D，已修）。
+run m366_enum_payload bash examples/m366_enum_payload/verify.sh
+# ── M366（缺陷 636/637）：make_tag 消息与里程碑推断门 ──────────────────────
+#   636 `head -c 80` 字节截断切多字节字符 ⇒ 非法 UTF-8（v0.2.364/365 消息尾 "�"）；
+#   637 里程碑只读 CHANGELOG 标题行，而本仓「先发布后补 CHANGELOG」⇒ 消息前缀错一轮。
+#   判据：J1 max(两源) · J2 消息严格 UTF-8 · J3 反向回落 + 不一致明示 · J4 tag 名合规。
+#   负控：NC-old 旧法复现非法 UTF-8 · NC-nosub 去前缀必须回落 CHANGELOG。
+run m366_tagmsg bash examples/m366_tagmsg/verify.sh

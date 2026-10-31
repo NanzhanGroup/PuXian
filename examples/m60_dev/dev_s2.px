@@ -1,7 +1,7 @@
 # ============================================================
 # M60 S2 dev_s2.px —— 设备组 tty_config / fd_wait
 # ------------------------------------------------------------
-# 测试点（docs/M60_PLAN.md §三.2）：
+# 测试点（docs/archive/M60_PLAN.md §三.2）：
 #   A. tty_config(sfd, 9600, true) raw 设置成功；再 tty_config(sfd, 115200, false)（仅波特率）成功
 #   B. raw 生效：master 写 "HELLO"（无 \n）→ slave read 一次全量返回 5B（raw 关 canonical 行缓冲）
 #   C. fd_wait 就绪：master 写数据 → fd_wait 返回就绪 fd（list 含 sfd）

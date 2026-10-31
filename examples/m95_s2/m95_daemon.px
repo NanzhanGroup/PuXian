@@ -1,4 +1,4 @@
-# M95-S2 daemon —— http_serve handler 协程化验证（D8-②，docs/M95_PLAN.md）
+# M95-S2 daemon —— http_serve handler 协程化验证（D8-②，docs/archive/M95_PLAN.md）
 # 服务端 VM handler（def 函数）执行 = 帧协程：handler 内 sleep/chan/spawn 阻塞
 # 让出占协程不占 fserve worker（PX_SERVE_WORKERS 可设很小）；读+解析（段1）→
 # spawn handler 协程 → 完成回调投回续处理（段2 响应写）→ keep-alive/交还事件循环。

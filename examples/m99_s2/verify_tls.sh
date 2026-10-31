@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# M99-S2 TLS 验证 —— px_serve TLS 连接事件化 IDLE（docs/M99_PLAN.md §S3）
+# M99-S2 TLS 验证 —— px_serve TLS 连接事件化 IDLE（docs/archive/M99_PLAN.md §S3）
 #   1) openssl 生成自签证书 → m99_s2_tls_daemon（tls_server + px_serve max_conn=2）
 #   2) 顺序建 20 TLS keep-alive conns × /fast 全成功（事件化前 max_conn=2 池被 TLS 空闲占死
 #      → 第 3+ 悬挂；M99 空闲交 IDLE → 全即时建连保持）【注：并发 TLS 握手既有缺陷先于 M99，

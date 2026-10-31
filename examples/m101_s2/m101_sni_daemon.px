@@ -1,4 +1,4 @@
-# M101-SNI daemon —— SNI 多证书 + 并发 TLS 握手修复验证（docs/M101_PLAN.md §四）
+# M101-SNI daemon —— SNI 多证书 + 并发 TLS 握手修复验证（docs/archive/M101_PLAN.md §四）
 # tls_server 注册默认证书（无 hostname）+ SNI 证书（hostname=sni.local，RSA）→
 # px_serve accept 后 px_conn_init 走 mbedtls 握手；px_sni_cb（M101 改：p_ctx=PxConn* +
 #   命中 slot 且 RSA key → per-连接 clone 到 c->own_pk_sni）在并发 SNI 握手下验证：

@@ -1,4 +1,4 @@
-# M99-S2 TLS daemon —— px_serve TLS 连接事件化 IDLE 验证（docs/M99_PLAN.md §S3 TLS）
+# M99-S2 TLS daemon —— px_serve TLS 连接事件化 IDLE 验证（docs/archive/M99_PLAN.md §S3 TLS）
 # tls_server(cert,key) 注册进程级服务端 TLS → px_serve accept 后 px_conn_init 走 mbedtls
 # 握手，整连接 TLS。验证：TLS keep-alive 空闲连接同样交 IDLE（PxConn rbuf TLS 缓冲残留
 # 入在途判定 px_pxserve_inflight_data → 不悬挂不丢）；事件循环 detect 可读 → 投回续读。

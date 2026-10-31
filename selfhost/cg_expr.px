@@ -542,6 +542,15 @@ def cg_gen_expr(expr):
         if callee[0] == "Field":
             let obj = callee[1]
             let mname = rust_unescape(callee[2])
+            # ── M366（缺陷 634）：枚举**类型名**上的成员调用 = 带载荷变体构造 ──────
+            #   修前落到 px_field(Shape, "Circle") 求值 ⇒ GETG(Shape) ⇒
+            #   「R1001 未定义变量: 'Shape'」（指错对象）。定稿与 Field 访问同口径：
+            #   变体存在 ⇒ R1005；不存在 ⇒ R1008。实参**不求值**（与另两轨一致）。
+            if obj[0] == "Var" and cg_enums.has(rust_unescape(obj[1])):
+                let en1 = rust_unescape(obj[1])
+                if contains(cg_enums[en1], mname):
+                    return cg_err_expr("R1005: 枚举变体 " + en1 + "." + mname + " 不接受参数（data enum 未实现；请写 " + en1 + "." + mname + "）")
+                return cg_err_expr("R1008: 枚举 " + en1 + " 没有变体 '" + mname + "'")
             # 静态分派：已知类型 + impl 方法
             var static_type = null
             if obj[0] == "Var":

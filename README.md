@@ -40,15 +40,26 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 
 | 项 | 值 |
 |---|---|
-| 用户可见版本 | **`px 0.2.281`**（`./tools/px --version`；源码直跑取 `tools/px` 的 `SELFHOST_VER`，发布包含 git tag 生成的 `VERSION`） |
-| 最新发布 tag | **`v0.2.285`** —— 命名 = `v0.2.<里程碑>`（M272 起：里程碑号即 patch 段） |
-| 里程碑 | **M285**（143 个里程碑节 · `CHANGELOG.md` **15,859 行**） |
+| 用户可见版本 | **`px 0.2.281`**（`./tools/px --version`；源码直跑取 `tools/px` 的 `SELFHOST_VER`，发布包含 git tag 生成的 `VERSION`）<br>⚠️ **已知偏差（缺陷 638，M366 实测）**：`SELFHOST_VER` 停在 `0.2.281`，而最新 tag 已是 `v0.2.365` —— 源码直跑看到的版本号比真实进度落后 84 个里程碑 |
+| 最新发布 tag | **`v0.2.365`** —— 命名 = `v0.2.<里程碑>`（M272 起：里程碑号即 patch 段） |
+| 里程碑 | **M365**（`CHANGELOG.md` **22,985 行** / 413 个带里程碑号的标题节 / 313 个不同里程碑号） |
 | 入库自举件 | **14 件**静态 ELF（`bootstrap/`，带源码链指纹门 `PXSRC-…` / `PXRT-…`） |
-| 全量门 | **192 门 / 63 步**（单一注册源 `selfhost/gates.registry.sh` + 运行器 `run_gates.sh`） |
-| 结构守卫 | **26 个**（`selfhost/check_*`：注册一致性 / 路径卫生 / 打桩锚点 / 判据串在场 / 前提 / 密钥 / 包架构 …） |
-| native 名册 | **392 项**（单一事实源 `docs/native_index.json`，由 `tools/gen_native_table.sh` 生成，CI 防漂移） |
-| 上游生态 | **122 个包**（`registry-px` @ `01f6048` · Apache-2.0 · **238 个上游用例 × 双轨**回归） |
+| 全量门 | **242 门**（单一注册源 `selfhost/gates.registry.sh` + 运行器 `run_gates.sh`） |
+| 结构守卫 | **32 个**（`selfhost/check_*`：注册一致性 / 路径卫生 / 打桩锚点 / 判据串在场 / 前提 / 密钥 / 包架构 …） |
+| native 名册 | **394 项**（单一事实源 `docs/native_index.json`，由 `tools/gen_native_table.sh` 生成，CI 防漂移） |
+| 本地 registry | **135 个包**（`registry/`，M69 起的官方库） |
+| 示例 | **262 个示例目录 / 120 个单文件 `.px`** |
 | CI | 3 条工作流（`ci` / `release` / `tag-guard`）· 5 个 job（regression / examples / toolchain / multiarch-cross / **native-arm64 真机**） |
+
+> 📏 **本表每个数字都可复核**（M366 加：数字漂移是文档最常见的腐化方式，所以把命令写出来）：
+> ```bash
+> grep -c '^run ' selfhost/gates.registry.sh          # 门
+> ls selfhost/check_*.sh selfhost/check_*.py | wc -l  # 守卫
+> python3 -c 'import json;print(len(json.load(open("docs/native_index.json"))))'   # native 名册
+> ls registry/*/ -d | wc -l                            # 本地 registry
+> ls -d examples/*/ | wc -l; wc -l < CHANGELOG.md      # 示例 / CHANGELOG 行数
+> git tag --sort=-v:refname | head -1                   # 最新 tag
+> ```
 
 ### 四条工程主线
 
@@ -249,7 +260,7 @@ selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc · pxc
 | `selfhost/bootstrap_prove.sh` / `_bc.sh` | C 轨 / BC 轨自举证明：与基准**逐字节** diff |
 | `selfhost/native_bootstrap.sh` | aarch64 官方通道：只需 gcc 的原生/交叉自举 + **自证** |
 | `selfhost/rebake_bin.sh` | 入库件重烘 + **源码链指纹门**（`--check-all`：14 件二进制是否就是**当前源码**烘出的） |
-| `selfhost/gates.registry.sh` + `run_gates.sh` | **全量门**（192 门）：清单与机制分离（M243）｜旧名 `selfhost/m116_gates.sh` 仍可用（兼容转发） |
+| `selfhost/gates.registry.sh` + `run_gates.sh` | **全量门**（242 门）：清单与机制分离（M243）｜旧名 `selfhost/m116_gates.sh` 仍可用（兼容转发） |
 
 **自举证明（三步 + 双轨自证）**：
 
@@ -277,7 +288,7 @@ selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc · pxc
 │   ├── interp.px + i*.px   #   解释器模块（tree-walking）
 │   ├── lexer.px parser.px value.px env.px module.px   # 词法 / 语法 / 值系统 / 作用域 / 模块
 │   ├── golden/             #   逐字节基准（compiler.c 18,974 行 · compiler.bc.dump 41,405 行）
-│   ├── gates.registry.sh · run_gates.sh    # 全量门（192 门 · 单一注册源 + 运行器）
+│   ├── gates.registry.sh · run_gates.sh    # 全量门（242 门 · 单一注册源 + 运行器）
 │   ├── check_*.sh / *.py   #   26 个结构守卫（注册 / 路径 / 锚点 / 在场 / 前提 / 密钥 / 架构 …）
 │   ├── gcroot_*.py · gcstress_sweep.sh     # GC 根面审计器 + 压力筛
 │   └── rebake_bin.sh · devbuild.sh         # 入库件重烘指纹门 / 开发构建
@@ -285,7 +296,7 @@ selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc · pxc
 ├── stdlib/                 # 标准库 27 个 .px（13 个公开库 + L1 工具模块）
 ├── registry/               # 版本化库分发（135 个包 / 257 个版本目录：13 官方 + 122 第三方）
 ├── upstream-tests/         # 上游第三方用例（238 个 × 双轨回归 + EXPECTED.tsv 期望表）
-├── examples/               # 229 个示例目录 / 120 个单文件 .px（含 192 门中的绝大多数门）
+├── examples/               # 262 个示例目录 / 120 个单文件 .px（含 242 门中的绝大多数门）
 ├── packaging/              # 发行打包（rpm/dnf 仓库 · make_release · tag_guard · pages · chain/）
 │   └── chain/              #   全量门裁决器 + 通用观察器（M284 入仓）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
@@ -388,7 +399,7 @@ selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc · pxc
 
 ## 🧪 示例
 
-`examples/` 目录：**229 个示例目录 / 120 个单文件 `.px`** —— 其中绝大多数目录是**门**（三轨逐字节一致 + 负控独立判红）。
+`examples/` 目录：**262 个示例目录 / 120 个单文件 `.px`** —— 其中绝大多数目录是**门**（三轨逐字节一致 + 负控独立判红）。
 
 ```bash
 # 解释运行

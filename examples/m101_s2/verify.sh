@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# M101-S1 并发 TLS 握手缺陷复现/验证（docs/M101_PLAN.md §二/§四）
+# M101-S1 并发 TLS 握手缺陷复现/验证（docs/archive/M101_PLAN.md §二/§四）
 #   RSA-TLS1.3 / RSA-TLS1.2 / EC-TLS1.3 三轮 barrier 高并发新建连接全握手，
 #   统计握手失败率。修复前（v0.2.0-m100 runtime）预期 RSA FAIL>0 复现 M99 记档
 #   （TLS1.3 CertificateVerify 签名错 / TLS1.2 大并发 EOF）；EC 结果二分定位根因

@@ -1,4 +1,4 @@
-# M100 daemon —— middleware 链协程化验证（docs/M100_PLAN.md S2）
+# M100 daemon —— middleware 链协程化验证（docs/archive/M100_PLAN.md S2）
 # 并发模型升级：px_serve route 命中后 middleware 链（runtime_route.c px_route_try_dispatch）
 # 全 VM 且 async_ok → 不再 g_pool worker 内同步逐个 px_call，改链状态机 defer
 # （PxPend kind=2：登记链快照入 GC 根 + spawn 首段；done 回调逐段推进：

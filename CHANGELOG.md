@@ -522,7 +522,7 @@ SELFTEST FAIL（2 条失败 / 34）
 **6 条双引号文本**（`selftest_pxrepo_mirror` 4 条判据文案 · `check_gate_premise` 1 条 P3 文案 · `m285` 1 条夹具写入串）⇒ **真实债务 0**。
 
 > 上轮 §9.2 把 20 条一律称「必须保留」，实际 12 条是量具没覆盖 ⇒ **「剩 N 条全是必须保留」必须先用量具口径验证**。
-> 台账：`docs/M355_PIPE_SWEEP.md` **§10**（含 10.4 三条教训：口径变则基线必重生成 · 每文件配额会掩盖新增 · 负控要先写期望）。
+> 台账：`docs/archive/M355_PIPE_SWEEP.md` **§10**（含 10.4 三条教训：口径变则基线必重生成 · 每文件配额会掩盖新增 · 负控要先写期望）。
 
 ### 五 全量门（一轮即绿 · 量具改动未连带扫红）
 
@@ -594,7 +594,7 @@ SELFTEST FAIL（2 条失败 / 34）
 `check_pipe_grep.sh` 原正则把 `[ -n "$X" ] || grep -q PAT f` 计成一条残留 ⇒
 **3 处假阳性**（`check_neg_residue:87` · `run_gates:312` · `m258:173`）。现正则 `([^|]|^)\|…`，
 `scan_one`/`scan_one_file`/`--list` 三处同一算法；新增夹具 F 守它，`--self-test` **5 → 6** 条全绿。
-台账：`docs/M355_PIPE_SWEEP.md` §9（含 9.2「剩 20 条全是必须保留」的逐条归属）。
+台账：`docs/archive/M355_PIPE_SWEEP.md` §9（含 9.2「剩 20 条全是必须保留」的逐条归属）。
 
 ### 三 棘轮重生成
 
@@ -622,7 +622,7 @@ SELFTEST FAIL（2 条失败 / 34）
 换成 here-string ⇒ `selftest_make_tag` 的 Q5 负控 **`sed` 锚点写的是 `! printf`（写法锚）** ⇒ 命中 0 ⇒
 负控失牙，Q5a/Q5b「打桩后仍在拦」连带报红。修法（`01d612c`）：Q5 锚点改 **awk 固定串语义锚**
 （行首 `if` 且行含 `^m[0-9]+$` ⇒ 整行换 `if false; then : # NEGCTL-Q5`），与 printf/管道/here-string 形态解耦；
-`grep -c NEGCTL-Q5 == 1` 硬校验保留。自证 `selftest_make_tag.sh` ⇒ **84/0**。台账 `docs/M355_PIPE_SWEEP.md` §9.4。
+`grep -c NEGCTL-Q5 == 1` 硬校验保留。自证 `selftest_make_tag.sh` ⇒ **84/0**。台账 `docs/archive/M355_PIPE_SWEEP.md` §9.4。
 
 **链2** `chain-m359-20261030-004017-1840137`（HEAD `01d612c`）：
 
@@ -710,7 +710,7 @@ SELFTEST FAIL（2 条失败 / 34）
 
 > **负载第三次越界**：M356 4.25/核 · M357 5.02/核 · M358 **5.76/核**。本轮门数与上轮同（236），
 > 改的是判据助手自身（CPU 相关极小）⇒ 不能归因于本轮改动，属 quiet 档口径 12 的 **ANOMALY 待判**
-> （已记 `docs/M355_PIPE_SWEEP.md` §8.2）。峰值内存同比 M357（7902.8 MiB）涨 19.5%，同源待查。
+> （已记 `docs/archive/M355_PIPE_SWEEP.md` §8.2）。峰值内存同比 M357（7902.8 MiB）涨 19.5%，同源待查。
 
 ### 五 发布
 
@@ -742,7 +742,7 @@ SELFTEST FAIL（2 条失败 / 34）
 | `selfhost/check_bin_portability.sh:90` | `readelf -d f \| grep -q NEEDED` | `grep -q NEEDED <<< "$(readelf -d f)"` |
 | `selfhost/native_bootstrap.sh:295` | 同上 | 同上 |
 
-台账明细与「未动、属次层的 4 条」见 `docs/M355_PIPE_SWEEP.md` §7。
+台账明细与「未动、属次层的 4 条」见 `docs/archive/M355_PIPE_SWEEP.md` §7。
 
 ### 二 单门自证（7 门全绿 · `run_gates.sh --only`）
 
@@ -810,7 +810,7 @@ SELFTEST FAIL（2 条失败 / 34）
   ⇒ **23 条属口径修正，不是判据修复**，不得算作业绩。
 
 仍未覆盖（已知偏差，不猜）：单引号字符串里的**夹具文本**（`printf '… | grep -q …'` 用于生成测试文件）仍被计入，
-本门自身即有此例；排除需引号感知解析，风险高于收益，记入 `docs/M355_PIPE_SWEEP.md` §4.1。
+本门自身即有此例；排除需引号感知解析，风险高于收益，记入 `docs/archive/M355_PIPE_SWEEP.md` §4.1。
 
 ### 三 97 条风险分层（下轮作业地图）
 
@@ -820,7 +820,7 @@ SELFTEST FAIL（2 条失败 / 34）
 | 小产出 `printf`/`echo`（变量回显） | **44** | 次批（M355 实测 672B 走 19 次 write，仍可能撞 SIGPIPE） |
 | shell 函数/装置文本/其他 | **43** | 最后，逐条辨真假 |
 
-明细在 `docs/M355_PIPE_SWEEP.md` §4.1。
+明细在 `docs/archive/M355_PIPE_SWEEP.md` §4.1。
 
 ### 四 全量门：绿 236 / 红 0（一轮即绿）
 
@@ -864,7 +864,7 @@ SELFTEST FAIL（2 条失败 / 34）
 遇到超长行整份文件**静默截断**（不报错）。守卫用 `grep -c` 实测 141 才是真值。
 ⇒ 记一笔：**测量工具本身也要有第三态**（口径 17 同族：静默少算看着像「很干净」）。
 
-明细台账：`docs/M355_PIPE_SWEEP.md`。
+明细台账：`docs/archive/M355_PIPE_SWEEP.md`。
 
 ### 二 本轮收口的 6 门（各单跑自证，全绿）
 
@@ -1084,7 +1084,7 @@ DBG 行固定为 `pipestatus=141 0`（141 = printf 被 SIGPIPE 杀死，0 = grep
 > 接 M352 的遗留问题：M352 的 V5 实测说 m280/m183/m208 在 2.6× 超订下仍绿，而 quiet 档把它们登记为「需要空机」。
 > 本轮用**真实分片档**（8 片 / SHARD_JOBS=2 / 235 门全跑）把三门放回分片连跑 3 轮，回答「到底要不要移档」。
 > 结论：**三门全部留在 quiet 档** —— m183 在分片档 **3/3 轮红**（确定性，不是偶发），另两门未达到移档的前置条件。
-> 证据档：`/data/autodrive/logs/M353-ROUNDS.md` · 产物 `/data/gatevm/m353_fullgate-20261029-015906/r{1,2,3}/` · 决策档 `docs/M353_QUIET_PREMISE.md`。
+> 证据档：`/data/autodrive/logs/M353-ROUNDS.md` · 产物 `/data/gatevm/m353_fullgate-20261029-015906/r{1,2,3}/` · 决策档 `docs/archive/M353_QUIET_PREMISE.md`。
 
 ### 一 quiet 档前提核查：3 轮实测 → **不移档**
 
@@ -4255,7 +4255,7 @@ PX_GC_STATS_INTERVAL=<s>     周期性汇总（默认 0=仅退出时；服务端
 ## M311（2026-10-18 · 第 181 轮）— 门超时口径入仓 · 真模型端到端 · 全量门成本模型（A+C+B）
 
 > **令源**：用户 2026-10-18「A+C+B，按顺序做，都立项在 M311 里面。」
-> 单一出处：`docs/M311_PLAN.md`（§一 A · §二 C · §三 B · §四 验收）。
+> 单一出处：`docs/archive/M311_PLAN.md`（§一 A · §二 C · §三 B · §四 验收）。
 
 ### 一 A · 门超时口径入仓（**缺陷 532**）
 
@@ -4345,7 +4345,7 @@ A4 aarch64 包必须在 · A5 规模锚点）。
 
 ## M311 发布小结（v0.2.311 · 2026-10-18）— 三绿 + D5 全绿 · 发布档全量门 219/0 · 墙钟 5896s（**超 5400s 判据，据实登记**）
 
-> 单一出处：`docs/M311_PLAN.md` §四（§4.1 串行权威档 · §4.2 发布档）·
+> 单一出处：`docs/archive/M311_PLAN.md` §四（§4.1 串行权威档 · §4.2 发布档）·
 > 笔记 `M311_R2_FINAL_RESULT.md`（§六 人工归因）· `M311_D5_RELEASE_VERIFY.md`。
 
 ### 一 tag 核对（origin == 本地）
@@ -4398,7 +4398,7 @@ Release 资产 **4 件**（`draft=false` · `prerelease=false` · `published_at 
 ## M310 发布小结（v0.2.310 · 2026-10-18）— 三绿 + 发布档全量门 216/0 · 墙钟 5296s · D5 全绿
 
 > M310 = **甲1（GC 边缘：成功响应丢头的唯一必要条件）** + **丙2（ONNX 新算子族接性能账本）**。
-> 单一出处：`docs/M310_PLAN.md`（§五 甲1 · §六 丙2 · §七 同形状站点 · **§八 阶段D 收口**）·
+> 单一出处：`docs/archive/M310_PLAN.md`（§五 甲1 · §六 丙2 · §七 同形状站点 · **§八 阶段D 收口**）·
 > `data/notes/proto/M310_D2_FULL_RESULT.md` · `M310_R2_FINAL_RESULT.md` · `M310_D5_RELEASE_VERIFY.md`。
 
 ### 一 tag 核对（origin == 本地）
@@ -4456,7 +4456,7 @@ Release 资产 **4 件**（`draft=False` · `prerelease=False` · `published_at 
 
 > M309 = **C1 全量门瘦身**（A/B 判定**成立**）+ **C3 `pxpkg sync` 收尾**（用户 2026-10-16 11:33 拍板）。
 > 单一出处：`/data/app/ws/data/notes/proto/M309_AB_VERDICT.md`（§八 发布验收 · §九 发布物复核）·
-> `docs/M309_PLAN.md` §三 阶段D 收口记录 · `docs/GATE_ISOLATION.md` §十/§十一。
+> `docs/archive/M309_PLAN.md` §三 阶段D 收口记录 · `docs/GATE_ISOLATION.md` §十/§十一。
 
 ### 一 tag 核对（origin == 本地）
 
@@ -4513,7 +4513,7 @@ Release 资产 **4 件**（`draft=False` · `prerelease=False` · `published_at 
 
 `725ae29`（C3 W1：`pxpkg sync` 客户端 —— 远程 registry 同步 · 幂等/原子/落盘即验）
 → `74d2e80`（W1 补正：`archive_sha256` hex 校验长度/字符集**分两条**）
-→ `8ced3f7`（C3 W4：契约夹门 `examples/m309_pxpkg_sync/` **37/0** + 注册 + `docs/M309_PLAN.md`）
+→ `8ced3f7`（C3 W4：契约夹门 `examples/m309_pxpkg_sync/` **37/0** + 注册 + `docs/archive/M309_PLAN.md`）
 → `08e681f`（C1 阶段B 收口：`shard_run.sh` **默认**夹门内并行度〔退路 `SHARD_NO_CLAMP=1`〕+
 `docs/GATE_ISOLATION.md` §十/§十一 + `packaging/chain/shard_accel.sh`〔B3 发布侧入口〕+
 `quiet_needed.txt`/`net_needed.txt` 行内注释解析修复）。
@@ -8837,7 +8837,7 @@ if [ "$_el" -ge "${PX_RUN_HINT_SEC:-2}" ] && { [ -t 2 ] || [ "${PX_RUN_HINT:-0}"
 - 双方（东月 24.8×/清歌 21.8× · VM 10.2×/7.7× · 比 3.71×/4.32×）**同向、量级一致** ⇒ 互证成功。
 - 清歌 §2.6 的**生产形态**结论（对我们现役 .px 负载）：dict/list/str 混合 0.97× ·
   JSON 1.01× · 文本处理 **0.79×（VM 更快）** ⇒ **默认 VM 轨已足够；只有纯计算热点才需 `--c`**。
-- ⚠️ `docs/M89_PERF_BASELINE.md` 顶部加**作废声明**并指向 v2；`px build --c` 的 `--help` 文案
+- ⚠️ `docs/archive/M89_PERF_BASELINE.md` 顶部加**作废声明**并指向 v2；`px build --c` 的 `--help` 文案
   （原写「≈1.5x」）同步失真 ⇒ 修正。
 
 ### 十 验收
@@ -19503,7 +19503,7 @@ void px_root_restore_iso(void);         // longjmp 落点：**只收缩根栈**�
 ### http_serve「对端断开感知 / 请求可取消」原语 `http_conn_alive`（M123 · qg-issue 78）
 
 > **主题：把「客户端已经走了」变成 handler 能观测到的事实** —— 处理过程从此可提前收尾。
-> 缺口-决策-门见 `docs/M123_PLAN.md`；T2 集成验收见 qg-issue 78（清歌）。
+> 缺口-决策-门见 `docs/archive/M123_PLAN.md`；T2 集成验收见 qg-issue 78（清歌）。
 
 - **P0 · `http_conn_alive()` → 1 / 0**（runtime native，VM / C 双轨可用）：同连接内幂等、
   无副作用、**不消费任何数据**（`poll(POLLRDHUP)` + `recv(MSG_PEEK|MSG_DONTWAIT)`），
@@ -19546,7 +19546,7 @@ void px_root_restore_iso(void);         // longjmp 落点：**只收缩根栈**�
 ### 真实模块 `ws-install` PuXian 化暴露的三类缺陷修复（M117）
 
 > **主题：继续拿真实模块当探针** —— 这三条都"写得出来、跑得起来"，但**静默错 / 无限等**。
-> 详细缺口-决策-门见 `docs/M117_PLAN.md`，台账 `qg-issue 72`。
+> 详细缺口-决策-门见 `docs/archive/M117_PLAN.md`，台账 `qg-issue 72`。
 
 - **F1 · `read_file` 读 `st_size==0` 的伪文件返回空串** —— `/proc`、`/sys` 的 `st_size` 恒为 0，
   旧实现按 `fseek/ftell` 的大小分配缓冲 ⇒ **一个字节都不读**（`read_file("/proc/sys/kernel/hostname")`
@@ -19569,13 +19569,13 @@ void px_root_restore_iso(void);         // longjmp 落点：**只收缩根栈**�
 ### 真实模块 PuXian 化暴露的**静默错/致命错**五条修复（M116）
 
 > **主题：继续用 `ws-center` / `ws-ddns` 的 PuXian 化当"探针"，专治"不报错但结果错"与
-> "错得没信号"这两类缺陷** —— 详细缺口-决策-门见 `docs/M116_PLAN.md`、台账 `qg-issue 71`。
+> "错得没信号"这两类缺陷** —— 详细缺口-决策-门见 `docs/archive/M116_PLAN.md`、台账 `qg-issue 71`。
 > 共同点：既有门（对拍/自举/示例）**全绿**，因为**两条轨各错各的、或错在同一方向**。
 
 - **D2 · 字典缺键：编译轨静默 `null`、解释轨 `R1008`（两轨分叉 → 静默数据损坏）**
   - 实测代价：ws-center 移植时 `str(r["role"])`（键缺失）在编译轨下得到字符串 `"null"`
     并**被写进数据库**；解释轨当场报错。违背 `docs/MINI_SUBSET §五`「双模式一致」与
-    `docs/M65_PLAN.md` 的 R1008 口径。
+    `docs/archive/M65_PLAN.md` 的 R1008 口径。
   - 修：`px_index` / `px_field` 的 dict 分支补 `px_dict_has` 判定 → 缺键统一
     `R1008: 字典没有键 'xxx'`（编译轨非零退出，与解释轨同口径）；
     `px_index` 的非 str 键文案对齐解释轨 `R1002`。
@@ -19639,7 +19639,7 @@ void px_root_restore_iso(void);         // longjmp 落点：**只收缩根栈**�
 ### 服务进程/环境原语补全 —— ws-center / ws-ddns PuXian 化实测缺口（M115）
 
 > **主题：把 `ws-center`（2717 行 Go）与 `ws-ddns`（1141 行 Go）两个真实模块 PuXian 化，
-> 在开发过程中把语言缺的原语顶出来，当场补齐（不绕过）。** 详细缺口-决策-门见 `docs/M115_PLAN.md`。
+> 在开发过程中把语言缺的原语顶出来，当场补齐（不绕过）。** 详细缺口-决策-门见 `docs/archive/M115_PLAN.md`。
 
 - **缺口（四条，均无现成代偿）**：
   - ① `os.Setenv` 无对应原语 ⇒ 配置文件无法注入进程环境，**子进程继承不到**（只能改全局 dict，语义漂移）；
@@ -20203,7 +20203,7 @@ void px_root_restore_iso(void);         // longjmp 落点：**只收缩根栈**�
 
 ### M110 · serve 进程内分配「13.5× 放大」根因修复 + 交替「必备字面核心」整串预筛（qg-issue 38 / 34 附页2）
 
-> 依据 `docs/M110_PLAN.md`。清歌实测：**同一段代码**在 CLI 单线程进程里 83ms，在 `px serve` 进程里
+> 依据 `docs/archive/M110_PLAN.md`。清歌实测：**同一段代码**在 CLI 单线程进程里 83ms，在 `px serve` 进程里
 > **1117ms（13.5×）**。根因定位到 `runtime/runtime.c`：`gc_block_stop` 的软屏蔽快路径被
 > `g_active_threads == 0` 门控，而**服务进程池 worker 常驻注册** ⇒ 门控恒不成立 ⇒ 全进程（含主线程）
 > **每次 `xmalloc`/`xfree` 付 2 次 `rt_sigprocmask`**（实测单次 64KB 正则扫描 **1 053 631 次**、
@@ -20250,7 +20250,7 @@ m101_s2 三轮并发 TLS 握手 **0 失败** · S2 安全点对拍（软屏蔽 v
 
 ### M111 · 解释器（pxi）字符串下标/切片：消除每次调用的「全量字符表物化」（qg-issue 39）
 
-> 依据 `docs/M111_PLAN.md`。清歌实测「同一源码，编译轨 4/7/13 ms vs `px run` 7 408/26 303/112 360 ms」
+> 依据 `docs/archive/M111_PLAN.md`。清歌实测「同一源码，编译轨 4/7/13 ms vs `px run` 7 408/26 303/112 360 ms」
 > （1 852× / 3 758× / 8 643×，外推 64KB ≈ 1 800 s）。
 > **根因不是「逐字节重扫」，而是每次 `s[i]` 都物化一张 n 元字符表**：
 > `selfhost/ival.px` `i_index()` 字符串分支与 `i_slice()` 字符串分支都执行
@@ -20291,7 +20291,7 @@ m101_s2 三轮并发 TLS 握手 **0 失败** · S2 安全点对拍（软屏蔽 v
 
 ### M109 二期 · 响应头「同名多值」：值支持 str / list[str]，客户端重复头聚合（qg-issue 36 收口）
 
-> 依据 `docs/M109_PLAN.md` §14。三条证据：① 客户端 `px_dict_set` 对同名头**后写覆盖前写**（多 `Set-Cookie` 只剩最后一条）；
+> 依据 `docs/archive/M109_PLAN.md` §14。三条证据：① 客户端 `px_dict_set` 对同名头**后写覆盖前写**（多 `Set-Cookie` 只剩最后一条）；
 > ② 服务端 `px_hdr_append` 对非 `str` 值直接 `continue` ⇒ handler 传 `list` **被静默跳过**；
 > ③ `stdlib/cookiejar.px` 头注已声明「接受 `Set-Cookie` 为 `str` 或 `list[str]`」，但生产者端**从不产出 list**
 > ⇒ 该分支一直是**不可达代码**。
@@ -20309,7 +20309,7 @@ m101_s2 三轮并发 TLS 握手 **0 失败** · S2 安全点对拍（软屏蔽 v
 
 ### M109 · HTTP 响应头通路：白名单 → 拒绝名单（qg-issue 36 · handler 响应头不再被静默丢弃 + 预算 4KB + route/脚本通路统一）
 
-> 依据 `docs/M109_PLAN.md`。现场：晨曦 Mahesvara 明确放行的 **17 个响应头只有 7 个到达客户端**，
+> 依据 `docs/archive/M109_PLAN.md`。现场：晨曦 Mahesvara 明确放行的 **17 个响应头只有 7 个到达客户端**，
 > 10 个被**静默丢弃**（`ETag`/`Vary`/HSTS/CSP/`X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/
 > `WWW-Authenticate`/`Retry-After`/`Accept-Ranges`）；ma-cache 的 `Age`/`X-Cache`/`X-Cache-Key` **全丢**
 > → CDN 命中率 68% 却无任何 HIT/MISS 标识，**险些误报「边缘没缓存」**；
@@ -20355,7 +20355,7 @@ S0 读码时另在计划外发现**两处同族违约**（否则只修一半）�
 
 ### M108 · 服务端连接生命周期族：TLS 握手不再拖死整端口（qg-issue 37 · 443 假死根因修复 + 池自愈 + 有界入队 + 可见性）
 
-> 依据 `docs/M108_PLAN.md`。现场：晨曦 Mahesvara **443 全站不可用 2h41m**（80/443 同进程，80 全好）、
+> 依据 `docs/archive/M108_PLAN.md`。现场：晨曦 Mahesvara **443 全站不可用 2h41m**（80/443 同进程，80 全好）、
 > 进程活着、80/443 都 LISTEN、客户端 TLS 握手**收 0 字节直到 15s 超时**、`CLOSE-WAIT` 52→61→64 单调增长且
 > `Recv-Q` 最高 1794B、**294/300 线程 wchan=futex**、只能重启恢复、优雅关闭 91s 被 SIGKILL。
 
@@ -20424,7 +20424,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M107-S2 · VM 全局名访问「稳定指针槽位记忆」（qg-issue 35 残余 · 每次访问 30ns → 18ns，−40%）
 
-> 依据 `docs/M107_PLAN.md` §2.4。M105-S2 已把 `px_get_global` 的 O(g_len) 线性扫描改成 O(1) 哈希，
+> 依据 `docs/archive/M107_PLAN.md` §2.4。M105-S2 已把 `px_get_global` 的 O(g_len) 线性扫描改成 O(1) 哈希，
 > 残余成本落在**每次**访问都要重算的 `strlen + FNV-1a + 开放寻址探测 + strcmp`。
 > - **做法**：VM 轨 `PXOP_GETG` 传入的名字来自 `BCModule` 全局名表 `m->G[b]`——**编译期常量字符串指针，
 >   进程生命周期内地址不变** ⇒ 以「名字指针」为键做一级记忆（TLS 直接映射 128 项）：首次按名查找并
@@ -20446,7 +20446,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M107-S3 · 内存路径：slab 分配器复用 + 页回收收口（qg-issue 34 内存路径 · 真负载 5.6× / mmap+munmap −97.8%）
 
-> 依据 `docs/M107_PLAN.md` §3.5，病灶由 M106-S1 的**调用者归因**钉死（`xmalloc` 采样 28.84% 中 **95.25% ← `px_str_len`**；
+> 依据 `docs/archive/M107_PLAN.md` §3.5，病灶由 M106-S1 的**调用者归因**钉死（`xmalloc` 采样 28.84% 中 **95.25% ← `px_str_len`**；
 > `slab_reclaim_empty` 25.82% 中 **100% ← `px_gc_collect`**）+ `strace -f` 逐调用计数（真负载 mmap 59,369 / munmap 24,113，
 > 其中 **99.9% 是 4KB 单页**）。
 > - **S3a 位图内联**：`in_use` 位图由「独立 `slab_raw_alloc`（第二次 mmap）」改为**内联在 slab 映射尾部**
@@ -20463,7 +20463,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   mmap **59,369 → 1,827**、munmap **24,113 → 37**（合计 **−97.8%**）；峰值 RSS **144.7 → 38.5 MB（−73%）**；
 >   产物 **md5 逐字节一致**。旁证：分配器压力/边界用例 **2.29s → 0.48s（4.8×）**、32 例语料逐字节一致、**0 条 SLAB 告警**。
 > - `bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收 M107-S3 runtime。
-> - 计划、量化表与两次**实测纠错**（首版整链搜索退化 ~10s、次版单 hint 退化 ~14.5s）见 `docs/M107_PLAN.md` §3.5。
+> - 计划、量化表与两次**实测纠错**（首版整链搜索退化 ~10s、次版单 hint 退化 ~14.5s）见 `docs/archive/M107_PLAN.md` §3.5。
 
 ### M106 · 字符串下标原语 O(n)→摊还 O(1)（qg-issue 33-A 语言层主修 · 真实负载 1.78~1.89x）
 
@@ -20471,7 +20471,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > 审批链路的 fail-closed 统一文案，但根因**不在连接**（那是 Issue 31/32）而在 **`s[i]` / `len(s)` 为 O(n)/次**：
 > `px_index` 的 PX_STR 分支先全串扫一遍拿 rune 数、再从 byte0 走到第 i 个 rune ⇒ 逐字符扫字符串天然 **O(n²)**；
 > ws-approve 的纯 .px `json_valid`（`/check` 调两次）在 64KB body 上放大成 11.6s，越过 2s/5s fail-closed 阈值。
-> 计划、量化表与实测见 `docs/M106_PLAN.md`。
+> 计划、量化表与实测见 `docs/archive/M106_PLAN.md`。
 > - **S1 量化（零侵入采样剖析 + 调用者归因，插桩件不入库）**——真实负载 `compiler_vm bc stdlib/yaml.px`：
 >   - 基线 **3080 样本**，`px_index` 独占 **46.43%**；补丁后 **1663 样本**，`px_index` **0.06%**，
 >     且 `3080 − 1430 = 1650 ≈ 1663` ⇒ **差值恰好是这一项，零新热点**（其余符号绝对计数持平）；
@@ -20526,8 +20526,8 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析 + S3 GC 同步瘦身 + S5 收口）
 
-> 依据 `docs/M104_PLAN.md` §7.3 归因（「真瓶颈在 runtime 侧的名解析与锁路径，而非解释循环分派」），
-> M105 承接该结论**先量化、再动手**。计划、量化表与实测见 `docs/M105_PLAN.md`。
+> 依据 `docs/archive/M104_PLAN.md` §7.3 归因（「真瓶颈在 runtime 侧的名解析与锁路径，而非解释循环分派」），
+> M105 承接该结论**先量化、再动手**。计划、量化表与实测见 `docs/archive/M105_PLAN.md`。
 > - **S1 量化（零侵入，插桩件不入库）**——真实负载 `compiler_vm bc stdlib/yaml.px`：
 >   - 动态指令 **5,302,670** 条，其中 `GETG` **723,980（13.7%）**、`SRCLINE` 869,191、`CALL` 312,181；
 >   - `LD_PRELOAD` 计数：`strcmp` 调用 **262,956,746** 次，其中 **95.0%（249,747,716）来自全局表线性扫描**
@@ -20585,9 +20585,9 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M104 · VM 性能增强（LTO 构建档 + 执行引擎优化）
 
-> 依据 `docs/M104_native_prestudy.md`（③ native 旗舰 D0 预研）**路线 ① 裁定**：native 天花板 = C 轨
+> 依据 `docs/archive/M104_native_prestudy.md`（③ native 旗舰 D0 预研）**路线 ① 裁定**：native 天花板 = C 轨
 > ≈1.04~1.5x VM 且成本 18~25 周，故 M104 转为**纯运行时/工具链性能增强**（不动语言语义、不动发射器、
-> 不动 golden）。计划与完整实测见 `docs/M104_PLAN.md`（§七）。
+> 不动 golden）。计划与完整实测见 `docs/archive/M104_PLAN.md`（§七）。
 > - **执行引擎优化（默认 VM 轨；`runtime/vm.c`）**
 >   - **O3 类型特化快路径**（主要收益）：`ADD/SUB/MUL/DIV/IDIV/MOD/EQ/NE/LT/LE/GT/GE/BITAND/BITOR/
 >     BITXOR/SHL/SHR/SHRU/NEG/BITNOT/NOT/JMPT/JMPF/INDEX` 的 **INT⊗INT** 分支在解释循环内联构造
@@ -20642,7 +20642,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > M103 = 清歌 Issue 29（29-puxian-ddns-gaps：dns TXT + ed25519_keygen）+ Issue 30
 > （30-puxian-api-server-gaps：YAML 序列化 + 图片 JPEG）全量收官——qg-issue 29/30
 > 归档 done，ws-ddns .px 纯 native 移植与 api-server 头像/配置写回缺口清零。
-> 规划 docs/M103_PLAN.md。性质：**L0 runtime（native 301 → 306（+5））+ L1 stdlib**。
+> 规划 docs/archive/M103_PLAN.md。性质：**L0 runtime（native 301 → 306（+5））+ L1 stdlib**。
 > 基线 v0.2.0-m102（8377953）。commit 链：01eed4d（S1 立项 + D0 侦察）+ 9216c71
 > （S2a）+ ae707ff（S2b）+ b6d262e（S2c）+ 996f4b4（S2d）+ 本收口（S3）。
 > - **S2a · dns_txt(domain) → list[str]**（Issue 29 GAP-DNS-TXT-1，native 302）：
@@ -20698,7 +20698,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > M102 = 二期候选 B（.px 子进程池协程化）+ C（h2 handler 协程化）侦察驱动里程碑
 > （候选排序第 4/5 项）：**先 D0 侦察、成立则实施、不成立就地关闭记录**。commit 链：
 > 7edb71f（S1 立项 + D0 侦察定稿）+ 3b02cf9（S2a D1 实施）+ a6e7993（S2b 收口决策）。
-> 规划 docs/M102_PLAN.md。性质：**L0 runtime**（语言层 .px 执行并发模型）。
+> 规划 docs/archive/M102_PLAN.md。性质：**L0 runtime**（语言层 .px 执行并发模型）。
 > - **D0 侦察结论**：
 >   - **候选 C（h2 handler 协程化）→ ❌ 关闭记录**：runtime_h2.c 为最小 h2c 帧循环
 >     （M35：h2c Upgrade + prior knowledge + HPACK + 固定 echo 响应），**不调用 VM
@@ -20732,7 +20732,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 > M101 = 二期候选排序第 A 项（已复现真实缺陷：M99-S3 记档「px_serve 并发 TLS 握手
 > TLS1.3 CertificateVerify 签名错 + TLS1.2 大并发 EOF，M98 runtime 复现，先于 M99」）。
-> 规划 docs/M101_PLAN.md。性质：**L0 runtime bugfix**（服务端 TLS 多 worker 并发握手
+> 规划 docs/archive/M101_PLAN.md。性质：**L0 runtime bugfix**（服务端 TLS 多 worker 并发握手
 > 正确性——mbedtls 3.6.2 预编译库未编线程支持下的共享竞态根治）。
 > - **根因（D0 侦察 + 复现二分）**：px_serve g_pool 多 worker 并发在各自连接上执行
 >   mbedtls 服务端握手，而 runtime/mbedtls 3.6.2 库 **MBEDTLS_THREADING_C 关（config
@@ -20771,7 +20771,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > M100 = 二期候选第 2 项（middleware 链协程化）正式立项（M98_PLAN §二 ⚠️ 遗留清单第 4 项；
 > M99 收口后二期排序第 2 项）。commit 链：2c202ec（S1 立项 + D0 侦察 + 设计定稿）+
 > 6d65d23（S2 实现 + examples/m100 验证套件 11P/0F）+ 本 commit（S3 收口 + tag v0.2.0-m100）。
-> 规划 docs/M100_PLAN.md。上游：M98（px_serve route/vhost handler 拆段协程化，
+> 规划 docs/archive/M100_PLAN.md。上游：M98（px_serve route/vhost handler 拆段协程化，
 > PxPend 注册表 + px_pxserve_defer + 段2 续处理骨架直接复用）；M99（连接级事件化 IDLE）。
 > 性质：**L0 runtime**（px_serve route 管道 middleware 链并发模型层）。
 > - **背景**：M98 只拆了「middleware 链之后的 route handler」——链本身仍在 g_pool worker
@@ -20814,7 +20814,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > M99 = 原 M95 二期候选第 1 项（px_serve 连接级事件化 IDLE）正式立项（M98 收口后，
 > qg-issue 29/30/31/32 等已闭环或排期）。commit 链：68a589b（S1 立项 + D0 侦察 +
 > 方案）+ 09caa6a（S2 实现 + examples/m99_s2 验证门）+ 965bbd0（S3 回归面）+ 本
-> commit（S4 收口 + tag v0.2.0-m99）。规划 docs/M99_PLAN.md。
+> commit（S4 收口 + tag v0.2.0-m99）。规划 docs/archive/M99_PLAN.md。
 > - **背景**：M98 已把 px_serve 的 route/vhost VM handler 拆段协程化（长业务占协程不占
 >   线程），但 **keep-alive 空闲连接仍每连接一个 g_pool 线程阻塞在下一请求 recv 直到
 >   连接关闭**（SO_RCVTIMEO 15s）→ max_conn 预派生池被空闲连接占死，超出 worker 数的
@@ -20866,7 +20866,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > M98 = 原 M95-S5（px_serve route/vhost handler 协程化）正式立项（M97 期间 qg-issue
 > 31/32 插入顺延编号）。commit 链：1d3168b（S1 立项 + D0 复核 + 范围决策）+ fdc2160
 > （S2a route 拆段）+ 448c0d3（S2b vhost 拆段 + null 回退）+ 本 commit（S3 收口 +
-> tag v0.2.0-m98）。规划 docs/M98_PLAN.md；早期侦察快照 docs/M95_S5_PLAN.md。
+> tag v0.2.0-m98）。规划 docs/archive/M98_PLAN.md；早期侦察快照 docs/archive/M95_S5_PLAN.md。
 > - **背景**：px_serve（M31.4b g_pool）每连接一个常驻线程跑 px_conn_worker 阻塞
 >   keep-alive 到连接关闭（PxConn 为栈对象）→ route/vhost VM handler 长业务
 >   （sleep/chan/spawn）占死 worker → 慢请求数 ≥ worker 数即饿死全系统。D0 复核
@@ -20987,7 +20987,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   golden/compiler.bc.dump 逐字节一致）+ bootstrap/pxi_vm 重链吸收 M96 runtime
 >   （9,329,448 → 9,334,320B，hello 与 pxi stdout 一致）+ bootstrap/pxi 重链吸收
 >   M96 runtime（9,495,360 → 9,504,560B，--c 轨解释器，M91 重链批次惯例）。详见
->   docs/M96_PLAN.md。
+>   docs/archive/M96_PLAN.md。
 > - ⚠️ 二期边界（M96_PLAN §五/D8 二期候选）：α 纯正 epoll 网络栈（协议整体 VM 化后）；
 >   文件 IO / popen 子进程等待等其余阻塞 native offload 候选；M97 = px_serve
 >   route/vhost handler 协程化（M95_S5_PLAN.md，暂缓）。
@@ -21021,7 +21021,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   让出 + precise 低阈值 GC 压力 16/16 + close/HEAD 逐字节）+ 协程内核回归 m93_s2/s3
 >   12 + m94_s2/s3 8 + **vm_ab 38 PASS 0 GAP 0 FAIL** + m89_s3d 9 + m82/m83_s6 ✅ +
 >   diffcheck --all ✅；bootstrap/pxi_vm 重链吸收 M95 runtime（9,329,128 → 9,329,448B，
->   hello 与 pxi stdout 一致）。详见 docs/M95_PLAN.md。
+>   hello 与 pxi stdout 一致）。详见 docs/archive/M95_PLAN.md。
 > - ⚠️ 二期边界（M95_PLAN §五）：sse_serve（需先做「协程局部连接上下文」替代 __thread
 >   g_cur_conn）、px_serve（route/vhost 管道 handler 调用点深埋 runtime_route）；完成后
 >   评估 fserve/pool 默认 worker 数下调（256 → CPU 级）。
@@ -21049,7 +21049,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   sse_serve handler 内 sleep 两段推送 + sse_close，curl -k 收流正确；handler 返回
 >   连接保持路径断连后服务健康重连正常）。回归全绿：m83_s6 9（SSE legacy + http_stream
 >   takeover）+ m95_s2 12 + m89_s3d 9 + **vm_ab 38 PASS 0 GAP 0 FAIL** + m93_s2/s3 12
->   + m94_s2/s3 8 + diffcheck interp ✅。详见 docs/M95_PLAN.md §五。
+>   + m94_s2/s3 8 + diffcheck interp ✅。详见 docs/archive/M95_PLAN.md §五。
 > - ⚠️ 继续边界：M95-S5（px_serve route/vhost handler 协程化，g_pool 收敛到 coro）。
 
 ### M94 · 协程调度完备性（D8 二期-A：抢占 + 定时器并入调度循环 + 逃生舱边界决策）
@@ -21082,7 +21082,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   + m89_s3d 9 + **vm_ab 38 PASS 0 GAP 0 FAIL** + diffcheck --all ✅ + m82 + m83_s6 ✅；
 >   双自举证明：compiler_new/compiler_vm 全链重链（含 M94 runtime）后 compiler_vm
 >   重放 compiler.px dump 30582 行与 golden **逐字节一致**；bootstrap/pxi_vm 重链
->   吸收新调度器（9,329,184 → 9,329,128B，hello 一致）。详见 docs/M94_PLAN.md。
+>   吸收新调度器（9,329,184 → 9,329,128B，hello 一致）。详见 docs/archive/M94_PLAN.md。
 > - ⚠️ 后续编排（D8 二期 ①②）：**M95** 服务端 handler 协程化（http_serve/sse/
 >   px_serve 活跃请求占协程不占 fserve worker）；**M96** 客户端网络 IO 协程化
 >   （http/tcp/udp/ws/s3/dns/fd_wait 阻塞桥 → 事件登记让出）。work-stealing 后置。
@@ -21110,7 +21110,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > - **验证门全绿**：examples/m93_s3/verify.sh **6 PASS**（mutex 4000/chan 乒乓
 >   8×300/并发 sleep/with 展开/让出×GC 低阈值/逃生舱对拍）；m93_s2 6 + m89_s3d 9
 >   + vm_ab 31P/7GAP(已知)/0F + diffcheck --all ✅ + m82 + m83_s6 ✅；万级 spawn
->   10000 协程 3.26s；5000 协程×分配×GC 37s 零崩。详见 docs/M93_PLAN.md。
+>   10000 协程 3.26s；5000 协程×分配×GC 37s 零崩。详见 docs/archive/M93_PLAN.md。
 > - ⚠️ 已知边界（D8 二期）：网络 IO（http/tcp/ws）epoll 协程化、服务端 handler
 >   协程化、抢占/work-stealing、逃生舱内 spawn 协程化 —— 后置。
 
@@ -21120,7 +21120,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > native 桥登记根栈），双模式由产物轨自动判定（VM 轨默认 precise；C 轨逃生舱
 > conservative）。commit 链：2017101（S1/S2a 框架）+ a55a13c（S2b 语言核心层）
 > + a323505（S2c 服务/IO 层 + 根栈原子性）+ 9d91f24（S2d 插桩）+ 本收口。
-> 详见 docs/M92_PLAN.md。tag **v0.2.0-m92**。
+> 详见 docs/archive/M92_PLAN.md。tag **v0.2.0-m92**。
 
 ### M92-S2d · VM 轨产物默认 precise 插桩（bc_emit）+ 自举重建 + 双 golden 更新（2026-09-09，dongyue）
 
@@ -21149,7 +21149,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M92-S2c · precise GC native 桥登记批次 2（服务/IO 层）+ 根栈并发原子性修复（2026-09-09，dongyue）
 
-> M92（精确 GC 终极项，docs/M92_PLAN.md）S2c 完成。S2a 框架 + S2b 语言核心层
+> M92（精确 GC 终极项，docs/archive/M92_PLAN.md）S2c 完成。S2a 框架 + S2b 语言核心层
 > 登记（2017101/a55a13c）后，本批把服务/IO 主路径 native 桥的跨 GC 点裸局部全部
 > 登记进 precise 根面，并用 precise 低阈值 + 服务压测验证。
 > - **服务端主 worker 登记**（runtime/runtime.c）：
@@ -21202,8 +21202,8 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M91 · 默认轨切 VM（px build 默认产物 = 字节码 VM 轨 + C 轨逃生舱）
 
-> 完成（2026-09-09，dongyue）：M91（立项依据 docs/M90_S4_switch_eval.md + perf 基线）
-> 按 S0-S4 收口，详见 docs/M91_PLAN.md。commit fca0cee（S3）+ 收口提交。
+> 完成（2026-09-09，dongyue）：M91（立项依据 docs/archive/M90_S4_switch_eval.md + perf 基线）
+> 按 S0-S4 收口，详见 docs/archive/M91_PLAN.md。commit fca0cee（S3）+ 收口提交。
 > - **tools/px 引擎反转**：`px build` 默认 = VM 轨（compiler_vm --emit-c → BCModule
 >   字节码镜像 C → 链 runtime 含 vm.o → 显式帧 VM 执行）；新增 `--c`（C 轨逃生舱
 >   fn_* 文本轨，纯计算热点 ≈1.5x 用）；`PX_BUILD_ENGINE=c|vm` env 逃生舱（脚本/CI
@@ -21249,12 +21249,12 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   tmo_save 9~20→0。回归：m89_s3d 9 PASS、m90_s1 5 PASS、m82 unix 全 PASS（issue28 场景）、
 >   m83_s6 SSE/http_stream 全 PASS、vm_ab 38 例 FAIL 0、短压 RPS 1473。
 > - 诊断：PX_EV_DIAG=1 门控计数器（idle_put/detect/tmo_close/tmo_save + SAVE 明细），
->   生产默认关零开销。详见 docs/M90_S2_F3.md §6。
+>   生产默认关零开销。详见 docs/archive/M90_S2_F3.md §6。
 
 ### M90-S2/S3/S4 · F3 快查 + stdlib 全 VM 冒烟 + 默认轨切换立项评估（M90 收官）
 
 > 完成（2026-09-09，dongyue）：M90（默认轨切换前奏）S2-S4 收官（S1 见下一条目）。
-> - **S2 F3 快查（docs/M90_S2_F3.md）**：HTTP keep-alive 高并发崩溃判定真 bug ——
+> - **S2 F3 快查（docs/archive/M90_S2_F3.md）**：HTTP keep-alive 高并发崩溃判定真 bug ——
 >   **15s keep-alive 空闲超时误杀活跃连接**（M88-B-S2 事件化遗留，与 VM/C 轨无关）。
 >   关键证据：崩溃阈值 = 压测时长跨 ~15s（M89 短测 8 并发 12.3s <15s 未触发被掩盖；
 >   长压 8/20 并发均复现：RPS 249-301、ok 率 26-65%、max 16.6-17.7s 尖刺、Connection
@@ -21263,7 +21263,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 >   （超时 close 前 poll 二次确认兜底 + 事件循环漏报深查）。
 > - **S3 stdlib 全 VM 编译冒烟**：stdlib 13/13 `compiler_new bc` 通过（F1 后无缺口；
 >   capability 41KB 全量 VM 运行 == pxi 已在 S1 兑现）。
-> - **S4 默认轨切换立项评估（docs/M90_S4_switch_eval.md）**：技术前置全齐（F1/
+> - **S4 默认轨切换立项评估（docs/archive/M90_S4_switch_eval.md）**：技术前置全齐（F1/
 >   stdlib/语义对拍 38 例/perf 代价量化 0-10%）；golden 大迁移范围 + AB 回退开关
 >   （`px build` 默认 VM + `--c` 逃生舱 + PX_BUILD_ENGINE env）设计完成；建议
 >   F3-fix 先行后按 S0-S4 独立立项（如 M91）推进切换，无技术 blocker。
@@ -21273,7 +21273,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 ### M90-S1 · bc_emit 默认参数支持（F1）+ for/continue 死循环修复 + capability VM 化跑通
 
 > 完成（2026-09-09，dongyue）：M90（默认轨切换前奏：bc_emit 缺口清障）S1 收官，
-> 详见 docs/M90_PLAN.md。默认轨切换前置硬缺口 F1 落地，并连带暴露/修复 M89 遗留
+> 详见 docs/archive/M90_PLAN.md。默认轨切换前置硬缺口 F1 落地，并连带暴露/修复 M89 遗留
 > continue-for 死循环、实现 capability.px（41KB 系统文件）全量 VM 化运行。
 > - **F1 bc_emit 默认参数**：新指令 PXOP_NARGS 57（槽=本帧实际实参数，PxFrame
 >   增 nargs）+ bc_emit_func_body arity=必需数/ndefault 计数 + 函数入口
@@ -21300,7 +21300,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 ### M89-后置决策 · VM vs C 轨性能基线（默认轨切换数据底座）
 
 > 完成（2026-09-09，dongyue）：M89-S4 收口后置决策项「默认轨切 VM」的量化数据
-> 基础（docs/M89_PERF_BASELINE.md + examples/m89_perf/ 一键复现资产）。
+> 基础（docs/archive/M89_PERF_BASELINE.md + examples/m89_perf/ 一键复现资产）。
 > - **三类负载实测（同源双轨产物对拍，3-5 轮取中位）**：fib 纯计算热点 VM/C =
 >   **1.52x**；compiler 形态综合真实负载（compiler.px 双轨产物跑同一 bc dump）=
 >   **1.04x**；HTTP JSON 服务 8 并发 RPS = **1.00x（持平）**。
@@ -21620,7 +21620,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 ### M89-S3-A1 · VM 化实现启动：发射器首个真实切片 + VM GETG/SETG/Top 运行
 
 > 完成（2026-09-08）：VM 化旗舰（M89）进入 **S3-A 实码阶段**，A1 落地
-> （A0 骨架见 docs/M89_vm_design.md）。
+> （A0 骨架见 docs/archive/M89_vm_design.md）。
 > - **selfhost/bc_emit.px**（AST→BCModule 发射器首个真实切片）：K 池按值去重、G 池全局名源码序收集、
 >   N 池预留；函数级槽分配对齐现 codegen `_v` 编号体系（参数 0..arity-1 + hoist 局部预占（帧槽零值
 >   即 PX_NULL 免初始化）+ 临时槽）；A1 子集接线 VarDecl/Assign(Var)/Return/If/While/Empty +
@@ -21637,7 +21637,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > - ⚠️ 记录：pxi 解释器不支持 import codegen 生态（i_run_program 解释合并 prog 触发 rust_str_debug
 >   越界）——compiler 生态工具一律编译版运行（bc_cli 亦如此），解释验证仅限单文件。
 
-### M89-S1/S2 · VM 化详勘预研 + 设计定稿（docs/M89_vm_prestudy.md · M89_vm_design.md）
+### M89-S1/S2 · VM 化详勘预研 + 设计定稿（docs/archive/M89_vm_prestudy.md · M89_vm_design.md）
 
 > 完成（2026-09-07~08）：VM 化旗舰（M89）**详勘（S1，只侦察未写码）** 与 **设计定稿（S2）**。
 > - S1 结论：双执行轨坐实（编译轨 px 函数=C 函数+C 递归、无显式帧；pxi=AST 树遍历），共享
@@ -21654,7 +21654,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > - ⚠️ 记录：M89 主体（VM 实现 S3-A..D）为季度级大工程，issue28 止血（B1/B2/B3）已先行落地（见下条），
 >   根治（分代/精确 GC + 全局槽）随 M89-S3-D 吸收。
 
-### Issue28 止血批次 B1-B3（qg-issue 28 · docs/ISSUE28_PLAN.md）
+### Issue28 止血批次 B1-B3（qg-issue 28 · docs/archive/ISSUE28_PLAN.md）
 
 > 完成（2026-09-07）：对 M88-B 后仍阻塞 ws-approve .px 化（#47）的 **GC STW 周期尖刺 +
 > 堆只涨不落 + 并发吞吐 GIL** 三瓶颈做保守 GC 框架内止血（最终根治随 M89 VM 化精确 GC）。
@@ -21673,7 +21673,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > - ⚠️ 残余（M89 吸收）：单次 STW 仍 ~100-300ms（sweep 线性于对象数）；issue28 §7 全量验收
 >   （单发 p95≤50ms / max≤100ms / 500 并发 p50≤200ms）需观音/清歌 ws-approve 隔离实测。
 
-### M89 立项 + S0 · 版本升格 0.1.0 → 0.2.0（docs/M89_PLAN.md · VM 化旗舰里程碑启动）
+### M89 立项 + S0 · 版本升格 0.1.0 → 0.2.0（docs/archive/M89_PLAN.md · VM 化旗舰里程碑启动）
 
 > 完成（2026-09-07）：**M89 立项**（VM 化 = AST/C 递归 → 显式帧 + 平坦字节码 VM，
 > 总钥匙；S0 版本升格 → S1 VM 详勘预研 → S2 设计 → S3 实现 → S4 收口）。**版本号 0.1.0 → 0.2.0**：
@@ -21741,7 +21741,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > 立项（2026-09-07）：qg-issue 27（清歌 ws-approve .px 化 #47 压测/线上事故：http_serve_unix 高并发崩溃）
 > → runtime `px_spawn` 受 GC 线程表固定 64 槽限制，槽满 `px_error`→`exit(1)`；http_serve/sse_serve
 > accept 每连接 spawn → 64 并发即崩。M88 = A（线程池止血，已开工）→ B（事件驱动）→ C（用户态协程 M:N）
-> 三档完整演进。规划见 docs/M88_PLAN.md。
+> 三档完整演进。规划见 docs/archive/M88_PLAN.md。
 
 ### M88-S1 · GC 线程槽动态化（qg-issue 27）
 
@@ -21789,7 +21789,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > ② pxc→px 可行（/usr/bin/pxc = symlink → tools/pxc bash 前端；M71-S4 readlink 自发现、逻辑不依赖 argv[0]；改名面=脚本名 + usage/version 文本 + spec + 文档，pxc 留兼容别名）；
 > ③ 用户拍板**路线甲（自动裁剪）**，乙案（默认 min）剔除（自举/工具链需全量、破坏向后兼容、与编译型惯例倒置）。
 > M86 = **S0**（命令正名 px + help 补齐 M85 开关 + pxc 兼容别名 + spec 双装 + 文档入口更新）→ **S1**（selfhost 语义打点收集「被引用 native 集」，旁路导出不扰 codegen；import 递归；解析异常退全量）→ **S2**（裸 `px build` 自动折 `--no-xxx` 裁剪集复用 M85 链路 + `--full/--max` 逃生舱 + 显式 flag 优先级 > 自动）→ **S3**（收口：重链 + 自举证明 + 回归总闸 + qg-issue 25 归档 + tag v0.1.0-m86 待令）。
-> 不改语言语法/现有 native 语义；native 总数 **301** 不变；bootstrap 发布物全能力。执行规划 `docs/M86_PLAN.md`（S0→S3）。
+> 不改语言语法/现有 native 语义；native 总数 **301** 不变；bootstrap 发布物全能力。执行规划 `docs/archive/M86_PLAN.md`（S0→S3）。
 
 ### M86-S0 · 命令正名 px + help 补齐 + 安装链路双装（qg-issue 25）
 
@@ -21836,7 +21836,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > （--no-sqlite/--no-ws/--no-tls/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route 等，
 > 与 --no-quic 正交可组合）+ runtime.c 各模块注册段 #ifndef PX_NO_\<MOD\> 包裹 + tools/pxc
 > 链接/缓存 key 按开关集裁剪；目标产物 9.0M→**2~4M**，默认全能力 build 行为零漂移；
-> 方案 C（--gc-sections 自动死代码裁剪）二期评估不承诺。执行规划 `docs/M85_PLAN.md`（S1→S3）。
+> 方案 C（--gc-sections 自动死代码裁剪）二期评估不承诺。执行规划 `docs/archive/M85_PLAN.md`（S1→S3）。
 > 不改语言语法/现有 native 语义；native 总数 **301** 不变。
 
 ### M85-S1 · 模块裁剪开关集落地：runtime.c 宏包裹 + tools/pxc 细粒度裁剪（qg-issue 24）
@@ -21865,7 +21865,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > - **重链 + 零漂移实证**：tools/pxc build selfhost/interp.px → 产物 **9,457,456 B 与 m84 入库 bootstrap/pxi 同字节**（仅 .note.gnu.build-id 20B 差异，gcc 链接非确定性）——宏包裹在无 -D 全能力路径对 pxi **零语义影响**的最强证明；功能冒烟（hello/sha256/sqlite/dns_lookup 解释模式）全过；已 cp 覆盖 bootstrap/pxi 提交（build-id 更新记录）。
 > - **自举证明**：selfhost/bootstrap_prove.sh rc=0（B.c == golden/compiler.c 10595 行逐字节；compiler.px 未动）。
 > - **回归总闸 12 批内容全 PASS**：m82_http_serve_unix + m83_s1–s6 + m84_s1–s3 + m85_s1–s2 —— m83_s5/s6 内容断言全 PASS，仅 verify.sh 收尾 trap 在工具进程管理下 signal 边界（同 M84-S4 记录，CI 环境正常，不修）。
-> - **qg-issue 24 归档 `done/`**（00-README 更新：Issue 1–24 全部合入/归档，仅 14-W1b ⏸️ + 13-R2 自持）；docs/M85_PLAN.md 全程记录。
+> - **qg-issue 24 归档 `done/`**（00-README 更新：Issue 1–24 全部合入/归档，仅 14-W1b ⏸️ + 13-R2 自持）；docs/archive/M85_PLAN.md 全程记录。
 > - tag v0.1.0-m85 **待用户令**（规划默认推）。
 
 ### M84-S4 · 收口：重链 bootstrap/pxi + 全量回归 + qg-issue 21/22/23 归档（tag v0.1.0-m84）
@@ -21874,7 +21874,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > - **重链 + 自举证明**：tools/pxc build selfhost/interp.px → 覆盖 bootstrap/pxi；bootstrap_prove.sh rc=0（compiler.px 未动，B.c == golden 10595 行逐字节）。pxc 等编译器类 ELF 源码未动无需重链（产物每次编译现链最新 runtime）。
 > - **双模式抽查**：pxi run == pxc build —— hmac_sha256 RFC4231 TC2（5bdcc146…）与 dns_lookup localhost（[::1, 127.0.0.1]）解释/编译逐字节一致。
 > - **全量回归总闸全绿**：m82（http_serve_unix）+ m83_s1–s6 + m84_s1–s3 每批独立 verify PASS —— m83_s5 multipart 上传卸 Content-Length hack 仍过（CT 修复后 runtime 自动补 CL）、m83_s6 SSE 同端口零回归、m84_s1 单 CT 6 场景断言、m84_s2 RFC4231/Go/TC3 对拍、m84_s3 公网 www.qq.com 与 Go net.LookupIP 交集≥1。
-> - **native 301**（gen_native_table.sh 幂等，native_index/CHEATSHEET 已同步）；qg-issue **21/22/23 归档 `done/`**（00-README 更新：Issue 1–23 全部合入/归档，仅 14-W1b ⏸️ 挂起 + 13-R2 业务自持）；docs/M84_PLAN.md 全程记录。
+> - **native 301**（gen_native_table.sh 幂等，native_index/CHEATSHEET 已同步）；qg-issue **21/22/23 归档 `done/`**（00-README 更新：Issue 1–23 全部合入/归档，仅 14-W1b ⏸️ 挂起 + 13-R2 业务自持）；docs/archive/M84_PLAN.md 全程记录。
 > - 附带记录：m83_s5/s6 verify.sh 收尾 trap 在工具进程管理下 signal terminated（内容断言全 PASS，CI 环境正常），属既有脚本边界，不修。
 
 ### M84-S2 · hmac_sha256 native + sha256 bytes/含 NUL 增强（qg-issue 21，GAP-HMAC-1）
@@ -22115,7 +22115,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   同 handler 双跑对拍**；spec §8.22 + CHEATSHEET（native 287→288 + §4.1 unix 变体）+
   ECOSYSTEM + native_index.json（tools/gen_native_table.sh 重生成）同步。
 
-### M72 · AI 调试回路 + runtime bytes 增强（docs/M72_PLAN.md）✅
+### M72 · AI 调试回路 + runtime bytes 增强（docs/archive/M72_PLAN.md）✅
 
 > 立项（2026-09-06 用户指令，方案 A）：qg-issue **9**（print stdout 全缓冲——服务日志运行中不可见/崩溃前丢失）+ **10**（AI 诊断 D1 编译产物错误无行号 / D2 spawn 协程错误不隔离）+ **13-R1**（ws-backup PuXian 化前置：AES/HTTP 二进制硬缺口 GAP-BIN-1/2）**一批 runtime 立项**，一次自举重建共享成本；13-R2（ws-backup-px 业务）拆 M73。L0 runtime + 编译器诊断层，**不改语言语义**。
 > 回归：runtime.c/h + runtime_aes.c + selfhost（cg_stmt/codegen/interp/ibuiltin）改动 → 重链 bootstrap pxc/pxi + golden/compiler.c 与 codegen golden 重生成 + 自举证明 + diffcheck + examples/toolchain verify + native_index 防漂移。
@@ -22126,7 +22126,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - **M72-S4 runtime bytes native（Issue 13 R1，commit 39a4d6c）**：**GAP-BIN-1** `aes_gcm_encrypt_bytes/decrypt_bytes`（str|bytes 取参含 \0 不截断；去 aes_is_utf8 限制——二进制明文可解出；输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 字节兼容）+ CBC `aes_encrypt_bytes/decrypt_bytes` 顺带同坑修复；**GAP-BIN-2** `http_request` body 收 str|bytes **长度感知**（Content-Length=bytes.len；body 独立发送顺带修复 16KB req 缓冲大 payload 溢出；http_unix 保持原样）；native 283→287；实测 runtime.c 577953B 二进制 GCM/CBC roundtrip + HTTP POST bytes 上传 sha256 逐字节一致。
 - **M72-S5 重建链 + 回归 + 文档收口**：golden/compiler.c（自举基准）与 codegen golden（s 系列 .c，S2 插桩后 C 产物变化）重生成；pxi 重链；自举证明 + diffcheck --all + examples/toolchain verify 全绿；ECOSYSTEM_GAPS §6（M72 已落地能力 D1-D4/B1-B2）；CHEATSHEET native 计数 281→287 + M72 诊断/bytes 注记；ROADMAP/README(.en)/qg-issue 同步；Issue 9/10 归档 done；Issue 13 R1 ✅（R2 → M73）。
 
-### M71 · build 管线现代化 + AI 交付一条龙（docs/M71_PLAN.md）✅
+### M71 · build 管线现代化 + AI 交付一条龙（docs/archive/M71_PLAN.md）✅
 
 - **M71 立项（commit ae81443）**：四条合一 —— qg-issue 12（B1 build 无缓存全量 gcc / B2 交叉 5 flag 人肉串 / B3 Release 仅 x86_64 / B4 安装靠 PX_STDLIB）+ qg-issue 11（F4 结论过时）+ 用户点名 MCP `build` 第 9 工具（补「写→验→交付」闭环）；Issue 9/10（runtime 诊断，需 selfhost 重建）拆 **M72 候选**。
 - **M71-S1 build 增量缓存（commit 528b072）**：`tools/pxc build` 对 runtime 源预编译 `.o` 缓存（等价 Go build cache）——key = runtime源×cc×no_quic；命中只编 base.c + 链接：**二次 build quic 14.7s→0.94s / no-quic 11.6s→0.41s**；改 runtime 源 / 换 cc / 切 quic 自动重建（key 失效），零语义风险（产物同前全量路径）。
@@ -22134,7 +22134,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - **M71-S3 MCP 第 9 工具 `build`（commit c7c045c）**：pxmcp `tools_meta`+`mcp_call_tool` 加 `build`（参数 file/code/target/no_quic → spawn `tools/pxc build`，返回产物路径 + 非零 rc 即 isError）→ **AI agent 一条 MCP 完成写→验→交付（编译产物）闭环**；examples/m71_mcp_build verify（list 9 工具 + build 产物静态可运行 + 坏代码 isError）+ m65 verify 8→9 全绿。
 - **M71-S4 分发安装（commit e0b19d5）**：Release 资产附 **`sha256sums.txt`**（make_release.sh 与 tarball 同目录生成 + release.yml 上传/Notes 提及）；**`tools/install.sh`** 一键安装（`--prefix`/PX_PREFIX/root→`/usr/local` 非 root→`~/.local`；sha256 强校验失败中止；aarch64 提示用 `--target` 交叉）；`tools/pxc` **argv0 自发现**（readlink 解析软链→真实包根）+ **PX_STDLIB 自动注入**（包根有 stdlib 且未显式设置时）→ **安装后任意目录免环境变量**；实测 `--prefix /tmp/pxinst` 安装 OK + 软链任意目录含 `import std.io` 程序运行 OK（B4 达成）。
 - **M71-S5 文档收口**：ECOSYSTEM_GAPS.md **F4 归因更正**（Issue 11：慢的是 pxi 解释器非「纯普贤」——实测 **pxc build 编译版扫 13578 行 runtime.c 仅 0.055s ≈ grep 14×**，工具选型更正为「重文本/大文件编译版毫秒级可胜任；真重负载走 pxc build 产物或等字节码 VM」）+ 顶部更新注记；ROADMAP/README(.en) M71 行 + CHEATSHEET 工具链注记。
-### M70 · 语言缺口修复：表达式跨行 + 模块顶层状态（docs/M70_PLAN.md）✅
+### M70 · 语言缺口修复：表达式跨行 + 模块顶层状态（docs/archive/M70_PLAN.md）✅
 
 > 立项（2026-09-05 用户指令）：M69-S4 `docs/ECOSYSTEM_GAPS.md §4` 拆出的两条语言缺口——
 > **G2 表达式跨行**（写库第一痛点，AI 生成最常见语法错）+ **G1 模块顶层状态**（写有状态模块/配置中心受阻）。
@@ -22173,7 +22173,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   CI 自动发布 + GitHub 产物二次冒烟（sha256 三方一致 + 跨行/模块状态双模式冒烟）+ 本机留档 +
   发布指引更新至 m70。
 
-### M69 · 生态启动：资产化 + AI 速查 + registry 拉取闭环（docs/M69_PLAN.md）✅
+### M69 · 生态启动：资产化 + AI 速查 + registry 拉取闭环（docs/archive/M69_PLAN.md）✅
 
 > 立项（2026-09-05 用户指令）：GitHub 见 M68 收尾 → 立项 M69 生态线。承接 M68_PLAN §七留档。
 > 决策：D1 精编件不进发布包（repo README 为入口 + Release 附链接）；D2 registry 最小闭环（随库入库 + 本地挂载，远程评估）；
@@ -22206,7 +22206,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   diff 空（幂等）；**tag `v0.1.0-m69` → push → tag 驱动 workflow 自动发布** + GitHub 产物二次解包冒烟 +
   发布指引更新（RELEASE_PROCESS.md）。
 
-### M68 · pxi 一致性收官：解释器 native 可达性根治（docs/M68_PLAN.md）✅
+### M68 · pxi 一致性收官：解释器 native 可达性根治（docs/archive/M68_PLAN.md）✅
 
 > 来源：清歌反馈「pxi 内置不全、缺 sqlite，编译器没事」→ 源码级侦查确认根因：编译产物
 > 默认可达 = runtime `px_set_global` 全局 native **281 名**，pxi 只认 interp.px
@@ -22231,7 +22231,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - **文档收敛**：spec §9.3 + MINI_SUBSET §十三.0 + README/README.en 已知限制（pxi 白名单
   条目更新为 M68 根治后一致）+ CHANGELOG 本条 + qg-issue 00-README §4 第 1 条勾除。
 
-### M67 · 多架构一等支持：aarch64 交叉编译 + GC 架构抽象 + armv7/riscv64（qg-issue 07，docs/M67_PLAN.md）✅
+### M67 · 多架构一等支持：aarch64 交叉编译 + GC 架构抽象 + armv7/riscv64（qg-issue 07，docs/archive/M67_PLAN.md）✅
 
 > 来源：清歌 qg-issue 07（任务清单·执行版）两阶段 —— 阶段一 aarch64 交叉编译提升为一等支持；
 > 阶段二 runtime GC 架构抽象层 + armv7（armhf）/riscv64 扩展。决策：D1 armv7/riscv64 交叉库
@@ -22286,7 +22286,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   可混链）。**CI run 98 六 job 全绿**（aarch64/armv7/riscv64 三档 qemu 验证 + 回归 + 质量门），
   cache 全 warm 后 multiarch 三档仅需 qemu 安装 + verify 秒级完成。
 
-### M66 · 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入，docs/M66_PLAN.md）✅
+### M66 · 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入，docs/archive/M66_PLAN.md）✅
 
 > 来源：清歌（qingge）qg-issue 01–06 —— ws-core / ws-install / ws-todo 等 wsAgent 生态模块
 > 被卡的 runtime 原语缺口（P0 blocker）与 stdlib 生态缺失。决策：D0 以官方仓库现状为准；
@@ -22323,7 +22323,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - **验证**：m66_proc/m66_yaml/m66_pxml/m66_lunar verify ALL PASS；capability 双模式 253 PASS / 0 FAIL；
   diffcheck --all 零回归；fmt --check + lint 全仓全绿（stdlib 3 新库 lint 0/0）。
 
-### M65 · LSP / MCP 自举（spec §12 工具链收官 + §12.1 AI agent 协议，docs/M65_PLAN.md）✅
+### M65 · LSP / MCP 自举（spec §12 工具链收官 + §12.1 AI agent 协议，docs/archive/M65_PLAN.md）✅
 
 - **M65-S1 JSON-RPC 共享底座 + runtime 补丁**：`tools/jsonrpc_core.px`（纯 defs）——
   Content-Length 帧读写（read(0) 累积缓冲，半包/粘包/坏头/坏 body 自测 33 断言双模式）+ JSON-RPC
@@ -22351,7 +22351,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - **验证**：m65_lsp + m65_mcp verify ALL PASS；fmt --check + lint 全仓全绿；capability 双模式
   253 PASS / 0 FAIL；新 5 文件（jsonrpc_core/pxcheck/lsp_core/pxlsp/pxmcp）lint 0 错 0 警。
 
-### M64 · 工具链自举恢复（fmt/lint/doc/test/bench 五项自举，docs/M64_PLAN.md）✅
+### M64 · 工具链自举恢复（fmt/lint/doc/test/bench 五项自举，docs/archive/M64_PLAN.md）✅
 
 - **M64-S1 keep-lexer 底座**：不碰 pxlexer（自举链零风险），派生 `tools/fmtlexer.px`
   （788 行，`g_keep` 开关 + `lex_tokens_keep` 保留注释/行结构，对齐 Rust
@@ -22373,7 +22373,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - **README / spec §12 勾选同步**：pkg/ast/fmt/lint/test/doc/bench 七项自举已标注，
   lsp/mcp 留 M64d（按需）。
 
-### M64 收尾 · 欠债清理（docs/M64_PLAN.md §14）✅
+### M64 收尾 · 欠债清理（docs/archive/M64_PLAN.md §14）✅
 
 - **CI 质量门**：ci.yml 新增 `toolchain` job —— `pxc fmt --check`（selfhost+tools+stdlib
   39 文件收敛域）+ `pxc lint`（compiler.px 项目级主入口 + tools 11 独立文件 0/0）+
@@ -22456,7 +22456,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M61 · 外部库 FFI proof（zlib）+ 纯语言 2D 游戏内圈（gfx/png/贪吃蛇）✅
 
-- **规划**：`docs/M61_PLAN.md`（A=外部系统库绑定全链路 proof + B=纯语言 2D 内圈；无真板
+- **规划**：`docs/archive/M61_PLAN.md`（A=外部系统库绑定全链路 proof + B=纯语言 2D 内圈；无真板
   期游戏线 0→1 地基；用户选 A+B 并行）。
 - **S0 zlib 两版静态 .a 入库**：`runtime/third_party/zlib/{include,lib,lib-aarch64}`，
   zlib 1.3.1 源码自编（x86_64 gcc / aarch64-linux-musl 交叉，ar 抽 crc32.o 双架构校验）；
@@ -22498,7 +22498,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   优化方向留档 bytes 画布。
 
 
-- **规划**：`docs/M60_PLAN.md`（前置实测复核：poll 仅 runtime 内部 3 处未暴露、termios
+- **规划**：`docs/archive/M60_PLAN.md`（前置实测复核：poll 仅 runtime 内部 3 处未暴露、termios
   全库零命中、sleep 仅 ms 整数粒度、SPI_IOC_MESSAGE 因 transfer 数组含 u64 指针留档、
   GPIO V2 单线请求 592B 结构体 C offsetof 实测核对）。
 - **S1 us 级时钟 + fd 控制**：`sleep_us(us)`（nanosleep，EINTR 续睡，<=0 不睡）/
@@ -22530,7 +22530,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 
 ### M59 · 数学与随机补齐（C libm 内置，14 函数 + 2 常量）✅
 
-- **规划**：`docs/M59_PLAN.md`（前置实测复核：现有数学内置仅 abs/min/max/sum/sqrt/pow 六枚；
+- **规划**：`docs/archive/M59_PLAN.md`（前置实测复核：现有数学内置仅 abs/min/max/sum/sqrt/pow 六枚；
   sin/cos/tan/atan2、floor/ceil/round、log/log10/exp、random 全缺；libm 已 include + `-lm`
   已链接 → 零新依赖）。
 - **S1 三角 + pi**：`sin`/`cos`/`tan`（弧度）/`atan2(y,x)`（先 y 后 x）+ `pi` 常量
@@ -22634,7 +22634,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 - 连带：#2（spawn 不隔离 panic）在该场景**根除**——网络失败已不 panic；协程内其他运行时
   错误（除零等）仍不隔离（MINI_SUBSET §十三.1 部分缓解记录）
 
-### 新增 · M58 首个 dogfood 真实应用：pxhwmond 硬件健康守护 daemon（examples/m58_hwmond，见 docs/M58_PLAN.md）
+### 新增 · M58 首个 dogfood 真实应用：pxhwmond 硬件健康守护 daemon（examples/m58_hwmond，见 docs/archive/M58_PLAN.md）
 
 - **首个 dogfood 里程碑**：用 PuXian 写**真实边缘应用**——单静态二进制硬件健康守护 daemon，
   把 M57 能力（fd 原语数据通道 / mmap 活映射 / aarch64 交叉编译）揉进完整真实程序，
@@ -22674,7 +22674,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   物理拆仓后「改 PuXian」与「推 Mahesvara」权限隔离，PuXian 侧对 Mahesvara 的参与回归 PR 流程；
   git 历史完整保留（未清史）；Mahesvara 曾以真实应用身份抓出的 H3/并发类 bug 已在 CHANGELOG M53–M56 留存
 
-### 新增 · M57 边缘设备层支持（Linux 用户态，见 docs/M57_PLAN.md）
+### 新增 · M57 边缘设备层支持（Linux 用户态，见 docs/archive/M57_PLAN.md）
 
 - **fd 原语内建（S1）**：`open(path[, mode]) → fd`（mode `r/w/a/rw/w+` → O_*）、
   `close(fd) → bool`、`ioctl(fd, request[, arg]) → int`（arg 三形态：缺省→NULL /
@@ -22759,7 +22759,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   由清歌提交（runtime/runtime.c +73；仓库外应用侧 llm.px / translate.px / main.px），
   编号与主线 HTTP/3 里程碑并行插队 —— 本条目为 PuXian runtime 侧文档补齐
 
-### 新增 · M54 HTTP/3 生产化（见 docs/M54_PLAN.md）
+### 新增 · M54 HTTP/3 生产化（见 docs/archive/M54_PLAN.md）
 
 - **TLS 1.3 会话恢复（1-RTT resumption）**：server SSL_CTX 开启 stateless session ticket；
   语言 API `quic_connect_resume(ip,port,alpn,session)` / `quic_session_save(conn)` /
@@ -22776,7 +22776,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
   `quic_streams_left(conn)` 剩余配额；`quic_open_stream` 达配额返回 -206（原吞为 -1）
 - bootstrap/pxi 重建：解释器同能力支持 M54 全部新内置（S5 全量回归 14 项端到端全 PASS）
 
-### 新增 · M53 HTTP/3 三栈合一 WebServer（见 docs/M53_PLAN.md）
+### 新增 · M53 HTTP/3 三栈合一 WebServer（见 docs/archive/M53_PLAN.md）
 
 - `px_serve(port, docroot, timeout, {http3: true | {port?, cert?, key?}})` 单调用同时托管
   HTTP/1.1（TCP）+ HTTP/3（QUIC/UDP，缺省同端口），HTTP/1.1+HTTP/2+HTTP/3 共用同一
@@ -22961,7 +22961,7 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > 决策记录：默认轨切换（px build 默认产物切 BC + diffcheck/capability golden
 > 大迁移）不在 S3-C 段做——VM 轨当前解释执行无 JIT/native，默认切换性能倒退
 > 且动主干验证体系（fn_* .c golden 全量重生成），收益未到兑现点；技术可行性
-> 已由三切片实证，工程化铺开挂起为后置决策项（详见 docs/M89_PLAN.md）。
+> 已由三切片实证，工程化铺开挂起为后置决策项（详见 docs/archive/M89_PLAN.md）。
 
 ## M143 —— float32 值族 / 位模式 / Go `encoding/json` 的 32 位浮点文本（第 24 轮）
 
