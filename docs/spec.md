@@ -1696,7 +1696,8 @@ def main(args: list[str]) -> int:
 ```
 
 ### 16.3 结构体 + match
-> ⚠️ 本示例是 **data enum（计划中）** 的目标形态，当前不可编译；
+> ⚠️ 本示例是 **data enum 的目标形态**：语法已收（M367-S1，`Circle(radius: float)` 可解析）·
+> **载荷取值与 `match` 解构未实现**（`Shape.Circle(1.5)` 报 `R1005`）⇒ 示例仍不可编译；
 > 现在请用 `struct` + `match` 判类型字段表达（见 §3.8 的状态说明）。
 >
 > ⚠️ **另有一条独立限制（M362 实测，2026-10-30）**：即使把 data enum 换成 `struct`，
