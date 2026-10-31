@@ -1,4 +1,4 @@
-# M101-S1 daemon —— px_serve 并发 TLS 握手缺陷复现/验证（docs/M101_PLAN.md §二）
+# M101-S1 daemon —— px_serve 并发 TLS 握手缺陷复现/验证（docs/archive/M101_PLAN.md §二）
 # tls_server(cert,key) 进程级服务端 TLS → px_serve accept 后 px_conn_init 走 mbedtls
 # 握手（g_pool 多 worker 并发）。本 daemon 用 max_conn=16（默认）刻意放大并发握手面：
 # M99 顺序建连规避了「并发 TLS 握手」缺陷（TLS1.3 CertificateVerify 签名错 /

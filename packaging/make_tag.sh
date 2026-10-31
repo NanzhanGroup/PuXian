@@ -55,6 +55,18 @@ AT=""; MILESTONE=""; MSG=""; NAME=""; NAME_GIVEN=0; DO_MOVE=0; DO_PUSH=0; DRY=0;
 die() { echo "❌ $*" >&2; exit "${EXIT_CODE:-1}"; }
 say() { echo "$*"; }
 
+# M366（缺陷 636）：按**字节**截断会把多字节字符切一半 ⇒ 非法 UTF-8。
+#   实测（修前）：v0.2.364 / v0.2.365 的 tag 消息尾部都是 "�"，
+#   而现在 dry-run 打出的消息同样是 "…书写��"。git 不拒绝这种消息，但它是坏数据：
+#   任何按 UTF-8 严格解码的工具（镜像同步、发布页渲染）都会报错或显示乱码。
+#   修法：先按字节截断，再用 iconv 丢掉**尾部不完整序列**（-c 丢弃非法字节）。
+#   为什么不用 bash 的 ${s:0:N}：那是**按 locale 字符**截，CI 常跑在 LC_ALL=C 下 ⇒ 又变回按字节。
+trunc_utf8() {  # $1=文本 $2=字节上限
+    local s="$1" n="${2:-80}" cut
+    cut="$(printf '%s' "$s" | head -c "$n")"
+    printf '%s' "$cut" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null
+}
+
 u() {  # u <说明>
     cat >&2 <<EOF
 用法: packaging/make_tag.sh [选项]
@@ -130,16 +142,28 @@ if [ -n "${MINOR_OVERRIDE:-}" ]; then
     say "ℹ️ 次段由 --minor 指定: $VER_BASE（大改进才升 · 见 docs/RELEASE_PROCESS.md）"
 fi
 
-# ---------- 3. 里程碑号：显式 > CHANGELOG 标题行最高 ----------
+# ---------- 3. 里程碑号：显式 > max(CHANGELOG 标题行, 提交主题前缀) ----------
+# M366（缺陷 637）：本仓流程是「**先发布、后补 CHANGELOG**」⇒ 发布那一刻 CHANGELOG 顶部
+#   仍是**上一轮**的条目，只按 CHANGELOG 推断就会张冠李戴（实测：v0.2.365 的 tag 消息
+#   写成「M364：M365 第 2 轮…」，v0.2.364 写成「M363：M364 第 3 轮…」，连续三版都错）。
+#   而提交主题按约定以 `M<NNN>：` 开头 —— 那是**当轮**的号，比 CHANGELOG 更可信。
+#   定稿：两个来源都取，**取较大者**（里程碑号单调），并在两者不一致时把事实打出来。
 if [ -z "$MILESTONE" ]; then
+    CHG_M=""
     if git cat-file -e "${SHA_FULL}:${CHANGELOG_PATH}" 2>/dev/null; then
-        MILESTONE="$(git show "${SHA_FULL}:${CHANGELOG_PATH}" \
+        CHG_M="$(git show "${SHA_FULL}:${CHANGELOG_PATH}" \
                      | grep -E '^#{2,4}[[:space:]]' \
                      | grep -oE '\bM[0-9]{1,4}\b' | sed 's/^M//' | sort -nu | tail -1 || true)"
     fi
+    SUBJ_M="$(git log -1 --format=%s "$SHA_FULL" \
+                 | sed -nE 's/^M([0-9]{1,4})([:：].*)?$/\1/p' | head -1)"
+    if [ -n "$CHG_M" ] && [ -n "$SUBJ_M" ] && [ "$CHG_M" != "$SUBJ_M" ]; then
+        say "ℹ️ 里程碑两源不一致：CHANGELOG 顶部 M$CHG_M · 提交主题 M$SUBJ_M ⇒ 取较大者（本仓「先发布后补 CHANGELOG」）"
+    fi
+    MILESTONE="$(printf '%s\n%s\n' "$CHG_M" "$SUBJ_M" | grep -E '^[0-9]+$' | sort -n | tail -1 || true)"
     [ -n "$MILESTONE" ] \
-        || { EXIT_CODE=2 die "推断不出里程碑：$CHANGELOG_PATH 标题行里没有 M<NNN>；用 --milestone 显式指定"; }
-    say "ℹ️ 里程碑自 $CHANGELOG_PATH 标题行推断: M$MILESTONE"
+        || { EXIT_CODE=2 die "推断不出里程碑：$CHANGELOG_PATH 标题行与提交主题都没有 M<NNN>；用 --milestone 显式指定"; }
+    say "ℹ️ 里程碑推断: M$MILESTONE"
 fi
 
 # 里程碑必须是纯数字（容忍 --milestone m248 这种写法）
@@ -185,7 +209,7 @@ if ! grep -qE "$TAG_NAME_RE" <<< "$TAG"; then
 fi
 
 # 默认消息：提交主题若已带 `M<N>` 前缀就不再叠一层（否则会出现「M248：M248：xxx」）。
-_SUBJ="$(git log -1 --format=%s "$SHA_FULL" | head -c 80)"
+_SUBJ="$(trunc_utf8 "$(git log -1 --format=%s "$SHA_FULL")" 80)"
 if [ -n "$MSG" ]; then
     TARGET_TAG_MSG="$MSG"
 elif grep -qE "^M${MILESTONE}([:：]| |\$)" <<< "$_SUBJ"; then
@@ -219,7 +243,7 @@ fi
 if [ "$DRY" = 1 ]; then
     say "── dry-run（不创建、不推送）──"
     say "  tag 名   : $TAG"
-    say "  指向提交 : $SHA ($(git log -1 --format=%s "$SHA_FULL" | head -c 60))"
+    say "  指向提交 : $SHA ($(trunc_utf8 "$(git log -1 --format=%s "$SHA_FULL")" 60))"
     say "  消息     : $TARGET_TAG_MSG"
     say "  动作     : $([ "$EXISTS" = 1 ] && echo '重定向（原指向 '"${OLD_SHA:0:7}"'）' || echo '新建')"
     say "  推送命令 : git push${DO_PUSH:+} origin main $TAG"

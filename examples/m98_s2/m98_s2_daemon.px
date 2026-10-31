@@ -1,4 +1,4 @@
-# M98-S2a daemon —— px_serve route VM handler 协程化验证（docs/M98_PLAN.md S2a）
+# M98-S2a daemon —— px_serve route VM handler 协程化验证（docs/archive/M98_PLAN.md S2a）
 # 并发模型升级：route VM handler 命中 → 挂起表 stage1 + 帧协程 spawn（sleep/chan 让出
 # 占协程不占 g_pool worker）→ worker 释放取下一 job → 完成回调投回 → 续 worker 段2
 # （px_route_respond 归一化+响应+访问日志）→ keep-alive 下一请求。

@@ -1,4 +1,4 @@
-# M99-S2 daemon —— px_serve 连接级事件化 IDLE 验证（docs/M99_PLAN.md）
+# M99-S2 daemon —— px_serve 连接级事件化 IDLE 验证（docs/archive/M99_PLAN.md）
 # 并发模型升级：keep-alive 空闲连接（响应写完 + 无下一请求在途）交 IDLE 事件循环照看，
 # g_pool worker 释放取下一 job —— 空闲连接 0 占用 worker（事件化前：每空闲连接占死一个
 # g_pool 线程阻塞 recv 到关闭 / max_conn 预派生池被 keep-alive 空闲占满 → 后续连接悬挂）。

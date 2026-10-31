@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# M100 verify.sh —— middleware 链协程化验证门（docs/M100_PLAN.md S2）
+# M100 verify.sh —— middleware 链协程化验证门（docs/archive/M100_PLAN.md S2）
 # ------------------------------------------------------------
 #   1) build daemon（px build 自动重建 runtime .o：runtime.c/runtime_route.c 已改，
 #      .rtcache key 变 → 编译错误在此暴露）+ Go 客户端（CGO_ENABLED=0 静态）

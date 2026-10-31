@@ -1,6 +1,6 @@
 # M115：服务进程/环境原语 —— env_set / env_unset / os_self_path / isatty / now_sec
 #       + os_spawn opts dict（group / setsid / stdout / stderr / stdin / cwd / env）
-# 来源：ws-center / ws-ddns 两个 Go 模块 PuXian 化实测缺口（docs/M115_PLAN.md）
+# 来源：ws-center / ws-ddns 两个 Go 模块 PuXian 化实测缺口（docs/archive/M115_PLAN.md）
 # 双模式：px run == px build（本文件只用解释器轨已注册的内置，无 spawn/chan）
 
 let WORKDIR = "/tmp/m115_proc_env"

@@ -1081,8 +1081,8 @@ close(fb)
   ——LD_PRELOAD mock 因 pxc 产物静态链接不可行，改内核自带用户态可访问设备走**同一胶水路径**，验证力度更强。
 - **交叉编译与裁剪（S4）**：`px build --no-quic [--cc <交叉CC>] [--mbedtls-lib <dir>] [--sqlite-obj <file>]`
   —— ngtcp2/openssl-quictls 无 aarch64 预编译且交叉成本高 → 裁剪（PX_NO_QUIC 条件编译 7 处）；
-  > M85-S1（2026-09-06）泛化：`px build` 模块开关集 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 `--no-quic` 正交可组合，`--min` 聚合）—— runtime.c 注册/调用段 14 处 `#ifndef PX_NO_<MOD>` 包裹 + 链接去 sqlite3.o/libz.a + 缓存 key 纳开关集；产物 9.0M→2.7M；裁剪态缺 native → 运行时未定义（R1001 口径）。详见 tools/px usage 与 docs/M85_PLAN.md。
-  > M86-S0/S1/S2（2026-09-06）：① **命令正名 `px`**（pxc 兼容别名 symlink，spec/install.sh 双装 `/usr/bin/px` + `/usr/bin/pxc → px`）；② **`px refs <file>`** 引用集子命令 + `runtime/native_mod_map.txt`（112 个可裁 native 名=模块，生成器 `tools/gen_native_map.sh`）；③ **裸 `px build` = 按引用集自动最小**（编译 C 产物提取 `px_get_global` 引用名 → map 反推被引用模块，未引用模块自动补裁——复用 M85 cuts/宏/缓存 key 链路；`--full/--max` 全能力逃生舱；显式 flag 优先级 > 自动，自动只补未声明模块；解析失败自动退全量保编译成功）。实测：裸 hello 2,713,472 B / `--full` 9,010,184 B / sqlite 程序自动保留 3,759,248 B。详见 docs/M86_PLAN.md。
+  > M85-S1（2026-09-06）泛化：`px build` 模块开关集 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 `--no-quic` 正交可组合，`--min` 聚合）—— runtime.c 注册/调用段 14 处 `#ifndef PX_NO_<MOD>` 包裹 + 链接去 sqlite3.o/libz.a + 缓存 key 纳开关集；产物 9.0M→2.7M；裁剪态缺 native → 运行时未定义（R1001 口径）。详见 tools/px usage 与 docs/archive/M85_PLAN.md。
+  > M86-S0/S1/S2（2026-09-06）：① **命令正名 `px`**（pxc 兼容别名 symlink，spec/install.sh 双装 `/usr/bin/px` + `/usr/bin/pxc → px`）；② **`px refs <file>`** 引用集子命令 + `runtime/native_mod_map.txt`（112 个可裁 native 名=模块，生成器 `tools/gen_native_map.sh`）；③ **裸 `px build` = 按引用集自动最小**（编译 C 产物提取 `px_get_global` 引用名 → map 反推被引用模块，未引用模块自动补裁——复用 M85 cuts/宏/缓存 key 链路；`--full/--max` 全能力逃生舱；显式 flag 优先级 > 自动，自动只补未声明模块；解析失败自动退全量保编译成功）。实测：裸 hello 2,713,472 B / `--full` 9,010,184 B / sqlite 程序自动保留 3,759,248 B。详见 docs/archive/M86_PLAN.md。
   mbedtls/sqlite 纯 C 交叉保留（tools/cross_aarch64.sh，mbedtls 3.6.2 + sqlite3 交叉入库）；
   musl 兼容 5 点（execinfo 条件包含 / GC `__aarch64__` 寄存器扫描分支 / getcontext→内联汇编 SP+setjmp
   spill / close_range→循环关闭）；qemu-aarch64 静态产物设备层 ioctl 与 x86 结果一致
@@ -1103,7 +1103,7 @@ close(fb)
 ### 8.18 边缘设备深化：us 级时钟 + fd 控制 + 设备组小内置 + std.edge（M60，树莓派线深化）
 
 > 在 §8.17 fd 原语之上收敛 GAP 树莓派线 #1–#5（GPIO 真控制/边沿中断/串口 termios/
-> us 级时钟），M60（docs/M60_PLAN.md）。新增 5 个 C 小内置（Linux 用户态边缘设备）：
+> us 级时钟），M60（docs/archive/M60_PLAN.md）。新增 5 个 C 小内置（Linux 用户态边缘设备）：
 > `sleep_us(us)` → null（us 级 nanosleep，EINTR 续睡，`<=0` 不睡）；`now_us()` → int
 > （**CLOCK_MONOTONIC** 微秒，测量/计时语义，与 `now_ms` 的 REALTIME 墙钟用途区分，
 > 两者数值起点不同不可比）；`fcntl(fd, cmd[, arg])` → int（标准 fcntl，O_NONBLOCK 等）；
@@ -1131,7 +1131,7 @@ close(fb)
 
 ### 8.19 外部系统库 FFI（zlib proof）+ 纯语言 2D 游戏内圈（M61，游戏线 0→1 地基）
 
-> M61（docs/M61_PLAN.md）双线收口 GAP 候选池（无真板）：A = **FFI 外部系统库绑定**
+> M61（docs/archive/M61_PLAN.md）双线收口 GAP 候选池（无真板）：A = **FFI 外部系统库绑定**
 > proof（游戏窗口线 0→1 机制地基），B = **纯语言 2D 内圈**（零 FFI/零硬件、产出可见
 > 图片与可玩 demo，最大程度 dogfood M59+M60）。
 
@@ -1191,7 +1191,7 @@ std.gfx 走纯 list 路径（text/blit 依赖 pxi 未同步 builtin 仍受限，
 
 ### 8.20 自举 wsAgent runtime 原语补全（M66，qg-issue 01/02/05 合入）
 
-> M66（docs/M66_PLAN.md）合入清歌（qingge）qg-issue 01/02/05 全部 L0 缺口——ws-core / ws-install /
+> M66（docs/archive/M66_PLAN.md）合入清歌（qingge）qg-issue 01/02/05 全部 L0 缺口——ws-core / ws-install /
 > ws-todo 这些 wsAgent 生态模块被卡的原语族（unix socket 裸连接、子进程输出捕获/双向管道/进程组杀、
 > 原子改名/递归删/安全随机/文件哈希、写文件权限位、密码 zip）。关键决策：D0 以官方仓库现状为准
 > （issue 内旧基线认知如"os_exec M23 已有"不成立——官方从未有该 native）；D1 `os_capture` 与既有
@@ -1236,7 +1236,7 @@ ws-todo `lunar:M-D` 重复规则落点）。
 
 ### 8.21 多架构一等支持：GC 架构抽象 + 四档矩阵（M67，qg-issue 07）
 
-> M67（docs/M67_PLAN.md）落实 qg-issue 07 两阶段：阶段一 aarch64 交叉编译提升为一等支持
+> M67（docs/archive/M67_PLAN.md）落实 qg-issue 07 两阶段：阶段一 aarch64 交叉编译提升为一等支持
 > （文档/CI/三用例）；阶段二 runtime GC 架构抽象层 + armv7/riscv64 扩展（CI 四档矩阵）。
 > 关键决策：D1 armv7/riscv64 交叉库 **CI 现编 + actions/cache，不入库**控体积（aarch64 维持仓库预置）；
 > D2 armv7 = **armhf**（linux-musleabihf，树莓派 2/3）；D3 GC 改动为**重构等价**（不做算法变更，
@@ -1331,7 +1331,7 @@ spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同
 
 ### 8.23 服务进程/环境原语补全（M115，ws-center / ws-ddns PuXian 化实测）
 
-> M115（docs/M115_PLAN.md）来自 **ws-center**（2717 行 Go · 中心管理服务）与 **ws-ddns**（1141 行 Go ·
+> M115（docs/archive/M115_PLAN.md）来自 **ws-center**（2717 行 Go · 中心管理服务）与 **ws-ddns**（1141 行 Go ·
 > DNS 授权签名系统）两个真实模块的 PuXian 化开发：把 Go 服务端每次都要用、而 PuXian 缺的原语
 > 当场补齐（**不许绕过** —— 绕过等于把"语言缺什么"这件事藏起来）。四条缺口均**无现成代偿**：
 > ① `os.Setenv` 无对应原语（配置只读不写 ⇒ 子进程继承不到）② daemonize 三件套
@@ -1389,13 +1389,13 @@ spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同
   - 编译模式：编译期检查 + 推断（快，等价运行时检查前置）
 - 测试套件必须在双模式下跑同一用例
 
-> **M68 native 可达性根治（2026-09，docs/M68_PLAN.md）**：解释器（pxi）对 runtime 内嵌
+> **M68 native 可达性根治（2026-09，docs/archive/M68_PLAN.md）**：解释器（pxi）对 runtime 内嵌
 > native 的可达性与编译产物**完全一致，零 `extern def` 裸脚本即可调全部内置**。机制：
 > C 侧 `ffi_call` 双表查找（① ffi 注册表 = extern def C 库 → ② 全局 PX_NATIVE 表 =
 > `px_set_global` 注册的全部 runtime 内置，编译产物裸名调用同源），两表未命中返回可辨
 > Err（`ffi_call: 未注册函数: <name>`，不杀进程）；pxi `i_eval_call` 用户作用域/注册
 > builtin 均未命中时自动回退 `ffi_call(cname, args)`，宿主哨兵 Err（真拼错名）转
-> R1001，业务返回值/Err 原样透传。差异表见 docs/pxi_native_diff.md（281 runtime native
+> R1001，业务返回值/Err 原样透传。差异表见 docs/archive/pxi_native_diff.md（281 runtime native
 > vs 原 pxi 129 名白名单 → 差集 155 全量对齐，含 sqlite/aes/rsa/xml/zip/tcp/udp/ws/sse/
 > cron/session/bus/http_serve/os_pid/now_ms 及 quic/h3 族）。
 
@@ -1439,7 +1439,7 @@ assert(cond, msg)     # 断言，失败 panic
 panic(msg)            # 致命错误，退出码 1
 ```
 
-> **M59 数学/随机内置（2026-09，C libm，docs/M59_PLAN.md）**：`sin(x)`/`cos(x)`/`tan(x)`
+> **M59 数学/随机内置（2026-09，C libm，docs/archive/M59_PLAN.md）**：`sin(x)`/`cos(x)`/`tan(x)`
 > （弧度）、`atan2(y,x)`（**先 y 后 x**）→ float；`floor(x)`/`ceil(x)`/`round(x)`
 > （C99 .5 远离零，**返回 float**，需整数用 `int()`）→ float；`log(x)`（自然对数 ln）/
 > `log10(x)`/`exp(x)`；`random()` → float∈[0,1)、`random_int(n)` → int∈[0,n)（n>0）、

@@ -246,7 +246,7 @@
 | 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源）。**M62-L1 已修一半**：整值浮点补 `.0` 后缀（编译/解释对齐）；**M63-L9 已全修**：float→str 最短 roundtrip 全精度（定点舒适区 1e-4≤|f|<1e15 内定点、区外科学，逐位 + strtod 回读取最短 roundtrip），见 §十三.8 | 已修复；无规避项 |
 | 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）白名单不覆盖网络/S3 真实应用 API（相对路径 import + open/read 链早期实测失败；open/read 等已随 M57/M60 补）。**M63-L8 已补 HTTP/S3 6 名**（http_post/http_request/s3_get/s3_put/s3_list/s3_delete），见 §十三.8 | http_get_stream（chunk_handler 回调跨解释器边界）与 quic/h3/udp/serve/session/bus/cron/sse 高层 API 仍非 pxi Mini 子集（编译模式全能力）；真实网络应用可走编译模式或已补 6 名 |
 
-### §十三.0 M68 根治：pxi native 可达性与编译模式一致（2026-09，docs/M68_PLAN.md）
+### §十三.0 M68 根治：pxi native 可达性与编译模式一致（2026-09，docs/archive/M68_PLAN.md）
 
 > 上表 #8「pxi 对真实应用 API 支持未承诺」在本里程碑**根治**：解释器（pxi）不再是
 > 手工白名单（interp.px `i_register_builtins` names 129 名），而是经 C 侧 `ffi_call`
@@ -257,7 +257,7 @@
 >   signal·time/http_serve·px_serve·route·vhost·middleware·rate_limit·basic_auth·
 >   sandbox/fsync·read_at·write_at·truncate_file/set_timeout·set_interval·clear_timer/
 >   xxhash/os_pid/now_ms/args/input/panic/gc（91 真 native）+ quic/h3 族（64，完整宿主）。
->   差异表逐名见 docs/pxi_native_diff.md。
+>   差异表逐名见 docs/archive/pxi_native_diff.md。
 > - **typo 语义不漂移**：真拼错名（宿主两表均未命中）→ pxi 仍 R1001「未定义变量」，
 >   错误可辨、不误调（宿主哨兵 Err 载荷 `ffi_call: 未注册函数: <name>` 判定）。
 > - **quic/h3 条件编译**：`--no-quic` 裁剪宿主无此全局 → 与裁剪编译产物一致不可达。
@@ -332,7 +332,7 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
 
 ### §十三.4 M59 双模式同步记录：数学/随机内置进 pxi 解释器
 
-> M59（docs/M59_PLAN.md）为编译模式新增 C libm 数学内置 14 函数 + pi/e 常量（S1–S3）。
+> M59（docs/archive/M59_PLAN.md）为编译模式新增 C libm 数学内置 14 函数 + pi/e 常量（S1–S3）。
 > §二 已记录一处先于 M59 存在的**双模式不对称**：`sqrt` 编译模式有、解释器无
 > （ibuiltin.px 无 sqrt 分支）。M59-S4 一并收口，并给全部 15 函数（含 sqrt）+ 2 常量做
 > 解释器同步。此处记录实现要点与过程中新发现的行为差异：
@@ -358,7 +358,7 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
 
 ### §十三.5 M60 双模式同步记录：边缘设备 5 内置进 pxi 解释器
 
-> M60（docs/M60_PLAN.md）为编译模式新增 5 个 C 小内置（S1：sleep_us/now_us/fcntl；
+> M60（docs/archive/M60_PLAN.md）为编译模式新增 5 个 C 小内置（S1：sleep_us/now_us/fcntl；
 > S2：tty_config/fd_wait）+ stdlib/edge.px（S3，纯语言封装，import std.edge）。S4 做
 > 解释器同步（白名单 +5 + ibuiltin 纯转发 5 分支 → bootstrap/pxi 重建）。要点与新发现：
 
@@ -379,7 +379,7 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
 
 ### §十三.6 M61 双模式同步记录：外部库 extern（zlib）+ stdlib import 边界复核
 
-> M61（docs/M61_PLAN.md）A 线把外部系统库（zlib）以 extern def 接入 FFI（runtime_zlib.c，
+> M61（docs/archive/M61_PLAN.md）A 线把外部系统库（zlib）以 extern def 接入 FFI（runtime_zlib.c，
 > 3 函数注册进 px_ffi_register 表，pxc 无条件链 libz.a）；B 线新增 stdlib/gfx.px 与
 > stdlib/png.px（第 5/6 个 stdlib）。S4 复核双模式边界，要点与新发现：
 

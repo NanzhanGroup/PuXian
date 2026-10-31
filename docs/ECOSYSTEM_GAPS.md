@@ -86,7 +86,7 @@
 - `docs/ECOSYSTEM.md §6`：生态健康速查（F1/F2 已在）。
 - qg-issue 00-README 已知缺口段：本文件可作为仓库内权威缺口评估副本；仓库外 qg-issue 侧引用本文档。
 
-## 6. M72 已落地能力（2026-09-06，docs/M72_PLAN.md）——诊断/可观测性 + bytes native
+## 6. M72 已落地能力（2026-09-06，docs/archive/M72_PLAN.md）——诊断/可观测性 + bytes native
 
 > 非语言语义缺口修复（L0 runtime + 编译器诊断层 + bytes native），来源 qg-issue 9/10/13-R1。均已实测闭环，详见 M72_PLAN §四 验收。
 
