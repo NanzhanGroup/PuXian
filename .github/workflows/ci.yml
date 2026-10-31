@@ -1533,6 +1533,15 @@ jobs:
           bash examples/m366_tagmsg/verify.sh > /tmp/v_m366t.log 2>&1 || { echo "❌ m366_tagmsg 门失败（tag 消息/里程碑推断）"; tail -40 /tmp/v_m366t.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m366t.log | tail -8
           echo "✅ m366_tagmsg（消息严格 UTF-8 · 里程碑两源取 max）PASS"
+      - name: m367_enum_parse（data enum 载荷字段进 AST · M367-S1 · 缺陷 364）
+        # 判据：A 三轨一致（无括号访问不回归）· B AST 真存（字段名/类型/行号）· C 不再 E2001
+        #       · D 旧位置写法 V(float) 不回归 · E 多字段全在 · F 覆盖度自证
+        # 负控：NC-ast ⇒ B1 红 · NC-legacy ⇒ D1 红（要重编三轨 ⇒ CI 用 --neg-skip）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m367_enum_parse/verify.sh --neg-skip > /tmp/v_m367p.log 2>&1 || { echo "❌ m367_enum_parse 门失败（data enum 语法/AST）"; tail -40 /tmp/v_m367p.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m367p.log | tail -8
+          echo "✅ m367_enum_parse（EnumField 进 AST · 旧位置写法不回归）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

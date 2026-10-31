@@ -79,6 +79,7 @@ let LAYOUT = {
     "Param": ["Param", [["name", "s"], ["ty", "o"], ["default", "o"], ["pos", "p"]]],
     "StructField": ["StructField", [["name", "s"], ["ty", "n"], ["pos", "p"]]],
     "EnumVariant": ["EnumVariant", [["name", "s"], ["fields", "tl"], ["pos", "p"]]],
+    "EnumField": ["EnumField", [["name", "s"], ["ty", "n"], ["pos", "p"]]],
     "TypeConstItem": ["TypeConstItem", [["name", "s"], ["value", "n"], ["pos", "p"]]],
     "MatchArm": ["MatchArm", [["pattern", "n"], ["guard", "o"], ["body", "n"], ["pos", "p"]]],
     "CompClause": ["CompClause", [["vars", "ls"], ["iterable", "n"]]],
@@ -579,16 +580,23 @@ def parse_enum_def():
             adv()
             if not chk(")"):
                 while true:
-                    # M237（缺陷 364）：spec §3.8/§16.3 承诺了 data enum（`Circle(radius: float)`），
-                    #   而本处只吃**类型**、不吃「字段名: 类型」⇒ 用户照文档写会得到
-                    #   `E2001 期望 ')'，实际得到 :`（**指不到真因**，违反「失败必须给出
-                    #   可执行的下一步」）。data enum 是**完整特性**（parser/AST/三轨构造/
-                    #   match 解构），本轮不实现 ⇒ 改为给出**能照着走**的指引。
-                    fields.append(parse_type())
-                    # ⚠️ 检查必须在 `parse_type()` **之后** —— parse_type 会把 `radius` 当类型名
-                    #   消费掉，下一个 token 才是 `:`（首版写在前面 ⇒ 恒不命中 ⇒ 假绿）。
-                    if chk(":"):
-                        perr("E2001", "枚举变体字段暂不支持「字段名: 类型」（data enum 计划中）—— 请写 `Circle(float)`，或改用 struct")
+                    # M237（缺陷 364）登记：spec §3.8/§16.3 承诺 data enum（`Circle(radius: float)`），
+                    #   而本处当时只吃**类型**、不吃「字段名: 类型」⇒ 用户照文档写会得到
+                    #   `E2001 期望 ')'，实际得到 :`（指不到真因）。M237 先改成可执行指引，
+                    #   M367-S1 起**真收下**：`名: 类型` 落成 `EnumField` 节点进 AST。
+                    # ⚠️ 两条口径必须同时成立：
+                    #   ① 旧写法 `Circle(float)`（只有类型）继续接受 —— 早已在册，不许回归；
+                    #   ② 判据看**下一个 token**：`chk("标识符") and chk2(":")`。
+                    #      先 `parse_type()` 再判 `:` 的老写法（M237）会先把 `radius` 当类型名吃掉，
+                    #      只剩 `:` 可判 —— 能判出「有冒号」但**丢了字段名**，故不能复用。
+                    let fpos = ppos()
+                    if chk("标识符") and chk2(":"):
+                        let fname = expect_ident("字段名")
+                        expect(":", "':'")
+                        let fty = parse_type()
+                        fields.append(["EnumField", qstr(fname), fty, fpos])
+                    else:
+                        fields.append(parse_type())
                     if chk(","):
                         adv()
                         continue
