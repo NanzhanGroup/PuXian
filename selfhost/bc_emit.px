@@ -1638,6 +1638,14 @@ def bc_assign_op_name(op):
 # ---------- 语句发射（A1 子集；B1 扩 容器/字段/方法/For） ----------
 def bc_emit_stmt_inner(stmt, func):
     let ty = stmt[0]
+    # M367-S1（缺陷 644）：函数体/块内的类型定义（struct/enum/trait/impl）→ 空语句。
+    #   对齐 C 轨 cg_stmt.px 同名分支（「顶层在 generate 处理」）。顶层定义由
+    #   bc_collect_types 收进模块元数据，本就不会流到这里；而**函数体内**的定义在
+    #   解析层放开后（S1 让 `Circle(radius: float)` 通过 parser）会落进本函数，
+    #   此前直坠末尾 panic("bc_emit_stmt 未实现") ⇒ 与 C/解释轨分叉
+    #   （m237 组 C sep_dataenum_def 实测 V 轨 rc=1，C/I 轨 rc=0）。
+    if ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ImplDef":
+        return
     if ty == "VarDecl":
         # M112-S0（Issue 46）：语义检查走轨无关共享层 —— VM 轨原先零校验，
         #   M91 默认轨切到 VM 后这条欠账就变成了默认行为

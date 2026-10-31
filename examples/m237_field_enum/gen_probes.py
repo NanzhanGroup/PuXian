@@ -90,9 +90,12 @@ B = [
     ("sep_enum_call_arity2",  ['let c = Color("Red", "Green")', "print(c)"]),
 ]
 
-# ── 组 C：data enum（文档承诺，parser 半实现） ─────────────────────
+# ── 组 C：data enum（M367-S1：语法已收，载荷未实现） ────────────────
+#   ⚠️ 组 C 必须留一句 print：probe_b.sh 判据里「三轨输出全空」= 假绿 ⇒ 判红。
+#   本例子只判「这个定义不打断执行」（三轨都在定义后正常跑完并输出同一句），
+#   载荷取值/解构的深度覆盖在 examples/m367_enum_parse/。
 C = [
-    ("sep_dataenum_def", ["enum Shape:", "    Circle(radius: float)", "    Rect(w: float, h: float)"]),
+    ("sep_dataenum_def", ["enum Shape:", "    Circle(radius: float)", "    Rect(w: float, h: float)", 'print("de-ok")']),
 ]
 
 PRELUDE = [

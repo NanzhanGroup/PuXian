@@ -1,3 +1,46 @@
+## M367 —— data enum 载荷字段真进 AST · VM 轨函数体内类型定义分叉 · 自举基准停摆 65 个里程碑（缺陷 364 收口 S1 · 643 · 644）（第 241 轮）
+
+> **令源**：spec §3.8 从第一版就写着 `enum Shape: Circle(radius: float)`，而 parser 直接给
+> `E2001 期望 ')'，实际得到 :` —— **承诺与实现之间差的不是语义，是"连语法都不收"**。
+> 本轮只收**语法/AST 段**（S1），载荷构造留 S2/S3；同时把 r1 全量门照出的两条红逐条定性。
+
+### 一 S1：`名: 类型` 进 AST（`EnumField{name, ty, pos}`）
+
+| 形状 | 修前 | S1 后 |
+|---|---|---|
+| `Circle(radius: float)` | `E2001`（指不到真因） | **解析通过**；`EnumField{name,ty,pos}` 进 AST |
+| `Circle(float)`（旧位置写法） | 可解析（裸类型节点） | **仍可解析**，不误标 `EnumField` |
+| `Shape.Circle(1.5)`（载荷取值） | `R1005` | `R1005`（S2/S3 才动） |
+
+判据要点：**先看下一个 token**（`chk("标识符") and chk2(":")`）——「先 `parse_type()` 再判 `:`」
+会把字段名当类型名吃掉，故不能复用。门 `examples/m367_enum_parse/`（12 判据 · 2 负控 NC-ast / NC-legacy）。
+
+### 二 644（r1 照出的真债）：函数体内类型定义在 VM 轨直坠 panic
+
+r1 全量门 `chain-m367-20261031-221305-2684059` 判 **NO-GO**（绿 241 / 红 2）。红门逐条定性：
+
+| 红门 | 真相 | 处置 |
+|---|---|---|
+| `m237_field_enum`（rc=2） | **旧判据 + 真分叉各一半**：① 静态判据仍在找「data enum 计划中」指引串（S1 已撤）② 组 C `sep_dataenum_def` 三轨分叉：`enum Shape:` 写在 `def main()` 体内时，C/解释轨为空操作、**VM 轨直坠 `bc_emit_stmt 未实现: [EnumDef…]`**（rc=1）⇒ 语法一放开就暴露，与 S1 同轮 | ① 判据改为 S1 契约（`EnumField` 在位 + 旧指引已撤），深度覆盖指向 m367；组 C 用例补一句 `print`（门内「三轨输出全空 = 假绿」判据要求）；② **修 VM**：`bc_emit_stmt_inner` 对 `StructDef/EnumDef/TraitDef/ImplDef` 显式空操作，对齐 `cg_stmt.px` 同名分支 |
+| `m312_gc_lock_order`（rc=1） | **负载敏感假红**：[4b]「3 轮 >100ms 的 GC 轮次合计」实测 1（max=454ms · err=0），同二进制空闲单跑 PASS（26s，三轮全 0） | 移入 `quiet_needed.txt`（空闲档串行），**判据未放松**（仍是 0 容忍）；证据落档 |
+
+`m237` 复跑 **39/0 · M237-VERIFY-OK**（含负控 A/B/C 与源逐字节还原）。
+
+### 三 643：`golden/compiler.c` / `compiler.bc.dump` 停在 M301（停摆 65 个里程碑）
+
+CI run `41207162858`（SHA `a3895db`）job「aarch64 自举件」step「原生自举 + 自证」**failure**。
+把 `parser.px` 还原到 HEAD 再编仍是 20090 行 ⇒ 与本轮改动无关。根因：**「改代码 → 重烘入库件」有门，
+「改代码 → 重定基基准」没有**，而 `bootstrap_prove(_bc)` 属 CI 独占 ⇒ 本地 242 门一门都测不到。
+处置：C 基准重定基 20103 → **20108 行**（norm 后 20107 行逐字节一致）；BC 基准 42890 → **42909 行**
+（VM 重放逐字节一致）；14 件重烘 `--check-all` **14/14**；`engine_parity` / `diffcheck --errors` 均绿。
+**欠账**：缺一条「golden 与当前源码同步」的门（O(1) 或 CI 前置），与 638 的版本守卫同批做。
+
+### 四 装置与文档同步
+
+- `bootstrap/pxc` / `pxc_vm` 重烘（`PXSRC-1c34be5f689e7a46`）——644 的修复只在源码里，不重烘等于没修。
+- docs 口径同步（`spec.md` §16.3 · `MINI_SUBSET.md` 第 3 行 · `PUXIAN_CHEATSHEET.md`）：从「parser 会拒绝」
+  改为「**语法已收 · 载荷未实现**」，与 §3.8 一致；`PX_DEF_TRIAGE` §17 记 644。
+
 ## M366 —— 枚举「带参构造」三轨同码同文（缺陷 634）+ 发布装置两修（636/637）+ docs 归档 65 份（第 241 轮）
 
 > **令源**：spec §3.8 承诺 data enum（`Circle(radius: f64)`），实现只做了「变体名」没做「载荷」。

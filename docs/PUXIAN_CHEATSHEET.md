@@ -3119,9 +3119,10 @@ set_timeout(fn (): print("once after 2s"), 2000)
     | `Color.Red.x` | `R1007: 枚举值 Color.Red 没有字段 'x'`（**值级**） |
     | `(7).x = 1` | `R1002: 类型 int 不支持字段赋值: 'x'` |
 
-    ⚠️ **data enum 仍是「计划中」**：`enum Shape:` + `Circle(radius: float)` 会被 parser 拒绝，
-    并给出**可执行指引**（`E2001 … 请写 Circle(float)，或改用 struct`）；`spec.md` §3.8/§16.3
-    已标注状态。**在此之前请用 `struct` + 可空字段表达。**
+    ⚠️ **data enum：语法已收（M367-S1）· 载荷未实现**：`enum Shape:` + `Circle(radius: float)`
+    **已能解析**（字段名与类型都进 AST `EnumField`，旧 `E2001 … 请写 Circle(float)` 指引已撤）；
+    但变体**仍不携带数据** —— `Shape.Circle(1.5)` 报 `R1005`，`match` 解构未实现。
+    深检门 `examples/m367_enum_parse`，口径见 `spec.md` §3.8。**在此之前请用 `struct` + 可空字段表达。**
 
     📌 三条实现纪律（改发射器时通用）：
     1. **诊断文本绝不能 `return` 给「返回 C 表达式文本」的函数** —— 那会生成非法 C；

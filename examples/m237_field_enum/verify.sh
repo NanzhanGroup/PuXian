@@ -16,6 +16,8 @@
 #     370 `d.a = v`（dict 字段写）解释轨 OK ⇄ 编译两轨 R1002（读支持写不支持）
 #     371 `E(V)` / `E("V")` 三轨三种错误（含 365 的崩溃）
 #     364 spec §3.8/§16.3 承诺 data enum，parser 只给「期望 ')'，实际得到 :」（指不到真因）
+#         —— M367-S1 起「字段名: 类型」已能解析（深检门 examples/m367_enum_parse）；
+#         本门组 C 保留「该定义在三轨上的执行结果一致」，静态锚点随契约改为 EnumField 在位。
 #
 # 定稿一条真相（三轨同码同文，参考 = 解释轨单一 env）：
 #   `T(...)` arity 必须恰等 ⇒ R2001 · `E("V")`/`E(V)` = 按变体名构造（保留能力）+ 存在性校验 ⇒ R1008
@@ -79,7 +81,11 @@ chk "解释轨：枚举构造拦在 args 求值之前" "has selfhost/iexpr.px 'i
 chk "解释轨：struct arity 响亮化（R2001）" "has selfhost/icall.px 'i_r2001'"
 chk "解释轨：字段赋值带类型（对接编译轨口径）" "has selfhost/istmt.px '不支持字段赋值'"
 chk "解释轨：struct 新字段不再静默（纯赋值分支）" "has selfhost/istmt.px '结构体没有字段'"
-chk "parser：data enum 给出可执行指引" "has selfhost/parser.px 'data enum 计划中'"
+# M367-S1 起契约变了：parser **收下**「字段名: 类型」并写进 AST（EnumField），
+#   旧的「E2001 + data enum 计划中」指引已撤 ⇒ 本条判据随之改为 S1 契约；
+#   深度覆盖（12 判据 · 2 负控）在 examples/m367_enum_parse/，此处只留锚点。
+chk "parser：data enum 载荷字段进 AST（S1 契约 · 深检 m367_enum_parse）" "has selfhost/parser.px 'EnumField'"
+chk "parser：旧「data enum 计划中」指引已撤（S1 起语法已收）" "! has selfhost/parser.px 'data enum 计划中'"
 chk "负控锚点自证（3 处唯一命中）" "NEGCTL --selftest >/dev/null"
 N_ENTRY=$(grep -c '' "$D/cases.tsv" 2>/dev/null || echo 0)
 chk "规模锚点：入库 cases.tsv ≥ 50 行（实测 $N_ENTRY）" "[ '$N_ENTRY' -ge 50 ]"
@@ -210,8 +216,11 @@ echo "── [9] 覆盖边界（如实登记）"
 cat <<'EOF'
   · 组 B/C 的**构建 rc** 参与比对（`st.txt` 第 2 字段）—— 本轮定稿是「全部统一到运行期」
     ⇒ 三轨的构建 rc 都应是 0、运行 rc 都应是 1，故可比。
-  · data enum 的**完整特性**（命名参数构造 + match 解构）**未实现**，本轮只做
-    「parser 给可执行指引 + spec §3.8/§16.3 标注状态」⇒ `Circle(radius: float)` 仍不可编译。
+  · data enum：M367-S1 起「字段名: 类型」**已能解析**并进 AST（`EnumField`），
+    但**载荷取值**（`Shape.Circle(1.5)` 仍 R1005）与 `match` 解构未实现 ⇒ 本门组 C
+    只判「三轨对这个定义的执行结果一致」（def 语句三轨皆空操作），深度覆盖见 m367_enum_parse。
+  · 函数体内定义类型（`def main(): enum X: ...`）：C/VM 两轨为空操作、解释轨会注册进全局
+    （历史口径，S1 未改）⇒ 本门只用「定义后不使用」的例，跨轨注册差异不在面内。
   · `E.V(args)`（变体携带数据）同理不在面内。
   · 结构体**嵌套赋值回读**（`p.inner.x = 1`）只覆盖一层；深层链未展开。
   · `?.` 的**接收者求值次数**由 M220（缺陷 319）单独覆盖，本门只覆盖 `?.` 的字段存在性。
