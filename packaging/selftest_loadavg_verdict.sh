@@ -50,6 +50,16 @@ machine_cpus(){
 NC=$(machine_cpus)
 [ -x "$SH" ] || { echo "❌ 缺 $SH 或不可执行"; exit 1; }
 
+# ── 语料分母（M368r2 · 缺陷 625 第三层）──
+# 本自证的语料是**按 16 核定标**的绝对量：quiet 8.3–9.6 ⇒ 0.52–0.60/核；
+#   所以每条判据调用都必须把分母钉成 16。不钉的后果已实测：CI runner 是 **4 核**
+#   ⇒ 8.3/4=2.07–2.40/核 ⇒ 「静默档」被判红，[1][2][4][5] 全塌（run 41225833374 等
+#   连续 3 轮 CI-only 红，而本机 16 核永远绿）。这是**语料定标**问题，不是判据问题：
+#   分母是判据的参数，语料是判据的输入，两者必须同界 —— 与 [11] 守的「分子分母同界」同一条道理。
+#   「分母取全机核数」的行为由 [11d] 单独验（那里**不**钤 --nproc，正是要验默认值）。
+CORES=16
+judge(){ "$SH" --nproc "$CORES" "$@"; }
+
 # 造语料：gen <file> <模式> [参数]
 #   quiet  : 465 点，8.3–9.6（≈0.55/核）
 #   spiky  : 453 点静默 + 12 点 90（真 M36x 形态：2.6% 越界）
@@ -77,13 +87,13 @@ echo "=== loadavg_verdict 离线自证（M361 · 判据 p95+占比，核数 ${NC
 
 echo "── [1] 静默档 ⇒ PASS"
 gen "$W/quiet.tsv" quiet
-out=$("$SH" --quiet "$W/quiet.tsv"); rc=$?
+out=$(judge --quiet "$W/quiet.tsv"); rc=$?
 chk "[1a] 退出码 0" "$rc" 0
 chkg "[1b] 聚合 PASS" "$out" "LOADAVG-VERDICT=PASS"
 
 echo "── [2] 尖峰短 + 均值低（M36x 真形态）⇒ PASS，且旧 max 判据必红"
 gen "$W/spiky.tsv" spiky
-outj=$("$SH" --json "$W/spiky.tsv"); rc=$?
+outj=$(judge --json "$W/spiky.tsv"); rc=$?
 chk "[2a] 新判据 退出码 0" "$rc" 0
 chkg "[2b] p95 没被尖峰带跑（0.52/核）" "$outj" "p95_pc=0.52"
 chkg "[2c] 越界占比 2.58% 在 5% 内" "$outj" "over_pct=2.58"
@@ -96,31 +106,31 @@ chk "[2f] 旧 max 红 / 新判据绿 ⇒ 治的是假红" "$(case "$rc:$oldrc" i
 
 echo "── [3] 持续压载（2.5/核）⇒ FAIL（p95 腿）"
 gen "$W/hog.tsv" hog
-outj=$("$SH" --json "$W/hog.tsv"); rc=$?
+outj=$(judge --json "$W/hog.tsv"); rc=$?
 chk "[3a] 退出码 1" "$rc" 1
 chkg "[3b] 聚合 FAIL" "$outj" "LOADAVG-VERDICT=FAIL"
 chkg "[3c] p95 越过 2.0/核 被点名" "$outj" "p95_ok=0"
 
 echo "── [4] 均值贴地但越界占比 5.16%（p95 恰在 2.0/核 边界）⇒ FAIL（占比腿单独有牙）"
 gen "$W/ratio.tsv" ratio
-outj=$("$SH" --json "$W/ratio.tsv"); rc=$?
+outj=$(judge --json "$W/ratio.tsv"); rc=$?
 chk "[4a] 退出码 1" "$rc" 1
 chkg "[4b] p95 腿是过的（恰 2.0/核）" "$outj" "p95_ok=1"
 chkg "[4c] 红来自占比腿（5.16% > 5%）" "$outj" "over_ok=0"
 
 echo "── [5] 单点 20/核 尖峰 ⇒ PASS + diag=ANOMALY（诊断量不判红）"
 gen "$W/spike1.tsv" spike1
-outj=$("$SH" --json "$W/spike1.tsv"); rc=$?
+outj=$(judge --json "$W/spike1.tsv"); rc=$?
 chk "[5a] 退出码 0（不判红）" "$rc" 0
 chkg "[5b] 打出 ANOMALY 诊断" "$outj" "diag=ANOMALY"
 chkg "[5c] max 原样保留可定位" "$outj" "max_pc=20.00"
 
 echo "── [6] 样本不足 / 空文件 ⇒ rc=2 INVALID（不许拿少数点判绿）"
 gen "$W/few.tsv" few; gen "$W/empty.tsv" empty
-out=$("$SH" "$W/few.tsv"); rc=$?
+out=$(judge "$W/few.tsv"); rc=$?
 chk "[6a] 5 个样本 rc=2" "$rc" 2
 chkg "[6b] 报 INVALID 而非 PASS/FAIL" "$out" "VERDICT=INVALID"
-out=$("$SH" "$W/empty.tsv"); rc=$?
+out=$(judge "$W/empty.tsv"); rc=$?
 chk "[6c] 空文件 rc=2" "$rc" 2
 
 echo "── [7] 六轮真实语料回放（M355–M360）"
@@ -139,11 +149,11 @@ else
 fi
 
 echo "── [8] 负控 A：判据自伤（阈值放到 100/核、占比 100%）⇒ [3] 必须变绿"
-out=$("$SH" --p95-percore 100 --over-pct 100 --anomaly-percore 1000 "$W/hog.tsv"); rc=$?
+out=$(judge --p95-percore 100 --over-pct 100 --anomaly-percore 1000 "$W/hog.tsv"); rc=$?
 chk "[8a] 自伤后持续压载变绿 ⇒ [3] 的红来自判据侧" "$rc" 0
 
 echo "── [9] 负控 B：占比阈值压到 0% ⇒ [2] 必须变红（占比腿有牙）"
-outj=$("$SH" --json --over-pct 0 "$W/spiky.tsv"); rc=$?
+outj=$(judge --json --over-pct 0 "$W/spiky.tsv"); rc=$?
 chk "[9a] 退出码 1" "$rc" 1
 chkg "[9b] 红点名为占比腿" "$outj" "over_ok=0"
 
@@ -152,6 +162,17 @@ echo "── [10] 用法 / 参数错误 ⇒ rc=2"
 "$SH" >/dev/null 2>&1; chk "[10b] 无输入 rc=2" "$?" 2
 "$SH" --p95-percore abc "$W/quiet.tsv" >/dev/null 2>&1; chk "[10c] 非数值阈值 rc=2" "$?" 2
 "$SH" --nproc 0 "$W/quiet.tsv" >/dev/null 2>&1; chk "[10d] 核数 0 rc=2" "$?" 2
+
+# ── [12] 分母口径负控（M368r2 · 缺陷 625 第三层）──────────────────────────
+# 作用两条：① 证明 [1] 的红绿**确实**随分母动 ⇒ 它不是恒绿的空判据；
+#          ② 把「CI 4 核假红」的机理钉成判据：同一份静默语料（0.52–0.60/核 @16）
+#             换上 4 核分母 = 2.07–2.40/核 ⇒ 必须 FAIL。
+echo "── [12] 分母口径负控：同一份静默语料换 4 核分母 ⇒ 必须 FAIL（证明 [1] 不是恒绿）"
+out=$( "$SH" --quiet --nproc 4 "$W/quiet.tsv" ); rc=$?
+chk "[12a] 4 核分母下静默语料 rc=1" "$rc" 1
+chkg "[12b] 聚合行 FAIL" "$out" "LOADAVG-VERDICT=FAIL"
+out=$( "$SH" --quiet --nproc "$CORES" "$W/quiet.tsv" ); rc=$?
+chk "[12c] 换回 16 核分母 rc=0（同一份语料 · 只有分母变了）" "$rc" 0
 
 # ── [11] 绑核回归（M361 首跑真红现场 · 缺陷 625 复发）──────────────────────
 # 现场：分片门用 taskset 把每路绑在 2 核上跑，判据默认核数取 nproc ⇒ 得 2 ⇒ 每核值虚高 8 倍
