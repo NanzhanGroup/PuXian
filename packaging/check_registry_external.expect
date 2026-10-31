@@ -25,7 +25,9 @@ path.home=
 # 逻辑名 → 期望状态（ok=200 · blocked=403 · missing=404 · other:<码>）
 version_json=ok
 sha256sums=ok
-files_manifest=blocked
+# M365（2026-10-31 实测）：files.sha256 两站均 200（14276 字节 · 146 行真清单元数据，非 HTML 错误页）
+#   ⇒ 缺陷 631 销号，钉改 ok；version.json 的 usage.verify 印 files.sha256 现在**跑得通**，不用改指引
+files_manifest=ok
 home=ok
 
 # 官方指引里的校验命令锚（version.json 的 usage.verify 与首页校验栏都印这条）
@@ -34,4 +36,4 @@ guidance_marker=files.sha256
 
 # 已知缺陷登记：处于「非 ok」状态是**已知且已记录**的（缺陷号写在键里）。
 #   若线上变成 ok ⇒ 门判红（钉不符）⇒ 删掉本行 + 改 version.json 的 usage.verify。
-known_defect_631=files_manifest
+# M365（2026-10-31）：缺陷 631 已由发布侧修好（两站 files.sha256 → 200）⇒ 登记行删除，按设计销号。

@@ -245,6 +245,8 @@ else
 fi
 
 echo "───────────────────────────────────────────────"
-echo "M365 门结果：✅ $PASS · ❌ $FAIL"
+# 末行必须让 gate_verdict.sh 判绿（M293 · 缺陷 506）：旧写法「✅ 40 · ❌ 0」里带了 ❌，
+# 被 GATE_BAD_LAST_RE 命中（失败优先）⇒ rc=0 也被记红（M365 全量门第 1 轮实红，判据/装置问题）。
+echo "M365 门结果：PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

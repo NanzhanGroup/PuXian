@@ -17,7 +17,6 @@
 #     （函数side 命名参数属另一特性，见 MINI_SUBSET §三 表第 5 条）
 #   · 报错一律 R2001（与结构体字段数错同一族），三轨**同码同文**
 # ============================================================
-
 def argmap_has_named(args):
     var i = 0
     while i < len(args):
@@ -25,7 +24,6 @@ def argmap_has_named(args):
             return true
         i += 1
     return false
-
 def argmap_field_index(field_names, name):
     var i = 0
     while i < len(field_names):
@@ -33,7 +31,6 @@ def argmap_field_index(field_names, name):
             return i
         i += 1
     return -1
-
 # 返回 [err_body_or_null, order]
 #   err_body：**不带** R 码前缀的报文体（三轨各自套自己的错误通道）
 #   order[i]：第 i 个字段取 args 的哪个下标（无错时是 args 下标的排列）
@@ -79,7 +76,6 @@ def argmap_struct(field_names, args, owner):
             return ["结构体 " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
         fi2 += 1
     return [null, order]
-
 # 非结构体目标的统一报文体（三轨同文）
 def argmap_reject(owner):
     if owner == null:
