@@ -1515,6 +1515,24 @@ jobs:
           bash examples/m365_named_args/verify.sh > /tmp/v_m365.log 2>&1 || { echo "❌ m365_named_args 门失败（命名参数构造 · 三轨）"; tail -40 /tmp/v_m365.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m365.log | tail -8
           echo "✅ m365_named_args（三轨一致 · 求值按书写顺序 · 报文同码同文）PASS"
+      - name: m366_enum_payload（枚举变体带载荷构造 · 三轨对拍 · M366 · 缺陷 634）
+        # 判据：A 三轨逐字节一致（解释 / VM / C）· B 门侧独立参考 · C 错误面同码同文 + 谓词
+        #       · D 副作用实参不求值 · E 覆盖度自证
+        # 负控：NC-code / NC-text ⇒ C 红 · NC-pos ⇒ B 红 · NC-side ⇒ D 红（需重编三轨 ⇒ CI 用 --neg-skip）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m366_enum_payload/verify.sh --neg-skip > /tmp/v_m366e.log 2>&1 || { echo "❌ m366_enum_payload 门失败（枚举变体带参 · 三轨）"; tail -40 /tmp/v_m366e.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m366e.log | tail -8
+          echo "✅ m366_enum_payload（三轨同码同文 · 实参不求值 · R1005/R1008）PASS"
+      - name: m366_tagmsg（make_tag 消息 UTF-8 与里程碑推断 · M366 · 缺陷 636/637）
+        # 判据：J1 里程碑取 max(CHANGELOG 最高, 提交主题前缀) · J2 消息严格 UTF-8（无截断残序列）
+        #       · J3 反向回落 + 两源不一致明示 · J4 tag 名合规
+        # 负控在临时仓库跑真脚本，不碰本仓、不建 tag ⇒ CI 直接跑全量
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m366_tagmsg/verify.sh > /tmp/v_m366t.log 2>&1 || { echo "❌ m366_tagmsg 门失败（tag 消息/里程碑推断）"; tail -40 /tmp/v_m366t.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m366t.log | tail -8
+          echo "✅ m366_tagmsg（消息严格 UTF-8 · 里程碑两源取 max）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
