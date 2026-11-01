@@ -155,7 +155,11 @@ if [ "$NERR" -gt 0 ]; then
   exit 2
 fi
 if [ "$NFAIL" -gt 0 ]; then
-  echo "LOADAVG-VERDICT=FAIL fail=$NFAIL files=$TOTAL anomaly=$NANOM"
+  # M370（缺陷 651）：FAIL 行必须与 PASS 行**同口径**带「核数」——
+  #   原来只有 PASS 带 ⇒ 任何「期望验分母、但该语料本就该判红」的断言（自测 [11d]）
+  #   在 4 核 runner 上读到 FAIL 行就找不到分母字段 ⇒ 假红（CI run 41243720177 / 41242829438 实测）。
+  #   判红条件一个字没动，只是把诊断量补齐。
+  echo "LOADAVG-VERDICT=FAIL fail=$NFAIL files=$TOTAL anomaly=$NANOM（判据 p95≤${P95PC}/核 且 越界≤${OVERPCT}% · 核数 ${NPROC}）"
   exit 1
 fi
 echo "LOADAVG-VERDICT=PASS files=$TOTAL anomaly=$NANOM（判据 p95≤${P95PC}/核 且 越界≤${OVERPCT}% · 核数 ${NPROC}）"
