@@ -114,6 +114,28 @@ S9 三连 000 ⇒ 仍判 unreachable）随门跑过。
 `git rev-parse v0.2.370^{commit}=9bb1e77`（注记 tag 对象 `0e257da`）·
 `releases/latest=v0.2.370`（`published_at=2026-11-01T04:32:26Z`）· 发布物 `puxian-0.2.370-9bb1e770.tar.gz`。
 
+### 八 CI 复核（`9bb1e77` · run `41273161038` · post-tag）
+
+`completed / success`（2026-11-01T04:27:17Z → 05:41:32Z，约 74min）；7 个 job 全绿，**失败步：无**。
+ci.yml 的 concurrency group 含 `${{ github.sha }}` ⇒ 本轮 post-tag 文档 push 不会取消这次 run（已核，run 跑到底）。
+
+| job | step | 名称 | 结论 |
+|---|---|---|---|
+| 工具链自举质量门 | 71 | `loadavg_verdict_selftest`（651 修的自证 · 37/37） | success |
+| 工具链自举质量门 | 102 | `m369_name_shadow`（M369 · 缺陷 635） | success |
+| 工具链自举质量门 | **105** | `registry_external`（653 修的**重点**；本地 8 分片真负载绿 + CI 绿，双证） | success |
+| 工具链自举质量门 | 11 | 门注册一致性（清单 ⇄ ci.yml 双向） | success |
+| 自举回归（PuXian-only） | 17 | 自举证明（pxc 编译 compiler.px 与基准一致） | success |
+| 自举回归（PuXian-only） | 11 | 引擎一致性门 · 用户面默认轨（negative，Issue 51） | success |
+| 多架构交叉编译 + qemu | 11 | aarch64 · riscv64 · armv7 三架构全绿 | success |
+| 原生 aarch64 自举自证 + 裸 build（gcc-only） | 20 | gcc-only 裸 build | success |
+
+Release run `41273161082` = `success`（04:43:40Z 完成）；`releases/latest` 复验 = **`v0.2.370`**
+（`published_at=2026-11-01T04:32:26Z`，与 §七 一致）。release job 侧曾一次 `403 rate limit exceeded`
+拿不到 latest，本地直取 GitHub API 成功 ⇒ 属限流，非发布异常。
+
+结论：651 / 652 / 653 三条修在 CI 与本地两侧**同口径绿**；M370 收口。
+
 ## M369 —— 名字解析优先级「变量 > 类型名」三轨统一（缺陷 635 收口）+ 全量门照出一扇存量假红（缺陷 650）（第 243 轮）
 
 > **令源**：用户「判据稳定性整治」的长期令。本轮既要落地 635，又要在**第一次真全量门**里
