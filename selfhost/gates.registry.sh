@@ -1061,6 +1061,21 @@ run gate_anchor_sentinel python3 selfhost/check_gate_anchors.py
 #   是**老版本**烘出的逐字节基准 ⇒ CI 两个 job 红（aarch64 自举自证 / 自举回归）。
 #   本地全量门测不到（`bootstrap_prove(_bc)` 属 CI 独占 · 各约 7 分钟）⇒ 本守卫是**廉价的那一半**。
 run version_golden bash selfhost/check_version_golden.sh
+step "M370 · 自举证明进本地全量门（缺陷 652：改编译器源码不重定基 golden ⇒ 本地全绿、CI 红）"
+#   来历（2026-11-01 实测）：M369（2bb9dae）改了 cg_expr.px 的名字解析守卫，14 件入库二进制重烘了，
+#   但 `selfhost/golden/compiler.c` / `golden/compiler.bc.dump` **没重定基**（golden 里一条
+#   `cg_name_is_value` 都没有）。244 门全绿 + 245 门全绿，CI 的「自举证明」step 却红在
+#   第 8935 行 —— 插入守卫会让生成的 C 里临时变量编号整体后移 ⇒ 全文 13031 行不同，肉眼不可见、
+#   只逐字节对拍能抓。这是「本地全量门测不到、只有 CI 看得见」的第 N 次复发。
+#   判据：`bootstrap/pxc` 现编 `compiler.px` 的产物（B.c）与 `golden/compiler.c`（A.c）
+#         norm_c 后**逐字节**一致；不一致必须重定基（`./bootstrap_prove.sh --update-golden`）
+#         并同批提交（改了基准还要 `cp selfhost/build/compiler_vm bootstrap/pxc_vm && engine_parity.sh`）。
+#   ⚠️ 成本重新实测（2026-11-01，本机 16 核）：入库件重烘后 pxc 编 compiler.px **≈9.5s**（含 diff），
+#      不是老注释里写的「≈7 分钟」（那是 M112 性能修复前的旧 pxc 的代价）⇒ 从「CI 独占」收编进本地门。
+#      BC 轨（`bootstrap_prove_bc.sh`，VM 重放 ≈5min）仍留 CI 独占，不进门。
+#   为什么放这里：与 version_golden（M250 缺陷 435 的「廉价那一半」）成对 —— 那条只量**版本串**，
+#      本条量**逐字节产物**，两者合起来才堵住「基准落后源码」这一族。
+run bootstrap_prove bash selfhost/bootstrap_prove.sh
 step "M368 · 版本链还活着没有（bump_version.sh 无人调用 · 缺陷 638）"
 #   来历：`packaging/bump_version.sh` 能改 9 个文件的版本串，但**没有任何一步强制调它**
 #   ⇒ `tools/px` 的 `SELFHOST_VER` 从 0.2.281 一路冻到 v0.2.367（84 个里程碑没涨）：

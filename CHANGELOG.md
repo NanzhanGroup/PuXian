@@ -1,3 +1,61 @@
+## M370 —— 两处「本地全绿、CI 红」：判据自己的分母口径（651）与自举基准落后源码（652）（第 244 轮）
+
+> **令源**：用户「判据稳定性整治」的长期令。本轮是 M369 发布后**第一次真看 CI**：
+> 一条假红（判据输出口径不对称），一条真红（本地全量门**看不见**的那半张网）。
+
+### 一 缺陷 651：`LOADAVG-VERDICT=FAIL` 行不带分母 ⇒ 自证在 4 核 runner 上假红
+
+CI run `41243720177`（`1fbdecd`）与 `41242829438`（`d6eef57`）红在同一 step：
+`loadavg_verdict_selftest` 的 **[11d]「绑核下分母仍是全机核数」**。
+
+根因不是绑核，是**聚合行口径不对称**：`PASS` 行带「判据 … · 核数 N」，`FAIL` 行**不带**。
+而自证 [11d] 读的正是那份「本就该判 FAIL」的静默语料（4 核 runner 上 [12a] 明文要求它 FAIL）
+⇒ 从 FAIL 行里找分母字段必然落空 ⇒ 假红。
+
+修：`FAIL` 行补齐「判据 … · 核数 N」。**判红条件一个字没动**，只补诊断量。
+复验：`packaging/selftest_loadavg_verdict.sh` **37/37 PASS**（[12a] 仍要求 4 核下 rc=1，[11d] 读到分母）。
+
+### 二 缺陷 652：改了编译器源码，`golden/*` 没重定基 ⇒ 自举证明红
+
+CI run `41259430460`（`f92b34c`）两 job 同根因红：
+
+| job | 红在哪 |
+|---|---|
+| 自举回归（PuXian-only） | step 17 `./bootstrap_prove.sh`：B.c ⇄ `golden/compiler.c` 不一致 |
+| 原生 aarch64 自举自证 | step 4 步骤 3/4 自证：**同一处**、同一首个差异行 8935 |
+
+首个差异行很说明问题：golden 里是 `if (px_is_truthy(px_method(px_get_global("cg_enums"), "has", …)))`，
+而现编产物多出一层 `cg_name_is_value` 守卫 —— 正是 M369（`2bb9dae`）改的那处。
+**插入守卫让生成 C 里的临时变量编号整体后移** ⇒ 全文 13031 行不同：肉眼看不出、只有逐字节对拍能抓。
+`2bb9dae` 重烘了 14 件入库二进制、也动了 golden，但只是**版本字面量那一行**，基准本体仍是老源码的产物。
+
+处置（重定基 + 自证，不是放宽判据）：
+```
+cd selfhost && ./bootstrap_prove.sh --update-golden      # 20108 → 20151 行（diff 13031 行）
+             ./bootstrap_prove_bc.sh --update-golden     # 42909 → 42976 行
+```
+重定基后两条自证各自「与既有缓存逐字节一致」（同源码链，不靠「应该一致」）。
+入库二进制 `bootstrap/pxc` **本来就对**（它烘自新源码），故不重烘；`--update-golden` 后重跑
+`bootstrap_prove.sh` 全绿即可。
+
+### 三 收编：`bootstrap_prove` 从「CI 独占」进本地全量门（245 → **246** 门）
+
+652 能溜过去，根因是 **本地全量门根本没有这道门**（M250 的 `version_golden` 只量版本串）。
+老注释说它「≈7 分钟」—— 那是 M112 性能修复**之前**的旧 pxc 的代价。今天实测：
+入库件重烘后 `bootstrap/pxc` 编 `compiler.px` + diff **≈9.5s**（缓存命中 0s）⇒ 成本已经不是理由。
+
+- 注册：`selfhost/gates.registry.sh` 里与 `version_golden` 成对（一条量版本串、一条量逐字节产物）。
+- 连带复核：`m264_gate_shared_tmp`（`/tmp/px_bootstrap` 只被 1 门用，不触发共用白名单）**绿**；
+  `gate_timeouts`（新门远低于默认 900s 上限）**绿**。
+- BC 轨（`bootstrap_prove_bc.sh`，VM 重放 ≈5min）**仍留 CI 独占**，不进门。
+
+### 四 账
+
+- 645 postcheck 无重试窗口 · 646 dy-notify 投递失败即丢弃 · 647 worktree 僵尸 · 649 shard_run 吞 git stderr
+  —— 仍全在账（648 sysupdate 已就地修，缺「长期不更新 ⇒ 告警」判据）。
+- M367 S2/S3（data enum 载荷构造 / `Shape.Circle(1.5)` 真取值 / R1005 文案 / `match` 解构 / VM·C 同语义）
+  与 golden 同步门（643）仍挂账。
+
 ## M369 —— 名字解析优先级「变量 > 类型名」三轨统一（缺陷 635 收口）+ 全量门照出一扇存量假红（缺陷 650）（第 243 轮）
 
 > **令源**：用户「判据稳定性整治」的长期令。本轮既要落地 635，又要在**第一次真全量门**里
@@ -40,9 +98,30 @@ reap 之前停在**僵尸**态，而 `kill -0` 对僵尸**仍返回 0**。是否
 
 ### 四 未做 / 交给 M370
 
-- CI 侧复核（`m369_name_shadow` step、M368 的 `loadavg_verdict_selftest`）**待 r2 绿后再看**。
+- CI 侧复核（`m369_name_shadow` step、M368 的 `loadavg_verdict_selftest`）⇒ 已在 r2 发布后做完，
+  结论与处置（缺陷 651）见上面 **M370** 一节。
 - `shard_run.sh` 建树失败吞 git stderr（649）· postcheck 无重试窗口（645）· dy-notify 丢弃（646）·
   worktree 僵尸（647）· sysupdate 空闲判据自匹配（648）—— 全部仍在账。
+
+### 五 r2 全量门回填（v0.2.369 = `ee594f4` 已发布）
+
+r1 的红门（650）修好后重跑全量门，**判据一条没放松**，同一条链跑到底：
+
+| 项 | 实测 |
+|---|---|
+| 目录 | `/data/gatevm/chain-m369-20261101-072933-1782451`（unit `chain-m369r2` · ws-debug.slice） |
+| 门 | **245** · 绿 245 · 红 0（8 分片 + quiet 档 11 门） |
+| 墙钟 | 07:29:33 → 08:59:33 = **90m00s** |
+| 负载 | `loadavg_max_1m=61.56`（诊断量）· **p95=0.93/核 · 越界 2.59% ≤ 5% ⇒ PASS** |
+| 内存 | cgroup peak **9690.3 MiB**（r1 是 9953.5，同一量级） |
+
+机械段（`gate_release_chain.sh` → `release_guard.sh`）自证链完整：
+`VERDICT=GREEN tag=v0.2.369 head=ee594f4` · 推送 `ee594f4` · `LATEST-VERDICT=OK expected=v0.2.369`（poll 5 命中）·
+发布物 `puxian-0.2.369-ee594f41.tar.gz` · `PRUNE-VERDICT=OK deleted=0 failed=0`（本轮目录仍新鲜，无历史可清）。
+**tag 与 commit 同一哈希**：`git rev-parse v0.2.369^{commit}` = `ee594f4101b81dbeb8f53a9ebcc5f93246fe0435`。
+
+650 的修法在这次真负载下拿到了证据：m255 在 8 分片（loadavg 峰值 61）里**绿**，说明「rc≥128 信号致死」的
+判据不再吃 SIGCHLD 时机。
 
 
 ## M367 —— data enum 载荷字段真进 AST · VM 轨函数体内类型定义分叉 · 自举基准停摆 65 个里程碑（缺陷 364 收口 S1 · 643 · 644）（第 241 轮）
