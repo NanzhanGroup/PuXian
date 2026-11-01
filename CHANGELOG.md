@@ -84,6 +84,36 @@ probe = 最多 RETRIES=3 次，间隔 BACKOFF=1s；**拿到任何 HTTP 码即停
 （用可编排的 `REGISTRY_PROBE_STUB` + `--probe-once` 钩子，离线确定）。
 ⚠️ 顺带守住口径 19：`| grep -q` 一律写成 `grep -q PAT <<< "$var"`（否则 grep 早退 ⇒ 生产者 EPIPE ⇒ pipefail 假否定）。
 
+### 六 缺陷 654（本轮新增）：wrapper 在 bash 正在执行时被原地改写 ⇒ 收尾段当场死、peak 全丢
+
+r1 的机械段脚本 `/data/autodrive/m370_chain_wrap.sh` 在 10:53:43 报 `line 49: rc: unbound variable` 退出 ——
+此时 8 分片与 quiet 档**都已经跑完**（`fullgate.log` 里门结论齐备），死的是**收尾判据段**。
+成因：脚本运行期间被就地编辑（加埋点），bash 按**文件偏移**继续读 ⇒ 读到改后与改前错位的行
+（`rc` 赋值行被挤走，`set -u` 下引用即死）。
+后果：结论只能靠兜底脚本补写 ⇒ STAMP 标记 `[via fallback]`、**cgroup peak 丢失**（r1 的 peak 因此记 NA）。
+
+处置（本轮）：r2 用**新文件名** `/data/autodrive/m370r2_chain_wrap.sh`（`rc=1` 先初始化 + `STAMP_TAG=370r2`），
+一次写成、跑起来不再动。机制层**未收**：wrapper 缺「启动时记下自身 sha256，收尾时比对，不一致就响亮告警」的自检 —— 挂 M371。
+
+### 七 r2 全量门回填（v0.2.370 = `9bb1e77` 已发布）
+
+653 修好后重跑同一条链，判据一条没放松：
+
+| 项 | 实测 |
+|---|---|
+| 目录 | `chain-m370-20261101-105945-3530213`（unit `chain-m370r2` · ws-debug.slice） |
+| 门 | **246** · 绿 **246** · 红 **0**（shard1–8 = 27/29/30/30/30/29/30/30 + quiet 档 11） |
+| 墙钟 | 10:59:45 → 12:32:41 = **92m56s** |
+| 负载 | `loadavg_max_1m=68.77`（诊断量）· **p95=1.17/核 · 越界 2.51% ≤ 5% ⇒ PASS** |
+| 内存 | cgroup peak **10006.0 MiB**（M369 是 9690.3，同一量级） |
+
+`registry_external`（653 修的那条）在 8 分片真负载下**绿**；653 的 9 条自证（S8 首探 000 → 重试取到应答 ⇒ ok ·
+S9 三连 000 ⇒ 仍判 unreachable）随门跑过。
+
+发布机械段自证：`CHAIN-VERDICT=GREEN tag=v0.2.370 head=9bb1e77` · `origin/main=9bb1e77` ·
+`git rev-parse v0.2.370^{commit}=9bb1e77`（注记 tag 对象 `0e257da`）·
+`releases/latest=v0.2.370`（`published_at=2026-11-01T04:32:26Z`）· 发布物 `puxian-0.2.370-9bb1e770.tar.gz`。
+
 ## M369 —— 名字解析优先级「变量 > 类型名」三轨统一（缺陷 635 收口）+ 全量门照出一扇存量假红（缺陷 650）（第 243 轮）
 
 > **令源**：用户「判据稳定性整治」的长期令。本轮既要落地 635，又要在**第一次真全量门**里
