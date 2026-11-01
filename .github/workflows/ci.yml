@@ -134,10 +134,14 @@ jobs:
           ./selfhost/interp_builtin_parity.sh 2>&1 | tail -14
 
       - name: 自举证明（pxc 编译 compiler.px 与基准一致）
+        #   M370：改成从**仓库根**用显式路径调用（脚本自己 `cd $(dirname $0)`，行为不变）——
+        #   原来写的是 `cd selfhost` + `./bootstrap_prove.sh`，而门注册一致性守卫
+        #   （selfhost/check_gate_registry.sh · M247）做的是**字面匹配** `selfhost/<脚本>`：
+        #   本轮把 bootstrap_prove 收编进本地门清单后，它立刻红在这条「漏注册」上
+        #   （CI 明明跑了，只是写法让守卫看不见）。显式路径让两侧口径一致，不靠例外表。
         run: |
           set -o pipefail
-          cd selfhost
-          ./bootstrap_prove.sh 2>&1 | tail -6
+          bash selfhost/bootstrap_prove.sh 2>&1 | tail -6
 
   examples:
     name: 示例编译运行

@@ -47,6 +47,10 @@ cd selfhost && ./bootstrap_prove.sh --update-golden      # 20108 → 20151 行�
 - 注册：`selfhost/gates.registry.sh` 里与 `version_golden` 成对（一条量版本串、一条量逐字节产物）。
 - 连带复核：`m264_gate_shared_tmp`（`/tmp/px_bootstrap` 只被 1 门用，不触发共用白名单）**绿**；
   `gate_timeouts`（新门远低于默认 900s 上限）**绿**。
+- 连带踩到的第三处（同一个「本地看不见」家族）：收编后 `check_gate_registry.sh`（M247 清单 ⇄ ci.yml **双向**对拍）
+  立刻红在「脚本门漏注册」—— CI 的 step 写的是 `cd selfhost` + `./bootstrap_prove.sh`，而守卫做**字面匹配**
+  `selfhost/<脚本>` ⇒「CI 明明在跑，守卫看不见」。处置：CI step 改成从仓库根 `bash selfhost/bootstrap_prove.sh`
+  （脚本自己 `cd $(dirname $0)`，行为不变），**不加例外表**（例外表只用于「CI 环境根本跑不了」的门）。
 - BC 轨（`bootstrap_prove_bc.sh`，VM 重放 ≈5min）**仍留 CI 独占**，不进门。
 
 ### 四 账
