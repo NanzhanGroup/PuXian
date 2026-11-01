@@ -24,10 +24,13 @@
 #      仍印 ⇒ ⚠️ 已知缺陷（响亮）；已不印 ⇒ 红（钉过期，缺陷该销号）
 #   E4 规模锚点：探测项 ≥4 · base ≥2（防「提取器/配置坏了 ⇒ 空跑恒绿」）
 #   E5 全体不可达（000）⇒ rc=3「无法判定」，**不算绿**
+#   E6 传输层失败（000）单次不判死：重试 RETRIES=3 次（退避 1s）；拿到任何 HTTP 码即停。
+#      连打 3 次仍 000 ⇒ 仍判 unreachable（判据强度不变，只滤抖动 —— 缺陷 653）
 #
 # 用法：
 #   packaging/check_registry_external.sh              # 实地探测（全量门用）
-#   packaging/check_registry_external.sh --self-test  # 离线自证（7 条，含 4 种负控；CI 用）
+#   packaging/check_registry_external.sh --self-test  # 离线自证（9 条，含 5 种负控；CI 用）
+#   packaging/check_registry_external.sh --probe-once <url>   # 单探自证钩子（S8/S9 用）
 #   EXPECT_FILE=<路径> packaging/check_registry_external.sh
 # 退出码：0 绿（含已登记缺陷的响亮警告）/ 1 钉不符或有违例 / 2 用法错 / 3 无法判定（外链不可达）
 # ============================================================
@@ -36,6 +39,13 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 EXPECT="${EXPECT_FILE:-$HERE/check_registry_external.expect}"
 TIMEOUT="${REGISTRY_PROBE_TIMEOUT:-5}"
+
+# 内部自证钩子：只探一个 URL 并按 class/attempts 打印（S8/S9 用；不属于对外用法）
+if [ "${1:-}" = --probe-once ]; then
+    PROBE_ONCE_URL="${2:-}"
+    [ -n "$PROBE_ONCE_URL" ] || { echo "用法错：--probe-once 需要 URL" >&2; exit 2; }
+    set --
+fi
 
 for a in "$@"; do
     case "$a" in
@@ -112,6 +122,31 @@ EOF
             || { echo "  ❌ S7 红但没指名规模锚点"; f=$((f+1)); }
     fi
 
+    # ── S8/S9：传输层抖动重试（缺陷 653）──────────────────────
+    cat > "$W/stub.sh" <<'EOS'
+#!/usr/bin/env bash
+code="$(head -1 "$STUB_SEQ" 2>/dev/null)"
+if [ -n "$code" ]; then tail -n +2 "$STUB_SEQ" > "$STUB_SEQ.tmp" 2>/dev/null; mv "$STUB_SEQ.tmp" "$STUB_SEQ"; fi
+printf '%s\n' "${code:-000}"
+EOS
+    chmod +x "$W/stub.sh"
+
+    printf '000\n200\n' > "$W/seq1"
+    local o8
+    o8="$(STUB_SEQ="$W/seq1" REGISTRY_PROBE_STUB="$W/stub.sh" REGISTRY_PROBE_BACKOFF=0 SELFTEST_RETRY_NO_SLEEP=1 \
+          bash "$0" --probe-once https://x.example/reg/sha256sums.txt 2>&1)"
+    if grep -q 'class=ok attempts=2' <<< "$o8"; then
+        echo "  ✅ S8 正控：首探 000 → 重试得 200 ⇒ ok（一次抖动不判红）"; p=$((p+1))
+    else echo "  ❌ S8 重试未生效：$o8"; f=$((f+1)); fi
+
+    printf '000\n000\n000\n' > "$W/seq2"
+    local o9
+    o9="$(STUB_SEQ="$W/seq2" REGISTRY_PROBE_STUB="$W/stub.sh" REGISTRY_PROBE_BACKOFF=0 SELFTEST_RETRY_NO_SLEEP=1 \
+          bash "$0" --probe-once https://x.example/reg/sha256sums.txt 2>&1)"
+    if grep -q 'class=unreachable attempts=3' <<< "$o9"; then
+        echo "  ✅ S9 负控：连打 3 次 000 ⇒ 仍判 unreachable（重试不削弱判据）"; p=$((p+1))
+    else echo "  ❌ S9 重试把真不可达洗绿了：$o9"; f=$((f+1)); fi
+
     echo "══ 自证：$p 通过 / $f 失败 ══"
     rm -rf "$W"
     [ "$f" = 0 ] || exit 1
@@ -132,9 +167,36 @@ classify() {
     esac
 }
 
-# 探测一个 URL：echo 状态分类；正文落到 $BODY（若给）
+# ── 缺陷 653（M370）：外链偶发抖动曾「一次判死」⇒ 全量门假红 ─────────────
+# 证据：chain-m370 首轮 shard1 registry_external ❌（soft.xiusoft.cn/…/sha256sums.txt = unreachable，
+#       同站其余 3 项 200）；随后同一 URL 连打 20 次全 200（均值 ≈60ms），files.sha256 5/5 200。
+# ⇒ 传输层失败（000 = 连 HTTP 回答都没拿到）单次不构成判据：给 RETRIES 次机会，间隔 BACKOFF 秒退避；
+#   **拿到任何 HTTP 码（含 403/500）即停** —— 那是真回答，不重试。
+# ★ 判据强度不变：连打 RETRIES 次仍 000 ⇒ 仍判 unreachable（红；全灭时 rc=3），
+#   只是不再把「一次网络抖动」当成「发布物坏了」。
+RETRIES="${REGISTRY_PROBE_RETRIES:-3}"
+BACKOFF="${REGISTRY_PROBE_BACKOFF:-1}"
+PROBE_ATTEMPTS=0
+
+fetch_code() {   # $1=url $2=body(可空) —— 单次尝试，echo HTTP 码
+    local url="$1" body="${2:-}" code=""
+    if [ -n "${REGISTRY_PROBE_STUB:-}" ]; then
+        # 自证桩：外层可用 STUB_SEQ 编排「先 000 后 200」的序列
+        code="$("$REGISTRY_PROBE_STUB" "$url" "$body" 2>/dev/null)"
+        code="${code%%$'\n'*}"      # 只取第一行（不用 | head —— 口径 19：避免 SIGPIPE）
+    elif [ -n "$body" ]; then
+        code="$(curl -s -o "$body" -w '%{http_code}' --max-time "$TIMEOUT" "$url" 2>/dev/null)"
+    else
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$TIMEOUT" "$url" 2>/dev/null)"
+    fi
+    [ -n "$code" ] || code=000
+    printf '%s\n' "$code"
+}
+
+# 探测一个 URL：echo 状态分类；正文落到 $BODY（若给）；尝试次数留在 $PROBE_ATTEMPTS
 probe() {
-    local name="$1" url="$2" body="${3:-}" code
+    local name="$1" url="$2" body="${3:-}" code try=1
+    PROBE_ATTEMPTS=1
     if [ -n "${SELFTEST_ACTUALS:-}" ]; then
         code="$(echo "$SELFTEST_ACTUALS" | tr ',' '\n' | awk -F= -v k="$name" '$1==k{print $2; exit}')"
         [ -n "$code" ] || code=000
@@ -142,14 +204,32 @@ probe() {
         classify "$code"
         return
     fi
-    if [ -n "$body" ]; then
-        code="$(curl -s -o "$body" -w '%{http_code}' --max-time "$TIMEOUT" "$url" 2>/dev/null)"
-    else
-        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$TIMEOUT" "$url" 2>/dev/null)"
+    while : ; do
+        code="$(fetch_code "$url" "$body")"
+        [ "$code" != 000 ] && break
+        [ "$try" -ge "$RETRIES" ] && break
+        echo "     ⏳ 第 $try/$RETRIES 次探测传输层失败（000）· ${BACKOFF}s 后重试  $url"
+        [ "${SELFTEST_RETRY_NO_SLEEP:-0}" = 1 ] || sleep "$BACKOFF"
+        try=$((try+1))
+        PROBE_ATTEMPTS=$try
+    done
+    if [ "$try" -gt 1 ] && [ "$code" != 000 ]; then
+        echo "     ✅ 重试后可达：第 $try 次 = $code（前 $((try-1)) 次 000，抖动不取）  $url"
     fi
-    [ -n "$code" ] || code=000
     classify "$code"
 }
+
+# ── 内部钩子执行点（须在 probe 定义之后）─────────────────────────
+if [ -n "${PROBE_ONCE_URL:-}" ]; then
+    # 必须在本 shell 里调 probe（不能放 $( ) 子壳，否则 $PROBE_ATTEMPTS 回传不出来）
+    _pf="$(mktemp)"
+    probe probe_once "$PROBE_ONCE_URL" > "$_pf"
+    cat "$_pf"
+    pc="$(tail -1 "$_pf")"
+    rm -f "$_pf"
+    echo "class=$pc attempts=$PROBE_ATTEMPTS"
+    [ "$pc" = ok ] && exit 0 || exit 1
+fi
 
 # ── 读取钉表 ────────────────────────────────────────────────
 declare -A E=()

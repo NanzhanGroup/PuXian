@@ -1770,7 +1770,10 @@ run release_assets bash packaging/check_release_assets.sh --self-test
 #     E2 known_defect_631 行必须仍成立（已变 ok ⇒ 红，逼销号）
 #     E3 指引自洽：manifest 取不到时 version.json 不许仍印 guidance_marker
 #     E4 规模锚点（探项≥4 · 站≥2）· E5 全 000 ⇒ rc=3「无法判定」，不当绿
-#   本地跑**实地探测**（本门就是对外可见面的看守）；CI 跑 `--self-test`（7 条，4 个负控，离线确定）。
+#   本地跑**实地探测**（本门就是对外可见面的看守）；CI 跑 `--self-test`（9 条，5 个负控，离线确定）。
+#   E6（缺陷 653 · M370）：传输层失败（000）单次不判死 ⇒ 重试 3 次、退避 1s；拿到任何 HTTP 码即停。
+#      理由：chain-m370 首轮 shard1 就因 soft.xiusoft.cn/…/sha256sums.txt 一次 000 而 rc=1（随后连打 20 次全 200）。
+#      判据强度不变：连打 3 次仍 000 ⇒ 仍判 unreachable（红 / 全灭 rc=3）。
 #   ⚠️ 本门**要出网** ⇒ 必须在 $PX_GATEVM/net_needed.txt 登记 `registry_external`，
 #      否则分片调度会把它塞进 netns 隔离片 ⇒ 8 次探测全 000 ⇒ rc=3 门清单内判红。
 #      （M363 链首跑实测就是这个装置坑，不是外链二次故障；外链现状仍是 files.sha256 403 —— 缺陷 631 未完）
