@@ -2533,7 +2533,7 @@ def bc_emit_program(prog):
     #   复位后两轨起点状态一致：哨兵键不可能再泄漏进语义检查。
     cg_structs = cg_new_dict()
     cg_enums = cg_new_dict()
-    cg_enum_fields = cg_new_dict()   # M372：与 cg_enums 一起全量复位
+    cg_enum_fields = cg_new_dict()  # M372：与 cg_enums 一起全量复位
     cg_impls = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()

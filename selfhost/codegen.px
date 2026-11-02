@@ -887,7 +887,7 @@ def cg_generate(prog):
     cg_closures = ""
     cg_structs = cg_new_dict()
     cg_enums = cg_new_dict()
-    cg_enum_fields = cg_new_dict()   # M372：与 cg_enums 一起全量复位（防跨编译残留）
+    cg_enum_fields = cg_new_dict()  # M372：与 cg_enums 一起全量复位（防跨编译残留）
     cg_impls = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()

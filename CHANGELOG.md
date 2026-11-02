@@ -54,6 +54,24 @@ S2 落了构造与 parser；本轮 S3 落**值**：
 `m372_data_enum`（产品面）+ `m372_sni_slot`（缺陷 657）双双注册进 `gates.registry.sh`
 与 `ci.yml`（双向校验），CI 均以 `--neg-skip` 跑（三轨重编成本）。
 
+### 五 r2 全量门 6 红：逐条定位与修复（诚实记账 · 判绿前先认账）
+
+r2 第一轮（`chain-m372-20261102-213342`）**红 6 / 249**。六条全是 S3+657 的**收尾漏项**，
+不是产品语义错 —— 但这一点只有在逐条查过之后才敢说：
+
+| # | 门 | 真因 | 修法 |
+|---|----|------|------|
+| 1 | `m245_tls_cert_reload` | `negctl.py` 的「槽满出口」锚点仍指旧报文「超出上限 %d」⇒ 657 改文案后命中 0，负控打桩被拒（`anchor`，不是产品红） | 锚点改认**形状**（tls_mu→hs_mu unlock + 657 注释行）；`negctl --check` 自证 5 处唯一命中 |
+| 2 | `interp_builtin_list` | 657 新增 native `px_sni_capacity` 未进内置名册 ⇒ lint 会误报 L002 | 跑 `tools/gen_builtin_list.sh` 重派生（411 名）——名册唯一载体是生成块，**不手改** |
+| 3 | `m177_builtin_parity` | 纯连带（名册门 rc≠0） | 随 ② |
+| 4 | `fmt_check` | `argmap.px`/`bc_emit.px`/`codegen.px` 各有 1 处注释列宽/空行不符（S3 编辑留下的） | `pxfmt -w` 三个文件；全量 `--check` 复扫 0 残留 |
+| 5 | `eco_index` | `docs/native_index.json` 停在 411 名前（少 `px_sni_capacity`） | 重生成 ecosystem / native_table / native_map |
+| 6 | `bootstrap_prove` | **golden 不是当前源码的产物**：S3 新增 `argmap_fields` 后只落了 2 行（等于没落） | 按当前源码重定基两条基准（C 轨 20838 行 · BC 轨 44648 行）→ 重烘 14 件 → `--check-all` 14/14 |
+
+**两条教训**：① 改了编译器源码 ⇒ **golden 必须重定基**，「本地绿」在 bootstrap_prove 上是假的；
+② 基准更新量级要自检 —— 「只改 2 行」对一次新增函数的改动来说不可能合理，那正是它红的理由。
+③ 门被中断 ≠ 源码干净（本轮另一次：`cg_expr.px` 残留三处负控补丁差点被 `git add -A` 带进去，见 3b170af 正文）。
+
 ## M371 —— 装置面收口：建树失败必须说得出真因（649 修 · 647 只止住 · 645/646 修）（第 245 轮）
 
 > **令源**：用户 2026-11-02 08:20「按你的建议处理，自主立项，自主决策，持续推进 PuXian，
