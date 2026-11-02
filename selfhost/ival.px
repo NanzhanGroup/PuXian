@@ -520,6 +520,11 @@ def i_field(v, name, pos):
         if v["__typeref__"] == "enum":
             let en = v["name"]
             if g_enums.has(en) and contains(g_enums[en], name):
+                # M372：**具名**载荷变体不能无括号取值（载荷无处安放，响亮要参数）；
+                #   旧位置写法 `V(float)` 保留历史行为（无括号 ⇒ 无载荷值），不回归 M367 门。
+                let flds = i_enum_fields_of(en, name)
+                if len(flds) > 0 and not it_enum_pos_style(flds):
+                    return Err(i_r1005("枚举变体 " + en + "." + name + " 需要 " + str(len(flds)) + " 个字段，给出 0；请写 " + en + "." + name + "(...)", pos))
                 return Ok(it_enum(en, name, null))
             return Err(i_r1008("枚举 " + en + " 没有变体 '" + name + "'", pos))
         return Err(i_r1007("类型 " + v["name"] + " 没有字段 '" + name + "'", pos))

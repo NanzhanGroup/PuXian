@@ -274,7 +274,43 @@ def i_eval_expr(node, env):
 #   ⇒ 三轨三种行为。定稿：保留能力（实参=变体名），存在性校验后构造。
 # ⚠️ 必须在 **args 求值之前**拦下 —— `Color(Red)` 里的 `Red` 不是变量，
 #   若先求值会报「未定义变量 'Red'」（指不到真因）。
-def i_enum_ctor(ename, args, pos):
+# M372：变体载荷字段名表（不存在或无字段 → []）。存在性由 g_enums 判（调用方负责）。
+def i_enum_fields_of(ename, vname):
+    if g_enum_fields.has(ename):
+        if g_enum_fields[ename].has(vname):
+            return g_enum_fields[ename][vname]
+    return []
+# M372：带载荷变体构造 —— 实参按**书写顺序**求值，按字段序装 dict（键 = "0"…，与字段名解耦：
+#   旧写法 `Circle(float)` 没有字段名，两条写法共用同一载荷表示）。
+#   与结构体走同一份装配算法 argmap_fields（M365 教训：三轨各写一遍必分叉）。
+def i_enum_build(ename, vname, args, env, pos):
+    let flds = i_enum_fields_of(ename, vname)
+    let nf = len(flds)
+    if nf == 0:
+        return Err(i_r1005("枚举变体 " + ename + "." + vname + " 不接受参数，给出 " + str(len(args)), pos))
+    let owner = ename + "." + vname
+    let am = argmap_fields(flds, args, owner, "枚举变体")
+    if am[0] != null:
+        return Err(i_r2001(am[0], pos))
+    let order = am[1]
+    let vals = []
+    var i = 0
+    while i < len(args):
+        var vnode = args[i]
+        if vnode[0] == "NamedArg":
+            vnode = vnode[2]
+        let ar = i_eval_expr(vnode, env)
+        if ar.is_err():
+            return Err(ar.err())
+        vals.append(ar.unwrap())
+        i += 1
+    let payload = it_new_dict()
+    var k = 0
+    while k < nf:
+        payload[str(k)] = vals[order[k]]
+        k += 1
+    return Ok(it_enum(ename, vname, payload))
+def i_enum_ctor(ename, args, env, pos):
     if len(args) != 1:
         return Err(i_r1005("枚举 " + ename + " 构造需要 1 个变体名，给出 " + str(len(args)), pos))
     let a0 = args[0]
@@ -287,6 +323,11 @@ def i_enum_ctor(ename, args, pos):
         return Err(i_r1002("枚举 " + ename + " 构造的实参必须是变体名（字符串字面量或标识符）", pos))
     if not g_enums.has(ename) or not contains(g_enums[ename], vname):
         return Err(i_r1008("枚举 " + ename + " 没有变体 '" + vname + "'", pos))
+    # M372：**具名**载荷变体不能走「变体名」构造（载荷无处安放）；
+    #   旧位置写法保留历史行为 `Vec("V")`。
+    let flds0 = i_enum_fields_of(ename, vname)
+    if len(flds0) > 0 and not it_enum_pos_style(flds0):
+        return Err(i_r1005("枚举变体 " + ename + "." + vname + " 需要 " + str(len(flds0)) + " 个字段，请用 " + ename + "." + vname + "(...) 构造", pos))
     return Ok(it_enum(ename, vname, null))
 # ---------- 调用表达式（对齐 eval_call） ----------
 def i_eval_call(node, env):
@@ -297,6 +338,21 @@ def i_eval_call(node, env):
     # M365：命名参数（仅结构体构造）。装配与报文走 argmap.px（三轨同一份）。
     #   ⚠️ 求值顺序：**按书写顺序**算每一个实参，装配只用 order 决定落到哪个字段
     #   （命名参数若改求值顺序，带副作用的实参三轨就会分叉）。
+    # M372：data enum 载荷 + 命名参数 —— 必须先于下面的「命名参数仅结构体」判断，
+    #   否则 `Shape.Rect(w: 3.0, h: 4.0)` 会被拒成 R2001。遮蔽规则同 Field 调用：
+    #   `Shape` 若已是局部值，就按值处理（不让类型名抢用户的变量名）。
+    if argmap_has_named(args) and callee[0] == "Field" and callee[1][0] == "Var":
+        let en2 = rust_unescape(callee[1][1])
+        if g_enums.has(en2):
+            let cr2 = i_eval_expr(callee[1], env)
+            if cr2.is_err():
+                return Err(cr2.err())
+            let recv2 = cr2.unwrap()
+            if i_type_name(recv2) == "type" and recv2.has("__typeref__") and recv2["__typeref__"] == "enum":
+                let vn2 = rust_unescape(callee[2])
+                if not contains(g_enums[en2], vn2):
+                    return Err(i_r1008("枚举 " + en2 + " 没有变体 '" + vn2 + "'", pos))
+                return i_enum_build(en2, vn2, args, env, pos)
     if argmap_has_named(args):
         var owner = null
         if callee[0] == "Var":
@@ -351,7 +407,7 @@ def i_eval_call(node, env):
             return i_builtin_ffi_call([cname, arg_vals], pos)
         # M237（缺陷 371）：枚举类型的「调用」= 按变体名构造（须先于 args 求值，见 i_enum_ctor）
         if g_enums.has(cname):
-            return i_enum_ctor(cname, args, pos)
+            return i_enum_ctor(cname, args, env, pos)
         if cname == "chan":
             var cap = 0
             if len(args) > 0:
@@ -414,7 +470,8 @@ def i_eval_call(node, env):
             if g_enums.has(en0):
                 if not contains(g_enums[en0], mname0):
                     return Err(i_r1008("枚举 " + en0 + " 没有变体 '" + mname0 + "'", pos))
-                return Err(i_r1005("枚举变体 " + en0 + "." + mname0 + " 不接受参数（data enum 未实现；请写 " + en0 + "." + mname0 + "）", pos))
+                # M372：有载荷变体 ⇒ 真构造；无载荷变体 ⇒ 沿用 M366 的 R1005（给出实参个数）
+                return i_enum_build(en0, mname0, args, env, pos)
         let arg_vals = []
         var ai = 0
         while ai < len(args):
@@ -634,6 +691,19 @@ def i_match_pattern(pat, v, env, pos):
     let pty = pat[0]
     if pty == "PatLiteral":
         # ["PatLiteral", expr]
+        # M372：`case Shape.Circle:` —— 字面量是**枚举变体引用** ⇒ 只比类型 + 变体名
+        #   （载荷不参与：「任意 Circle」应落同一个 arm）。
+        #   ⚠️ 不能走 i_eval_expr：有载荷变体无括号取值现在会响亮 R1005（ival.px i_field）。
+        let pe = pat[1]
+        if pe[0] == "Field" and pe[1][0] == "Var":
+            let en1 = rust_unescape(pe[1][1])
+            let vn1 = rust_unescape(pe[2])
+            if g_enums.has(en1) and contains(g_enums[en1], vn1):
+                if i_type_name(v) != "enum":
+                    return Ok(false)
+                if v["__enum__"] != en1:
+                    return Ok(false)
+                return Ok(v["variant"] == vn1)
         let lr = i_eval_expr(pat[1], env)
         if lr.is_err():
             return Err(lr.err())
@@ -677,7 +747,19 @@ def i_match_pattern(pat, v, env, pos):
                 return Ok(true)
             if payload == null:
                 return Ok(false)
-            return i_match_pattern(pat[2][0], payload, env, pos)
+            # M372：载荷按**声明序**（dict 键 "0"…"N-1"）解构；个数不等 ⇒ 本 arm 不匹配
+            #   （与 PatTuple 同口径：多/少都不匹配，落到下一个 arm，不报错）
+            if len(pat[2]) != len(payload):
+                return Ok(false)
+            var pi = 0
+            while pi < len(pat[2]):
+                let mr = i_match_pattern(pat[2][pi], payload[str(pi)], env, pos)
+                if mr.is_err():
+                    return Err(mr.err())
+                if not mr.unwrap():
+                    return Ok(false)
+                pi += 1
+            return Ok(true)
         if t == "struct":
             if v["__struct__"] != name:
                 return Ok(false)

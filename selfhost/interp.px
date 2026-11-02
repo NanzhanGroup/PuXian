@@ -52,6 +52,9 @@ var loaded = {"_": 0}
 var g_globals = null
 var g_structs = it_new_dict()
 var g_enums = it_new_dict()
+# M372：data enum 载荷字段表 —— enum → {变体名: [字段名...]}（旧写法字段名 = "0","1"…）
+#   与 g_enums（变体名列表）并存：后者被 20+ 处 contains 判存在性，不动。
+var g_enum_fields = it_new_dict()
 var g_traits = it_new_dict()
 var g_impls = it_new_dict()
 var g_loop_depth = 0
@@ -163,6 +166,7 @@ def main():
     g_globals = env_new(null)
     g_structs = it_new_dict()
     g_enums = it_new_dict()
+    g_enum_fields = it_new_dict()
     g_traits = it_new_dict()
     g_impls = it_new_dict()
     g_loop_depth = 0

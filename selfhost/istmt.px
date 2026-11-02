@@ -290,11 +290,25 @@ def i_exec_enum(stmt, env):
     # ["EnumDef", name, variants, pos]  variants: [["EnumVariant", name, fields, pos]]
     let name = rust_unescape(stmt[1])
     let vs = []
+    # M372：变体 → 载荷字段名表。旧写法 `Circle(float)` 没有字段名 ⇒ 位置序号 "0","1"…
+    let vfs = it_new_dict()
     var i = 0
     while i < len(stmt[2]):
         vs.append(rust_unescape(stmt[2][i][1]))
+        let flds = []
+        let raw = stmt[2][i][2]
+        var fi = 0
+        while fi < len(raw):
+            let f = raw[fi]
+            if type(f) == "list" and len(f) > 0 and f[0] == "EnumField":
+                flds.append(rust_unescape(f[1]))
+            else:
+                flds.append(str(fi))
+            fi += 1
+        vfs[rust_unescape(stmt[2][i][1])] = flds
         i += 1
     g_enums[name] = vs
+    g_enum_fields[name] = vfs
     i_bind_typeref(env, name, "enum")
     return Ok(null)
 # ---------- impl 定义（对齐 exec_stmt ImplDef：closure=globals） ----------

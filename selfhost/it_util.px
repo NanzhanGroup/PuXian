@@ -110,6 +110,18 @@ def it_struct(tname, fields):
 # enum 值包装：{"__enum__": type_name, "variant": name, "payload": v 或 null}
 def it_enum(tname, variant, payload):
     return {"__enum__": tname, "variant": variant, "payload": payload}
+# M372：载荷字段表是否「旧位置写法」（`V(float)`，字段名缺省 ⇒ 生成 "0","1"…）。
+#   判定：字段名恰好是 0..N-1 的序号。标识符不能以数字开头 ⇒ 用户写成不了这个样子。
+#   语义差别（与 M367 门 D 用例兼容）：
+#     · 旧位置写法：`Vec.V` 仍可无载荷取值（历史行为，不许回归）；
+#     · 具名字段（`Circle(radius: float)`）：载荷必给，无括号取值响亮 R1005。
+def it_enum_pos_style(flds):
+    var i = 0
+    while i < len(flds):
+        if flds[i] != str(i):
+            return false
+        i += 1
+    return true
 # 类型对象包装：{"__typeref__": "struct"/"enum", "name": n}
 def it_typeref(kind, name):
     return {"__typeref__": kind, "name": name}

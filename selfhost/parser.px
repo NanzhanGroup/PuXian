@@ -1428,6 +1428,23 @@ def parse_pattern():
             let fpos = ppos()
             adv()
             let mname = expect_name("成员名", true)
+            # M372：`case Shape.Circle(r):` —— 带载荷变体的解构模式。
+            #   修前一律落 PatLiteral(Field) ⇒ 后面的 `(r)` 没人吃 ⇒
+            #   `E2001 期望 ':'，实际得到 (`（data enum 连写都写不出来）。
+            #   有括号 ⇒ PatConstructor（变体名 + 子模式，声明序绑定）；
+            #   无括号 ⇒ 保持 PatLiteral（值匹配：常量组按值，enum 变体按变体名）。
+            if chk("("):
+                adv()
+                let fields = []
+                if not chk(")"):
+                    while true:
+                        fields.append(parse_pattern())
+                        if chk(","):
+                            adv()
+                            continue
+                        break
+                expect(")", "')'")
+                return ["PatConstructor", qstr(mname), fields]
             return ["PatLiteral", ["Field", ["Var", qstr(name), fpos], qstr(mname), fpos]]
         if chk("("):
             adv()

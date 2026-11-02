@@ -36,6 +36,11 @@ def argmap_field_index(field_names, name):
 #   order[i]：第 i 个字段取 args 的哪个下标（无错时是 args 下标的排列）
 #   → 调用方据此「按书写顺序求值、按 order 装字段」
 def argmap_struct(field_names, args, owner):
+    return argmap_fields(field_names, args, owner, "结构体")
+
+# M372：data enum 载荷装配 —— 与结构体同一算法，只有报文里的「结构体」换成 kind。
+#   kind = 「结构体」/「枚举变体 …」；owner 由调用方拼好（如 "Shape.Rect"）。
+def argmap_fields(field_names, args, owner, kind):
     let nf = len(field_names)
     let order = []
     var i = 0
@@ -44,7 +49,7 @@ def argmap_struct(field_names, args, owner):
         i += 1
     if not argmap_has_named(args):
         if len(args) != nf:
-            return ["结构体 " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+            return [kind + " " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
         var k0 = 0
         while k0 < nf:
             order[k0] = k0
@@ -58,22 +63,22 @@ def argmap_struct(field_names, args, owner):
             let nm = rust_unescape(a[1])
             let fi = argmap_field_index(field_names, nm)
             if fi < 0:
-                return ["结构体 " + owner + " 没有字段「" + nm + "」", order]
+                return [kind + " " + owner + " 没有字段「" + nm + "」", order]
             if order[fi] != -1:
-                return ["结构体 " + owner + " 字段「" + nm + "」重复给出", order]
+                return [kind + " " + owner + " 字段「" + nm + "」重复给出", order]
             order[fi] = ai
         else:
             while pend < nf and order[pend] != -1:
                 pend += 1
             if pend >= nf:
-                return ["结构体 " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+                return [kind + " " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
             order[pend] = ai
             pend += 1
         ai += 1
     var fi2 = 0
     while fi2 < nf:
         if order[fi2] == -1:
-            return ["结构体 " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
+            return [kind + " " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
         fi2 += 1
     return [null, order]
 # 非结构体目标的统一报文体（三轨同文）
