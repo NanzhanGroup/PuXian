@@ -1,0 +1,81 @@
+enum Shape:
+    Circle(radius: float)
+    Rect(w: float, h: float)
+    Px(x: int, y: int)
+    Dot
+
+enum Color:
+    Circle(radius: float)
+    Red
+
+enum Vec:
+    V(float)
+    W
+
+def area(s):
+    match s:
+        case Shape.Circle(r):
+            return 3.0 * r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Px(x, y):
+            return x + y
+        case Shape.Dot:
+            return 0
+    return -1
+
+def classify(s):
+    match s:
+        case Shape.Circle(2.0):
+            return "exact2"
+        case Shape.Circle(_):
+            return "circle"
+        case Shape.Rect(3.0, _):
+            return "rect3"
+        case _:
+            return "other"
+
+def main():
+    let a = Shape.Circle(2.0)
+    let b = Shape.Rect(3.0, 4.0)
+    let c = Shape.Rect(w: 3.0, h: 5.0)
+    let d = Shape.Rect(3.0, h: 6.0)
+    let e = Shape.Px(y: 4, x: 3)
+    let f = Shape.Dot
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+    print(f)
+    print(area(a))
+    print(area(b))
+    print(area(d))
+    print(area(e))
+    print(area(f))
+    print(classify(a))
+    print(classify(Shape.Circle(9.0)))
+    print(classify(b))
+    print(classify(f))
+    match f:
+        case Shape.Circle(r):
+            print("no")
+        case Shape.Dot:
+            print("dot")
+    match a:
+        case Shape.Circle(r):
+            print(r)
+    match a:
+        case Shape.Circle:
+            print("any circle")
+        case _:
+            print("other")
+    match Shape.Px(1, 2):
+        case Shape.Px(x, y):
+            print(x + y)
+    let c1 = Color.Circle(5.0)
+    print(c1)
+    let v = Vec.V
+    print(v)
+    print(Vec.V(1.5))
+    print(Vec.V == v)

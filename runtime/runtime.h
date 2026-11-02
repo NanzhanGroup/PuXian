@@ -94,7 +94,10 @@ struct LXObject {
         struct { char* name; LXFuncPtr fn; void* ctx; LXValue env; } func;
         struct { char* name; LXFuncPtr fn; } native;
         struct { char* type_name; char** fnames; LXValue* fvals; int nfields; } struct_inst;
-        struct { char* type_name; char* variant; } enum_inst;
+        // M372（data enum 载荷）：payload = 载荷 dict（键 "0"…"N-1"）或 px_null()
+        //   —— 与解释轨 it_enum(t,v,payload) 同构。键用**位置序号**而不是字段名：
+        //   旧位置写法 `V(float)` 没有字段名，两条写法共用同一表示（三轨不必各带一张字段名表）。
+        struct { char* type_name; char* variant; LXValue payload; } enum_inst;
         struct { LXValue* items; int len; } tuple;
         struct {
             int cap;          // 缓冲容量（0 = 无缓冲 rendezvous）
@@ -257,6 +260,18 @@ void px_enum_arity(const char* type_name, int got) __attribute__((noreturn));
 // M89-S3-B3b：enum 值变体名（match 模式匹配 subject.type==PX_ENUM && variant==name 用；
 //   非 enum → px_null，不报错——对齐 cg 的 type 短路判断）
 LXValue px_enum_variant(LXValue v);
+// M372（data enum 载荷）：带载荷构造 / 取载荷。
+//   px_enum_payload：payload 传 px_null() ⇒ 退化为无载荷变体（与 px_enum 同值）。
+//   px_enum_payload_of：非 enum / 无载荷 ⇒ px_null()（不报错，对齐 px_enum_variant 口径）。
+LXValue px_enum_payload(const char* type_name, const char* variant, LXValue payload);
+LXValue px_enum_payload_of(LXValue v);
+// M372：match 解构的**结构判据** —— subject 是 enum 且载荷恰好 n 项（n=0 ⇒ 只看变体）。
+//   与 px_match_tuple 同族：多/少都**不匹配**（落到下一个 arm，不报错）。
+bool px_match_enum_payload(LXValue v, int n);
+// M372：`case Shape.Circle:`（不跟括号）的判据 —— 类型名 + 变体名同时相等（载荷不参与）。
+//   tv 形如 "Shape.Circle"。为什么要类型名：同名变体在两个枚举里是**不同构造器**
+//   （解释轨 i_match_pattern 的 PatLiteral 分支一直比 `__enum__`，编译轨修前只比变体名）。
+bool px_enum_is(LXValue v, const char* tv);
 LXValue px_tuple(LXValue* items, int len);
 // M32：生成器对象（创建时物化，gen_next 逐项消费）
 LXValue px_gen_from_list(LXValue list);

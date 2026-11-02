@@ -209,7 +209,15 @@ static mbedtls_pk_context g_srv_key;
 static int g_srv_tls_ready = 0;
 static pthread_mutex_t g_srv_tls_mu = PTHREAD_MUTEX_INITIALIZER;
 // M33：TLS SNI 多证书表（tls_server(cert, key, hostname) 多次注册；按 ClientHello SNI 选证书）
-#define PX_MAX_SNI_CERTS 16
+// M372/缺陷 657（2026-11-02，用户令经晨曦总线转办）：容量 16 → 默认 256，编译期可覆盖。
+//   事故：晨曦给 id.xiusoft.cn 装第 17 张证书 ⇒ register_tls 报「SNI 证书数量超出上限 16」
+//   ⇒ **整机 443 全挂**（注册失败发生在启动路径，不是「只是新站不通」）。
+//   ⚠ 为什么不做 realloc 动态扩容：px_sni_cb 把 &g_sni_certs[slot].cert 交给 SSL 上下文，
+//     数组一旦搬迁就是 UAF（与缺陷 414 / 655 同族）。容量只能编译期固定。
+//   ⇒ 容量必须**可读**（px_sni_capacity），让上层在启动前就能拦住，而不是装到第 N 张才炸。
+#ifndef PX_MAX_SNI_CERTS
+#define PX_MAX_SNI_CERTS 256
+#endif
 typedef struct {
     char hostname[256];
     mbedtls_x509_crt cert;
@@ -502,6 +510,7 @@ static void px_sock_set_reuseport(int fd, const char* what) {
 }
 
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
+static LXValue bi_px_sni_capacity(LXValue* args, int nargs, void* ctx);   // M372/缺陷 657
 // M18 后台定时任务 / 定时器原语
 static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx);
 static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx);
@@ -2433,6 +2442,13 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
                 }
                 break;
             }
+            case PX_ENUM: {
+                // M372：载荷 dict 递归标记 —— 漏标 ⇒ 枚举值是唯一活引用时载荷被误回收
+                //   （match 解构 / 打印读到已释放 dict）。
+                LXValue pl = cur->as.enum_inst.payload;
+                if (px_value_is_obj(pl) && pl.as.obj) PUSH_OBJ(pl.as.obj);
+                break;
+            }
             case PX_TUPLE: {
                 LXValue* items = cur->as.tuple.items;
                 for (int i = 0; i < cur->as.tuple.len; i++) {
@@ -4187,9 +4203,45 @@ LXValue px_enum(const char* type_name, const char* variant) {
     o->type = PX_ENUM;
     o->as.enum_inst.type_name = xstrdup(type_name);
     o->as.enum_inst.variant = xstrdup(variant);
+    // M372：无载荷变体 —— payload 恒 px_null()（既有调用点语义零变化）
+    o->as.enum_inst.payload = px_null();
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + strlen(type_name) + strlen(variant) + 2);
     return v;
+}
+
+// M372（data enum 载荷）：带载荷构造。载荷是**不可变 dict**（键 "0"…"N-1"），
+//   与 struct 的字段值同一套 GC 标记 / 读 / 等值比较 ⇒ runtime 面只加
+//   这一个字段 + 两个桥函数（见 docs/archive/M372_DATA_ENUM_PLAN.md §三）。
+LXValue px_enum_payload(const char* type_name, const char* variant, LXValue payload) {
+    LXValue v = px_enum(type_name, variant);
+    v.as.obj->as.enum_inst.payload = payload;
+    return v;
+}
+
+LXValue px_enum_payload_of(LXValue v) {
+    if (v.type == PX_ENUM) return v.as.obj->as.enum_inst.payload;
+    return px_null();
+}
+
+// M372：match 解构的结构判据（对齐 px_match_tuple 的「个数不等 ⇒ 不匹配」口径）。
+//   n == 0 ⇒ 只看是不是该变体；载荷不存在（null）而 n > 0 ⇒ 不匹配。
+bool px_match_enum_payload(LXValue v, int n) {
+    if (v.type != PX_ENUM) return false;
+    LXValue p = v.as.obj->as.enum_inst.payload;
+    if (n == 0) return true;
+    if (p.type != PX_DICT) return false;
+    return p.as.obj->as.dict.len == n;
+}
+
+// M372：类型名 + 变体名同时相等（tv = "Type.Variant"）。载荷**不参与** ——
+//   `case Shape.Circle:` 的直觉是「任意载荷的 Circle 都落这个 arm」。
+bool px_enum_is(LXValue v, const char* tv) {
+    if (v.type != PX_ENUM) return false;
+    const char* t = v.as.obj->as.enum_inst.type_name;
+    size_t lt = strlen(t);
+    if (strncmp(tv, t, lt) != 0 || tv[lt] != '.') return false;
+    return strcmp(tv + lt + 1, v.as.obj->as.enum_inst.variant) == 0;
 }
 
 // M237（缺陷 365/368/371）：枚举构造的**统一入口**。
@@ -5036,7 +5088,25 @@ static char* px_fmt_value_raw_n(LXValue v, int* out_len) {
         case PX_FUNC: { char t[256]; int n = snprintf(t, sizeof(t), "<fn %s>", v.as.obj->as.func.name); rsb_append(&b, t, n); break; }
         case PX_NATIVE: { char t[256]; int n = snprintf(t, sizeof(t), "<builtin %s>", v.as.obj->as.native.name); rsb_append(&b, t, n); break; }
         case PX_STRUCT: { char t[256]; int n = snprintf(t, sizeof(t), "<struct %s>", v.as.obj->as.struct_inst.type_name); rsb_append(&b, t, n); break; }
-        case PX_ENUM: { char t[256]; int n = snprintf(t, sizeof(t), "%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); rsb_append(&b, t, n); break; }
+        case PX_ENUM: {
+            // M372：打印含载荷 —— 对齐解释轨 i_to_str 的 `Type.Variant(payload)`
+            //   （payload 为 null ⇒ 退化回 `Type.Variant`，既有输出逐字节不变）。
+            LXObject* eo = v.as.obj;
+            rsb_append(&b, eo->as.enum_inst.type_name, (int)strlen(eo->as.enum_inst.type_name));
+            rsb_append(&b, ".", 1);
+            rsb_append(&b, eo->as.enum_inst.variant, (int)strlen(eo->as.enum_inst.variant));
+            if (!px_is_null(eo->as.enum_inst.payload)) {
+                int plen = 0;
+                char* ps = px_fmt_value_n(eo->as.enum_inst.payload, &plen);
+                if (ps) {
+                    rsb_append(&b, "(", 1);
+                    rsb_append(&b, ps, plen);
+                    rsb_append(&b, ")", 1);
+                    xfree(ps);
+                }
+            }
+            break;
+        }
         case PX_RESULT: {
             LXObject* o = v.as.obj;
             int sn = 0;
@@ -5524,7 +5594,15 @@ static int compare_values_raw(LXValue a, LXValue b) {
         return a.as.b == b.as.b ? 0 : (a.as.b ? 1 : -1);
     }
     if (a.type == PX_ENUM && b.type == PX_ENUM) {
-        return strcmp(a.as.obj->as.enum_inst.variant, b.as.obj->as.enum_inst.variant);
+        // M372（data enum 载荷）：载荷进值语义。
+        //   主键仍是**变体名**（与解释轨 i_cmp_values 一致）；类型名只作同变体名的
+        //   确定性 tiebreak（跨类型同变体名此前被判相等 = 错账，与 i_eq 的「类型名参与」对齐）；
+        //   最后才比载荷（dict 比较；null vs null ⇒ PX_NULL 分支给 0，null vs 非 null ⇒ 类型名兜底非 0）。
+        int c = strcmp(a.as.obj->as.enum_inst.variant, b.as.obj->as.enum_inst.variant);
+        if (c != 0) return c < 0 ? -1 : 1;
+        c = strcmp(a.as.obj->as.enum_inst.type_name, b.as.obj->as.enum_inst.type_name);
+        if (c != 0) return c < 0 ? -1 : 1;
+        return compare_values(a.as.obj->as.enum_inst.payload, b.as.obj->as.enum_inst.payload);
     }
     if ((a.type == PX_LIST || a.type == PX_TUPLE) && (b.type == PX_LIST || b.type == PX_TUPLE)) {
         int na = (a.type == PX_LIST) ? a.as.obj->as.list.len : a.as.obj->as.tuple.len;
@@ -12972,6 +13050,8 @@ void px_register_builtins(void) {
     // M17 .px 脚本执行机制
     px_set_global("px_exec", px_native("px_exec", bi_px_exec));
     px_set_global("px_serve", px_native("px_serve", bi_px_serve));
+    // M372/缺陷 657：SNI 槽容量（编译期常量，可读）—— 部署侧启动前自检用
+    px_set_global("px_sni_capacity", px_native("px_sni_capacity", bi_px_sni_capacity));
     // M31 安全/多租户/防爆破：沙箱 / 虚拟主机 / 限流
     px_set_global("sandbox_enter", px_native("sandbox_enter", bi_sandbox_enter));
     px_set_global("vhost", px_native("vhost", bi_vhost));
@@ -25253,9 +25333,13 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
             if (!g_sni_certs[i].active && slot < 0) slot = i;
         }
         if (slot < 0) {
+            int used = 0;
+            for (int i = 0; i < PX_MAX_SNI_CERTS; i++) if (g_sni_certs[i].active) used++;
             pthread_mutex_unlock(&g_srv_tls_mu);
             pthread_mutex_unlock(&g_srv_hs_mu);
-            px_error("SNI 证书数量超出上限 %d", PX_MAX_SNI_CERTS);
+            // 缺陷 657：原来只有一句「超出上限 %d」，运维看不出「已经装了多少 / 卡在哪张证书」。
+            px_error("SNI 证书数量超出上限：已用 %d / 容量 %d（hostname=%.200s）",
+                     used, PX_MAX_SNI_CERTS, hostname);
         }
         if (g_sni_certs[slot].active) {
             mbedtls_x509_crt_free(&g_sni_certs[slot].cert);
@@ -28306,6 +28390,14 @@ static void px_pxserve_shutdown_wake_all(void) {
     pthread_mutex_unlock(&g_conn_mu);
     if (n > 0 && g_serve_diag)
         fprintf(stderr, "[px-serve] 优雅关闭：shutdown 唤醒 %d 个在册连接\n", n);
+}
+
+static LXValue bi_px_sni_capacity(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)ctx;
+    // M372/缺陷 657：SNI 槽容量可读 —— 上层（网关 / 部署脚本）可在启动前自检，
+    //   而不是装到第 N 张证书才整机炸。零参数，返回编译期常量。
+    if (nargs != 0) px_error("R1002: px_sni_capacity 不接受参数");
+    return px_int((int64_t)PX_MAX_SNI_CERTS);
 }
 
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {

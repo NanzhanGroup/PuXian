@@ -369,7 +369,16 @@ def i_cmp_values_raw(a, b):
             return -1
         if va > vb:
             return 1
-        return 0
+        # M372（data enum 载荷）：主键仍是变体名；同变体名再比**类型名**（跨类型同变体名
+        #   此前被判「相等」= 错账，与 i_eq 的「类型名参与」对齐），最后比载荷。
+        #   ⚠️ 这个顺序必须与 runtime compare_values 的 PX_ENUM 分支**逐条一致**。
+        let ea = a["__enum__"]
+        let eb = b["__enum__"]
+        if ea < eb:
+            return -1
+        if ea > eb:
+            return 1
+        return i_cmp_values(a["payload"], b["payload"])
     if ta == "list" or ta == "tuple" or ta == "dict" or ta == "result":
         let ida = object_id(a)
         let idb = object_id(b)

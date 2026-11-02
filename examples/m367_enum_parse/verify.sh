@@ -49,8 +49,8 @@ enum Shape:
     Rect(w: float, h: float)
     Empty
 
-let s = Shape.Circle
-let r = Shape.Rect
+let s = Shape.Circle(1.5)
+let r = Shape.Rect(2.0, 3.0)
 print(s)
 print(r)
 EOF
@@ -63,7 +63,7 @@ else
     bad "C 命名写法仍被拒（rc=$RC_RUN）：$(head -2 "$WORK/e.run.err" | tr '\n' ' ')"
 fi
 
-# ── A：三轨一致（无括号变体访问）────────────────────────────
+# ── A：三轨一致（命名写法**带载荷**构造 —— M372 起具名变体必须给载荷）────
 "$PX" build "$WORK/e.px" > "$WORK/e.vmlog" 2>&1; RC_VM=$?
 if [ "$RC_VM" -eq 0 ] && [ -x "$WORK/build/e" ]; then "$WORK/build/e" > "$WORK/e.vm" 2> "$WORK/e.vm.err"; else : > "$WORK/e.vm"; fi
 rm -rf "$WORK/build"

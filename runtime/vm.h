@@ -168,7 +168,18 @@ typedef struct {
 #define PXOP_RAISE   70
 #define PXOP_MATCHFAIL 71 // M239：b=subject 槽 ⇒ px_match_fail（永不返回；match 非穷尽 ⇒ R1003）
 #define PXOP_MATCHTUP 72  // M239：a=dst(bool), b=subject 槽, c=期望元素个数（px_match_tuple）
-#define PXM_MAX      73
+// ── M372（data enum 载荷）三指令 ──────────────────────────────────────────
+//   不动 NEWENUM（旧 BC 兼容）；载荷构造走 ENUMNEWP，取载荷走 ENUMPAY，
+//   match 解构的结构判据走 MATCHENUMP（与 MATCHTUP 同族，多/少都不匹配）。
+#define PXOP_ENUMPAY 73    // a=dst, b=obj 槽（px_enum_payload_of；非 enum/无载荷 → null）
+// ENUMP：带载荷构造 = 「先 NEWENUM 再挂载荷」两步 —— a=dst(新 enum), b=enum 源槽, c=载荷槽。
+//   为什么不做成一条「类型+变体+载荷」三操作数指令：指令只有 a/b/c 三个 u16 操作数，
+//   类型名/变体名各要一个 N idx，载荷槽要一个槽号 ⇒ 三个都要，装不下（借 fl 存 N idx
+//   会撞 u8 上限：名字池在编译器自举规模下早已 > 255）。两步法零容量风险、旧 NEWENUM 不动。
+#define PXOP_ENUMP 74      // a=dst, b=enum 源槽, c=载荷槽（px_enum_payload 语义：新值，源值不变）
+#define PXOP_MATCHENUMP 75 // a=dst(bool), b=subject 槽, c=期望载荷项数（px_match_enum_payload）
+#define PXOP_ENUMIS 76     // a=dst(bool), b=subject 槽, c=N["Type.Variant"]（px_enum_is）
+#define PXM_MAX      77    // = 最大操作码 + 1（px_op_name 的名字表按 PXM_MAX 定长）
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

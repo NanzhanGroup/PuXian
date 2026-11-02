@@ -250,7 +250,7 @@ examples/m236_ws_stream/rej_method.px src=8f3d0cc29580ad07 rc=0 out=40ca1a31b7ce
 examples/m236_ws_stream/rej_path.px src=6d191911ed26abf2 rc=0 out=5d9364262788f2b501e6dd4198003020 err=e3b0c44298fc1c14
 examples/m236_ws_stream/srv.px src=8db1da303b41b596 rc=0 out=998a39af94307aaff87ed8ee2fd1f055 err=e3b0c44298fc1c14
 examples/m236_ws_stream/srv_manual.px src=5f66080253da2a3d rc=0 out=7686ab3ce344ef39a4e6911f4945f678 err=e3b0c44298fc1c14
-examples/m239_match_case/drv.px src=d0b89f47db722687 rc=0 out=321cc4c4619a068bb06fbdc5f93f55b7 err=e3b0c44298fc1c14
+examples/m239_match_case/drv.px src=d0b89f47db722687 rc=0 out=e9296a9a3270dd4ee7c3b09cb66ebbdc err=e3b0c44298fc1c14
 examples/m242_table_ptr/srv.px src=ff3b23c770824dda rc=0 out=3ab8f680c1bff400bfb3b2acd470cd1c err=e3b0c44298fc1c14
 examples/m245_tls_cert_reload/repro.px src=2cd0c9892fdc10df rc=0 out=50a3c98db5b66c7a0bd0ee8f7658fd90 err=e3b0c44298fc1c14
 examples/m246_compound_assign/drv.px src=9d2625fa6f373310 rc=0 out=855d822c3724f52a810ff4f2f748236a err=e3b0c44298fc1c14
@@ -311,6 +311,8 @@ examples/m318_mem_layers/proxy.px src=77d3159123c00c61 rc=0 out=514c35e90ff407d7
 examples/m318_mem_layers/srv.px src=a05c52e232f91274 rc=0 out=f4871cca2227921e604d586c2f9e048b err=e3b0c44298fc1c14
 examples/m319_ws_eof_spin/srv.px src=65baa1acab255d65 rc=0 out=1cea0970acb77c0781c28c0b0469da2c err=e3b0c44298fc1c14
 examples/m324_tls_failclosed/probe.px src=6b89fc50ceea0621 rc=0 out=11f6dd983c77381aa80783879008cdd4 err=e3b0c44298fc1c14
+examples/m372_data_enum/main.px src=71c7d75337988ff5 rc=0 out=3b82f8343c2c75742221098636da25da err=e3b0c44298fc1c14
+examples/m372_data_enum/value.px src=8cae8bff3a30e3fe rc=0 out=d152e95888a859f2e32e54e030465398 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

@@ -31,7 +31,57 @@ def cg_enum_ctor(cname, args):
     var known = 0
     if contains(cg_enums[cname], vn):
         known = 1
+    # M372（data enum 载荷）：**具名**载荷变体不能走「变体名」构造（载荷无处安放）；
+    #   旧位置写法 `Vec("V")` 保留历史行为（对齐解释轨 i_enum_ctor）。
+    if known == 1:
+        let flds0 = cg_enum_fields_of(cname, vn)
+        if len(flds0) > 0 and not cg_enum_pos_style(flds0):
+            return cg_err_expr("R1005: 枚举变体 " + cname + "." + vn + " 需要 " + str(len(flds0)) + " 个字段，请用 " + cname + "." + vn + "(...) 构造")
     return "px_enum_checked(\"" + cname + "\", \"" + vn + "\", " + str(known) + ")"
+# ── M372（data enum 载荷）────────────────────────────────────────────────
+# 字段名表 / 旧位置写法判据 —— 与解释轨 i_enum_fields_of / it_enum_pos_style、
+#   VM 轨 bc_enum_fields / bc_enum_pos_style 同名同义（三轨同一口径，便于对拍）。
+def cg_enum_fields_of(tname, vname):
+    if cg_enum_fields.has(tname):
+        if cg_enum_fields[tname].has(vname):
+            return cg_enum_fields[tname][vname]
+    return []
+def cg_enum_pos_style(flds):
+    var i = 0
+    while i < len(flds):
+        if flds[i] != str(i):
+            return false
+        i += 1
+    return true
+# 带载荷变体构造：`Shape.Circle(1.5)` / `Shape.Rect(w: 2.0, h: 3.0)`。
+#   三轨同一份装配算法（argmap_fields，kind = "枚举变体"）⇒ 报文逐字一样；
+#   实参**按书写顺序**求值，载荷 dict 的键 = 位置序号 "0"…"N-1"（与解释轨 it_enum_build
+#   同表示：旧位置写法没有字段名，两条写法共用同一载荷表示）。
+def cg_enum_payload_new(ename, vname, flds, args):
+    let nf = len(flds)
+    if nf == 0:
+        return cg_err_expr("R1005: 枚举变体 " + ename + "." + vname + " 不接受参数，给出 " + str(len(args)))
+    let am = argmap_fields(flds, args, ename + "." + vname, "枚举变体")
+    if am[0] != null:
+        return cg_err_expr("R2001: " + am[0])
+    let vnodes = []
+    let parts = []
+    var ai = 0
+    while ai < len(args):
+        var vnode = args[ai]
+        if vnode[0] == "NamedArg":
+            vnode = vnode[2]
+        vnodes.append(vnode)
+        parts.append(cg_gen_expr(vnode))
+        ai += 1
+    let sj = cg_seq_join(vnodes, parts)
+    var dc = "({ LXValue _ep = px_dict(); "
+    var fi = 0
+    while fi < nf:
+        dc += "px_dict_set(_ep, \"" + str(fi) + "\", " + sj[1][am[1][fi]] + "); "
+        fi += 1
+    dc += "_ep; })"
+    return cg_seq_wrap(sj[0], "px_enum_payload(\"" + ename + "\", \"" + vname + "\", " + dc + ")")
 # ---------- 推导式公共：收集 clauses（生成 iterable/迭代变量/绑定） ----------
 def cg_comp_collect(clauses):
     let r = {"_": 0}
@@ -425,6 +475,12 @@ def cg_gen_expr(expr):
                 var vk = 0
                 if contains(cg_enums[oname], fname):
                     vk = 1
+                # M372（data enum 载荷）：具名载荷变体**不能无括号取值**（载荷无处安放，
+                #   静默造「载荷全 null」的值是本仓反复踩过的坑 M116/M120/M163）；
+                #   旧位置写法 `Vec.V` 保留历史行为，不回归 M367 门 D。
+                let flds1 = cg_enum_fields_of(oname, fname)
+                if len(flds1) > 0 and not cg_enum_pos_style(flds1):
+                    return cg_err_expr("R1005: 枚举变体 " + oname + "." + fname + " 需要 " + str(len(flds1)) + " 个字段，给出 0；请写 " + oname + "." + fname + "(...)")
                 return "px_enum_checked(\"" + oname + "\", \"" + fname + "\", " + str(vk) + ")"
         let o = cg_gen_expr(obj)
         return "px_field(" + o + ", \"" + fname + "\")"
@@ -462,6 +518,16 @@ def cg_gen_expr(expr):
         #   求值顺序：cg_seq_join 按**传入顺序**造临时量 ⇒ 传书写顺序 vnodes，
         #   再按 order 取临时名装字段（与解释轨 / VM 轨逐字对齐）。
         if argmap_has_named(args):
+            # M372：**枚举变体**也吃命名参数（`Shape.Rect(w: 2.0, h: 3.0)`）——
+            #   装配算法与结构体同一份（argmap_fields），差别只在「字段表来自哪个变体」。
+            if callee[0] == "Field":
+                let fobj = callee[1]
+                if fobj[0] == "Var" and not cg_name_is_value(rust_unescape(fobj[1])) and cg_enums.has(rust_unescape(fobj[1])):
+                    let en1 = rust_unescape(fobj[1])
+                    let vn1 = rust_unescape(callee[2])
+                    if not contains(cg_enums[en1], vn1):
+                        return cg_err_expr("R1008: 枚举 " + en1 + " 没有变体 '" + vn1 + "'")
+                    return cg_enum_payload_new(en1, vn1, cg_enum_fields_of(en1, vn1), args)
             var owner = null
             if callee[0] == "Var":
                 owner = rust_unescape(callee[1])
@@ -549,7 +615,9 @@ def cg_gen_expr(expr):
             if obj[0] == "Var" and not cg_name_is_value(rust_unescape(obj[1])) and cg_enums.has(rust_unescape(obj[1])):
                 let en1 = rust_unescape(obj[1])
                 if contains(cg_enums[en1], mname):
-                    return cg_err_expr("R1005: 枚举变体 " + en1 + "." + mname + " 不接受参数（data enum 未实现；请写 " + en1 + "." + mname + "）")
+                    # M372（data enum 载荷）：这条从「R1005 未实现」变成**真构造**；
+                    #   无字段变体的 `Shape.Dot()` ⇒ R1005「不接受参数」（见 cg_enum_payload_new）。
+                    return cg_enum_payload_new(en1, mname, cg_enum_fields_of(en1, mname), args)
                 return cg_err_expr("R1008: 枚举 " + en1 + " 没有变体 '" + mname + "'")
             # 静态分派：已知类型 + impl 方法
             var static_type = null
@@ -867,9 +935,23 @@ def cg_match_bind(name):
     return v
 def cg_enum_var_cond(name, subject):
     return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + name + "\") == 0)"
+# M372：`case Shape.Circle:` 的判据（类型名 + 变体名；载荷不参与）—— 对齐解释轨
+#   i_match_pattern 的 PatLiteral 分支（它比 `__enum__` 与 variant 两项）。
+def cg_enum_lit_cond(tname, vname, subject):
+    return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.type_name, \"" + tname + "\") == 0 && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + vname + "\") == 0)"
 def cg_gen_pattern_cond(pattern, subject):
     let pty = pattern[0]
     if pty == "PatLiteral":
+        # M372：字面量是**枚举变体引用**（`Shape.Circle`）⇒ 只比类型 + 变体名。
+        #   不能走 cg_gen_expr：具名载荷变体的无括号取值现在响亮报 R1005。
+        #   `type X const`（常量组）不走这条（cg_const_enums 命中 ⇒ 仍按值比较）。
+        let pe = pattern[1]
+        if pe[0] == "Field" and pe[1][0] == "Var":
+            let en1 = rust_unescape(pe[1][1])
+            let vn1 = rust_unescape(pe[2])
+            if cg_enums.has(en1) and contains(cg_enums[en1], vn1):
+                if not cg_const_enums.has(en1):
+                    return cg_enum_lit_cond(en1, vn1, subject)
         var e = cg_gen_expr(pattern[1])
         return "px_is_truthy(px_eq(" + subject + ", " + e + "))"
     if pty == "PatWildcard":
@@ -893,9 +975,18 @@ def cg_gen_pattern_cond(pattern, subject):
         let name = rust_unescape(pattern[1])
         let c = cg_enum_var_cond(name, subject)
         if len(pattern[2]) > 0:
-            # M239：**无载荷变体**带子模式 ⇒ 永不匹配（data enum 尚未支持；解释轨同口径）。
-            #   不静默：若这是唯一的 arm，末尾 px_match_fail 会响亮报 R1003。
-            return "(0 && " + c + ")"
+            # ── M372（data enum 解构）：真绑定 ─────────────────────────────
+            #   修前恒假（M239：data enum 未支持；解释轨当时同口径）⇒ `case Shape.Circle(r):`
+            #   永不匹配。现在：变体匹配 → 载荷项数匹配 → 逐项子模式（声明序，键 "0"…"N-1"）。
+            #   多/少都不匹配（px_match_enum_payload 与 px_match_tuple 同口径），c 轨不报错。
+            let subs = pattern[2]
+            var parts = [c, "px_match_enum_payload(" + subject + ", " + str(len(subs)) + ")"]
+            var pi = 0
+            while pi < len(subs):
+                let subj_i = "px_field(px_enum_payload_of(" + subject + "), \"" + str(pi) + "\")"
+                parts.append("(" + cg_gen_pattern_cond(subs[pi], subj_i) + ")")
+                pi += 1
+            return "(" + join(" && ", parts) + ")"
         return c
     return "1"
 def cg_tuple_cond(subject, n):

@@ -310,6 +310,19 @@ if [ "$DO_PUSH" = 1 ]; then
     say "📤 git push $REMOTE ${REFS[*]}"
     git push "$REMOTE" "${REFS[@]}" || { EXIT_CODE=5 die "推送失败"; }
     say "✅ 已推送: ${REFS[*]}"
+
+    # ---------- 9b. 发版通知（用户令 2026-11-02 20:53：「打 tag 后通知到我的 ws-android」）----------
+    #   通道唯一：/data/app/ws/data/autodrive/notify_release.sh → dy-notify.sh p0 → ws-android。
+    #   纪律（三条都是踩出来的）：
+    #     ① **通知是旁路**：任何失败都不改本脚本退出码 —— 发布是主事，通知是附属，反过来就是灾难；
+    #     ② 幂等：同 tag 同状态只发一次（release_guard 也会兜底调用，不能刷屏）；
+    #     ③ 投递失败不留标记 ⇒ 下次调用重试；dy-notify 另有 pending-user 重投兜底（缺陷 646）。
+    NOTIFY_HOOK="${PX_RELEASE_NOTIFY_HOOK:-/data/app/ws/data/autodrive/notify_release.sh}"
+    if [ -x "$NOTIFY_HOOK" ]; then
+        timeout 15 "$NOTIFY_HOOK" "$TAG" "$SHA_FULL" PUSHED make_tag || true
+    else
+        say "   （发版通知 hook 不存在，跳过：$NOTIFY_HOOK）"
+    fi
 else
     say "   下一步（**main 与 tag 同一次 push** · 消 push 竞态）:"
     say "     git push origin main $TAG"

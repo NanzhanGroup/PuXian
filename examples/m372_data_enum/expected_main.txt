@@ -1,0 +1,23 @@
+Shape.Circle({0: 2.0})
+Shape.Rect({0: 3.0, 1: 4.0})
+Shape.Rect({0: 3.0, 1: 5.0})
+Shape.Rect({0: 3.0, 1: 6.0})
+Shape.Px({0: 3, 1: 4})
+Shape.Dot
+12.0
+12.0
+18.0
+7
+0
+exact2
+circle
+rect3
+other
+dot
+2.0
+any circle
+3
+Color.Circle({0: 5.0})
+Vec.V
+Vec.V({0: 1.5})
+true

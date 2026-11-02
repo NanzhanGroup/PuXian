@@ -33,6 +33,7 @@ var p_brack = 0  # M119：括号深度（parse 前重置）
 var cg_closures = ""
 var cg_structs = {"_": 0}
 var cg_enums = {"_": 0}
+var cg_enum_fields = {"_": 0}  # M372：枚举变体字段名表
 var cg_impls = {"_": 0}
 var cg_vars = {"_": 0}
 var cg_var_types = {"_": 0}

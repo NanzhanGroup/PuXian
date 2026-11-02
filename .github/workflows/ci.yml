@@ -1555,6 +1555,26 @@ jobs:
           bash examples/m367_enum_parse/verify.sh --neg-skip > /tmp/v_m367p.log 2>&1 || { echo "❌ m367_enum_parse 门失败（data enum 语法/AST）"; tail -40 /tmp/v_m367p.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m367p.log | tail -8
           echo "✅ m367_enum_parse（EnumField 进 AST · 旧位置写法不回归）PASS"
+      - name: m372_data_enum（data enum 载荷值语义三轨一致 · M372/S3 · spec §3.8 后半）
+        # 判据：main.px / value.px 各自 解释轨 == VM 轨 == C 轨 == expected（逐字节）
+        #       · 载荷数量契约三道错误格（R2001 少给/多给 · R1005 无载荷变体给参数）
+        #       · 旧位置写法 Vec.V / Vec.V(1.5) 不回归 · 覆盖度自证（用例被改空则门红）
+        # 负控：篡改 expected 一行 ⇒ 判据必红（自证篡改真发生）· 载荷给少的程序 ≠ 期望
+        # ⚠ 前置：本门跑 tools/px，CI 里由 build 步先重烘（同 m367/m369），本地须先 rebake_bin.sh
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m372_data_enum/verify.sh --neg-skip > /tmp/v_m372d.log 2>&1 || { echo "❌ m372_data_enum 门失败（data enum 载荷值语义）"; tail -40 /tmp/v_m372d.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m372d.log | tail -8
+          echo "✅ m372_data_enum（载荷构造/解构/相等/排序三轨一致）PASS"
+      - name: m372_sni_slot（SNI 证书槽容量 · 缺陷 657 · 第 17 张证书不再整机挂）
+        # 判据：px_sni_capacity() 三轨 =256 · 17 个 hostname 全成（事故复现）· 256 张边界 ·
+        #       同名覆盖不占新槽 · 溢出带「已用/容量 + hostname」· 源码契约（宏可覆盖/静态数组/无 realloc）
+        # 负控：第 257 张必须拒绝（期望反转必红）· 读数 == 源码宏（容量不是写死在别处）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m372_sni_slot/verify.sh --neg-skip > /tmp/v_m372s.log 2>&1 || { echo "❌ m372_sni_slot 门失败（SNI 槽容量）"; tail -40 /tmp/v_m372s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m372s.log | tail -8
+          echo "✅ m372_sni_slot（容量 256 可读 · 17 张全成 · 溢出可诊断）PASS"
       - name: m369_name_shadow（名字解析优先级：变量 > 类型名 · M369 · 缺陷 635）
         # 判据：A 三轨逐字节一致（6 正控：局部遮蔽+方法调用/字段 · 模块级 · 块内 · 参数 · 先变量后类型）
         #       · B 门侧独立参考（期望值门内写死，不抄实现）· C 错误面 R1001 三轨同码同文

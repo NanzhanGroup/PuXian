@@ -1,0 +1,18 @@
+true
+false
+true
+true
+false
+true
+false
+false
+true
+true
+true
+false
+false
+true
+false
+true
+false
+[Shape.Circle({0: 1.0}), Shape.Circle({0: 2.0})]

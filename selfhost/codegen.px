@@ -37,6 +37,10 @@ var p_brack = 0  # M119：括号深度（parse 前重置）
 var cg_closures = ""
 var cg_structs = {"_": 0}
 var cg_enums = {"_": 0}
+# M372（data enum 载荷）：类型 → 变体 → 字段名表（声明序；旧写法字段名 = 位置序号）。
+#   与 cg_enums（变体名列表）并列而不是替换：既有 20+ 处 contains 判据一个不用改
+#   （S2 解释轨已按这条走过一轮，形态一致才好三轨对拍）。
+var cg_enum_fields = {"_": 0}
 var cg_impls = {"_": 0}
 var cg_vars = {"_": 0}
 var cg_var_types = {"_": 0}
@@ -585,11 +589,27 @@ def cg_collect_types(prog):
             cg_structs[rust_unescape(st[1])] = fnames
         elif ty == "EnumDef":
             let vnames = []
+            let vf = cg_new_dict()
             var vi = 0
             while vi < len(st[2]):
-                vnames.append(rust_unescape(st[2][vi][1]))
+                let vd = st[2][vi]
+                let vn1 = rust_unescape(vd[1])
+                vnames.append(vn1)
+                # M372：字段名表 —— 具名字段取名字，旧写法（裸类型节点）取位置序号
+                let fns = []
+                if len(vd) > 2:
+                    var fj = 0
+                    while fj < len(vd[2]):
+                        let fe = vd[2][fj]
+                        if fe[0] == "EnumField":
+                            fns.append(rust_unescape(fe[1]))
+                        else:
+                            fns.append(str(fj))
+                        fj += 1
+                vf[vn1] = fns
                 vi += 1
             cg_enums[rust_unescape(st[1])] = vnames
+            cg_enum_fields[rust_unescape(st[1])] = vf
         elif ty == "ImplDef":
             let tn = rust_unescape(st[1])
             if cg_impls.has(tn):
@@ -867,6 +887,7 @@ def cg_generate(prog):
     cg_closures = ""
     cg_structs = cg_new_dict()
     cg_enums = cg_new_dict()
+    cg_enum_fields = cg_new_dict()   # M372：与 cg_enums 一起全量复位（防跨编译残留）
     cg_impls = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()

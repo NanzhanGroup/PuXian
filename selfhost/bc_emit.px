@@ -126,6 +126,10 @@ def bc_new_module(name):
     #   consts={name:[{n,e}]}（TypeConst 值表达式，Field 访问处展开对齐 codegen 内联）
     m["structs"] = []
     m["enums"] = bc_new_dict()
+    # M372（data enum 载荷）：类型 → 变体 → 字段名表（声明序；旧写法字段名 = 位置序号 "0","1"…）。
+    #   ⚠️ 与 g_enums（S2 解释轨）同一条取舍：「变体名列表」保留原状，字段表**另立**一张，
+    #     避免为加字段到处改 contains 判据（S2 已按这条走过一轮，形态一致才好对拍）。
+    m["enum_fields"] = bc_new_dict()
     m["consts"] = bc_new_dict()
     m["nclosure"] = 0  # B4: 闭包/lambda 命名计数 "<closureN>"
     return m
@@ -142,6 +146,21 @@ def bc_enum_has(tname, vname):
     if not g_bcm["enums"].has(tname):
         return false
     return contains(g_bcm["enums"][tname], vname)
+# M372（data enum 载荷）：变体的字段名表（声明序）；未登记/无字段 ⇒ []
+def bc_enum_fields(tname, vname):
+    if g_bcm["enum_fields"].has(tname):
+        if g_bcm["enum_fields"][tname].has(vname):
+            return g_bcm["enum_fields"][tname][vname]
+    return []
+# M372：旧位置写法（`V(float)`，字段名缺省 ⇒ "0","1"…）判据 —— 对齐 it_enum_pos_style。
+#   位置写法保留历史行为（`Vec.V` 可无载荷取值）；具名字段变体则必须给载荷。
+def bc_enum_pos_style(flds):
+    var i = 0
+    while i < len(flds):
+        if flds[i] != str(i):
+            return false
+        i += 1
+    return true
 # B2：TypeConst 查找 —— consts[tname] 里找 iname，命中返回值表达式（null=无）
 def bc_const_find(tname, iname):
     if not g_bcm["consts"].has(tname):
@@ -772,6 +791,15 @@ def bc_emit_expr(expr, dst, func):
                     let mn = bc_n_add(g_bcm["n_pool"], "R1008: 枚举 " + oname + " 没有变体 '" + fname + "'")
                     bc_emit_inst(func, "RAISE", 0, mn, 0)
                     return d
+                # M372（data enum 载荷）：具名载荷变体**不能无括号取值**（载荷无处安放）。
+                #   静默造「载荷全 null」的值是本仓反复踩过的坑（M116/M120/M163）；
+                #   旧位置写法 `Vec.V`（字段名 = 位置序号）保留历史行为，不回归 M367 门 D。
+                let flds0 = bc_enum_fields(oname, fname)
+                if len(flds0) > 0 and not bc_enum_pos_style(flds0):
+                    let m1 = "R1005: 枚举变体 " + oname + "." + fname + " 需要 " + str(len(flds0)) + " 个字段，给出 0；请写 " + oname + "." + fname + "(...)"
+                    let mn1 = bc_n_add(g_bcm["n_pool"], m1)
+                    bc_emit_inst(func, "RAISE", 0, mn1, 0)
+                    return d
                 let tn = bc_n_add(g_bcm["n_pool"], oname)
                 let vn = bc_n_add(g_bcm["n_pool"], fname)
                 bc_emit_inst(func, "NEWENUM", d, tn, vn)
@@ -802,6 +830,21 @@ def bc_emit_expr(expr, dst, func):
         #   与 bc_emit_struct_new 的差别只有一处：**先按书写顺序求值到临时槽，
         #   再 MOV 到字段槽**，保证求值顺序与解释轨逐字对齐（含副作用实参）。
         if argmap_has_named(expr[2]):
+            # M372：**枚举变体**也吃命名参数（`Shape.Rect(w: 2.0, h: 3.0)`）——
+            #   装配算法与结构体同一份（argmap_fields），差别只在「字段表来自哪个变体」。
+            if callee[0] == "Field":
+                let fobj = callee[1]
+                if fobj[0] == "Var" and not bc_name_is_value(func, rust_unescape(fobj[1])) and g_bcm["enums"].has(rust_unescape(fobj[1])):
+                    let en1 = rust_unescape(fobj[1])
+                    let vn1 = rust_unescape(callee[2])
+                    var de1 = dst
+                    if de1 < 0:
+                        de1 = bc_tmp(func)
+                    if not bc_enum_has(en1, vn1):
+                        let me1 = bc_n_add(g_bcm["n_pool"], "R1008: 枚举 " + en1 + " 没有变体 '" + vn1 + "'")
+                        bc_emit_inst(func, "RAISE", 0, me1, 0)
+                        return de1
+                    return bc_emit_enum_payload_new(en1, vn1, bc_enum_fields(en1, vn1), expr[2], de1, func)
             var owner = null
             if callee[0] == "Var":
                 owner = rust_unescape(callee[1])
@@ -839,14 +882,13 @@ def bc_emit_expr(expr, dst, func):
                 var d634 = dst
                 if d634 < 0:
                     d634 = bc_tmp(func)
-                var msg0 = ""
-                if bc_enum_has(en0, vn0):
-                    msg0 = "R1005: 枚举变体 " + en0 + "." + vn0 + " 不接受参数（data enum 未实现；请写 " + en0 + "." + vn0 + "）"
-                else:
-                    msg0 = "R1008: 枚举 " + en0 + " 没有变体 '" + vn0 + "'"
-                let mn0 = bc_n_add(g_bcm["n_pool"], msg0)
-                bc_emit_inst(func, "RAISE", 0, mn0, 0)
-                return d634
+                if not bc_enum_has(en0, vn0):
+                    let mn0 = bc_n_add(g_bcm["n_pool"], "R1008: 枚举 " + en0 + " 没有变体 '" + vn0 + "'")
+                    bc_emit_inst(func, "RAISE", 0, mn0, 0)
+                    return d634
+                # M372（data enum 载荷）：这条分支从「R1005 未实现」变成**真构造**。
+                #   无字段变体的 `Shape.Dot()` ⇒ R1005「不接受参数」（见 bc_emit_enum_payload_new）。
+                return bc_emit_enum_payload_new(en0, vn0, bc_enum_fields(en0, vn0), expr[2], d634, func)
             return bc_emit_methodcall(callee[1], rust_unescape(callee[2]), expr[2], dst, func)
         return bc_emit_call(callee, expr[2], dst, func)
     if ty == "Constructor":
@@ -1081,9 +1123,64 @@ def bc_emit_enum_new(cname, args, dst, func):
         let mn = bc_n_add(g_bcm["n_pool"], "R1008: 枚举 " + cname + " 没有变体 '" + vname + "'")
         bc_emit_inst(func, "RAISE", 0, mn, 0)
         return d
+    # M372（data enum 载荷）：**具名**载荷变体不能走「变体名」构造（载荷无处安放）；
+    #   旧位置写法 `Vec("V")` 保留历史行为（对齐解释轨 i_enum_ctor）。
+    let flds0 = bc_enum_fields(cname, vname)
+    if len(flds0) > 0 and not bc_enum_pos_style(flds0):
+        let m1005 = "R1005: 枚举变体 " + cname + "." + vname + " 需要 " + str(len(flds0)) + " 个字段，请用 " + cname + "." + vname + "(...) 构造"
+        let mn1 = bc_n_add(g_bcm["n_pool"], m1005)
+        bc_emit_inst(func, "RAISE", 0, mn1, 0)
+        return d
     let tn = bc_n_add(g_bcm["n_pool"], cname)
     let vn2 = bc_n_add(g_bcm["n_pool"], vname)
     bc_emit_inst(func, "NEWENUM", d, tn, vn2)
+    return d
+# M372（data enum 载荷）：带载荷变体构造 —— `Shape.Circle(1.5)` / `Shape.Rect(w: 2.0, h: 3.0)`。
+#   三轨同一份装配算法（argmap.px 的 argmap_fields，kind = "枚举变体"）⇒ 报文逐字一样；
+#   实参**按书写顺序**求值到临时槽，再按字段序装进载荷 dict（键 = 位置序号 "0"…"N-1"，
+#   与解释轨 it_enum_build 同表示 —— 旧写法没有字段名，两条写法共用一个载荷表示）。
+#   BC 形态：NEWDICT（载荷 dict）→ NEWENUM（类型+变体）→ ENUMP（挂载荷）。
+def bc_emit_enum_payload_new(ename, vname, flds, args, dst, func):
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let nf = len(flds)
+    if nf == 0:
+        # 无字段变体给了实参 —— 与解释轨同码同文
+        let m0 = "R1005: 枚举变体 " + ename + "." + vname + " 不接受参数，给出 " + str(len(args))
+        let mn0 = bc_n_add(g_bcm["n_pool"], m0)
+        bc_emit_inst(func, "RAISE", 0, mn0, 0)
+        return d
+    let am = argmap_fields(flds, args, ename + "." + vname, "枚举变体")
+    if am[0] != null:
+        let mn1 = bc_n_add(g_bcm["n_pool"], "R2001: " + am[0])
+        bc_emit_inst(func, "RAISE", 0, mn1, 0)
+        return d
+    let temps = []
+    var ai = 0
+    while ai < len(args):
+        var vnode = args[ai]
+        if vnode[0] == "NamedArg":
+            vnode = vnode[2]
+        let t = bc_tmp(func)
+        bc_emit_expr(vnode, t, func)
+        temps.append(t)
+        ai += 1
+    let base = bc_tmp(func)
+    while func["next_slot"] < base + 2 * nf:
+        bc_tmp(func)
+    var fi = 0
+    while fi < nf:
+        let kk = bc_k_add(g_bcm["k_pool"], "str", 0, 0.0, str(fi))
+        bc_emit_inst(func, "LOADK", base + 2 * fi, kk, 0)
+        bc_emit_inst(func, "MOV", base + 2 * fi + 1, temps[am[1][fi]], 0)
+        fi += 1
+    let ps = bc_tmp(func)
+    bc_emit_inst(func, "NEWDICT", ps, base, nf)
+    let tn = bc_n_add(g_bcm["n_pool"], ename)
+    let vn3 = bc_n_add(g_bcm["n_pool"], vname)
+    bc_emit_inst(func, "NEWENUM", d, tn, vn3)
+    bc_emit_inst(func, "ENUMP", d, d, ps)
     return d
 # ---------- B3/B4：推导式展开 + lambda/闭包基建 ----------
 # 以槽号 obj 调方法（obj 已是槽号；args 元素=槽号(int)→MOV 或 表达式）
@@ -1454,6 +1551,14 @@ def bc_match_enumvar(vname, t, func):
     let eb = bc_tmp(func)
     bc_emit_inst(func, "EQ", eb, ev, ks)
     return eb
+# M372：`case Shape.Circle:` 的判据（类型名 + 变体名；载荷不参与）—— ENUMIS 一条指令。
+#   与 bc_match_enumvar（只比变体名）的分工：PatConstructor 只拿到成员名（parser 丢了类型名），
+#   解释轨同一分支也只比变体；PatLiteral 保留完整 Field ⇒ 三轨都比「类型 + 变体」。
+def bc_match_enumlit(tname, vname, t, func):
+    let nn = bc_n_add(g_bcm["n_pool"], tname + "." + vname)
+    let eb = bc_tmp(func)
+    bc_emit_inst(func, "ENUMIS", eb, t, nn)
+    return eb
 # M239：模式条件发射 —— 结果改为「往 jumps 里追加**失败即跳**的 JMPF 站点」，
 #   顺带在结构检查通过之后发射绑定 MOV（靠跳转顺序保证「元组结构不符则不绑定」）。
 #   绑定槽用 **bc_tmp**（新槽）而非 bc_slot ⇒ 真遮蔽外层同名（对齐解释轨 env_new / C 轨 cg_new_var）。
@@ -1532,18 +1637,50 @@ def bc_match_cond(pattern, t, func, jumps):
     if pty == "PatConstructor":
         let name = rust_unescape(pattern[1])
         if len(pattern[2]) > 0:
-            # M239：**无载荷变体**带子模式 ⇒ 永不匹配（data enum 尚未支持；解释轨同口径）
-            let z = bc_tmp(func)
-            bc_emit_inst(func, "IMM", z, 0, 0)
-            let zj = len(func["bc"])
-            bc_emit_inst(func, "JMPF", z, 0, 0)
-            jumps.append(zj)
+            # ── M372（data enum 解构）：真绑定 ───────────────────────────────
+            #   修前恒假（M239：data enum 未支持）⇒ `case Shape.Circle(r):` 永不匹配。
+            #   现在：变体匹配 → 载荷项数匹配 → 逐项子模式（声明序，键 "0"…"N-1"）。
+            #   多/少都不匹配（MATCHENUMP 与 MATCHTUP 同口径）；不带子模式的有载荷变体
+            #   （`case Shape.Circle:`）落在下面的纯变体判据，照样匹配（见 PatLiteral）。
+            let subs = pattern[2]
+            let eb = bc_match_enumvar(name, t, func)
+            jumps.append(len(func["bc"]))
+            bc_emit_inst(func, "JMPF", eb, 0, 0)
+            let mp = bc_tmp(func)
+            bc_emit_inst(func, "MATCHENUMP", mp, t, len(subs))
+            jumps.append(len(func["bc"]))
+            bc_emit_inst(func, "JMPF", mp, 0, 0)
+            let pay = bc_tmp(func)
+            bc_emit_inst(func, "ENUMPAY", pay, t, 0)
+            var pi = 0
+            while pi < len(subs):
+                let ev = bc_tmp(func)
+                let kn = bc_n_add(g_bcm["n_pool"], str(pi))
+                bc_emit_inst(func, "GETF", ev, pay, kn)
+                bc_match_cond(subs[pi], ev, func, jumps)
+                pi += 1
             return
         let eb2 = bc_match_enumvar(name, t, func)
         jumps.append(len(func["bc"]))
         bc_emit_inst(func, "JMPF", eb2, 0, 0)
         return
     if pty == "PatLiteral":
+        # M372：`case Shape.Circle:`（不跟括号）—— PatLiteral(Field) 指向 enum 变体时
+        #   按**变体**匹配，不走「求值再 EQ」：具名载荷变体的无括号取值是 R1005
+        #   （载荷无处安放），借道求值会让「只问变体」的直觉报错。
+        #   `type X const`（常量组）不走这条：bc_const_find 命中 ⇒ 仍按值比较。
+        let lit = pattern[1]
+        if lit[0] == "Field":
+            let lo = lit[1]
+            if lo[0] == "Var":
+                let lon = rust_unescape(lo[1])
+                let lmn = rust_unescape(lit[2])
+                if not bc_name_is_value(func, lon) and bc_enum_has(lon, lmn):
+                    if bc_const_find(lon, lmn) == null:
+                        let ec = bc_match_enumlit(lon, lmn, t, func)
+                        jumps.append(len(func["bc"]))
+                        bc_emit_inst(func, "JMPF", ec, 0, 0)
+                        return
         let ev = bc_tmp(func)
         bc_emit_expr(pattern[1], ev, func)
         let eb = bc_tmp(func)
@@ -2364,11 +2501,27 @@ def bc_emit_program(prog):
             m["structs"].push(sd)
         elif ty == "EnumDef":
             let vnames = []
+            let vf = bc_new_dict()
             var vi = 0
             while vi < len(st[2]):
-                vnames.append(rust_unescape(st[2][vi][1]))
+                let vd = st[2][vi]
+                let vn1 = rust_unescape(vd[1])
+                vnames.append(vn1)
+                # M372：字段名表 —— 具名字段取名字，旧写法（裸类型节点）取位置序号
+                let fns = []
+                if len(vd) > 2:
+                    var fj = 0
+                    while fj < len(vd[2]):
+                        let fe = vd[2][fj]
+                        if fe[0] == "EnumField":
+                            fns.append(rust_unescape(fe[1]))
+                        else:
+                            fns.append(str(fj))
+                        fj += 1
+                vf[vn1] = fns
                 vi += 1
             m["enums"][rust_unescape(st[1])] = vnames
+            m["enum_fields"][rust_unescape(st[1])] = vf
         i += 1
     bc_collect_consts(items)
     let impl_list = bc_collect_impl_list(items)
@@ -2380,6 +2533,7 @@ def bc_emit_program(prog):
     #   复位后两轨起点状态一致：哨兵键不可能再泄漏进语义检查。
     cg_structs = cg_new_dict()
     cg_enums = cg_new_dict()
+    cg_enum_fields = cg_new_dict()   # M372：与 cg_enums 一起全量复位
     cg_impls = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()

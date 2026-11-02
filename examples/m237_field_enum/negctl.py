@@ -21,17 +21,14 @@ import sys
 PATCHES = {
     "neg-a": [
         # C 轨：把「校验后的构造」退回「不校验的构造」⇒ `Color("Nope")` 静默造出假枚举值
+        # M372：锚点收窄到**返回行**本身 —— 修前锚了「known 计算 + return」整段，
+        #   而 M372 在两者之间插了「具名变体无括号 ⇒ R1005」分支 ⇒ 整段不再连续。
+        #   撤回目标没变：把校验后的 px_enum_checked 退回不校验的 px_enum。
         ("selfhost/cg_expr.px",
-         '    var known = 0\n'
-         '    if contains(cg_enums[cname], vn):\n'
-         '        known = 1\n'
          '    return "px_enum_checked(\\"" + cname + "\\", \\"" + vn + "\\", " + str(known) + ")"',
          '    return "px_enum(\\"" + cname + "\\", \\"" + vn + "\\")"',
          "C 轨枚举构造去校验"),
         ("selfhost/cg_expr.px",
-         '                var vk = 0\n'
-         '                if contains(cg_enums[oname], fname):\n'
-         '                    vk = 1\n'
          '                return "px_enum_checked(\\"" + oname + "\\", \\"" + fname + "\\", " + str(vk) + ")"',
          '                return "px_enum(\\"" + oname + "\\", \\"" + fname + "\\")"',
          "C 轨变体访问去校验"),
@@ -40,9 +37,9 @@ PATCHES = {
         # 解释轨：撤回枚举构造拦截 ⇒ `Color("Red")` 报 R1004（修前行为）
         ("selfhost/iexpr.px",
          '        if g_enums.has(cname):\n'
-         '            return i_enum_ctor(cname, args, pos)\n',
+         '            return i_enum_ctor(cname, args, env, pos)\n',
          '        if false:\n'
-         '            return i_enum_ctor(cname, args, pos)\n',
+         '            return i_enum_ctor(cname, args, env, pos)\n',
          "解释轨枚举构造拦截失效"),
     ],
 }

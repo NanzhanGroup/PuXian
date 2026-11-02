@@ -123,6 +123,8 @@ const char* px_op_name(int op) {
         [PXOP_IN] = "IN", [PXOP_NOTIN] = "NOTIN",
         [PXOP_RAISE] = "RAISE",
         [PXOP_MATCHFAIL] = "MATCHFAIL", [PXOP_MATCHTUP] = "MATCHTUP",
+        [PXOP_ENUMPAY] = "ENUMPAY", [PXOP_ENUMP] = "ENUMP",
+        [PXOP_MATCHENUMP] = "MATCHENUMP", [PXOP_ENUMIS] = "ENUMIS",
         [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
         [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
@@ -927,6 +929,23 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             slots[in.a] = px_enum(mm->N[in.b], mm->N[in.c]);
             break;
         }
+        // ── M372（data enum 载荷）────────────────────────────────────────
+        // ENUMP：带载荷构造 —— a=dst(新 enum)，b=enum 源槽（NEWENUM 产物），c=载荷槽。
+        //   语义 = px_enum_payload(源.type_name, 源.variant, 载荷)；源值不变（值语义）。
+        case PXOP_ENUMP: {
+            LXValue src = slots[in.b];
+            if (src.type != PX_ENUM)
+                px_error("R9001: VM %s:%d ENUMP 源值不是枚举（type=%s）",
+                         cf->name, fr->line, px_type_name(src));
+            slots[in.a] = px_enum_payload(src.as.obj->as.enum_inst.type_name,
+                                          src.as.obj->as.enum_inst.variant,
+                                          slots[in.c]);
+            break;
+        }
+        // ENUMPAY：a=dst，b=obj 槽（px_enum_payload_of；非 enum/无载荷 → null）
+        case PXOP_ENUMPAY:
+            slots[in.a] = px_enum_payload_of(slots[in.b]);
+            break;
         // RAISE（M237）：b=N[消息] ⇒ px_error(消息)。编译期已知错误的**运行期**形态
         //   （三轨同阶段：解释轨逐句执行、C 轨 px_error、VM 轨本指令）。
         case PXOP_RAISE: {
@@ -947,6 +966,21 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_MATCHTUP:
             slots[in.a] = px_bool(px_match_tuple(slots[in.b], (int)in.c));
             break;
+        // MATCHENUMP（M372）：a=dst(bool)，b=subject 槽，c=期望载荷项数 —— data enum
+        //   解构模式的结构判据（多/少都不匹配；载荷不存在而 c>0 ⇒ 不匹配）。
+        case PXOP_MATCHENUMP:
+            slots[in.a] = px_bool(px_match_enum_payload(slots[in.b], (int)in.c));
+            break;
+        // ENUMIS（M372）：a=dst(bool)，b=subject 槽，c=N["Type.Variant"] ——
+        //   `case Shape.Circle:` 的判据（类型名 + 变体名；载荷不参与）。
+        case PXOP_ENUMIS: {
+            const PxBCModule* mm = cf->mod;
+            if (!mm || in.c >= (uint16_t)mm->nN)
+                px_error("R9001: VM %s:%d ENUMIS 名字越界 c=%d (nN=%d)",
+                         cf->name, fr->line, in.c, mm ? mm->nN : -1);
+            slots[in.a] = px_bool(px_enum_is(slots[in.b], mm->N[in.c]));
+            break;
+        }
         // NEWGEN（B3，M34 惰性生成器）：a=dst，b=seq 槽，c=2 连续槽基址
         //   [transform(PX_FUNC), filter(PX_FUNC|null)] → px_gen_lazy（同 codegen 单 for
         //   GenExp：elt 恒为 transform 闭包，cond 有则 filter 闭包）。槽越界容错（防御）。

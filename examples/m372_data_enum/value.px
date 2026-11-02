@@ -1,0 +1,39 @@
+enum Shape:
+    Circle(radius: float)
+    Rect(w: float, h: float)
+    Dot
+
+enum Color:
+    Circle(radius: float)
+    Red
+
+enum Vec:
+    V(float)
+    W
+
+def show(x):
+    if x:
+        print("true")
+    else:
+        print("false")
+
+def main():
+    show(Shape.Circle(1.0) == Shape.Circle(1.0))
+    show(Shape.Circle(1.0) == Shape.Circle(2.0))
+    show(Shape.Circle(1.0) != Shape.Circle(2.0))
+    show(Shape.Rect(1.0, 2.0) == Shape.Rect(w: 1.0, h: 2.0))
+    show(Shape.Rect(1.0, 2.0) == Shape.Rect(1.0, 3.0))
+    show(Shape.Dot == Shape.Dot)
+    show(Shape.Dot == Shape.Circle(1.0))
+    show(Shape.Circle(1.0) == Color.Circle(1.0))
+    show(Color.Circle(1.0) == Color.Circle(1.0))
+    show(Vec.V == Vec.V)
+    show(Vec.V(1.0) == Vec.V(1.0))
+    show(Vec.V(1.0) == Vec.V(2.0))
+    show(Vec.V == Vec.V(1.0))
+    let l = [Shape.Circle(1.0)]
+    show(l == [Shape.Circle(1.0)])
+    show(l == [Shape.Circle(2.0)])
+    show(Shape.Circle(1.0) < Shape.Circle(2.0))
+    show(Shape.Circle(2.0) < Shape.Circle(1.0))
+    print(sorted([Shape.Circle(2.0), Shape.Circle(1.0)]))
