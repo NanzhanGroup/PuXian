@@ -498,6 +498,26 @@ echo "── 全部分片结束 ──"
 # ── 6b) 低负载门：此时机器已空闲 ⇒ 串行跑（见 quiet_needed.txt）──
 if [ -n "$QUIET_LIST" ]; then
   echo "── 低负载门串行跑（$QUIET_LIST）──"
+  # ── M372 r5（2026-11-03 · 东月）：quiet 档起跑前**等机器真静** ──
+  #   实测（chain-m372-20261103-050252）：quiet 档里 m183 被拖到 900s 超时（同门空闲单跑 111s）。
+  #   kernel 侧硬证据：06:47 `khugepaged` 与 `kworker/8:1H (blk_mq_timeout_work)` 各 **blocked 122s**、
+  #   `synchronize_rcu_normal` 卡死 ⇒ 分片刚结束时**块 IO 回写尚未平息**，quiet 起跑时机器并不静。
+  #   口径：sync 落盘 + 1min loadavg < nproc/4 连续 3 次采样（各 5s）；最多等 180s，
+  #         超时**不阻断**（打印实测值，供红门归因）；QUIET_NO_WAIT=1 可关闭。
+  if [ -z "${QUIET_NO_WAIT:-}" ]; then
+    sync
+    _q_t0=$(date +%s); _q_ok=0; _q_lim=$(( $(nproc) / 4 )); [ "$_q_lim" -lt 2 ] && _q_lim=2
+    for _ in $(seq 1 36); do
+      _la="$(cut -d' ' -f1 /proc/loadavg)"
+      if awk -v l="$_la" -v m="$_q_lim" 'BEGIN{exit !(l < m)}'; then
+        _q_ok=$(( _q_ok + 1 )); [ "$_q_ok" -ge 3 ] && break
+      else
+        _q_ok=0
+      fi
+      sleep 5
+    done
+    echo "  quiet 前置：sync + 等静（达标 ${_q_ok}/3 · 阈值 <${_q_lim} · 等 $(( $(date +%s) - _q_t0 ))s · 现 loadavg $(cut -d' ' -f1-3 /proc/loadavg)）"
+  fi
   # 用分片 worktree（与分片同一份代码）；先恢复被负控改过的受管目录，避免 run_gates 拒脏树
   git -C "$BASE/wt1" checkout -q -- selfhost runtime tools 2>/dev/null || true
   ( cd "$BASE/wt1" && GATE_TSV="$LOG/quiet.times.tsv" GATE_TIMEOUT_DEFAULT=900 \
