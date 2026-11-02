@@ -40,11 +40,11 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 
 | 项 | 值 |
 |---|---|
-| 用户可见版本 | **`px 0.2.281`**（`./tools/px --version`；源码直跑取 `tools/px` 的 `SELFHOST_VER`，发布包含 git tag 生成的 `VERSION`）<br>⚠️ **已知偏差（缺陷 638，M366 实测）**：`SELFHOST_VER` 停在 `0.2.281`，而最新 tag 已是 `v0.2.365` —— 源码直跑看到的版本号比真实进度落后 84 个里程碑 |
-| 最新发布 tag | **`v0.2.365`** —— 命名 = `v0.2.<里程碑>`（M272 起：里程碑号即 patch 段） |
-| 里程碑 | **M365**（`CHANGELOG.md` **22,985 行** / 413 个带里程碑号的标题节 / 313 个不同里程碑号） |
+| 用户可见版本 | **`px 0.2.370`**（`./tools/px --version`；源码直跑取 `tools/px` 的 `SELFHOST_VER`，发布包含 git tag 生成的 `VERSION`）<br>✅ 缺陷 638（版本号链断 84 个里程碑）已于 **M368** 收口：`make_tag.sh` 版本闸 + 门 `version_drift` 双保险；此后再出现偏差会被**拒绝打 tag**，不再是纯靠人记得 |
+| 最新发布 tag | **`v0.2.370`** —— 命名 = `v0.2.<里程碑>`（M272 起：里程碑号即 patch 段） |
+| 里程碑 | **M370 已发布 · M371 在建**（`CHANGELOG.md` **23,379 行** / 413 个带里程碑号的标题节 / 313 个不同里程碑号） |
 | 入库自举件 | **14 件**静态 ELF（`bootstrap/`，带源码链指纹门 `PXSRC-…` / `PXRT-…`） |
-| 全量门 | **242 门**（单一注册源 `selfhost/gates.registry.sh` + 运行器 `run_gates.sh`） |
+| 全量门 | **247 门**（单一注册源 `selfhost/gates.registry.sh` + 运行器 `run_gates.sh`；M371 新增 `shard_wt_recovery`） |
 | 结构守卫 | **32 个**（`selfhost/check_*`：注册一致性 / 路径卫生 / 打桩锚点 / 判据串在场 / 前提 / 密钥 / 包架构 …） |
 | native 名册 | **394 项**（单一事实源 `docs/native_index.json`，由 `tools/gen_native_table.sh` 生成，CI 防漂移） |
 | 本地 registry | **135 个包**（`registry/`，M69 起的官方库） |

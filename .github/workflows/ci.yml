@@ -1565,6 +1565,18 @@ jobs:
           bash examples/m369_name_shadow/verify.sh --neg-skip > /tmp/v_m369s.log 2>&1 || { echo "❌ m369_name_shadow 门失败（变量/类型名同名解析）"; tail -40 /tmp/v_m369s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m369s.log | tail -8
           echo "✅ m369_name_shadow（变量 > 类型名 · 三轨一致 · 跨帧回归）PASS"
+      - name: shard_wt_recovery（分片建树契约：失败必须留 git 原文 · M371 · 缺陷 649/647）
+        # 判据：T1 正常仓 rc=0 · T2 前提自证（脏注册下 worktree remove 真失败）
+        #       · T3 契约 C2（脏注册下仍建成、注册表无残留）· T4 正控（失败须含 git 原文）
+        #       · T5 判据通道可读（worktree list 读不到 ⇒ 红，不当绿）
+        # 负控：N1 ⇒ 副本改回「吞 stderr」，同场景必须说不出真因。
+        #   纯 git + mktemp，秒级 ⇒ **不需要** --neg-skip（负控每次真跑）。
+        # 647 只止住未定性：本门不为 prune 立判据（状态复现不出来 ⇒ 造不出够牙的负控）。
+        if: ${{ !cancelled() }}
+        run: |
+          bash selfhost/check_shard_wt_recovery.sh > /tmp/v_shardwt.log 2>&1 || { echo "❌ shard_wt_recovery 门失败（分片建树 / 真因丢失）"; tail -40 /tmp/v_shardwt.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_shardwt.log | tail -8
+          echo "✅ shard_wt_recovery（建树失败留真因 · 脏注册仍建成）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

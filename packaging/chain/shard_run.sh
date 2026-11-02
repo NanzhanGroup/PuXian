@@ -52,7 +52,7 @@
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-N=""; N_SET=0; DRY=0
+N=""; N_SET=0; DRY=0; PREP_ONLY=0
 # ── M351（缺陷 613）：耗时表默认值移出 /tmp ──
 #   旧默认 = /tmp/gatevm/times_m302_full.tsv（10-12 手工产物，2026-10-28 实测仍在）。两处病：
 #     ① 住 /tmp ⇒ 重启即被清；被清后 awk 读不到任何门 ⇒ 每门 t 退化成 60，
@@ -81,6 +81,9 @@ SHARD_CPUS="${SHARD_CPUS:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry)   DRY=1 ;;
+    # M371（缺陷 647/649）：只做「分片环境准备」后退出 —— 给 selfhost/check_shard_wt_recovery.sh
+    # 一个能走**真实代码路径**的接缝（否则门只能测一份复制品，测不到正要用的那段代码）。
+    --prep-only) PREP_ONLY=1 ;;
     --times) shift; TIMES="${1:-}" ;;
     --only)  shift; ONLY_GATES="${1:-}" ;;
     [0-9]*)  N="$1"; N_SET=1 ;;
@@ -168,6 +171,84 @@ BASE="${PX_GATEVM:-/data/gatevm}"
 TS=$(date +%Y%m%d-%H%M%S)
 LOG="$BASE/shard-$TS"
 mkdir -p "$LOG"
+
+# ── 4) 准备分片环境（worktree + .rtcache reflink 副本 + 私有 tmp + 私有 devbuild 槽）──
+# ⚠️ worktree **不能放 /tmp 下** —— 私有 /tmp 一 bind 就把它遮蔽了（步2 实测）
+# ⚠️ .rtcache 用 **reflink（COW）** 而不是硬链接：实测本机 / 是 XFS reflink=1
+#    （cp -a --reflink=auto 全量 10G 耗时 6.4s · 0 空间 · 改副本不影响源，已实证）。
+#    硬链接的两个隐患：① 若某 key 目录「存在但缺 .complete」，rt_cache_compile 会
+#    `cp src $dir/` 与 `cc -o $dir/x.o` **就地截断**同名 inode ⇒ 源 + 全部分片一起污染；
+#    ② 无法界定「谁写脏了谁」。reflink 从根上消掉这类风险，代价只有几秒。
+# ⚠️ devbuild 多槽（/tmp/devbuild_slots）也要**每分片一份**：回填是
+#    `cp -a $out $slot/$name` 后写 key ⇒ 多分片同填一个槽时读者可能拿到半个二进制。
+#    默认路径在私有 /tmp 里 ⇒ 不预置就是**空槽**（每片冷建）。
+#
+# ★ M371（缺陷 647/649）：抽成函数 + `--prep-only` 接缝
+#   为什么抽：两个缺陷都住在这段里，而旧版只能靠"看代码"守 —— 没有任何门跑得到它。
+#   抽出来之后 selfhost/check_shard_wt_recovery.sh 用 `--prep-only` 走**同一份代码**，
+#   并自带负控（把 prune / stderr 捕获分别删掉，判据必须红）。
+prep_worktrees(){
+  local HEAD_SHA="$1" i WT err errf
+  # ── 缺陷 647（2026-11-01 03:33/03:35 实测）：**僵尸 worktree 注册 ⇒ 整轮空跑** ──
+  #   现象：/data/gatevm/wt3 目录被人删掉、`git worktree list` 里的注册还在 ⇒
+  #         `worktree add` 报 "already registered" ⇒ 建树失败 ⇒ exit 3。
+  #         两轮 chain-m368 就这样各空转一次（不是红，是**根本没跑**）。
+  #   旧版为什么兜不住：只做 `worktree remove --force`，而它对"目录已不在"的注册
+  #         返回非零；旧版把这个失败 `>/dev/null 2>&1` 吞掉后照旧 add ⇒ 撞同一条注册。
+  #   修法：建树前先 `worktree prune`（清"目录不在"的注册）；每片 remove 之后再 prune 一次，
+  #         判据是"add 之前注册表里没有指向 $WT 的残留"，而不是"我调过 prune"。
+  git -C "$SRC" worktree prune >/dev/null 2>&1 || true
+  for i in $(seq 1 "$N"); do
+    WT="$BASE/wt$i"
+    # 每次重建 worktree：消掉「上一轮残留 vs 这一轮 HEAD」这类不可见差异
+    # （步2 实测：检出 198MB / 1.8s，代价可忽略）
+    git -C "$SRC" worktree remove --force "$WT" >/dev/null 2>&1 || true
+    rm -rf "$WT"
+    git -C "$SRC" worktree prune >/dev/null 2>&1 || true
+    echo "── 建 worktree wt$i @ ${HEAD_SHA:0:8} ──"
+    # ── 缺陷 649：**建树失败必须留下 git 原文** ──
+    #   旧版 `>/dev/null 2>&1 || { echo "❌ wt$i 建树失败"; exit 3; }` 把真实原因
+    #   （already registered / invalid reference / 权限 / 磁盘满）全丢了 ⇒ 只能靠人复现。
+    #   ⚠️ 这段是 647 的**前置**：正因为当时没留原文，647 的真因至今无法定性
+    #      （见 triage · 「647 定性失败」）—— 先修「说得清」，再谈「修得对」。
+    errf="$LOG/wt$i.add.err"
+    if ! err="$(git -C "$SRC" worktree add --detach "$WT" "$HEAD_SHA" 2>&1)"; then
+      # 防御性重试一次（647）：prune 掉指向 $WT 的过期注册后再试
+      _err1="$err"
+      git -C "$SRC" worktree prune >/dev/null 2>&1 || true
+      if ! err="$(git -C "$SRC" worktree add --detach "$WT" "$HEAD_SHA" 2>&1)"; then
+        { printf '=== 第 1 次 ===\n%s\n=== prune 后第 2 次 ===\n%s\n' "$_err1" "$err"; } > "$errf"
+        echo "❌ wt$i 建树失败（git 原文见 $errf）："
+        [ -n "$_err1" ] && printf '%s\n' "$_err1" | sed 's/^/    git#1: /'
+        [ -n "$err" ]   && printf '%s\n' "$err"   | sed 's/^/    git#2: /'
+        exit 3
+      fi
+      echo "  ⚠ wt$i 首次建树失败、prune 后重试成功（原文 $errf）"
+    fi
+    cp -a --reflink=auto "$SRC/.rtcache" "$WT/.rtcache" || { echo "❌ wt$i .rtcache 副本失败"; exit 3; }
+    # ⚠️ 私有 /tmp **每次清空重建**（不能只删 devbuild_slots）——
+    #   实测（2026-10-12）：上一轮被 `kill -KILL` 打断时，分片里的门锁文件
+    #   （`/tmp/m116_gates.lock`）留了下来，里面记的是**分片 PID 命名空间里的低号 PID**（4），
+    #   而 `kill -0 4` 在新命名空间里仍然算"活着" ⇒ 之后每一轮分片都报
+    #   「已有 m116 全门在跑（PID 4）…拒绝启动」⇒ **整轮空跑**（211 门一个没跑，汇总却只报
+    #   「合计 绿 3」（quiet 档那 3 个）—— 见下面 7) 新增的"空跑必红"判据）。
+    rm -rf "$BASE/tmp$i"
+    mkdir -p "$BASE/tmp$i"
+    if [ -d /tmp/devbuild_slots ]; then
+      cp -a --reflink=auto /tmp/devbuild_slots "$BASE/tmp$i/devbuild_slots" 2>/dev/null \
+        || echo "  ⚠ wt$i：devbuild 槽副本失败（仍可跑，会冷建）"
+    fi
+  done
+}
+
+# `--prep-only`：只准备环境（供 check_shard_wt_recovery.sh 走真实路径），不取门清单、不跑门。
+if [ "$PREP_ONLY" = 1 ]; then
+  _PH="$(git -C "$SRC" rev-parse HEAD)" || { echo "❌ --prep-only：$SRC 不是可用 git 仓库" >&2; exit 3; }
+  echo "═══ prep-only：N=$N · SRC=$SRC · BASE=$BASE · HEAD=${_PH:0:8} ═══"
+  prep_worktrees "$_PH"
+  echo "PREP-ONLY-OK"
+  exit 0
+fi
 
 # ── 1a) 耗时表解析（M351 · 缺陷 613）：显式 --times 优先；否则按「新→旧」三级回落并把选择打进日志 ──
 TIMES_SRC="--times 显式指定"
@@ -361,39 +442,9 @@ if [ "$DRY" = 1 ]; then
   echo "（--dry：不启动）"; exit 0
 fi
 
-# ── 4) 准备分片环境（worktree + .rtcache reflink 副本 + 私有 tmp + 私有 devbuild 槽）──
-# ⚠️ worktree **不能放 /tmp 下** —— 私有 /tmp 一 bind 就把它遮蔽了（步2 实测）
-# ⚠️ .rtcache 用 **reflink（COW）** 而不是硬链接：实测本机 / 是 XFS reflink=1
-#    （cp -a --reflink=auto 全量 10G 耗时 6.4s · 0 空间 · 改副本不影响源，已实证）。
-#    硬链接的两个隐患：① 若某 key 目录「存在但缺 .complete」，rt_cache_compile 会
-#    `cp src $dir/` 与 `cc -o $dir/x.o` **就地截断**同名 inode ⇒ 源 + 全部分片一起污染；
-#    ② 无法界定「谁写脏了谁」。reflink 从根上消掉这类风险，代价只有几秒。
-# ⚠️ devbuild 多槽（/tmp/devbuild_slots）也要**每分片一份**：回填是
-#    `cp -a $out $slot/$name` 后写 key ⇒ 多分片同填一个槽时读者可能拿到半个二进制。
-#    默认路径在私有 /tmp 里 ⇒ 不预置就是**空槽**（每片冷建）。
+# ── 4) 准备分片环境 —— 实现见文件上方 prep_worktrees()（M371 抽出，供 --prep-only 单测）──
 HEAD_SHA="$(git -C "$SRC" rev-parse HEAD)"
-for i in $(seq 1 "$N"); do
-  WT="$BASE/wt$i"
-  # 每次重建 worktree：消掉「上一轮残留 vs 这一轮 HEAD」这类不可见差异
-  # （步2 实测：检出 198MB / 1.8s，代价可忽略）
-  git -C "$SRC" worktree remove --force "$WT" >/dev/null 2>&1
-  rm -rf "$WT"
-  echo "── 建 worktree wt$i @ ${HEAD_SHA:0:8} ──"
-  git -C "$SRC" worktree add --detach "$WT" "$HEAD_SHA" >/dev/null 2>&1 || { echo "❌ wt$i 建树失败"; exit 3; }
-  cp -a --reflink=auto "$SRC/.rtcache" "$WT/.rtcache" || { echo "❌ wt$i .rtcache 副本失败"; exit 3; }
-  # ⚠️ 私有 /tmp **每次清空重建**（不能只删 devbuild_slots）——
-  #   实测（2026-10-12）：上一轮被 `kill -KILL` 打断时，分片里的门锁文件
-  #   （`/tmp/m116_gates.lock`）留了下来，里面记的是**分片 PID 命名空间里的低号 PID**（4），
-  #   而 `kill -0 4` 在新命名空间里仍然算"活着" ⇒ 之后每一轮分片都报
-  #   「已有 m116 全门在跑（PID 4）…拒绝启动」⇒ **整轮空跑**（211 门一个没跑，汇总却只报
-  #   「合计 绿 3」（quiet 档那 3 个）—— 见下面 7) 新增的"空跑必红"判据）。
-  rm -rf "$BASE/tmp$i"
-  mkdir -p "$BASE/tmp$i"
-  if [ -d /tmp/devbuild_slots ]; then
-    cp -a --reflink=auto /tmp/devbuild_slots "$BASE/tmp$i/devbuild_slots" 2>/dev/null \
-      || echo "  ⚠ wt$i：devbuild 槽副本失败（仍可跑，会冷建）"
-  fi
-done
+prep_worktrees "$HEAD_SHA"
 
 # ── 5) 启动 ──
 PIDS=()

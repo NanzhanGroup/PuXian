@@ -1826,3 +1826,14 @@ step "M369 · 名字解析优先级：变量 > 类型名（缺陷 635 · 三轨�
 #        · D 跨函数回归（遮蔽不串帧）· E 覆盖度自证（「变量胜」四族 + 回归族）。
 #   负控：NC-expect ⇒ B 红 · NC-invert ⇒ A 红 · NC-empty ⇒ E 红。
 run m369_name_shadow bash examples/m369_name_shadow/verify.sh
+step "M371 · 分片建树契约：失败必须说得出真因（缺陷 649 可证 · 647 只止住）"
+#   来历（2026-11-01）：chain-m368 两轮在 wt3 建树失败 exit 3 —— **整轮空跑**，
+#     而日志只有一句「❌ wt3 建树失败」：旧版把 git 的 stderr 吞进 /dev/null。
+#   ⇒ 649（吞 stderr）是能修的，且本门能用负控证明修得有效；
+#   ⇒ 647（僵尸 worktree 注册）**真因至今未定性**：状态复现不出来（本机 git 在目录已删/
+#     目录残缺两种形态下 rm -rf 之后 add 仍成功）⇒ 造不出「删掉 prune 就必红」的负控，
+#     按 CRIT_3 本门**不为 prune 立判据**，只立可判的契约 C2。
+#   判据：T1 正常仓 rc=0 · T2 前提自证（脏注册下 remove 真失败）· T3 契约 C2（脏注册下仍建成、
+#     注册表无残留）· T4 正控（失败须含 git 原文）· T5 判据通道可读。
+#   负控：N1 ⇒ 副本改回吞 stderr，同场景必须「说不出真因」。
+run shard_wt_recovery bash selfhost/check_shard_wt_recovery.sh
