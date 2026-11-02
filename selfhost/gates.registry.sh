@@ -944,6 +944,8 @@ run m245_tls_cert_reload bash examples/m245_tls_cert_reload/verify.sh
 #   面 = 13 个复合赋值运算符 × 14 个类型对 × {复合形态, 展开形态}。
 #   判据 [5] 是**独立真值**（不依赖三轨）：`x op= y` ⇄ `x = x op y` 必须同结果。
 #   负控要重编 C 轨 + 两轨驱动 ⇒ 本地跑全量档，CI 用 --neg-skip。
+# M372：本门 r4 实测 1362s = 上限 1500s 的 91%（未红但已贴上限）⇒ 连同 m227/m231 一并归入
+#   宿主 quiet 档（/data/gatevm/quiet_needed.txt）：进程派生型，分片 16 路并发下线性放大 3–4×。
 gate_timeout m246_compound_assign 1500
 run m246_compound_assign bash examples/m246_compound_assign/verify.sh
 # M250（第 127 轮 · 缺陷 433）：**ONNX 张量助手族全量对拍 + native 覆盖面台账**。
