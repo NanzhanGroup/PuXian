@@ -64,7 +64,11 @@ make_dirty(){                # $1=repo $2=path
   git -C "$r" worktree add --detach "$p" HEAD >/dev/null 2>&1 || return 1
   rm -f "$p/.git"
   printf 'junk\n' > "$p/junk"
-  git -C "$r" worktree list --porcelain 2>/dev/null | grep -qF "$p"
+  # 无管道读法：pipefail 下 `git | grep -q` 会因 grep 先退出触发 SIGPIPE（上游 141 ⇒ 恒假）
+  local wl
+  wl=$(git -C "$r" worktree list --porcelain 2>/dev/null || true)
+  case "$wl" in *"$p"*) return 0 ;; esac
+  return 1
 }
 
 run_prep(){                  # $1=repo $2=base $3=script $4=outfile -> rc
