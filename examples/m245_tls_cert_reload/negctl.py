@@ -21,11 +21,14 @@ LOCK = ("    pthread_mutex_lock(&g_srv_hs_mu);\n"
 LOCK_U = ("    pthread_mutex_lock(&g_srv_tls_mu);\n"
           "    int rc1, rc2;")
 
+# ⚠️ M372/缺陷 657（2026-11-02）：槽满出口的报文改成「已用 N / 容量 M + hostname」，
+#   锚点随之改到新报文上一行（注释 + 调用）。锚点只认**形状**：tls_mu unlock 后
+#   紧跟 hs_mu unlock；改文案不影响这条判据的本意（摘锁后必须判红）。
 UN1 = ("            pthread_mutex_unlock(&g_srv_tls_mu);\n"
        "            pthread_mutex_unlock(&g_srv_hs_mu);\n"
-       "            px_error(\"SNI 证书数量超出上限 %d\", PX_MAX_SNI_CERTS);")
+       "            // 缺陷 657：原来只有一句「超出上限 %d」，运维看不出「已经装了多少 / 卡在哪张证书」。")
 UN1_U = ("            pthread_mutex_unlock(&g_srv_tls_mu);\n"
-         "            px_error(\"SNI 证书数量超出上限 %d\", PX_MAX_SNI_CERTS);")
+         "            // 缺陷 657：原来只有一句「超出上限 %d」，运维看不出「已经装了多少 / 卡在哪张证书」。")
 
 UN2 = ("            pthread_mutex_unlock(&g_srv_tls_mu);\n"
        "            pthread_mutex_unlock(&g_srv_hs_mu);\n"

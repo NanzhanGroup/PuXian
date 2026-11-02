@@ -37,7 +37,6 @@ def argmap_field_index(field_names, name):
 #   → 调用方据此「按书写顺序求值、按 order 装字段」
 def argmap_struct(field_names, args, owner):
     return argmap_fields(field_names, args, owner, "结构体")
-
 # M372：data enum 载荷装配 —— 与结构体同一算法，只有报文里的「结构体」换成 kind。
 #   kind = 「结构体」/「枚举变体 …」；owner 由调用方拼好（如 "Shape.Rect"）。
 def argmap_fields(field_names, args, owner, kind):
