@@ -1601,6 +1601,10 @@ run m299_wake_channel bash examples/m299_wake_channel/verify.sh
 #        ⇒ 实测 **串行 480s → 并行 84s（5.7×）**；已登记进
 #        `examples/m244_gate_parallel/targets.tsv`，并由 [2k] 断言「串行 ⇄ 并行逐条读数相同」。
 # ═══════════════════════════════════════════════════════════════════════════
+# ⏱ 上限 1500s（M372 r3 实测顶穿）：r2 实测 830s / 默认上限 900s ⇒ 裕度只有 70s；
+#   r3 分片档（GATE_JOBS=2）直接吃到 900s 被砍（rc=124），红因是**量具**不是语义。
+#   1500s = 1.8× r2 最坏实测，且 ≥ P3 要求的 1.5× 基线。基线随本轮回填。
+gate_timeout m300_stdlib_surface2 1500
 run m300_stdlib_surface2 bash examples/m300_stdlib_surface2/verify.sh
 run m301_argcount bash examples/m301_argcount/verify.sh
 run m302_stdlib_surface3 bash examples/m302_stdlib_surface3/verify.sh

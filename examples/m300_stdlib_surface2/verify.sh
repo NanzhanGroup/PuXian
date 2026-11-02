@@ -96,6 +96,12 @@ fi
 # ── [2] 三轨对拍 ────────────────────────────────────────────
 echo "[2] 三轨对拍（解释 / VM / C）+ 四层判据"
 cp -f "$HERE/drv.px" "$W/drv.px"
+# [2] 的门内并行度夹到 8（M372 r3 量具自伤实证）：默认 auto = nproc = 16 路，
+#   而解释轨每例是**独立 spawn**（1.3–1.5s 冷启动）⇒ 16 路自抢 + 与分片/重烘叠加时，
+#   20s 的单例超时预算被击穿：r3 复跑实测 13 例 rc=124（同一批 label 空闲单跑 1.3–1.5s 全过）、
+#   16 例「非确定」（同一批超时被计成两遍不同）。上限取 8 是因为 [2k] 证明的档位就是 1 ⇄ 8，
+#   8 以上没有判据背书。分片档已导出 GATE_JOBS=2 ⇒ 这里 `:-` 不会覆盖它。
+export GATE_JOBS="${GATE_JOBS:-8}"
 timeout 1800 python3 "$HERE/three.py" --root "$ROOT" --work "$W" --cases "$HERE/CASES.tsv" \
         --model "$HERE/MODEL.tsv" --fork-allow "$HERE/ARITY_KNOWN.tsv" \
         --json "$W/three.json" > "$W/three.txt" 2>&1
