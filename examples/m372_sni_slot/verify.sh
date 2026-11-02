@@ -56,10 +56,12 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$WOR
 note "夹具：1 张 ECC 自签证书（复用给 N 个 hostname）"
 
 # ---------- P1 容量可读（三轨） ----------
-cat > "$WORK/cap.px" <<'EOF'
-def main():
-    print(px_sni_capacity())
-EOF
+# 容量语料**入库**：examples/m372_sni_slot/capacity.px。
+# 本门原先在 $WORK 里 heredoc 生成 cap.px ⇒ 新内建 px_sni_capacity 不进 native 覆盖面
+# 消费面（check_native_coverage.py 只扫 examples/ 与 registry/ 的 .px）⇒ m250 判据③
+# 「新增未覆盖」判红。按 m250 [5] 的仓库口径：运行期生成的语料必须另提交一份 .px 冒烟。
+D="$(cd "$(dirname "$0")" && pwd)"
+cp "$D/capacity.px" "$WORK/cap.px"
 "$PX" run "$WORK/cap.px" > "$WORK/cap.interp" 2> "$WORK/cap.err"; r1=$?
 rm -rf "$WORK/build"; ( cd "$WORK" && "$PX" build "$WORK/cap.px" > "$WORK/cap.vmlog" 2>&1 ); rb=$?
 if [ $rb -eq 0 ] && [ -x "$WORK/build/cap" ]; then "$WORK/build/cap" > "$WORK/cap.vm" 2>&1; else : > "$WORK/cap.vm"; fi
