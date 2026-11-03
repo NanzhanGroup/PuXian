@@ -1581,6 +1581,17 @@ jobs:
           bash examples/m372_sni_slot/verify.sh --neg-skip > /tmp/v_m372s.log 2>&1 || { echo "❌ m372_sni_slot 门失败（SNI 槽容量）"; tail -40 /tmp/v_m372s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m372s.log | tail -8
           echo "✅ m372_sni_slot（容量 256 可读 · 17 张全成 · 溢出可诊断）PASS"
+      - name: m373_data_enum_nested（data enum 复合载荷：数组/嵌套 + GC 根面 · M373）
+        # 判据：三轨 nested.px 逐字节（17 行）· GC 压测（PX_GC_THRESHOLD=5000 + LIVECHK + UAFDET）
+        #       载荷对象图存活位正确 · runs>0 前提自证（防「GC 没跑所以没报错」假绿）
+        #       · 循环引用打印有保护 · list 字面量模式给明确 E2001 · 覆盖度自证（关键行 7/7）
+        # 负控：篡改期望一行必红 · 阈值拉高使 runs=0 ⇒ 前提自证必红（要重编 ⇒ CI 用 --neg-skip）
+        # ⚠ 本门不改 runtime，不需要重烘（前置只有 tools/px 可执行）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m373_data_enum_nested/verify.sh --neg-skip > /tmp/v_m373d.log 2>&1 || { echo "❌ m373_data_enum_nested 门失败（复合载荷/GC 根面）"; tail -40 /tmp/v_m373d.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m373d.log | tail -8
+          echo "✅ m373_data_enum_nested（数组/嵌套载荷三轨一致 · GC 根面 · 覆盖度自证）PASS"
       - name: m369_name_shadow（名字解析优先级：变量 > 类型名 · M369 · 缺陷 635）
         # 判据：A 三轨逐字节一致（6 正控：局部遮蔽+方法调用/字段 · 模块级 · 块内 · 参数 · 先变量后类型）
         #       · B 门侧独立参考（期望值门内写死，不抄实现）· C 错误面 R1001 三轨同码同文

@@ -20819,7 +20819,7 @@ int main(int argc, char** argv) {
     px_srcline(69);
     px_set_global("g_bcm", px_null());
     px_srcline(71);
-    px_set_global("PXC_VER", px_str("0.2.372"));
+    px_set_global("PXC_VER", px_str("0.2.373"));
     px_srcline(72);
     px_set_global("PXC_MS", px_str("M-B9a"));
     { LXValue _r = fn_main(NULL, 0, NULL); int _code = 0;
