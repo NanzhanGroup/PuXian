@@ -1,3 +1,24 @@
+## M373 · 一（三红收口）：golden 重定基 + m373 门补注册进 CI
+
+> **令源**：自驱任务 T000175（2026-11-03）。main `8987df6` 起的 M373 全量门 250 门出 3 红
+> （证据 `/data/gatevm/chain-m373-20261103-103105-2807849`），三条同根：**改编译器/加门之后的
+> 「装置账本」没跟着改**，不是产品缺陷。
+
+| 门 | 分片 | 原文 | 定性 |
+|---|---|---|---|
+| `bootstrap_prove` | shard1 | `❌ B.c 与基准有差异`：`PXC_VER` 0.2.372 vs 0.2.373 | 版本 bump 后 golden 未重定基（缺陷 652 同形）|
+| `version_golden` | shard5 | `golden/compiler.c` / `.bc.dump` 里**没有** 0.2.373 | 同上，同一条基准的第三处视角 |
+| `gate_registry` | shard6 | `examples/m373_data_enum_nested/verify.sh` 本地清单有、ci.yml 没有 | 新门漏注册（M235 缺陷 355 同形）|
+
+处置（本提交）：
+1. `selfhost/golden/compiler.c`、`selfhost/golden/compiler.bc.dump` 重定基
+   （`bootstrap_prove.sh --update-golden` + `bootstrap_prove_bc.sh --update-golden`，两条基准同批）；
+   `diff` 只动 `PXC_VER` 那一行 —— 可核对，不是把差异一次性吞掉。
+2. `cp selfhost/build/compiler_vm bootstrap/pxc_vm` + `engine_parity.sh` 复核 rc=0（入库二进制与基准同步）。
+3. `.github/workflows/ci.yml` 补 `m373_data_enum_nested` 步骤（`--neg-skip`，同 m367/m372 口径）。
+4. 受影响三门复核：`run_gates.sh --only bootstrap_prove,version_golden,gate_registry` ⇒ **3/3 绿**
+   （gate_registry 由 12/13 → 13/13，`GATE-REGISTRY-OK`）。
+
 ## M372 · 九（r6 收账）：全量门 249/249 绿 · 发布侧被 GitHub 换镜像截断 ⇒ 钉 ubuntu-24.04
 
 > **令源**：自驱任务 T000175（2026-11-03）。r6 机械段 07:54 起跑，marker `CHAIN-EXIT=3`。
