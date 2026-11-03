@@ -43,7 +43,26 @@ r5 的四红全部归零，且**没有漂移出新红**：
    在那之前不把结论挂在"当天最新镜像"上（同一 tag 不同日期打出不同结论 = 不可复现）
 4. `Diag Release` 保留至 v0.2.372 补发验证完成后再删（它是诊断脚手架）
 
-### 四 欠账（明确不在本轮）
+### 四 补发结果（2026-11-03 12:53–13:05）
+
+钉 24.04 后走 M331 补资产入口重放：
+```
+POST /actions/workflows/release.yml/dispatches
+  {"ref":"main","inputs":{"tag":"v0.2.372","assets_only":"true"}}
+run 41580694466 → release ✅ / aarch64 自举件 ✅ / assets-verify ✅
+```
+`releases/latest` → **v0.2.372**（published 2026-11-03T04:55:50Z），资产 4 件：
+```
+puxian-0.2.372-3b7b6290.tar.gz              73762335  eee2081b0c9c…
+puxian-bootstrap-aarch64-v0.2.372.tar.gz    23107092  f9b1f0e331da…
+puxian-bootstrap-aarch64-v0.2.372.tar.gz.sha256
+sha256sums.txt
+```
+`assets_only=true` 的选择依据：run 297 的 rpm 链五个 job 全绿（el7/el9 构建 + 代签 +
+两条终验 + gh-pages 发布），缺的只有 Release 资产；为旧 tag 重跑 rpm 链会与 gh-pages
+单调性守卫打架（该守卫只保留最新版）。⇒ **发布缺口是「资产」不是「rpm 仓库」**。
+
+### 五 欠账（明确不在本轮）
 
 - **gcc 15 兼容**：`runtime.c` 在 gcc 15.2 下预编译失败，具体 error 行未取到
   （px 把 cc 日志写进临时文件、随目录删除）。下一步：diag 里 cat `/tmp/.px_cc_err.*`
@@ -51,6 +70,15 @@ r5 的四红全部归零，且**没有漂移出新红**：
 - **M373 的 CI 红**：`selfhost/golden/compiler.c` 与 `compiler.bc.dump` 里版本仍是
   0.2.372，而 main 已到 M373 ⇒ 版本 golden 哨兵红（`VERSION-GOLDEN-FAIL`）。
   需重烘 14 件内嵌源 + golden，属单独一轮（重活）。
+  本地全量门旁证（chain `chain-m373-20261103-103105`，250 门 247 绿 3 红），红门三条同一病根：
+  | 门 | 分片 | 判据原文 |
+  |---|---|---|
+  | bootstrap_prove | shard1 | `❌ B.c 与基准有差异`（改编译器源码未重定基）|
+  | version_golden | shard5 | `golden/compiler.c 里没有 0.2.373（现含 0.2.372）` |
+  | gate_registry | shard6 | `GATE-REGISTRY-FAIL`（新门 m373 与名册登记不一致）|
+  ⇒ 三条都不是产品缺陷，是 **M373 提交缺「重定基」收尾**。修法：`selfhost/bootstrap_prove.sh
+  --update-golden` + `bootstrap_prove_bc.sh --update-golden` + 补 gate registry 登记，
+  然后重跑全量门（250 门）再打 v0.2.373。
 
 
 
