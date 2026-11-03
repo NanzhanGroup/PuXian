@@ -1858,3 +1858,15 @@ run m372_data_enum bash examples/m372_data_enum/verify.sh
 #     同名覆盖不占新槽 · 溢出带「已用/容量 + hostname」· 源码契约（宏可覆盖、数组静态、无 realloc）。
 #   负控：第 257 张必须拒绝（期望反转必红）· 读数与源码宏交叉自证。
 run m372_sni_slot bash examples/m372_sni_slot/verify.sh
+# ---------------------------------------------------------------
+#  m373_data_enum_nested —— data enum **复合载荷**（数组 / 嵌套 enum）+ GC 根面（M373）
+#   为何立门：M372/S3 落了载荷值语义，但实测只覆盖到**标量**；载荷载体是通用 dict，
+#     数组与嵌套 enum 三轨本来就能跑 —— **能跑但没人测**，改 compare_values / gc_mark /
+#     px_fmt_value_n 任一处都能静默改坏而全量门全绿。
+#   判据：三轨 nested.px 逐字节（17 行）· GC 压测（PX_GC_THRESHOLD=5000 + LIVECHK + UAFDET）
+#     ⇒ 载荷对象图存活位正确 · **runs>0 前提自证**（防「GC 没跑所以没报错」的假绿）·
+#     循环引用打印有保护（{self: ...}）· list 字面量模式必须给明确 E2001（不静默不匹配）·
+#     覆盖度自证（用例关键行 7/7）。
+#   负控：篡改期望一行必红（自证篡改真发生）· 阈值拉高使 runs=0 ⇒ 前提自证必红。
+#   ⚠ 本门不改 runtime，**不需要重烘**（前置只有 tools/px 可执行）。
+run m373_data_enum_nested bash examples/m373_data_enum_nested/verify.sh

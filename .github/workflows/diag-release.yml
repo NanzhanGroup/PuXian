@@ -1,0 +1,78 @@
+# ============================================================
+# Diag Release —— 临时诊断 workflow（M373 期间，用后删除）
+# ------------------------------------------------------------
+# 为什么需要它：v0.2.372 的 Release workflow 在
+# 「构建发布包 + 创建 GitHub Release」这一步失败，
+# 但 tools/make_release.sh 的冒烟自检把编译器输出丢进了 /dev/null
+# ⇒ CI 日志里只剩一句「❌ build hello 失败」，无从定位。
+# 本机（Rocky 9 + gcc 11 / gcc 13）复现不出来（冒烟 6/6 ALL OK）。
+#
+# 本 workflow 做三件事：
+#   ① 打印 runner 环境（gcc / 内存 / 磁盘）
+#   ② 用**该 tag 的树**打包（--no-check 跳过吞错误的冒烟）
+#   ③ 解包后**手动跑 build 并把完整输出打出来**
+#
+# 用后删（它是诊断脚手架，不是产品件）。
+# ============================================================
+name: Diag Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要诊断的 tag（如 v0.2.372）'
+        required: true
+        default: 'v0.2.372'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出（该 tag 的树）
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: ① 环境
+        run: |
+          echo "=== uname ==="; uname -a
+          echo "=== gcc ==="; gcc --version | head -2
+          echo "=== cc ==="; cc --version | head -2 2>/dev/null || true
+          echo "=== nproc / mem / disk ==="; nproc; free -m; df -h /
+          echo "=== HEAD ==="; git rev-parse HEAD; git describe --tags --abbrev=0
+
+      - name: ② 打包（--no-check，绕开吞错误的冒烟）
+        run: |
+          chmod +x tools/pxc tools/make_release.sh bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar
+          bash tools/make_release.sh --no-check -o /tmp/p.tar.gz
+          ls -l /tmp/p.tar.gz
+
+      - name: ③ 解包 + 完整输出跑 build（这是本 workflow 的目的）
+        run: |
+          set +e
+          mkdir -p /tmp/rel && tar xzf /tmp/p.tar.gz -C /tmp/rel
+          D=$(ls -d /tmp/rel/*/ | head -1); echo "包根: $D"; cd "$D"
+          echo "=== 包根内容 ==="; ls -la | head -20
+          echo "=== px --version ==="; ./tools/px --version
+          printf 'def main():\n    print("hi")\n' > hello.px
+          echo "=== build --no-quic hello.px（完整 stdout+stderr）==="
+          ./tools/px build --no-quic hello.px 2>&1
+          echo "BUILD_RC=$?"
+          echo "=== build 目录 ==="; ls -la build/ 2>&1
+          echo "=== 若失败：手工复现 gcc 编译 hello.c ==="
+          if [ -f build/hello.c ]; then
+            gcc -O2 -c build/hello.c -o /tmp/hello.o 2>&1 | head -40
+            echo "GCC_HELLO_C_RC=$?"
+          fi
+          echo "=== runtime 单文件编译（CI 上最可能的失败点）==="
+          gcc -O2 -c runtime/runtime.c -DPX_NO_QUIC -o /tmp/rt.o 2>&1 | head -40
+          echo "GCC_RUNTIME_RC=$?"
+
+      - name: ④ 冒烟脚本原样再跑一遍（对比）
+        run: |
+          set +e
+          D=$(ls -d /tmp/rel/*/ | head -1); cd "$D"
+          bash -x tools/make_release.sh --help >/dev/null 2>&1 || true
+          echo "（冒烟由 ③ 直接替代；此处仅记录 make_release 里 build 的实际命令行）"
+          grep -n 'px build --no-quic hello.px' tools/make_release.sh || true

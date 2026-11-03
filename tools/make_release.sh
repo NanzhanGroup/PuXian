@@ -157,7 +157,7 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 | bootstrap/pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck | 自举工具链（fmt/lint/doc/test/bench/lsp/mcp/diagnostics） |
 | runtime/ | 构建必需 C 依赖（runtime*.c/h + mbedtls + miniz + sqlite3 + ngtcp2 + openssl，x86_64 与 aarch64 库均在） |
 | stdlib/ | 标准库（import std.* 必需） |
-| registry/ | 包库（import <包名> 用；`pxpkg add/install` 亦读取） |
+| registry/ | 包库（import <包名> 用；\`pxpkg add/install\` 亦读取） |
 | RELEASE.md / LICENSE | 本说明 / Apache-2.0 |
 
 **不含**：selfhost/（编译器源码）、docs/、examples/、capability/、.git。
@@ -270,7 +270,20 @@ cat > hello.px <<'PX'
 def main():
     print("hello from release pkg\n")
 PX
-./tools/px build --no-quic hello.px >/dev/null 2>&1 || { echo "  ❌ build hello 失败"; fail=1; }
+# M373（缺陷 658）：**失败必须说得出原因**。
+#   修前 `|| { echo "❌ build hello 失败"; }` 把编译器输出丢进 /dev/null ——
+#   CI 上失败时只留一句「build hello 失败」，无从定位（与 649「建树失败吞 git stderr」同族）。
+#   现在把输出落盘，失败时打尾部若干行；成功时文件随临时目录一起消失。
+smoke_build() {   # $1=源 $2=产物名 $3=日志名
+    ./tools/px build --no-quic "$1" > "$3" 2>&1
+}
+if smoke_build hello.px hello smoke-build.log; then
+    :
+else
+    echo "  ❌ build hello 失败（编译器输出共 $(wc -l < smoke-build.log) 行，末 25 行如下）"
+    tail -25 smoke-build.log | sed 's/^/     | /'
+    fail=1
+fi
 if [ -x build/hello ]; then
     SZ2="$(stat -c %s build/hello)"
     O="$(./build/hello 2>&1)"
@@ -293,12 +306,14 @@ import std.collections
 def main():
     print("stdlib import ok\n")
 PX
-if ./tools/px build --no-quic usesem.px >/dev/null 2>&1 && [ -x build/usesem ]; then
+if smoke_build usesem.px usesem smoke-usesem.log && [ -x build/usesem ]; then
     O3="$(./build/usesem 2>&1)"
     echo "  ④ import std.collections → $O3"
     [ "$O3" = "stdlib import ok" ] || { echo "  ❌ 输出不符"; fail=1; }
 else
-    echo "  ❌ import std.* 编译失败（stdlib 未定位）"; fail=1
+    echo "  ❌ import std.* 编译失败（stdlib 未定位）——编译器输出末 25 行："
+    tail -25 smoke-usesem.log 2>/dev/null | sed 's/^/     | /'
+    fail=1
 fi
 
 # ⑤ 包外任意目录调用 + PX_STDLIB env（模拟用户项目目录在包外）
@@ -309,12 +324,14 @@ def main():
     print("webroute import ok\n")
 PX
 export PX_STDLIB="$CHK/$NAME/stdlib"
-if "$CHK/$NAME/tools/px" build --no-quic proj.px >/dev/null 2>&1 && [ -x build/proj ]; then
+if "$CHK/$NAME/tools/px" build --no-quic proj.px > smoke-proj.log 2>&1 && [ -x build/proj ]; then
     O4="$(./build/proj 2>&1)"
     echo "  ⑤ 包外+PX_STDLIB(webroute) → $O4"
     [ "$O4" = "webroute import ok" ] || { echo "  ❌ 输出不符"; fail=1; }
 else
-    echo "  ❌ 包外 PX_STDLIB 编译失败"; fail=1
+    echo "  ❌ 包外 PX_STDLIB 编译失败——编译器输出末 25 行："
+    tail -25 smoke-proj.log 2>/dev/null | sed 's/^/     | /'
+    fail=1
 fi
 
 # ⑥ M64/M65 工具链自举版存在性（pxfmt/pxlint/pxdoc/pxtest/pxbench + pxlsp/pxmcp/pxcheck）

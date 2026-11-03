@@ -3119,10 +3119,13 @@ set_timeout(fn (): print("once after 2s"), 2000)
     | `Color.Red.x` | `R1007: 枚举值 Color.Red 没有字段 'x'`（**值级**） |
     | `(7).x = 1` | `R1002: 类型 int 不支持字段赋值: 'x'` |
 
-    ⚠️ **data enum：语法已收（M367-S1）· 载荷未实现**：`enum Shape:` + `Circle(radius: float)`
-    **已能解析**（字段名与类型都进 AST `EnumField`，旧 `E2001 … 请写 Circle(float)` 指引已撤）；
-    但变体**仍不携带数据** —— `Shape.Circle(1.5)` 报 `R1005`，`match` 解构未实现。
-    深检门 `examples/m367_enum_parse`，口径见 `spec.md` §3.8。**在此之前请用 `struct` + 可空字段表达。**
+    ✅ **data enum：已可用**（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷）：
+    `enum Shape:` + `Circle(radius: float)`，构造 `Shape.Circle(1.5)`、解构 `case Shape.Circle(r)`，
+    载荷可为标量 / 数组 / 嵌套 enum，参与相等、顺序与 `sorted()`，打印 `Shape.Circle({0: 2.0})`。
+    门 = `examples/m372_data_enum` + `examples/m373_data_enum_nested`，口径见 `spec.md` §3.8。
+    ⚠️ 三条限制：① 类型标注**不参与**构造校验（`Shape.Circle("abc")` 三轨静默接受）·
+    ② **list/dict 字面量不能作模式**（`case [1,2]:` 报 `E2001`；tuple 可以）·
+    ③ **模式内命名绑定** `case Circle(radius: r)` 未实现（构造支持命名，解构只支持位置）。
 
     📌 三条实现纪律（改发射器时通用）：
     1. **诊断文本绝不能 `return` 给「返回 C 表达式文本」的函数** —— 那会生成非法 C；

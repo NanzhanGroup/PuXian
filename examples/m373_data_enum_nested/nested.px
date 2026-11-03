@@ -1,0 +1,33 @@
+enum Shape:
+    Circle(items: [float])
+    Poly(inner: Shape, tag: str)
+    Empty(items: [int])
+    Dot
+
+def main():
+    print(Shape.Circle([1.0, 2.0, 3.0]))
+    print(Shape.Circle([]))
+    print(Shape.Empty([1, 2, 3]))
+    print(Shape.Poly(Shape.Circle([4.0]), "x"))
+    print(Shape.Circle([1.0, 2.0]) == Shape.Circle([1.0, 2.0]))
+    print(Shape.Circle([1.0, 2.0]) == Shape.Circle([1.0]))
+    print(Shape.Circle([1.0]) == Shape.Circle([2.0]))
+    print(Shape.Poly(Shape.Circle([1.0]), "a") == Shape.Poly(Shape.Circle([1.0]), "a"))
+    print(Shape.Poly(Shape.Circle([1.0]), "a") == Shape.Poly(Shape.Circle([2.0]), "a"))
+    match Shape.Circle([7.0, 8.0]):
+        case Shape.Circle(xs):
+            print(len(xs))
+            print(xs)
+        case _:
+            print("no")
+    match Shape.Poly(Shape.Circle([9.0]), "t"):
+        case Shape.Poly(inner, tg):
+            print(inner)
+            print(tg)
+        case _:
+            print("no")
+    print(Shape.Circle([1.0]) < Shape.Circle([2.0]))
+    print(Shape.Circle([1.0, 2.0]) < Shape.Circle([1.0, 3.0]))
+    let l = [Shape.Circle([2.0]), Shape.Circle([1.0])]
+    print(sorted(l))
+    print(Shape.Poly(Shape.Poly(Shape.Circle([0.5]), "i"), "o"))

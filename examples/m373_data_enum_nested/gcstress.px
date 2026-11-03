@@ -1,0 +1,16 @@
+enum Shape:
+    Circle(items: [float])
+    Poly(inner: Shape, tag: str)
+
+def churn(n):
+    var i = 0
+    var sink = 0
+    while i < n:
+        let s = Shape.Poly(Shape.Circle([1.0, 2.0]), "t" + str(i))
+        let junk = [i, i + 1, [i]]
+        sink = sink + len(junk)
+        i = i + 1
+    return n
+
+def main():
+    print(str(churn(200000)))

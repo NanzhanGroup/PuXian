@@ -314,6 +314,10 @@ examples/m324_tls_failclosed/probe.px src=6b89fc50ceea0621 rc=0 out=11f6dd983c77
 examples/m372_data_enum/main.px src=71c7d75337988ff5 rc=0 out=3b82f8343c2c75742221098636da25da err=e3b0c44298fc1c14
 examples/m372_data_enum/value.px src=8cae8bff3a30e3fe rc=0 out=d152e95888a859f2e32e54e030465398 err=e3b0c44298fc1c14
 examples/m372_sni_slot/capacity.px src=424c1231b37b2107 rc=0 out=558c01ade4f7b5a63d5206665c002963 err=e3b0c44298fc1c14
+examples/m373_data_enum_nested/badpat.px src=70f3968bd6a29856 rc=1 out=e3b0c44298fc1c149afbf4c8996fb924 err=1525fc7abadbb4e3
+examples/m373_data_enum_nested/cycle.px src=efac352f7a7fd0d4 rc=0 out=53ee8b4ff2ee4f8c2da9dec264945b95 err=e3b0c44298fc1c14
+examples/m373_data_enum_nested/gcstress.px src=bf62b6e47ecd51ab rc=0 out=462f7b4bc87527e6af65822ad25bb3b5 err=e3b0c44298fc1c14
+examples/m373_data_enum_nested/nested.px src=0f468c7a1df7b3fd rc=0 out=b2fc182de4e3104262834a9963c121ad err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

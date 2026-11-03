@@ -1197,7 +1197,7 @@ M231（运算符矩阵）逐个推过去 —— 而 **`x.f` / `x.f = v` / `T(...
 | `e.f`（枚举值） | `R1007: 枚举值 E.V 没有字段 'f'`（**值级** —— 用户手里有的是值） |
 | `x.f = v`（不可写目标） | `R1002: 类型 X 不支持字段赋值: 'f'`（带类型 + 带名） |
 | `d.f = v`（dict） | **支持**（= `d["f"] = v`，与**读**对称） |
-| data enum | **语法已收 · 载荷未实现**（M367-S1）：`Circle(radius: float)` 可解析、字段进 AST；`Shape.Circle(1.5)` 仍 `R1005`，spec §3.8 已改注 |
+| data enum | **已实现**（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷）：`Shape.Circle(1.5)` 构造、`case Shape.Circle(r)` 解构、载荷参与相等/顺序/排序、打印 `Shape.Circle({0: 2.0})`；门 = `m372_data_enum` + `m373_data_enum_nested`。两条限制见 spec §3.8：类型标注不参与校验 · list/dict 字面量不能作模式；**模式内命名绑定**（`case Circle(radius: r)`）未实现，用位置绑定 |
 
 #### 6.19.4 实现要点
 

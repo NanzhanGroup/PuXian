@@ -241,14 +241,27 @@ enum Shape:
     Rect(w: float, h: float)
 ```
 
-> ⚠️ **data enum 状态：语法已收 · 载荷未实现（M367-S1 核实）**。
-> `Circle(radius: float)` 这种「字段名: 类型」形态**已能解析**（M367-S1 之前是 `E2001`），
+> ✅ **data enum 状态：已实现（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷与门）**。
+> `Circle(radius: float)` 这种「字段名: 类型」形态可解析（M367-S1 之前是 `E2001`），
 > 字段名与类型都进 AST（`EnumField{name, ty, pos}`），旧写法 `Circle(float)` 继续接受。
-> 但**变体仍不携带数据**：`Shape.Circle(1.5)` 报 `R1005`（不接受参数），要取值只能写 `Shape.Circle`。
-> 余下两件：载荷值的三轨构造（S2 解释轨 / S3 VM+C）与 `match` 解构（S3）。
+>
+> **构造**：`Shape.Circle(1.5)` / `Shape.Rect(w: 3.0, h: 4.0)`（命名与位置可混用）。
+> **解构**：`case Shape.Circle(r)` 绑定载荷 · `case Shape.Circle(2.0)` 字面量精确匹配
+> · `case Shape.Circle(_)` 通配 · `case Shape.Circle`（无括号）匹配任意载荷。
+> **载荷值**：任意值 —— 标量、数组 `[1.0, 2.0]`、dict、**嵌套 enum**
+> （`Shape.Poly(Shape.Circle([4.0]), "x")` 成立，三轨一致）。载荷参与相等、顺序比较与 `sorted()`。
+> **打印**：载荷按**位置序号**建键，`Shape.Circle({0: 2.0})`；嵌套形态
+> `Shape.Poly({0: Shape.Circle({0: [4.0]}), 1: x})`；自引用 dict 打印为 `{self: ...}`（不无限展开）。
+> **门**：`m372_data_enum`（标量载荷值语义）+ `m373_data_enum_nested`（复合载荷 + GC 根面）。
+>
+> ⚠️ **两条当前限制（写清楚，免得按文档用错）**：
+> 1. **类型标注目前不参与构造校验**。`radius: float` 只是标注：`Shape.Circle("abc")` 三轨都
+>    静默接受（渐进类型的构造面尚未覆盖；`struct` 字段同样如此）。别把类型标注当运行期保证。
+> 2. **list / dict 字面量不能作模式**：`case [1, 2]:` 报 `E2001: 无效的模式: [`；
+>    `case (1, 2):`（tuple）可用。要在 arm 内判形状请用绑定 + 现场判断。
+>
 > ⚠️ **M365 更正一条旧口径**：原先写「§16.3 的命名参数构造 + `match` 解构同属该特性」——
 > 其中**命名参数构造已独立实现**（见 §3.7，限结构体）。
-> **在 S3 落地之前请用 `struct` + 可空字段表达。**
 
 #### 3.8.1 简化枚举（type X const 一行式带值枚举，M44）
 ```python
@@ -1696,9 +1709,14 @@ def main(args: list[str]) -> int:
 ```
 
 ### 16.3 结构体 + match
-> ⚠️ 本示例是 **data enum 的目标形态**：语法已收（M367-S1，`Circle(radius: float)` 可解析）·
-> **载荷取值与 `match` 解构未实现**（`Shape.Circle(1.5)` 报 `R1005`）⇒ 示例仍不可编译；
-> 现在请用 `struct` + `match` 判类型字段表达（见 §3.8 的状态说明）。
+> ✅ **本示例已按实测修正（M373，2026-11-03）**：`Circle(radius: float)` 语法（M367-S1）
+> + 载荷构造/解构（M372/S3）+ 复合载荷（M373）都已落地，
+> 门 = `examples/m372_data_enum` 与 `examples/m373_data_enum_nested`。
+>
+> ⚠️ **旧示例写的是 `case Circle(radius: r):`（模式内**命名**绑定）—— 该形态尚未实现**，
+> 实测报 `E2001: 期望 ')'，实际得到 :`。注意这是**不对称**的：**构造**支持命名
+> （`Shape.Circle(radius: 1.0)` 可用），**解构**只支持**位置**绑定。下面已改成可编译写法。
+> 另注 §3.8 末尾两条限制：类型标注不参与校验 · list/dict 字面量不能作模式。
 >
 > ⚠️ **另有一条独立限制（M362 实测，2026-10-30）**：即使把 data enum 换成 `struct`，
 > 下面的 `case ...: return ...` 写法**仍然不可编译** —— 报
@@ -1732,13 +1750,17 @@ enum Shape:
 
 def area(s: Shape) -> float:
     match s:
-        case Circle(radius: r): return 3.14159 * r * r
-        case Rect(w: w, h: h): return w * h
+        case Shape.Circle(r):            # 位置绑定（命名绑定尚未实现）
+            return 3.14159 * r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case _:
+            return 0.0
 
 def main():
-    shapes = [Circle(radius: 1.0), Rect(w: 2.0, h: 3.0)]
+    let shapes = [Shape.Circle(1.0), Shape.Rect(2.0, 3.0)]
     for s in shapes:
-        print(area(s))
+        print(area(s))                   # 3.14159 / 6.0（三轨逐字节一致）
 ```
 
 ### 16.4 并发（协程 + channel）

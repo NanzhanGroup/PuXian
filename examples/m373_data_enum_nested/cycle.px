@@ -1,0 +1,10 @@
+enum Shape:
+    Wrap(v)
+
+def main():
+    let d = {}
+    d["self"] = d
+    let s = Shape.Wrap(d)
+    print("built")
+    print(s)
+    print("done")

@@ -1,0 +1,7 @@
+def main():
+    let l = [1, 2]
+    match l:
+        case [1, 2]:
+            print("matched")
+        case _:
+            print("no")
