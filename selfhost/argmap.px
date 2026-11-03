@@ -80,6 +80,23 @@ def argmap_fields(field_names, args, owner, kind):
             return [kind + " " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
         fi2 += 1
     return [null, order]
+# M374：模式侧具名检测 —— 子模式列表里出现 NamedArg 即为具名解构。
+#   与构造侧共用 argmap_fields 装配算法（含「未知字段 / 重复字段 / 缺少字段」三报文），
+#   保证「写的时候怎么校验，读的时候就怎么校验」（三轨同码同文）。
+def argmap_has_named_pat(subs):
+    var i = 0
+    while i < len(subs):
+        if subs[i][0] == "NamedArg":
+            return true
+        i += 1
+    return false
+# M374：取子模式本体 —— 具名形态 [“NamedArg”, 字段名, 子模式, pos] 需脱壳。
+#   ⚠️ 三轨都必须经此函数取子模式：首版直接 subs[order[i]] 把 NamedArg 当模式，
+#      解释轨判成"不匹配"、C/VM 轨编成恒真（`(1)`）⇒ 三轨齐错（2026-11-03 20:2x 实测）。
+def argmap_pat_sub(s):
+    if s[0] == "NamedArg":
+        return s[2]
+    return s
 # 非结构体目标的统一报文体（三轨同文）
 def argmap_reject(owner):
     if owner == null:

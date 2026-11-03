@@ -1,0 +1,10 @@
+enum Shape:
+    Circle(radius: float)
+
+def main():
+    let a = Shape.Circle(2.0)
+    match a:
+        case Shape.Circle(radius: x, radius: y):
+            print("dup", x, y)
+        case _:
+            print("fallthrough")

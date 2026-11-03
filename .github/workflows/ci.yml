@@ -1592,6 +1592,17 @@ jobs:
           bash examples/m373_data_enum_nested/verify.sh --neg-skip > /tmp/v_m373d.log 2>&1 || { echo "❌ m373_data_enum_nested 门失败（复合载荷/GC 根面）"; tail -40 /tmp/v_m373d.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m373d.log | tail -8
           echo "✅ m373_data_enum_nested（数组/嵌套载荷三轨一致 · GC 根面 · 覆盖度自证）PASS"
+      - name: m374_data_enum_named（data enum 具名解构 · M374）
+        # 判据：三轨 named.px 逐字节（5 行）· 具名/乱序/位置/具名通配/无载荷五格
+        #       · 5 错误格 × 2 轨（R2001 未知/重复/缺字段 · E2001 位置在具名后 · R2001 无类型名）
+        #       · 覆盖度自证 5/5 · 前提自证（乱序 4.0 vs 位置 5.0 可分辨）
+        # 负控：篡改期望一行必红 · 错误格 ≠ 期望 · 具名通配形态在场（要重编三轨 ⇒ CI 用 --neg-skip）
+        # ⚠ 改 selfhost/*.px ⇒ 必须先重烘 14 件（CI 由发布链的 rebake 前置负责）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m374_data_enum_named/verify.sh --neg-skip > /tmp/v_m374d.log 2>&1 || { echo "❌ m374_data_enum_named 门失败（具名解构）"; tail -40 /tmp/v_m374d.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m374d.log | tail -8
+          echo "✅ m374_data_enum_named（具名解构三轨一致 · 5 错误格 × 2 轨 · 覆盖度自证）PASS"
       - name: m369_name_shadow（名字解析优先级：变量 > 类型名 · M369 · 缺陷 635）
         # 判据：A 三轨逐字节一致（6 正控：局部遮蔽+方法调用/字段 · 模块级 · 块内 · 参数 · 先变量后类型）
         #       · B 门侧独立参考（期望值门内写死，不抄实现）· C 错误面 R1001 三轨同码同文

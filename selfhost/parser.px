@@ -1414,6 +1414,34 @@ def parse_if_expr():
     let else_ = parse_expr()
     return ["IfExpr", cond, then, else_, pos]
 # ---------- 模式 ----------
+# M374：构造器模式的子模式列表 —— 位置模式 / 具名模式 `字段名: 模式`。
+#   具名形态复用 **NamedArg** 节点（与构造侧同一表示，argmap.px 的装配算法直接可用），
+#   因此不新增 AST 节点类型，astdump / LAYOUT 无需改动。
+#   位置模式不得出现在具名模式之后（与构造侧 parse_call_args 同一口径、同一 E2001）。
+def parse_pat_fields():
+    let fields = []
+    var seen_named = false
+    if not chk(")"):
+        while true:
+            if pk() == "标识符" and chk2(":"):
+                let npos = ppos()
+                let fname = pv()
+                adv()
+                adv()
+                skip_expr_ws()
+                fields.append(["NamedArg", qstr(fname), parse_pattern(), npos])
+                seen_named = true
+            else:
+                if seen_named:
+                    perr("E2001", "位置模式不能出现在具名模式之后（把这个也写成 `字段名: 模式`）")
+                fields.append(parse_pattern())
+            if chk(","):
+                adv()
+                skip_expr_ws()
+                continue
+            break
+    expect(")", "')'")
+    return fields
 def parse_pattern():
     let k = pk()
     if k == "整数" or k == "浮点" or k == "字符串" or k == "true" or k == "false" or k == "null":
@@ -1435,29 +1463,14 @@ def parse_pattern():
             #   无括号 ⇒ 保持 PatLiteral（值匹配：常量组按值，enum 变体按变体名）。
             if chk("("):
                 adv()
-                let fields = []
-                if not chk(")"):
-                    while true:
-                        fields.append(parse_pattern())
-                        if chk(","):
-                            adv()
-                            continue
-                        break
-                expect(")", "')'")
-                return ["PatConstructor", qstr(mname), fields]
+                # M374：第 4 元素 = 类型名（具名解构要用它查字段表；位置写法不使用）。
+                #   3 元素形态仍然合法（无类型名的裸构造器模式，如 `Some(x)`），
+                #   消费方一律用 len(pat) > 3 判断，不假设第 4 元素存在。
+                return ["PatConstructor", qstr(mname), parse_pat_fields(), qstr(name)]
             return ["PatLiteral", ["Field", ["Var", qstr(name), fpos], qstr(mname), fpos]]
         if chk("("):
             adv()
-            let fields = []
-            if not chk(")"):
-                while true:
-                    fields.append(parse_pattern())
-                    if chk(","):
-                        adv()
-                        continue
-                    break
-            expect(")", "')'")
-            return ["PatConstructor", qstr(name), fields]
+            return ["PatConstructor", qstr(name), parse_pat_fields()]
         if name == "_":
             return ["PatWildcard"]
         if is_upper(name):

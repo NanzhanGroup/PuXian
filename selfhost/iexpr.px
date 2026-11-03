@@ -749,11 +749,30 @@ def i_match_pattern(pat, v, env, pos):
                 return Ok(false)
             # M372：载荷按**声明序**（dict 键 "0"…"N-1"）解构；个数不等 ⇒ 本 arm 不匹配
             #   （与 PatTuple 同口径：多/少都不匹配，落到下一个 arm，不报错）
-            if len(pat[2]) != len(payload):
+            # M374：具名解构 `Shape.Rect(h: hh, w: ww)` —— 字段名→位置由 **同一份** argmap_fields
+            #   解出（与构造侧同码同文）；解不出 ⇒ R2001 运行期错误（与构造侧同一时机口径）。
+            let subs = pat[2]
+            var order = []
+            var oi = 0
+            while oi < len(subs):
+                order.append(oi)
+                oi += 1
+            if argmap_has_named_pat(subs):
+                if len(pat) < 4:
+                    return Err(i_r2001("具名解构需要写出枚举类型名（`类型.变体(字段名: 模式)`）", pos))
+                let tn = rust_unescape(pat[3])
+                let flds2 = i_enum_fields_of(tn, name)
+                if len(flds2) == 0:
+                    return Err(i_r2001("枚举 " + tn + " 没有带字段的变体「" + name + "」", pos))
+                let am2 = argmap_fields(flds2, subs, tn + "." + name, "枚举变体")
+                if am2[0] != null:
+                    return Err(i_r2001(am2[0], pos))
+                order = am2[1]
+            if len(subs) != len(payload):
                 return Ok(false)
             var pi = 0
-            while pi < len(pat[2]):
-                let mr = i_match_pattern(pat[2][pi], payload[str(pi)], env, pos)
+            while pi < len(subs):
+                let mr = i_match_pattern(argmap_pat_sub(subs[order[pi]]), payload[str(pi)], env, pos)
                 if mr.is_err():
                     return Err(mr.err())
                 if not mr.unwrap():

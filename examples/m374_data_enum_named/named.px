@@ -1,0 +1,29 @@
+enum Shape:
+    Circle(radius: float)
+    Rect(w: float, h: float)
+    Px(x: int, y: int)
+
+def area(s: Shape) -> float:
+    match s:
+        case Shape.Circle(radius: r):
+            return 3.14 * r * r
+        case Shape.Rect(h: hh, w: ww):
+            return ww * hh
+        case Shape.Px():
+            return 0.0
+
+def describe(s: Shape) -> str:
+    match s:
+        case Shape.Circle(r):
+            return "pos:" + str(r)
+        case Shape.Rect(w: ww, h: _):
+            return "named:" + str(ww)
+        case _:
+            return "other"
+
+def main():
+    print(area(Shape.Circle(2.0)))
+    print(area(Shape.Rect(w: 3.0, h: 5.0)))
+    print(area(Shape.Px(x: 1, y: 2)))
+    print(describe(Shape.Circle(1.5)))
+    print(describe(Shape.Rect(w: 4.0, h: 6.0)))

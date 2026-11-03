@@ -1,0 +1,10 @@
+enum Shape:
+    Rect(w: float, h: float)
+
+def main():
+    let b = Shape.Rect(w: 3.0, h: 5.0)
+    match b:
+        case Shape.Rect(w: ww, 5.0):
+            print("mixed", ww)
+        case _:
+            print("fallthrough")

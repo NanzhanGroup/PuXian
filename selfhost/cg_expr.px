@@ -980,11 +980,29 @@ def cg_gen_pattern_cond(pattern, subject):
             #   永不匹配。现在：变体匹配 → 载荷项数匹配 → 逐项子模式（声明序，键 "0"…"N-1"）。
             #   多/少都不匹配（px_match_enum_payload 与 px_match_tuple 同口径），c 轨不报错。
             let subs = pattern[2]
+            # M374：具名解构 —— 字段名→位置用**同一份** argmap_fields（三轨同码同文）；
+            #   解不出 ⇒ 运行期 R2001（px_error 不 return，故逗号右值只作类型占位）。
+            var order = []
+            var oi = 0
+            while oi < len(subs):
+                order.append(oi)
+                oi += 1
+            if argmap_has_named_pat(subs):
+                if len(pattern) < 4:
+                    return "(px_error(\"R2001: 具名解构需要写出枚举类型名（`类型.变体(字段名: 模式)`）\"), 1)"
+                let tn = rust_unescape(pattern[3])
+                let flds2 = cg_enum_fields_of(tn, name)
+                if len(flds2) == 0:
+                    return "(px_error(\"" + cg_escape_str("R2001: 枚举 " + tn + " 没有带字段的变体「" + name + "」") + "\"), 1)"
+                let am2 = argmap_fields(flds2, subs, tn + "." + name, "枚举变体")
+                if am2[0] != null:
+                    return "(px_error(\"" + cg_escape_str("R2001: " + am2[0]) + "\"), 1)"
+                order = am2[1]
             var parts = [c, "px_match_enum_payload(" + subject + ", " + str(len(subs)) + ")"]
             var pi = 0
             while pi < len(subs):
                 let subj_i = "px_field(px_enum_payload_of(" + subject + "), \"" + str(pi) + "\")"
-                parts.append("(" + cg_gen_pattern_cond(subs[pi], subj_i) + ")")
+                parts.append("(" + cg_gen_pattern_cond(argmap_pat_sub(subs[order[pi]]), subj_i) + ")")
                 pi += 1
             return "(" + join(" && ", parts) + ")"
         return c

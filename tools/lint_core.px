@@ -539,7 +539,11 @@ def lc_collect_pat(p, ctx):
         let fields = p[2]
         var i2 = 0
         while i2 < len(fields):
-            lc_collect_pat(fields[i2], ctx)
+            # M374：具名解构 `变体(字段名: 模式)` —— 子模式在 NamedArg[2]
+            if fields[i2][0] == "NamedArg":
+                lc_collect_pat(fields[i2][2], ctx)
+            else:
+                lc_collect_pat(fields[i2], ctx)
             i2 += 1
 # ---------- 推导式子句（声明 vars 到 sub） ----------
 def lc_decl_comp_vars(sub, clauses):

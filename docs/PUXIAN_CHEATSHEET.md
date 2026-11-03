@@ -3119,13 +3119,15 @@ set_timeout(fn (): print("once after 2s"), 2000)
     | `Color.Red.x` | `R1007: 枚举值 Color.Red 没有字段 'x'`（**值级**） |
     | `(7).x = 1` | `R1002: 类型 int 不支持字段赋值: 'x'` |
 
-    ✅ **data enum：已可用**（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷）：
-    `enum Shape:` + `Circle(radius: float)`，构造 `Shape.Circle(1.5)`、解构 `case Shape.Circle(r)`，
+    ✅ **data enum：已可用**（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷 → M374 具名解构）：
+    `enum Shape:` + `Circle(radius: float)`，构造 `Shape.Circle(1.5)`、解构 `case Shape.Circle(r)`、
+    具名解构 `case Shape.Rect(h: hh, w: ww)`（乱序可用，与构造侧同一份 argmap_fields），
     载荷可为标量 / 数组 / 嵌套 enum，参与相等、顺序与 `sorted()`，打印 `Shape.Circle({0: 2.0})`。
-    门 = `examples/m372_data_enum` + `examples/m373_data_enum_nested`，口径见 `spec.md` §3.8。
+    门 = `examples/m372_data_enum` + `examples/m373_data_enum_nested` + `examples/m374_data_enum_named`，
+    口径见 `spec.md` §3.8。
     ⚠️ 三条限制：① 类型标注**不参与**构造校验（`Shape.Circle("abc")` 三轨静默接受）·
     ② **list/dict 字面量不能作模式**（`case [1,2]:` 报 `E2001`；tuple 可以）·
-    ③ **模式内命名绑定** `case Circle(radius: r)` 未实现（构造支持命名，解构只支持位置）。
+    ③ 具名解构**必须写类型名**（`case Circle(radius: r)` 报 `R2001 需要写出枚举类型名`）。
 
     📌 三条实现纪律（改发射器时通用）：
     1. **诊断文本绝不能 `return` 给「返回 C 表达式文本」的函数** —— 那会生成非法 C；

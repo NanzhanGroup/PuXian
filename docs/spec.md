@@ -248,11 +248,19 @@ enum Shape:
 > **构造**：`Shape.Circle(1.5)` / `Shape.Rect(w: 3.0, h: 4.0)`（命名与位置可混用）。
 > **解构**：`case Shape.Circle(r)` 绑定载荷 · `case Shape.Circle(2.0)` 字面量精确匹配
 > · `case Shape.Circle(_)` 通配 · `case Shape.Circle`（无括号）匹配任意载荷。
+> **具名解构（M374）**：`case Shape.Rect(h: hh, w: ww)` —— 字段名到位置的映射由
+> `argmap.px` 的 `argmap_fields` 解出（**与构造侧同一份算法**，三轨同码同文）。
+> 规则与构造侧对齐：① 必须写全所有字段（缺一个即 `R2001 缺少字段「…」`）；
+> ② 字段名拼错 ⇒ `R2001 … 没有字段「…」`；③ 同名写两次 ⇒ `R2001 … 字段「…」重复给出`；
+> ④ 位置模式不得出现在具名模式之后（`E2001`，parser 层）；⑤ 具名解构必须写出**类型名**
+> （`Shape.Rect(w: ww)` 可以，裸 `Rect(w: ww)` 报 `R2001 具名解构需要写出枚举类型名`，
+> 因为字段表按 `类型.变体` 索引）。
 > **载荷值**：任意值 —— 标量、数组 `[1.0, 2.0]`、dict、**嵌套 enum**
 > （`Shape.Poly(Shape.Circle([4.0]), "x")` 成立，三轨一致）。载荷参与相等、顺序比较与 `sorted()`。
 > **打印**：载荷按**位置序号**建键，`Shape.Circle({0: 2.0})`；嵌套形态
 > `Shape.Poly({0: Shape.Circle({0: [4.0]}), 1: x})`；自引用 dict 打印为 `{self: ...}`（不无限展开）。
-> **门**：`m372_data_enum`（标量载荷值语义）+ `m373_data_enum_nested`（复合载荷 + GC 根面）。
+> **门**：`m372_data_enum`（标量载荷值语义）+ `m373_data_enum_nested`（复合载荷 + GC 根面）
+> + `m374_data_enum_named`（具名解构：三轨逐字节 + 5 错误格 × 2 轨 + 3 负控）。
 >
 > ⚠️ **两条当前限制（写清楚，免得按文档用错）**：
 > 1. **类型标注目前不参与构造校验**。`radius: float` 只是标注：`Shape.Circle("abc")` 三轨都
@@ -1713,9 +1721,10 @@ def main(args: list[str]) -> int:
 > + 载荷构造/解构（M372/S3）+ 复合载荷（M373）都已落地，
 > 门 = `examples/m372_data_enum` 与 `examples/m373_data_enum_nested`。
 >
-> ⚠️ **旧示例写的是 `case Circle(radius: r):`（模式内**命名**绑定）—— 该形态尚未实现**，
-> 实测报 `E2001: 期望 ')'，实际得到 :`。注意这是**不对称**的：**构造**支持命名
-> （`Shape.Circle(radius: 1.0)` 可用），**解构**只支持**位置**绑定。下面已改成可编译写法。
+> ⚠️ **旧示例写的是 `case Circle(radius: r):`（模式内**命名**绑定）—— M374 起已支持**，
+> 但必须写出类型名：`case Shape.Circle(radius: r):`。裸 `case Circle(radius: r):` 会报
+> `R2001 具名解构需要写出枚举类型名`（字段表按 `类型.变体` 索引）。构造侧与解构侧现在都支持命名，
+> 两侧共用 `argmap_fields` 同一份装配与报文（见 §3.8）。
 > 另注 §3.8 末尾两条限制：类型标注不参与校验 · list/dict 字面量不能作模式。
 >
 > ⚠️ **另有一条独立限制（M362 实测，2026-10-30）**：即使把 data enum 换成 `struct`，

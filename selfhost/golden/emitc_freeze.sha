@@ -318,6 +318,12 @@ examples/m373_data_enum_nested/badpat.px src=70f3968bd6a29856 rc=1 out=e3b0c4429
 examples/m373_data_enum_nested/cycle.px src=efac352f7a7fd0d4 rc=0 out=53ee8b4ff2ee4f8c2da9dec264945b95 err=e3b0c44298fc1c14
 examples/m373_data_enum_nested/gcstress.px src=bf62b6e47ecd51ab rc=0 out=462f7b4bc87527e6af65822ad25bb3b5 err=e3b0c44298fc1c14
 examples/m373_data_enum_nested/nested.px src=0f468c7a1df7b3fd rc=0 out=b2fc182de4e3104262834a9963c121ad err=e3b0c44298fc1c14
+examples/m374_data_enum_named/badfield.px src=c2086f57c9b4eb22 rc=0 out=b023fe3521f170e8b2536f4fdc0d92c7 err=e3b0c44298fc1c14
+examples/m374_data_enum_named/barename.px src=5e14c6a2987bf050 rc=0 out=c7397d190a2b1846c4c433707dac78bd err=e3b0c44298fc1c14
+examples/m374_data_enum_named/dupfield.px src=5eb7ffa95597ff00 rc=0 out=31e81e6aa56c25acdb8e0ea0fba8835d err=e3b0c44298fc1c14
+examples/m374_data_enum_named/missingfield.px src=cc86b01d9e27df6b rc=0 out=5d48843d7e754b25c54ba68c3434aa03 err=e3b0c44298fc1c14
+examples/m374_data_enum_named/mixed.px src=ea41dbd0a5aed6b3 rc=1 out=e3b0c44298fc1c149afbf4c8996fb924 err=a9e969712bbabbbb
+examples/m374_data_enum_named/named.px src=75da0d29d0fce409 rc=0 out=e7cc26ded285be2eff6b824765bf5934 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

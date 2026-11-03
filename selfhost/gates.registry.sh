@@ -1870,3 +1870,13 @@ run m372_sni_slot bash examples/m372_sni_slot/verify.sh
 #   负控：篡改期望一行必红（自证篡改真发生）· 阈值拉高使 runs=0 ⇒ 前提自证必红。
 #   ⚠ 本门不改 runtime，**不需要重烘**（前置只有 tools/px 可执行）。
 run m373_data_enum_nested bash examples/m373_data_enum_nested/verify.sh
+
+#  m374_data_enum_named —— data enum **具名解构**（M374）
+#   为何立门：构造侧 M372 起支持具名实参，解构侧 `case Shape.Rect(w: ww, h: hh):` 一直报
+#     E2001 ⇒ 同一契约只兑现一半（写的时候能用、读的时候不能用）。
+#   判据：三轨 named.px 逐字节（5 行）· 具名/乱序/位置/具名通配/无载荷五格 · 5 错误格 × 2 轨
+#     （未知字段 / 重复字段 / 缺字段 / 位置在具名之后 / 无类型名，报文与构造侧同一份 argmap_fields）
+#     · 覆盖度自证 5/5 · 前提自证（乱序绑定值 4.0 vs 位置吃法 5.0 可分辨）。
+#   负控：篡改期望一行必红 · 错误格 ≠ 期望（逐字节判据有鉴别力）· 具名通配形态在场。
+#   ⚠ 本门不改 runtime，但改 selfhost/*.px ⇒ **必须先重烘 14 件**（bootstrap 才是新编译器）。
+run m374_data_enum_named bash examples/m374_data_enum_named/verify.sh

@@ -77,7 +77,7 @@
 |---|---|---|---|
 | 1 | **闭包捕获**（读/写外部变量） | ✅ **已支持**（M362 实测：`var n = 0` + `let inc = fn() { n = n + 1; return n }`，解释 / VM / C 三轨输出均为 `1`、`2`，逐字节一致） | —（无需规避） |
 | 2 | **函数内 `def` 嵌套函数** | ✅ **已支持**（M362 实测：三轨输出均为 `12`，逐字节一致） | —（无需规避） |
-| 3 | **data enum 带值变体** `Circle(radius)` | ✅ **已支持**（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷）：`Shape.Circle(1.5)` 构造、`case Shape.Circle(r)` 位置解构、标量/数组/嵌套 enum 载荷三轨逐字节一致；门 = `examples/m372_data_enum` + `examples/m373_data_enum_nested`。限制见 `docs/spec.md` §3.8：类型标注不参与校验 · list/dict 字面量不能作模式 · **模式内命名绑定** `case Circle(radius: r)` 未实现 | —（直接可用；模式请用位置绑定） |
+| 3 | **data enum 带值变体** `Circle(radius)` | ✅ **已支持**（M367-S1 语法 → M372/S3 载荷值 → M373 复合载荷 → M374 具名解构）：`Shape.Circle(1.5)` 构造、`case Shape.Circle(r)` 位置解构、`case Shape.Rect(h: hh, w: ww)` 具名解构（与构造侧同一份 `argmap_fields`，乱序可用）、标量/数组/嵌套 enum 载荷三轨逐字节一致；门 = `examples/m372_data_enum` + `examples/m373_data_enum_nested` + `examples/m374_data_enum_named`。限制见 `docs/spec.md` §3.8：类型标注不参与校验 · list/dict 字面量不能作模式 · 具名解构必须写出类型名 | —（直接可用） |
 | 4 | `*args` 可变参数 | 编译模式语法错误 | 显式 list 参数 |
 | 5 | **函数/方法**的命名参数调用 `f(b: 2)` | **未实现**（M365 实测：parser 已能把 `名: 值` 解析为命名参数，但装配只对**结构体构造**生效；函数调用报 `R2001: 命名参数仅支持结构体构造（「f」不是结构体）`。⚠️ 与第 5' 条区分：**结构体构造**的命名参数`Point(x: 1, y: 2)` 已支持） | 位置参数 / dict 参数 |
 | 5' | **结构体构造**的命名参数 `Point(x: 1, y: 2)` | ✅ **已支持**（M365 实现：全命名 / 逆序 / 位置+命名混合三轨逐字节一致；求值按书写顺序；门 = `examples/m365_named_args`） | —（无需规避） |

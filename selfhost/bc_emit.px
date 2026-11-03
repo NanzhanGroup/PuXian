@@ -1643,6 +1643,30 @@ def bc_match_cond(pattern, t, func, jumps):
             #   多/少都不匹配（MATCHENUMP 与 MATCHTUP 同口径）；不带子模式的有载荷变体
             #   （`case Shape.Circle:`）落在下面的纯变体判据，照样匹配（见 PatLiteral）。
             let subs = pattern[2]
+            # M374：具名解构 —— 字段名→位置用**同一份** argmap_fields（与解释轨/C 轨同码同文）。
+            #   解不出 ⇒ RAISE 一条 R2001（运行期，与解释轨 i_match_pattern 返回 Err 同一时机）。
+            var order = []
+            var oi = 0
+            while oi < len(subs):
+                order.append(oi)
+                oi += 1
+            if argmap_has_named_pat(subs):
+                if len(pattern) < 4:
+                    let m1 = "R2001: 具名解构需要写出枚举类型名（`类型.变体(字段名: 模式)`）"
+                    bc_emit_inst(func, "RAISE", 0, bc_n_add(g_bcm["n_pool"], m1), 0)
+                    return
+                let tn = rust_unescape(pattern[3])
+                let flds2 = bc_enum_fields(tn, name)
+                if len(flds2) == 0:
+                    let m2 = "R2001: 枚举 " + tn + " 没有带字段的变体「" + name + "」"
+                    bc_emit_inst(func, "RAISE", 0, bc_n_add(g_bcm["n_pool"], m2), 0)
+                    return
+                let am2 = argmap_fields(flds2, subs, tn + "." + name, "枚举变体")
+                if am2[0] != null:
+                    let m3 = "R2001: " + am2[0]
+                    bc_emit_inst(func, "RAISE", 0, bc_n_add(g_bcm["n_pool"], m3), 0)
+                    return
+                order = am2[1]
             let eb = bc_match_enumvar(name, t, func)
             jumps.append(len(func["bc"]))
             bc_emit_inst(func, "JMPF", eb, 0, 0)
@@ -1657,7 +1681,7 @@ def bc_match_cond(pattern, t, func, jumps):
                 let ev = bc_tmp(func)
                 let kn = bc_n_add(g_bcm["n_pool"], str(pi))
                 bc_emit_inst(func, "GETF", ev, pay, kn)
-                bc_match_cond(subs[pi], ev, func, jumps)
+                bc_match_cond(argmap_pat_sub(subs[order[pi]]), ev, func, jumps)
                 pi += 1
             return
         let eb2 = bc_match_enumvar(name, t, func)
