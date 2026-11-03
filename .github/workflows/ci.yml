@@ -20,10 +20,16 @@ concurrency:
   group: ci-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
+# ---- M372 · 环境固定（2026-11-03 实测）----
+# 下面 4 个 x86 job 显式钉 ubuntu-24.04，不再用 ubuntu-latest：
+#   2026-11-03 GitHub 把 latest 切到 ubuntu-26.04 + gcc 15.2 ⇒ ① multiarch-cross 的
+#   `apt-get install qemu-user-static` 直接无候选包（exit 100 ×3）；② 门内 runtime 预编译
+#   在 gcc 15 下失败（`tools/make_release.sh` 同现象）。24.04 上两条均绿。
+#   26.04/gcc15 兼容是单独一轮的事；在那之前不把 CI 结论挂在"当天最新镜像"上。
 jobs:
   regression:
     name: 自举回归（PuXian-only）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: 检出代码
@@ -145,7 +151,7 @@ jobs:
 
   examples:
     name: 示例编译运行
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: 检出代码
@@ -162,7 +168,7 @@ jobs:
 
   toolchain:
     name: 工具链自举质量门（fmt + lint）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # M216s5：**30 → 60**。实测余量只有 ~7 分钟（见下），runner 性能一波动就超时；
     #   而「工具自测」步本身另设 45 分钟上限 ⇒ 极端情况下由**该步**先失败，
     #   `if: failure()` 的诊断 step 才跑得起来（job 级超时会让所有后续 step 全部 skip）。
@@ -1767,7 +1773,7 @@ jobs:
 
   multiarch-cross:
     name: 多架构交叉编译 + qemu 验证（${{ matrix.arch }}，M67）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false

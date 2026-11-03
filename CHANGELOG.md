@@ -1,4 +1,58 @@
-## M373 —— data enum 复合载荷「能跑但没人测」⇒ 立门 + 5 处文档与实现对齐（第 247 轮）
+## M372 · 九（r6 收账）：全量门 249/249 绿 · 发布侧被 GitHub 换镜像截断 ⇒ 钉 ubuntu-24.04
+
+> **令源**：自驱任务 T000175（2026-11-03）。r6 机械段 07:54 起跑，marker `CHAIN-EXIT=3`。
+
+### 一 r6 门结果：绿 249 · 红 0（分片 8 片全绿 + quiet 16 门全绿）
+
+| 段 | 结果 | 耗时 |
+|---|---|---|
+| 分片 8 路 | 绿 29+26+29+31+28+30+31+29 = 233 | 07:54 → 09:47（1h53m）|
+| quiet 串行 16 门 | 绿 16 · 红 0 | ~35min（等静 155s 达标 3/3，loadavg <4）|
+| 合计 | **绿 249 / 249** | 墙钟 ~1h53m |
+
+r5 的四红全部归零，且**没有漂移出新红**：
+- m317（判据自伤）→ 1024→2048 / 相对 50%→25% 后绿（本机 85s）
+- m239 / m324（分片环境次生）→ 进 quiet 档后绿
+- m183（机器不静）→ quiet 前置 `sync` + loadavg 探针（达标 3/3）后绿
+
+### 二 发布侧：CHAIN-EXIT=3 不是门红，是 GitHub 换了 runner 镜像
+
+`release_guard` 判绿通过（绿 249 · 红 0 · rc=0）→ `main` 与 tag `v0.2.372` 均已推送
+（`da6b947..3b7b629`），但 **Release workflow（run 297）attempt 1/2 都红**，
+`releases/latest` 轮询 29 次仍停在 v0.2.371 ⇒ `LATEST-VERDICT=BLOCKED`。
+
+日志定性（Release job「构建发布包」）：
+```
+❌ build hello 失败 / ❌ import std.* 编译失败（stdlib 未定位）
+错误: runtime 预编译失败 runtime.c（gcc）—— 日志 /tmp/.px_cc_err.*
+```
+用 `Diag Release`（run 41566470722）取到 runner 环境：
+**Ubuntu 26.04 LTS · gcc 15.2.0**（镜像 `ubuntu26/20261025.179`）。
+- 本机 Rocky 9（gcc 11/13）同一棵树打包 + 冒烟 **6/6 ALL OK**（EXIT=0）
+- 同一轮 `ci.yml` 的多架构 job 是另一条独立证据：`E: Package 'qemu-user-static'
+  has no installation candidate`（26.04 里没这个包名）⇒ exit 100 ×3
+
+结论：**代码与发布包没问题，是 `ubuntu-latest` 在 2026-11-03 被切到 26.04 + gcc 15**。
+这与「红门漂移」无关，别按门去修。
+
+### 三 处置（本轮提交）
+
+1. `.github/workflows/release.yml`：7 处 `runs-on` → **ubuntu-24.04**（arm job 仍 24.04-arm）
+2. `.github/workflows/ci.yml`：4 处 `runs-on` → **ubuntu-24.04**
+3. 两处文件头写明原因与退出条件：**升级到 26.04 是单独一轮**，先做 gcc 15 兼容定性；
+   在那之前不把结论挂在"当天最新镜像"上（同一 tag 不同日期打出不同结论 = 不可复现）
+4. `Diag Release` 保留至 v0.2.372 补发验证完成后再删（它是诊断脚手架）
+
+### 四 欠账（明确不在本轮）
+
+- **gcc 15 兼容**：`runtime.c` 在 gcc 15.2 下预编译失败，具体 error 行未取到
+  （px 把 cc 日志写进临时文件、随目录删除）。下一步：diag 里 cat `/tmp/.px_cc_err.*`
+  再定量定性；很可能与 C23 默认语义（隐式声明/函数原型）有关。
+- **M373 的 CI 红**：`selfhost/golden/compiler.c` 与 `compiler.bc.dump` 里版本仍是
+  0.2.372，而 main 已到 M373 ⇒ 版本 golden 哨兵红（`VERSION-GOLDEN-FAIL`）。
+  需重烘 14 件内嵌源 + golden，属单独一轮（重活）。
+
+
 
 > **令源**：用户 2026-11-03 09:26「继续执行 自主决策、自主立项、自主推进、打tag后的通知到我的
 > ws-android 设备策略」。

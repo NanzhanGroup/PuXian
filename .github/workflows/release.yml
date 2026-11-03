@@ -2,7 +2,7 @@
 # Release —— PuXian GitHub Release 自动发布（tag 驱动，M62）
 # ------------------------------------------------------------
 # 触发：推送 tag v*（如 v0.1.0-m62）到 GitHub
-# 流程：ubuntu-latest 检出（含 tag 历史）→ tools/make_release.sh
+# 流程：ubuntu-24.04 检出（含 tag 历史）→ tools/make_release.sh
 #       构建发布包（版本号自 tag 派生，见脚本"版本来源"段）
 #       → 收集 tarball / SHA-256 / 上一 tag 起的提交列表
 #       → gh CLI 创建 GitHub Release 并上传 tarball（GITHUB_TOKEN，零第三方 action）
@@ -66,7 +66,7 @@ concurrency:
 jobs:
   release:
     name: 构建发布包 + 创建 GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: 检出代码（含 tag 历史，供 git describe 与提交列表）
@@ -429,7 +429,7 @@ jobs:
   # ============================================================
   assets-verify:
     needs: [release, bootstrap-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -488,7 +488,7 @@ jobs:
   # ============================================================
   rpm-build-9:
     name: 构建 el9 签名 RPM 仓库并代签 el7（rockylinux:9）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: rockylinux:9
     needs: [rpm-build-7]
     timeout-minutes: 30
@@ -680,7 +680,7 @@ jobs:
     # 下游 rpm-build-9 / rpm-verify-7 / rpm-verify-openeuler / rpm-publish 都以它为前提，
     # 一处跳过即整链 skipped（skipped 不算失败，与 GPG 未配置时的既有行为同口径）。
     if: ${{ !inputs.assets_only }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: 检查 GPG 签名密钥是否就绪（未配置则跳过发布）
@@ -738,7 +738,7 @@ jobs:
 
   rpm-verify-7:
     name: el7 正式签名仓库终验（centos:7 + yum 3.4 双验签 + 安装）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [rpm-build-9]
     timeout-minutes: 30
     steps:
@@ -797,7 +797,7 @@ jobs:
   # ============================================================
   rpm-verify-openeuler:
     name: openEuler 正式签名仓库终验（22.03 / 24.03 · dnf 双验签 + 真编译运行）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [rpm-build-9]
     # M168 实测：本 job 内含**两个容器**各自的「dnf 装 gcc 依赖 + 真编译一个程序」，
     #   而容器自带源（repo.openeuler.org）在境外 runner 上很慢 —— 40min 会在第二个版本线
@@ -859,7 +859,7 @@ jobs:
   rpm-publish:
     name: 合并发布 el7+el9 rpm 仓库到 GitHub Pages
     needs: [rpm-build-9]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: 检查 GPG 签名密钥是否就绪（未配置则跳过发布）
