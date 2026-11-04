@@ -1603,6 +1603,20 @@ jobs:
           bash examples/m374_data_enum_named/verify.sh --neg-skip > /tmp/v_m374d.log 2>&1 || { echo "❌ m374_data_enum_named 门失败（具名解构）"; tail -40 /tmp/v_m374d.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m374d.log | tail -8
           echo "✅ m374_data_enum_named（具名解构三轨一致 · 5 错误格 × 2 轨 · 覆盖度自证）PASS"
+      - name: m375_ws_connect_timeout（WS 客户端建链/握手全程无超时 · M375 · 缺陷 PX-BUG-20261023-01 P0）
+        # 判据：[1] 静态（4 条建链路径全走 helper · 握手 5 处全走有界版 · 清零契约在场 · 缺陷号可追溯）
+        #       [2] 正控 now ⇒ ok 且 <3s（修复不能把正常握手打死）· [3] delay:2 ⇒ ok · [4] delay:8 ⇒ null
+        #       [5] 主判据 never ⇒ null **且 rc≠124** 且 4.5~9s（rc=124 = 外壳杀的 ⇒ 内部没超时 = 假绿）
+        #       [6] flow:7 握手后 7s 首帧必须收到（超时没漏到正常收发）· [7] ws:// URL 第二路径
+        #       [8] 邻居 refuse ⇒ null 且 <2s（快速失败与超时是两条路径）
+        #       [9][10] 负控 A/B：用超时值把同一用例翻转（证明判据的自变量是超时值，不是恒真/恒假）
+        # 负控：A（HS=1200 + delay:2 ⇒ null）· B（HS=12000 + delay:8 ⇒ ok）—— 只改环境变量，不需重编
+        # ⚠ 改 runtime ⇒ 必须先重烘 14 件（CI 由发布链的 rebake 前置负责）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m375_ws_connect_timeout/verify.sh > /tmp/v_m375ws.log 2>&1 || { echo "❌ m375_ws_connect_timeout 门失败（WS 建链/握手超时）"; tail -40 /tmp/v_m375ws.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m375ws.log | tail -8
+          echo "✅ m375_ws_connect_timeout（建链 10s / 握手 5s 有界 · 清零契约 · rc≠124 防假绿）PASS"
       - name: m369_name_shadow（名字解析优先级：变量 > 类型名 · M369 · 缺陷 635）
         # 判据：A 三轨逐字节一致（6 正控：局部遮蔽+方法调用/字段 · 模块级 · 块内 · 参数 · 先变量后类型）
         #       · B 门侧独立参考（期望值门内写死，不抄实现）· C 错误面 R1001 三轨同码同文

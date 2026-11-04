@@ -23,6 +23,24 @@ def anon_of(pid):
         return -1
     return kv_kb(r.ok(), "RssAnon:")
 
+# 采样：单次点采样**噪声 > 判据区间**（缺陷 661 · 2026-11-04 实测同一份代码三次：
+#   open slope2_bpr = -947 / 294 / 2408，而 [4.1] 阈值 2048 ⇒ 单点采样下这条判据是掷硬币；
+#   出现负值本身就说明「拿一次 /proc 读数当稳态」不成立）。
+#   改为：在判定点连采 k 次、取**最小值**（GC 若落在两次采样之间，min 取回落后的水位；
+#   真漏则整段仍在涨，min 挡不住累计增长 —— closed 档 [3.1] 仍必须 ≥4096 就是这条的守门）。
+def anon_min(pid, k, gap_ms):
+    best = -1
+    i = 0
+    while i < k:
+        v = anon_of(pid)
+        if v >= 0:
+            if best < 0 or v < best:
+                best = v
+        i += 1
+        if i < k:
+            sleep(gap_ms)
+    return best
+
 def run():
     av = args()
     if len(av) < 4:
@@ -47,10 +65,10 @@ def run():
             bad += 1
         i += 1
         if i == half:
-            a_mid = anon_of(pid)
+            a_mid = anon_min(pid, 3, 150)
             print("M317-DRV mid anon=" + str(a_mid) + " after=" + str(i))
             flush()
-    a1 = anon_of(pid)
+    a1 = anon_min(pid, 3, 150)
     print("M317-DRV end anon=" + str(a1) + " after=" + str(n))
     d1 = (a_mid - a0) * 1024
     d2 = (a1 - a_mid) * 1024

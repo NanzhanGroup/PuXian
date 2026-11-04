@@ -123,8 +123,53 @@ chk '静态 · px_conn_pushback 定义/声明/字段/消费/释放（5 处）' "
 # 三个收口点：按**形状**计数（不绑变量名 —— M242 缺陷 407 的教训）
 N1=$(grep -c 'px_conn_pushback(c, buf + rest_off, (size_t)rest_len)' "$RS")
 chk "静态 · 收口 A：ws_read_http_header 交还残余" "$N1" "1"
-N2=$(grep -c 'ws_client_handshake_px' "$RS")
-chk "静态 · 客户端握手点全部走 PxConn 版（1 处定义 + 5 处调用）" "$N2" "6"
+# ── M375 改后拓扑：5 个调用点 → `ws_client_handshake_bounded`（有界套 fd 超时）→ 1 个 PxConn 版
+#   原判据数的是「`ws_client_handshake_px` 出现次数 == 6（1 定义 + 5 调用）」。
+#   M375 把 5 处调用包了一层有界版 ⇒ 该文本计数必然变 3（定义 + 注释 + 有界版内那一处），
+#   但**门的意图（所有客户端握手都走 PxConn 收口）没有被削弱，反而多了一道**。
+#   ⇒ 判据改为按**调用形状**数，并且拆成两条互相独立的事实：
+#     ① 有界版 = 1 处定义 + 5 处调用（少一处 = 有调用点没套超时）
+#     ② 有界版体内仍走 PxConn 版（否则 = 用「超时改造」把残余收口绕过去了）
+#   ⚠ M288 的教训（判据绑文本形状会随重构漂移）：因此两条都配**静态负控**，
+#     证明「扰动源文本后判据真的会变」——纯文本，不需重编，`--neg-skip` 下也照跑。
+topo_bounded() { grep -c 'ws_client_handshake_bounded(' "$1"; }
+topo_body_px() { grep -c 'int r = ws_client_handshake_px(c, host, port, path);' "$1"; }
+N2=$(topo_bounded "$RS")
+chk "静态 · 客户端握手点全部走有界版（1 处定义 + 5 处调用）" "$N2" "6"
+N2I=$(topo_body_px "$RS")
+chk "静态 · 有界版体内仍走 PxConn 版（超时改造没把残余收口绕开）" "$N2I" "1"
+NSF="$W/negS-topo.c"
+if cp "$RS" "$NSF" && python3 - "$NSF" <<'PY'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding='utf-8').read()
+old = 'ws_client_handshake_bounded(cc, host, port, path)'
+if old not in s:
+    print('NEG-S1 anchor miss'); sys.exit(1)
+io.open(p, 'w', encoding='utf-8').write(s.replace(old, 'ws_client_handshake_px(cc, host, port, path)', 1))
+print('NEG-S1 patch ok')
+PY
+then
+    chk "负控 S1 · 撤一处有界调用（直连 PxConn）⇒ 上一判据必须不再成立" "$(topo_bounded "$NSF")" "5"
+else
+    bad "负控 S1 · 打桩锚点丢失（拓扑判据失去自证能力）"
+fi
+if cp "$RS" "$NSF" && python3 - "$NSF" <<'PY'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding='utf-8').read()
+old = 'int r = ws_client_handshake_px(c, host, port, path);'
+if old not in s:
+    print('NEG-S2 anchor miss'); sys.exit(1)
+io.open(p, 'w', encoding='utf-8').write(s.replace(old, 'int r = 0;   /* NEG-S2 */', 1))
+print('NEG-S2 patch ok')
+PY
+then
+    chk "负控 S2 · 有界版体内不调 PxConn ⇒ 上一判据必须不再成立" "$(topo_body_px "$NSF")" "0"
+else
+    bad "负控 S2 · 打桩锚点丢失（拓扑判据失去自证能力）"
+fi
+rm -f "$NSF"
 grep -q 'ws_client_handshake(' "$RS" && N3=1 || N3=0
 chk "静态 · 重复实现 ws_client_handshake（fd 版）已删除" "$N3" "0"
 grep -q 'ws_read_http_header_fd' "$RS" && N4=1 || N4=0
