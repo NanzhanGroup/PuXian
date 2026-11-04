@@ -1,3 +1,26 @@
+## M374 · 五（仓库瘦身）：bootstrap/ 从历史剥离 · .git 17GB → 89MB · 缺陷 658 因侧处置
+
+> **令源**：用户 2026-11-04 10:34「瘦身仓库」→ 10:43「把 bootstrap/ 从历史里剥掉」。
+
+### 一 做了什么
+- `git filter-repo --path bootstrap/ --invert-paths --force` 重写全部历史。
+- 历史里 bootstrap blob **2409 → 14**（未压缩 21.4GB → 0）；HEAD 保留当前一份（构建/CI/门依赖）。
+- 本地 `.git` **17GB → 89MB`**；可达提交 1151 → 1041（22 个只改 bootstrap 的提交变空被剔除）。
+- 4 个 tag（v0.2.371–374）在新历史上重建并 force push；远端旧分支 `feat/pxpkg-sync-w1` 删除。
+
+### 二 sha 全变（必读）
+- **所有历史 commit sha 已变更**；旧 sha 查 `docs/SHA_MAP_M374.tsv`（1062 条映射），
+  说明见 `docs/SHA_REWRITE_M374.md`。
+- 关键映射：`138b194`(v0.2.374) → `bb4e0cc`；`3b7b629`(v0.2.372) → `bb166c4`；
+  `0f4fbed`(重写前 HEAD) → `0197d5b`。
+
+### 三 验证
+- `tag_guard` 绿（最高里程碑 M374 ← v0.2.374）· `portability_shipped` 绿（14/14 全静态 x86_64）。
+- `rebake_bin.sh --check-all` **14/14 件与当前源码一致 · runtime 链错 0**（恢复逐字节一致）。
+- github Release v0.2.374 四资产完好（tar.gz 73.7MB / aarch64 bootstrap 23MB / sha256 ×2）。
+- GitHub 侧标称 size 仍需服务端 GC 才下降（见文档 §五）。
+
+
 ## M374 · 一（收账）：全量门 251/251 绿 · v0.2.374 已发 · CI 1/3 完整绿（2 处 checkout 超时）
 
 > **令源**：自驱任务 T000175（2026-11-04）。机械段 `chain-m374` 11-03 23:52:38 起跑，
