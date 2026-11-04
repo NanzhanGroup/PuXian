@@ -1880,3 +1880,20 @@ run m373_data_enum_nested bash examples/m373_data_enum_nested/verify.sh
 #   负控：篡改期望一行必红 · 错误格 ≠ 期望（逐字节判据有鉴别力）· 具名通配形态在场。
 #   ⚠ 本门不改 runtime，但改 selfhost/*.px ⇒ **必须先重烘 14 件**（bootstrap 才是新编译器）。
 run m374_data_enum_named bash examples/m374_data_enum_named/verify.sh
+
+#  m375_ws_connect_timeout —— WS 客户端「建链 + 握手」全程无超时（M375 · 缺陷 PX-BUG-20261023-01）
+#   为何立门：晨曦 2026-10-23 报 P0（对端 TCP 已连上但一字不发 ⇒ ws_connect 永久阻塞，
+#     worker 线程占死、连接不入会话表、不打日志、不释放 fd；广州积压 21 条，只能重启）。
+#     该缺陷的触发条件**不是「连不上」**而是「连上了但不说话」—— 既有 ws 门（m236/m235）
+#     结构上覆盖不到，所以必须用夹具把「对端行为」变成自变量。
+#   判据：静态 8 条（4 条建链路径全走 helper · 裸 connect 清零 · 握手 5 处全走 bounded ·
+#     **握手成功后清零 SO_* ** · 默认值/上界钳制 · 缺陷号可追溯 · SO_ERROR 复核）
+#     + 动态 12 条：now 正控（<3s ok）· delay:2 必 ok（超时不过短）· delay:8 必 null（超时生效）
+#     · never 必 null 且 **rc≠124**（是进程自己退出，不是外壳 timeout 杀的）+ 4.5~9s 时窗
+#     · flow:7 首帧必收到（证明超时没漏到正常收发）· ws:// URL 路径同判 · refuse <2s（快速失败仍在）
+#   负控：PX_WS_HANDSHAKE_TIMEOUT_MS=1200 时 delay:2 必须翻转为 null；=12000 时 delay:8 必须翻转
+#     为 ok ⇒ 证明判据的自变量确实是超时值本身，不是「某处恒返回 null」。
+#   边界（未覆盖，登记在案）：wss:// 的 TLS 握手与读响应头（BIO 是 mbedtls_net_recv，非 timeout 版，
+#     给同一 fd 设 SO_RCVTIMEO 会与 mbedtls 的 read_timeout 打架）· 服务端 ws_serve 的 accept 后握手。
+#   ⚠ 本门改 runtime/*.c ⇒ **必须先 --rebake-all 重烘 14 件**，否则门测的是旧运行时（假红/假绿）。
+run m375_ws_connect_timeout bash examples/m375_ws_connect_timeout/verify.sh

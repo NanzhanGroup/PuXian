@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <fcntl.h>          // M375：建链期非阻塞 + 恢复阻塞（fcntl）
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -689,6 +690,91 @@ static int px_ws_resolve_v4(const char* host, struct in_addr* out4) {
     return 0;
 }
 
+// ═══ M375（缺陷 PX-BUG-20261023-01）：客户端**建链与握手全程必须有界** ═══
+// 缺陷（晨曦 2026-10-23 09:35 经总线报，P0 · 复现率 100%）：
+//   对端「TCP 已连上但一个字节都不发」⇒ `ws_connect` 永久阻塞：
+//     · `connect()` 裸阻塞（路由黑洞 / SYN 丢弃 ⇒ 等内核重传超时，实测 >45s 至无限）
+//     · `ws_client_handshake_px` 的读响应头走 `px_conn_read` → `recv` 无线程内超时
+//       （`px_conn_read_body` 明文分支只处理 EINTR，EAGAIN 直接返回 -1 —— 但客户端 fd
+//        从来没设过 SO_RCVTIMEO ⇒ 根本不会有 EAGAIN）
+//   ⇒ 调用它的 worker 线程被永久占住，连接**不进会话表**（槽位分配在握手之后）、
+//     **不打日志**、**不释放 fd**；广州现场积压 21 条握手挂死连接（会话数:连接数 = 28:1），
+//     只能重启进程回收。
+//
+// 修法（两条边界，各自独立生效、互不掩盖）：
+//   ① 建链：非阻塞 connect + poll(timeout) + SO_ERROR 复核 ⇒ 到点即 ETIMEDOUT；
+//   ② 握手：握手套上 SO_RCVTIMEO/SO_SNDTIMEO，**成功后清零**恢复阻塞读语义
+//      （`ws_recv` 的契约是阻塞读，不能把这层超时漏到正常收发上 —— 那是另一条缺陷）。
+//   TLS（wss://）的 BIO 由 mbedtls 自己的 recv 回调掌握（`mbedtls_net_recv`，非 timeout 版），
+//   给同一 fd 设 SO_RCVTIMEO 会与 mbedtls 的 read_timeout 语义打架（见 runtime.c 的 M150 注释）
+//   ⇒ 本处显式跳过，登记为**未覆盖边界**（门里写清），另立任务。
+//
+// 旋钮：两个环境变量可覆盖默认值（运维现场调参 + 门做「判据自伤」负控用）：
+//   PX_WS_CONNECT_TIMEOUT_MS（默认 10000）· PX_WS_HANDSHAKE_TIMEOUT_MS（默认 5000）
+//   取值为 0 或非法 ⇒ 回落默认（不做「0 = 无限」——那等于把缺陷原样留一个后门）。
+#define PX_WS_CONNECT_TIMEOUT_MS_DEF   10000
+#define PX_WS_HANDSHAKE_TIMEOUT_MS_DEF  5000
+#define PX_WS_TIMEOUT_MAX_MS           120000
+
+static int ws_env_timeout_ms(const char* name, int def) {
+    const char* v = getenv(name);
+    if (!v || !v[0]) return def;
+    int n = atoi(v);
+    if (n <= 0) return def;
+    if (n > PX_WS_TIMEOUT_MAX_MS) n = PX_WS_TIMEOUT_MAX_MS;
+    return n;
+}
+
+// 给 fd 设有界读写（ms <= 0 ⇒ 清零 = 恢复「无限阻塞」，即本文件默认语义）
+static void ws_set_fd_timeout(int fd, int ms) {
+    if (fd < 0) return;
+    struct timeval tv;
+    tv.tv_sec = ms > 0 ? ms / 1000 : 0;
+    tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+}
+
+// 有界 connect（addr 已由 `px_ws_resolve_v4` 解析 —— 保留它是为了让「解析入口唯一」这条
+//   M240/M255 契约继续成立：本文件仍只有一处解析、四条建链路径共用）。
+// 返回 0 = 已连上且 fd 恢复**阻塞**模式；-1 = 失败（errno 已设；调用方负责 close）。
+static int ws_connect_bounded(int fd, const struct sockaddr_in* addr, int timeout_ms) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0) return -1;
+    if (fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) return -1;
+    int r = connect(fd, (const struct sockaddr*)addr, sizeof(*addr));
+    if (r < 0 && errno != EINPROGRESS) return -1;
+    if (r < 0) {
+        struct pollfd p;
+        p.fd = fd;
+        p.events = POLLOUT;
+        p.revents = 0;
+        int pr;
+        do { pr = px_io_poll(&p, 1, timeout_ms); } while (pr < 0 && errno == EINTR);  // M211 同族：EINTR 重试
+        if (pr == 0) { errno = ETIMEDOUT; return -1; }
+        if (pr < 0) return -1;
+        int soerr = 0;
+        socklen_t sl = sizeof(soerr);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0) return -1;
+        if (soerr != 0) { errno = soerr; return -1; }
+    }
+    // 恢复阻塞：后续 px_conn_read/write 依赖阻塞语义（握手期的上界改由 SO_RCVTIMEO 表达）
+    if (fcntl(fd, F_SETFL, fl) < 0) return -1;
+    return 0;
+}
+
+// 有界握手：明文套 fd 超时（成功后清零）；TLS 跳过（见上方边界说明）。
+// ⚠️ 清零必须在**成功后**也执行 —— `ws_recv` 是阻塞读契约，漏清会让所有正常收发
+//   在 5s 后返回 null（把「防挂死」变成「静默丢帧」，比原缺陷更难发现）。
+static int ws_client_handshake_bounded(PxConn* c, const char* host, int port, const char* path) {
+    int ms = ws_env_timeout_ms("PX_WS_HANDSHAKE_TIMEOUT_MS", PX_WS_HANDSHAKE_TIMEOUT_MS_DEF);
+    int bounded = (c && !c->is_tls);
+    if (bounded) ws_set_fd_timeout(c->fd, ms);
+    int r = ws_client_handshake_px(c, host, port, path);
+    if (bounded) ws_set_fd_timeout(c->fd, 0);
+    return r;
+}
+
 // ws_connect(host, port, path) → int conn | null（客户端握手）
 // M32：支持一行连接 ws_connect("ws://host:port/path") / "wss://host:port/path"（wss 走 TLS）
 LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
@@ -728,7 +814,7 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
             if (!hs) return px_null();
             PxConn* cc = px_pxconn_from_https(hs);
             if (!cc) { px_https_close_ex(hs); return px_null(); }
-            if (ws_client_handshake_px(cc, host, port, path) < 0) {
+            if (ws_client_handshake_bounded(cc, host, port, path) < 0) {   // M375（TLS：见边界说明，不高低设 SO_*）
                 px_https_close_ex(hs);
                 return px_null();
             }
@@ -761,13 +847,14 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
         addr.sin_family = AF_INET;
         addr.sin_port = htons((uint16_t)port);
         if (px_ws_resolve_v4(host, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
-        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+        // M375：有界建链（原裸 connect 在 SYN 黑洞上无限阻塞）
+        if (ws_connect_bounded(fd, &addr, ws_env_timeout_ms("PX_WS_CONNECT_TIMEOUT_MS", PX_WS_CONNECT_TIMEOUT_MS_DEF)) != 0) { close(fd); return px_null(); }
         // M288（缺陷 501）：**先建 PxConn、再做握手** —— 握手多读的字节由
         //   `ws_read_http_header` 交还给连接的 `pb`（原先 fd 版直接丢弃 ⇒ 首帧丢失）。
         //   与 TLS 分支同构（那边本就是「先建 cc、再握手」），并因此**删除了 fd 版重复实现**。
         PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
         px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
-        if (ws_client_handshake_px(cc, host, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
+        if (ws_client_handshake_bounded(cc, host, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }   // M375
         pthread_mutex_lock(&g_ws_mu);
         int slot = ws_alloc_slot();
         if (slot < 0) {
@@ -800,11 +887,12 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
     if (px_ws_resolve_v4(host, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+    // M375：有界建链（原裸 connect 在 SYN 黑洞上无限阻塞）
+    if (ws_connect_bounded(fd, &addr, ws_env_timeout_ms("PX_WS_CONNECT_TIMEOUT_MS", PX_WS_CONNECT_TIMEOUT_MS_DEF)) != 0) { close(fd); return px_null(); }
     // M288（缺陷 501）：先建 PxConn 再做握手（残余字节交还见 PxConn.pb）
     PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
     px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
-    if (ws_client_handshake_px(cc, host, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
+    if (ws_client_handshake_bounded(cc, host, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
     pthread_mutex_lock(&g_ws_mu);
     int slot = ws_alloc_slot();
     if (slot < 0) {
@@ -886,11 +974,12 @@ LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
     if (px_ws_resolve_v4(hbuf, &addr.sin_addr) != 0) { close(fd); return px_null(); }  // M240：无静态状态
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+    // M375：有界建链（原裸 connect 在 SYN 黑洞上无限阻塞）
+    if (ws_connect_bounded(fd, &addr, ws_env_timeout_ms("PX_WS_CONNECT_TIMEOUT_MS", PX_WS_CONNECT_TIMEOUT_MS_DEF)) != 0) { close(fd); return px_null(); }
     // M288（缺陷 501）：先建 PxConn 再做握手（残余字节交还见 PxConn.pb）
     PxConn* cc = (PxConn*)xmalloc(sizeof(PxConn));
     px_conn_init_client(cc, fd);   // M240(g)：统一初始化（含 mutex）
-    if (ws_client_handshake_px(cc, hbuf, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
+    if (ws_client_handshake_bounded(cc, hbuf, port, path) < 0) { px_conn_owner_free(cc); return px_null(); }
     pthread_mutex_lock(&g_ws_mu);
     int slot = ws_alloc_slot();
     if (slot < 0) { pthread_mutex_unlock(&g_ws_mu); px_conn_owner_free(cc); return px_null(); }   // M240(d)
@@ -981,10 +1070,10 @@ static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
             //   （含 close(nfd)）⇒ 下方的失败出口**不得**再 close（否则双重关闭）。
             PxConn* nc = NULL;
             int nfd_open = 1;
-            if (ra_ok && connect(nfd, (struct sockaddr*)&ra, sizeof(ra)) == 0) {
+            if (ra_ok && ws_connect_bounded(nfd, &ra, ws_env_timeout_ms("PX_WS_CONNECT_TIMEOUT_MS", PX_WS_CONNECT_TIMEOUT_MS_DEF)) == 0) {   // M375
                 nc = (PxConn*)xmalloc(sizeof(PxConn));
                 px_conn_init_client(nc, nfd);   // M240(g)：统一初始化（含 mutex）
-                if (ws_client_handshake_px(nc, rh, rp, rpath) != 0) {
+                if (ws_client_handshake_bounded(nc, rh, rp, rpath) != 0) {   // M375
                     px_conn_owner_free(nc);   // 含 close(nfd)
                     nc = NULL;
                     nfd_open = 0;

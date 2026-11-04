@@ -1,0 +1,28 @@
+# M375 门探针 · 客户端
+# 用法：cli.px <port> [form]
+#   form = 3arg（默认，ws_connect(host, port, path)）| url（ws_connect("ws://...")）
+#
+# 输出契约（verify.sh 逐行 grep，不解析自然语言）：
+#   CONN ok      握手成功
+#   CONN null    返回 null（失败/超时）
+var cli_port = 19991
+var cli_form = "3arg"
+let cli_av = args()
+if len(cli_av) > 1:
+    cli_port = int(cli_av[1])
+if len(cli_av) > 2:
+    cli_form = cli_av[2]
+
+if cli_form == "url":
+    c = ws_connect("ws://127.0.0.1:" + str(cli_port) + "/agent/t")
+else:
+    c = ws_connect("127.0.0.1", cli_port, "/agent/t")
+
+if c != null:
+    print("CONN ok")
+    if cli_form == "recv":
+        # 边界判据：握手期超时必须已清零 —— 否则这里会在 5s 处拿到 null
+        print("RECV =", ws_recv(c, 20000))
+    ws_close(c)
+else:
+    print("CONN null")

@@ -1,4 +1,70 @@
-## M374 · 六（tag 重建决策 · 种子实验 · 缺陷 660）
+## M375（缺陷 PX-BUG-20261023-01）：WS 客户端建链与握手全程无超时 —— 晨曦 P0，挂了 12 天
+
+> **令源**：用户 2026-11-04 10:59「其他节点有没有 PuXian 问题反馈过来的？」→ 13:58「继续自主决策、自主立项、自主推进、打 tag 后通知到我的 ws-android」。
+> **报障**：晨曦（wsa-chenxi）2026-10-23 09:35 经节点总线，P0，复现率 100%。
+
+### 一 缺陷（两处根因，各自独立生效）
+
+- **建链**：`connect()` 裸阻塞（URL 明文 / (host,port,path) / `ws_connect_auto` / 自动重连 四条路径）。
+  对 SYN 被丢弃的对端等的是内核重传超时（实测 >45s，部分路径无上界）。
+- **握手**：`ws_client_handshake_px → ws_read_http_header → px_conn_read → recv()`。
+  `px_conn_read_body` 明文分支只处理 EINTR（M211 缺陷 265 的修复），EAGAIN 直接返回 -1 ——
+  但**客户端 fd 从来没设过 SO_RCVTIMEO**，所以根本不会有 EAGAIN，只会在 recv 上无限阻塞。
+- **后果**：调用线程永久占住 · 连接**不进会话表**（槽位分配在握手之后）· **不打日志** · **不释放 fd**，
+  只能重启回收。广州现场积压 **21 条**握手挂死连接（会话数:连接数 = 28:1）。
+
+### 二 修法（两条边界，互不掩盖）
+
+- `ws_connect_bounded()`：`fcntl(O_NONBLOCK)` → `connect` → `poll(POLLOUT, timeout)` →
+  `getsockopt(SO_ERROR)` 复核 → `fcntl` 恢复阻塞。`EINPROGRESS` 正常路径、`EINTR` 重试。
+  四条路径全改走它 —— 解析入口仍只有 `px_ws_resolve_v4` 一处（M240/M255 契约不变，**未动判据**）。
+- `ws_client_handshake_bounded()`：握手前设 `SO_RCVTIMEO/SO_SNDTIMEO`，**握手完成后无条件清零**。
+  清零是这条修复的另一半 —— 漏了就把「防挂死」变成「5s 后静默丢帧」，比原缺陷更难发现。
+- 旋钮：`PX_WS_CONNECT_TIMEOUT_MS`（默认 10000）· `PX_WS_HANDSHAKE_TIMEOUT_MS`（默认 5000），
+  上界钳制 120000。**不提供「0 = 无限」** —— 那等于给这条缺陷留后门。
+
+### 三 判据（新门 m375 · 26 条断言 · 修前实证）
+
+| 层 | 判据 |
+|---|---|
+| 静态 8 | 4 条路径全走 helper · 裸 connect 清零 · 握手 5 处全走 bounded · **清零契约在场** · 默认值与上界 · 缺陷号可追溯 · SO_ERROR 复核 |
+| 正控 | now（立即 101）⇒ ok 且 <3s（修复不能把正常握手打死） |
+| 延迟分辨 | delay:2 ⇒ ok（超时不过短）· delay:8 ⇒ null（超时生效） |
+| **主判据** | never ⇒ null **且 rc≠124** 且 4.5~9s（rc=124 = 外壳 timeout 杀的 = 内部没超时） |
+| 边界 | flow:7 —— 握手后 7s 才来的首帧必须收到（防超时漏到正常收发） |
+| 第二路径 | `ws://` URL 形式 + never ⇒ null |
+| 邻居 | refuse（accept 后立刻 close）⇒ null 且 <2s（快速失败路径仍在） |
+| 负控 A/B | `HS=1200` 时 delay:2 **翻转为 null** · `HS=12000` 时 delay:8 **翻转为 ok** |
+
+- **修前实证**（同一夹具同一探针，`bootstrap/pxi` = 改动前入库件）：
+  never 模式 **rc=124（外壳 20s 强杀，进程从未返回）** → 修后 **rc=0，5506ms 返回 null**。
+- 负控 A/B 证明判据的自变量**确实是超时值本身**，不是「某处恒返回 null」或「判据恒绿」。
+
+### 四 未覆盖边界（登记，不装作已解决）
+
+1. **`wss://` 的 TLS 握手与读响应头**：BIO 是 `mbedtls_net_recv`（非 timeout 版），给同一 fd 设
+   `SO_RCVTIMEO` 会与 mbedtls 的 `read_timeout` 语义打架（见 runtime.c M150 注释）。
+   要修必须改 BIO 为 `mbedtls_net_recv_timeout` 并统一 read_timeout 口径 —— 影响所有 HTTPS 客户端，独立任务。
+2. **服务端 `ws_serve` 的 accept 后握手**：同样的「连上不说话」可占满 worker 池，修法不同
+   （服务端该用 idle timeout 而非一次性握手超时），独立任务。
+
+### 五 处置时延的诚实说明
+
+报障 2026-10-23 09:35，修复 2026-11-04 ⇒ **12 天**。当天我回的是「待空闲执行」，
+此后 M323→M374 全部投在「门为什么说不清话 / 仓库瘦身」上。
+**不是环境问题，是优先级判断的偏差**：外部节点按流程提的、附可复现证据的 P0，
+不该靠「我记得」才能被排期。口径已改：**外部 P0 优先于内部量具类工作**。
+
+### 六 本批改动面
+
+- `runtime/runtime_ws.c`：+约 110 行（helper 两处 + 5 处调用点 + 缺陷留痕注释）· 四条建链路径
+- `examples/m375_ws_connect_timeout/`：门（`verify.sh` + `silent_srv.py` + `cli.px`）
+- `selfhost/gates.registry.sh`：登记 m375（251 → 252 门）
+- `docs/PX-BUG-20261023-01.md`：缺陷单（现象/根因/修法/判据/边界/时延说明）
+- `bootstrap/`：14 件 `--rebake-all` 重烘（改 runtime ⇒ 指纹全变），`--check-all` 14/14 一致
+
+
+
 
 > **令源**：用户 2026-11-04 13:31「自主决策处理」（处置 11:36 报告中挂起的四项）。
 
