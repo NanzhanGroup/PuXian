@@ -5,7 +5,7 @@
 ### 一 做了什么
 - `git filter-repo --path bootstrap/ --invert-paths --force` 重写全部历史。
 - 历史里 bootstrap blob **2409 → 14**（未压缩 21.4GB → 0）；HEAD 保留当前一份（构建/CI/门依赖）。
-- 本地 `.git` **17GB → 89MB`**；可达提交 1151 → 1041（22 个只改 bootstrap 的提交变空被剔除）。
+- 本地 `.git` **17GB → 89MB**；可达提交 1151 → 1041（22 个只改 bootstrap 的提交变空被剔除）。
 - 4 个 tag（v0.2.371–374）在新历史上重建并 force push；远端旧分支 `feat/pxpkg-sync-w1` 删除。
 
 ### 二 sha 全变（必读）
