@@ -1,3 +1,41 @@
+## M374 · 一（收账）：全量门 251/251 绿 · v0.2.374 已发 · CI 1/3 完整绿（2 处 checkout 超时）
+
+> **令源**：自驱任务 T000175（2026-11-04）。机械段 `chain-m374` 11-03 23:52:38 起跑，
+> 11-04 03:07:25 退出（`M374B-DONE`：`CHAIN-EXIT=0`），
+> 证据 `/data/gatevm/chain-m374-20261103-235238-1330612/fullgate.log`。
+
+### 一 门：251/251 绿，红 0
+| 段 | 结果 |
+|---|---|
+| 分片 4 路（每门 4 核） | 绿 59+61+60+55 = **235** · 红 0 · 四片 rc=0 |
+| quiet 串行 16 门 | 绿 **16** · 红 0（等静 3/3 · loadavg 1.53/2.73/6.62） |
+| 合计 | **绿 251 · 红 0**（门清单 251，取自 `138b194`） |
+| 墙钟 | **170.5min**（23:52:38 → 02:43:09，+release/latest 至 03:07:25） |
+
+### 二 首跑 14 红 = 环境假红（见 `docs/GATE_TIMEOUTS.md` §8）
+- 4 片 × `SHARD_JOBS=2`（每门 2 核）+ `.rtcache` 冷：**11 门顶格 900s**，总 38642s，14 红。
+- 同 HEAD 改 4 片 × `JOBS=4`：全部 <900s 通过，**红 0**。
+- 结论：**超时红 ≠ 产品红**；重烘轮次强制 `SHARD_JOBS>=4`，不靠重跑碰运气。
+
+### 三 发版
+- `main` = `138b194`，tag `v0.2.374`（annotated）→ `138b194`，同批推。
+- 版本链闸：源码 0.2.374 == tag ✅；`releases/latest` = v0.2.374（19:06:45Z，4 资产）。
+- **rpm 链未执行**：Release run 41696871350 的 el7 构建 job 顶 45min 超时被 cancel，
+  el9 签名 / el7 终验 / openEuler 终验 / Pages 合并 四 job 全 skipped ⇒ 本轮 rpm 仓库未更新。
+
+### 四 CI：1/3 workflow 完整绿，2 处 cancelled = 同一根因（checkout 全量克隆）
+- `PuXian CI` **success**（19:44:06Z）。
+- `PuXian Tag Guard` cancelled：18:45:46→19:05:50 = 20.1min 顶 `timeout-minutes: 20`，
+  卡 step2 检出（`fetch-depth: 0`），**守卫 skipped ⇒ 未判红**；历史 14 次 run 均 2.1–3.5min 绿。
+- `Release` cancelled：el7 job 18:45:47→19:30:54 = 45.1min 顶 `timeout-minutes: 45`（release.yml:684），
+  同样卡检出（release.yml:704 `fetch-depth: 0`）。
+- 根因：仓库体积 10.0 GB 使全量克隆从 2–3min 劣化到 20min 量级（同体积定时 run 实测 138s，
+  push 批实测 20.4min 成功 / 20.0+44.9min 未完成）⇒ 20min 与 45min 两个上限被顶穿；
+  同一 push 并发拉起 CI+Tag Guard+Release 多个全量克隆 job 进一步放大取数争用。
+  与 tag 是否存在无关（v0.2.374 在仓）。
+- 欠账：gcc15 兼容、并发档 vs 串行基线对拍、checkout 提速（blob:none 部分克隆 / bootstrap 二进制入库策略，另立任务）。
+
+
 ## M373 · 二（收账）：全量门 250/250 绿 · v0.2.373 已发（4 资产）
 
 > **令源**：自驱任务 T000175（2026-11-03）。机械段 `chain-m373b` 13:18:08 起跑，15:28:29 退出
