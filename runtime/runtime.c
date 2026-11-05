@@ -172,8 +172,20 @@ int px_io_accept(int fd, struct sockaddr* sa, socklen_t* sl) {
         struct pollfd p;
         p.fd = fd; p.events = POLLIN; p.revents = 0;
         int pr = poll(&p, 1, PX_ACCEPT_POLL_MS);   // 裸 poll：px_io_poll 会吞 EINTR 重试，这里必须看见
-        if (pr < 0) return -1;                     // EINTR 或真错 → 交给调用方查 g_px_stop
-        if (pr == 0) continue;                     // 超时空转：让上层有机会看到 g_px_stop
+        if (pr < 0) {
+            // M376-r2（m256_eintr 红）：EINTR 必须是「重试」而不是「失败」——
+            //   GC 暂停 / 定时器信号打断 poll 时连接仍在队列里，返回 -1 会让
+            //   bi_px_serve 打 "net: accept 失败" 并退出循环（探针挂死）。
+            //   只有【停止中】才把 -1 交给调用方 break（M256 口径：被打断的不是失败）。
+            if (errno == EINTR && !g_px_stop) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            // M376-r2：超时分支持 g_px_stop —— 注释原来写「让上层有机会看到」，
+            //   但写的是 continue ⇒ 队列为空时死循环，上层永远看不到，进程只能被 kill -9。
+            if (g_px_stop) return -1;
+            continue;
+        }
         int r = accept(fd, sa, sl);
         if (r >= 0) { px_io_set_nodelay(r); return r; }
         if (errno == EAGAIN || errno == EWOULDBLOCK) continue;  // 竞态：POLLIN 后被别的线程取走
@@ -28696,9 +28708,11 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (_fl >= 0) fcntl(sfd, F_SETFL, _fl | O_NONBLOCK);
         int _drained = 0, _rejected = 0;
         for (;;) {
-            int _cfd = accept(sfd, NULL, NULL);
-            if (_cfd < 0) break;                 // EAGAIN/EWOULDBLOCK ⇒ 已排空
-            px_io_set_nodelay(_cfd);
+            // M376-r2（m313 [1.4] 红）：排空也必须走单点入口 —— 裸 accept 是旁路，
+            //   会让「NODELAY / EINTR / 停止检查」这套语义在最后一条路径上失守。
+            //   此处 sfd 已置 O_NONBLOCK ⇒ poll 立刻返回，语义与裸 accept 等价。
+            int _cfd = px_io_accept(sfd, NULL, NULL);
+            if (_cfd < 0) break;                 // 已排空 / 停止中 ⇒ 退出
             if (px_pool_push_tmo(_cfd, 200) != 0) {
                 __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
                 px_serve_stall_log("shutdown-drain-reject", "queue-full", _cfd, 0, g_pool_count);
