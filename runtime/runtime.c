@@ -158,10 +158,25 @@ static void px_io_set_nodelay(int fd) {
     int on = 1;
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));  // 失败不致命（非 TCP / 受限）
 }
+// M376（缺陷 659）：accept 前先 poll —— 裸 accept 在 glibc（BSD 语义）下被 SA_RESTART
+//   自动重启，信号打断**不会**让它返回 ⇒ 原实现只能靠信号处理器 shutdown(listen_fd)
+//   才能从 accept 挣脱；而 shutdown 使此后 accept 立即失败，主循环随即 break → close(sfd)
+//   ⇒ 内核 accept 队列里「已完成三次握手、尚未 accept」的连接被 RST：客户端 connect
+//   成功（refused=0）却随后读到 EOF（m176 的 bad=1）。
+//   signal(7) 明确 poll/select/epoll_wait **永不因 SA_RESTART 重启** ⇒ 用 poll 做等待原语，
+//   信号到达即返回 EINTR；调用方（各 serve 循环）据此自查 g_px_stop。
+//   100ms 超时上限：即使信号被 defer 或来自别的线程，循环也能在 100ms 内看到 g_px_stop。
+#define PX_ACCEPT_POLL_MS 100
 int px_io_accept(int fd, struct sockaddr* sa, socklen_t* sl) {
     for (;;) {
+        struct pollfd p;
+        p.fd = fd; p.events = POLLIN; p.revents = 0;
+        int pr = poll(&p, 1, PX_ACCEPT_POLL_MS);   // 裸 poll：px_io_poll 会吞 EINTR 重试，这里必须看见
+        if (pr < 0) return -1;                     // EINTR 或真错 → 交给调用方查 g_px_stop
+        if (pr == 0) continue;                     // 超时空转：让上层有机会看到 g_px_stop
         int r = accept(fd, sa, sl);
         if (r >= 0) { px_io_set_nodelay(r); return r; }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;  // 竞态：POLLIN 后被别的线程取走
         if (errno != EINTR) return r;
     }
 }
@@ -195,7 +210,9 @@ __thread int         px_lt_n = 0;
 // - g_px_stop / g_px_listen_fd：优雅关闭（SIGINT/SIGTERM → 停止 accept）
 // - g_px_max_body：请求体大小上限（px_serve opts.max_body_size）
 __thread PxConn* g_cur_conn = NULL;
-static volatile sig_atomic_t g_px_stop = 0;
+// M376（缺陷 659）：去 static —— runtime_ws.c 的 ws_serve 循环也要看到（见 runtime.h 声明）。
+//   唤醒责任从「信号处理器 shutdown(listen_fd)」改为「accept 前的 poll 超时」。
+volatile sig_atomic_t g_px_stop = 0;
 static volatile sig_atomic_t g_px_listen_fd = -1;
 static int g_px_max_body = 10 * 1024 * 1024;
 volatile int g_px_inflight = 0;  // px_serve 在途请求数（优雅关闭等待归零；runtime_ws.c 共享）
@@ -21938,10 +21955,11 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     fserve_ensure();
     for (;;) {
         int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
-        if (cfd < 0) continue;
+        if (cfd < 0) { if (g_px_stop) break; continue; }   // M376（缺陷 659）：停止时跳出，不再永久阻塞
         fserve_push(cfd, FSERVE_KIND_HTTP);
     }
-    return px_null(); // 不可达
+    close(sfd);   // M376：break 后收尾（「不可达」不再成立）
+    return px_null();
 }
 
 // http_serve_unix(sock_path, handler)：AF_UNIX HTTP 服务端（M82 / Issue 15 GAP-SRV-1）
@@ -21988,13 +22006,15 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
     for (;;) {
         int cfd = px_io_accept(sfd, NULL, NULL);
         if (cfd < 0) {
+            if (g_px_stop) break;                                 // M376（缺陷 659）：停止时跳出
             // accept 循环错误容忍：EINTR 已由 px_io_accept 处理；EMFILE/ENFILE 等短暂让出避免忙循环
             px_io_sleep_ms(50);   // M256（缺陷 456）：accept 错误退避
             continue;
         }
         fserve_push(cfd, FSERVE_KIND_HTTP);
     }
-    return px_null(); // 不可达
+    close(sfd);   // M376：break 后收尾（「不可达」不再成立）
+    return px_null();
 }
 
 // ==================== M21 SSE 服务端（编译模式，与并发 GC 兼容） ====================
@@ -22705,10 +22725,11 @@ static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx) {
     fserve_ensure();
     for (;;) {
         int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
-        if (cfd < 0) continue;
+        if (cfd < 0) { if (g_px_stop) break; continue; }   // M376（缺陷 659）：停止时跳出
         fserve_push(cfd, FSERVE_KIND_SSE);
     }
-    return px_null(); // 不可达
+    close(sfd);   // M376：break 后收尾
+    return px_null();
 }
 
 // sse_send(conn, data) → bool（连接不存在/写失败返回 false）
@@ -25408,9 +25429,12 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
 // ==================== M27 P0：优雅关闭（SIGINT/SIGTERM） ====================
 static void px_sigstop_handler(int sig) {
     (void)sig;
+    // M376（缺陷 659）：只置位，**不再 shutdown(listen_fd)**。
+    //   shutdown 会让此后 accept 直接失败 → 主循环 break → close(sfd) →
+    //   内核 accept 队列中已建连未 accept 的连接被 RST（客户端 connect 成功却读到 EOF）。
+    //   唤醒由 px_io_accept 的 poll 承担（signal(7)：poll 永不因 SA_RESTART 重启），
+    //   px_serve 随后 px_drain_accept_queue() 非阻塞排空，把已建连的连接交给 worker。
     g_px_stop = 1;
-    int fd = (int)g_px_listen_fd;
-    if (fd >= 0) shutdown(fd, SHUT_RDWR);
 }
 
 // ==================== M27 P0：Cookie / Session（跨请求共享，文件存储） ====================
@@ -28661,6 +28685,32 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             px_evc_detach(cfd);
             close(cfd);
         }
+    }
+    // M376（缺陷 659）：停止前排空 accept 队列。
+    //   「已三次握手、尚未 accept」的连接在内核队列里，close(sfd) 会直接 RST 它们 ——
+    //   客户端 connect 已成功（refused=0），随后读到 EOF（m176 的 bad=1）。
+    //   顺序必须在「广播 worker 退出」之前：worker 退出条件是「队列空 && g_px_stop」，
+    //   所以排空进来的连接仍有消费者，不是推进黑洞。
+    {
+        int _fl = fcntl(sfd, F_GETFL, 0);
+        if (_fl >= 0) fcntl(sfd, F_SETFL, _fl | O_NONBLOCK);
+        int _drained = 0, _rejected = 0;
+        for (;;) {
+            int _cfd = accept(sfd, NULL, NULL);
+            if (_cfd < 0) break;                 // EAGAIN/EWOULDBLOCK ⇒ 已排空
+            px_io_set_nodelay(_cfd);
+            if (px_pool_push_tmo(_cfd, 200) != 0) {
+                __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
+                px_serve_stall_log("shutdown-drain-reject", "queue-full", _cfd, 0, g_pool_count);
+                px_evc_detach(_cfd);
+                close(_cfd);
+                _rejected++;
+            } else {
+                _drained++;
+            }
+        }
+        if (_fl >= 0) fcntl(sfd, F_SETFL, _fl);
+        fprintf(stderr, "[px-serve] 停止前排空 accept 队列：入池 %d / 拒绝 %d\n", _drained, _rejected);
     }
     g_px_listen_fd = -1;
     close(sfd);

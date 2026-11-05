@@ -531,11 +531,12 @@ LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx) {
     }
     for (;;) {
         int cfd = px_io_accept(sfd, NULL, NULL);   // M256（缺陷 456）
-        if (cfd < 0) continue;
+        if (cfd < 0) { if (g_px_stop) break; continue; }   // M376（缺陷 659）：停止时跳出
         LXValue arg = px_int(cfd);
         px_spawn(ws_conn_worker, &arg, 1);
     }
-    return px_null(); // 不可达
+    close(sfd);   // M376：break 后收尾
+    return px_null();
 }
 
 // ws 连接线程（px_spawn）：args[0] = fd。握手 → 注册 → handler(conn) → 保持到关闭。

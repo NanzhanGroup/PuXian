@@ -850,6 +850,11 @@ void px_conn_pushback(PxConn* c, const void* data, size_t n);
 extern __thread PxConn* g_cur_conn;
 // 在途请求数（px_serve/sse_serve/ws_serve 连接线程计数；优雅关闭等待归零）
 extern volatile int g_px_inflight;
+// M376（缺陷 659）：优雅关闭标志。原为 runtime.c 内 static，runtime_ws.c 的 ws_serve
+//   循环看不见 ⇒ 只能靠 shutdown(listen_fd) 唤醒裸 accept，而 shutdown 会让内核
+//   accept 队列里「已建连未 accept」的连接被 close 时 RST。改为跨 TU 可见后，
+//   各 serve 循环改由 poll 超时唤醒并自查本标志，不再需要 shutdown。
+extern volatile sig_atomic_t g_px_stop;
 
 // ==================== M53-S2：HTTP 输出抽象（PxHttpOut） ====================
 // 请求管道（px_http_dispatch / px_route_try_dispatch）只面向 PxHttpOut 写响应，
