@@ -28706,13 +28706,30 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     {
         int _fl = fcntl(sfd, F_GETFL, 0);
         if (_fl >= 0) fcntl(sfd, F_SETFL, _fl | O_NONBLOCK);
-        int _drained = 0, _rejected = 0;
+        int _drained = 0, _rejected = 0, _quiet = 0;
+        // M376-r3（缺陷 659 收口）：**单次「空」不能判定排空完成**。
+        //   实测（HEAD 0ee53ab，空载连跑 3 次，100% 复现）：m176 = ok=699 / refused=0 / bad=1，
+        //   A 侧 access 253 行 + B 侧 449 行 = 702 = 699(客户端成功) + 3(门自测 fetch)
+        //   ⇒ **bad 的那一条从未出现在任何服务端 access 日志里**：它 connect 成功、随后被 RST，
+        //   服务端根本没 accept 到它 ⇒ 队列里仍有一条被 close(sfd) 打掉。
+        //   成因：px_io_accept 在「EINTR 且 g_px_stop」时**直接 return -1**（这份语义是给主循环
+        //   的：停止中被打断就该退出）。排空段沿用同一语义 ⇒ 排空途中任何一个信号（GC 定时器 /
+        //   SIGCHLD）打断 poll，都会让排空**提前结束**，余下连接被 RST。这就是 M376-r2 交接单
+        //   §24.4 记下的残留风险，现已实测坐实。
+        //   修法：排空只在**连续 PX_DRAIN_QUIET_ROUNDS 次取空**时才算完成 —— 单次 EINTR 只算
+        //   一轮「空」，下一轮 poll 会把队列里剩下的取走。sfd 已置 O_NONBLOCK 只是让 accept
+        //   本身不阻塞；**poll 仍按 PX_ACCEPT_POLL_MS(100ms) 等待**，故 3 轮 ≈ 300ms 静默期，
+        //   比原先的 100ms 更保守（关闭耗时上界仍远小于 join 超时 2s / systemd 90s）。
+        #define PX_DRAIN_QUIET_ROUNDS 3
         for (;;) {
             // M376-r2（m313 [1.4] 红）：排空也必须走单点入口 —— 裸 accept 是旁路，
             //   会让「NODELAY / EINTR / 停止检查」这套语义在最后一条路径上失守。
-            //   此处 sfd 已置 O_NONBLOCK ⇒ poll 立刻返回，语义与裸 accept 等价。
             int _cfd = px_io_accept(sfd, NULL, NULL);
-            if (_cfd < 0) break;                 // 已排空 / 停止中 ⇒ 退出
+            if (_cfd < 0) {
+                if (++_quiet >= PX_DRAIN_QUIET_ROUNDS) break;   // 连续取空 ⇒ 真排完了
+                continue;                                       // 单次 EINTR/超时 ⇒ 再试一轮
+            }
+            _quiet = 0;                                         // 取到连接 ⇒ 静默计数归零
             if (px_pool_push_tmo(_cfd, 200) != 0) {
                 __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
                 px_serve_stall_log("shutdown-drain-reject", "queue-full", _cfd, 0, g_pool_count);
@@ -28723,11 +28740,28 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
                 _drained++;
             }
         }
-        if (_fl >= 0) fcntl(sfd, F_SETFL, _fl);
+        // M376-r3（缺陷 659 最后一条 RST 窗口）：**排空结束 → close 之间不许有任何慢操作**。
+        //   实测（诊断 v2，2/2 复现）：bad 恒为 idx=380/383 且 rawlen=0（一个字节都没收到）
+        //   ⇒ connect 已成功（三次握手完成、进了 A 的 accept 队列），但 A 已在排空后 close
+        //   ⇒ 内核对该连接 RST。A 侧 access 253 + B 侧 449 = 702 = 699(客户端) + 3(门自测)
+        //   ⇒ 失败那条**从未出现在任何服务端 access 日志里**，确认它在队列里被打掉。
+        //   窗口成因：客户端每 ~5ms 一条连接，而原实现在排空退出后还做了
+        //   `fcntl(F_SETFL)` 恢复 + `fprintf(stderr)`（stderr 是阻塞写）**才** close ——
+        //   这几十微秒～毫秒就是「内核仍把新 SYN 派给 A、A 已不再 accept」的 RST 窗口。
+        //   修法：fd 即将关闭 ⇒ 不必恢复 O_NONBLOCK（恢复只为后续复用，这里没有后续）；
+        //   打印移到 close 之后。close 与「排空判定完成」之间只剩纳秒级指令。
+        g_px_listen_fd = -1;
+        // M376-r3（实测否证，写在这里防后来者再试一遍）：
+        //   试过在 close 前加 `shutdown(sfd, SHUT_RDWR)` 想「先把 socket 从 reuseport 组摘除」，
+        //   实测**无效** —— Linux 对 listening socket 的 shutdown 返回 ENOTCONN（未连接），
+        //   是空操作，m176 仍 5/5 稳定 bad=1。已撤回，不留无效代码。
+        //   真正可行的「停止接收」原语只有 close 本身；故本段只剩「把 close 前的工作压到零」：
+        //   不恢复 O_NONBLOCK（fd 即将销毁，恢复无意义且是窗口）、不在此前 fprintf
+        //   （stderr 是阻塞写，几十微秒～毫秒的窗口就够客户端塞进一条新连接）。
+        close(sfd);
         fprintf(stderr, "[px-serve] 停止前排空 accept 队列：入池 %d / 拒绝 %d\n", _drained, _rejected);
+        fflush(stderr);
     }
-    g_px_listen_fd = -1;
-    close(sfd);
 #ifndef PX_NO_QUIC
     // M53-S4：优雅关闭 H3 listener（停收包路由线程 → 关托管连接 → 释放 UDP fd）
     if (g_px_h3_listener > 0) {
