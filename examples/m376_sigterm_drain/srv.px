@@ -1,0 +1,9 @@
+# M376 门 · 服务端：`srv.px <port>`
+#   只用最小配置（reuse 关闭、无 TLS）：门要测的是「优雅关闭时 accept 队列」的语义，
+#   与 reuse_port 无关（m176 覆盖那一条）。
+let a = args()
+let port = int(a[1])
+let doc = "/tmp/px_m376_doc_" + str(port) + "_" + str(os_pid())
+mkdir(doc)
+write_file(doc + "/index.html", "M376-PID=" + str(os_pid()))
+px_serve(port, doc, 10000, json_parse("{}"))

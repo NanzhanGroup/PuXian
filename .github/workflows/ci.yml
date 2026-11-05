@@ -1617,6 +1617,19 @@ jobs:
           bash examples/m375_ws_connect_timeout/verify.sh > /tmp/v_m375ws.log 2>&1 || { echo "❌ m375_ws_connect_timeout 门失败（WS 建链/握手超时）"; tail -40 /tmp/v_m375ws.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m375ws.log | tail -8
           echo "✅ m375_ws_connect_timeout（建链 10s / 握手 5s 有界 · 清零契约 · rc≠124 防假绿）PASS"
+      - name: m376_sigterm_drain（SIGTERM 丢弃已建连未 accept 的连接 · M376 · 缺陷 659）
+        # 判据：[前提] /proc/net/tcp 的 LISTEN rx_queue ≥ 8（不成立判「门坏」rc=2，不判绿即不放过）
+        #       [1] 静态：信号处理器代码里没有 shutdown（先剥注释）· px_io_accept 走 poll
+        #           · 停止前排空段在场 · g_px_stop 检查 ≥5 处
+        #       [2] 主判据：SIGSTOP 冻住 accept ⇒ 12 条连接必然排队 ⇒ SIGTERM 后
+        #           ok=12 / bad=0 / refused=0 / 未被 kill -9（3 轮）
+        # 负控：把 shutdown 塞回处理器 ⇒ 必须 bad=12 判红（要重建 runtime ⇒ CI 用 --neg-skip）
+        # ⚠ 改 runtime ⇒ 必须先重烘 14 件（CI 由发布链的 rebake 前置负责）
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m376_sigterm_drain/verify.sh --neg-skip > /tmp/v_m376.log 2>&1 || { echo "❌ m376_sigterm_drain 门失败（优雅关闭丢连接）"; tail -50 /tmp/v_m376.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  PASS' /tmp/v_m376.log | tail -8
+          echo "✅ m376_sigterm_drain（停止前排空 accept 队列 · 12/12 全部 200 · 前提自证）PASS"
       - name: m369_name_shadow（名字解析优先级：变量 > 类型名 · M369 · 缺陷 635）
         # 判据：A 三轨逐字节一致（6 正控：局部遮蔽+方法调用/字段 · 模块级 · 块内 · 参数 · 先变量后类型）
         #       · B 门侧独立参考（期望值门内写死，不抄实现）· C 错误面 R1001 三轨同码同文

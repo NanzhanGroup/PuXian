@@ -1,0 +1,29 @@
+# M376 门 · 探针：`probe.px <port>` —— 单连接客户端，一行结论
+#   ok       拿到 200 OK
+#   bad len=N 拿到 EOF/RST 而**没有** 200（缺陷 659 的现象：connect 成功、随后被 RST）
+#   refused  connect 失败（listen 套接字已关 = 另一种缺口，与 bad 必须分开计数）
+let a = args()
+let port = int(a[1])
+let c = tcp_connect_ex("127.0.0.1", port)
+if not c["ok"]:
+    print("refused")
+    exit(2)
+let fd = c["fd"]
+tcp_send_ex(fd, "GET /index.html HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+var raw = bytes("")
+var k = 0
+var done = 0
+while k < 30 and done == 0:
+    let r = tcp_recv_ex(fd, 4096)
+    if r["n"] > 0:
+        raw = bytes_concat(raw, r["data"])
+    if r["eof"] or not r["ok"]:
+        done = 1
+    k += 1
+tcp_close(fd)
+let txt = bytes_to_str(raw)
+if contains(txt, "200 OK"):
+    print("ok")
+else:
+    print("bad len=" + str(len(txt)))
+    exit(1)

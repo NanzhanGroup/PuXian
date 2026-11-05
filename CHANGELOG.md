@@ -1,3 +1,86 @@
+## M376（缺陷 659）：SIGTERM 丢弃「已建连、未 accept」的连接 —— M375 全量门唯一红项的定性修复
+
+> **令源**：用户 2026-11-05 16:23「继续执行 自主决策、自主立项、自主推进、打 tag 后的通知到我的 ws-android 设备策略」。
+> **来历**：M375 二跑 `chain-m375b` 251/252，唯一红项 `m176_reuseport` [5] 复跑出现 `bad=1`。
+> 当轮定性为「与 M375 无因果的真缺口」（`git diff` 对 sigstop/accept/listen/shutdown 零命中，
+> 且 659 在 v0.2.371–374 全部存在），带缺陷发版并登记 659；本轮修它。
+
+### 一 缺陷（三处叠加，缺一不成立）
+
+1. `px_sigstop_handler` 里 `shutdown(listen_fd, SHUT_RDWR)` —— 它存在的理由是**裸 accept**：
+   glibc 的 BSD 语义让 `accept` 被 SA_RESTART 自动重启，信号叫不醒它（M376 实测：去掉 shutdown
+   而循环里没有 poll，进程 SIGTERM 后**不退出**）。
+2. shutdown 后 accept 立即失败 ⇒ `px_serve` 主循环 break ⇒ `close(sfd)`。
+3. 内核 accept 队列里「已完成三次握手、尚未 accept」的连接随 close 被 **RST**。
+   客户端 `connect` 成功（`refused=0`），随后 `recv` 得 EOF —— 这就是 m176 的 `bad=1`。
+
+**附带发现（同一批必须改）**：`fserve` HTTP / `fserve` UNIX / `fserve` SSE / `ws_serve`
+四个循环**没有** `g_px_stop` 检查 —— 原实现靠 shutdown 让 accept 失败来退出。
+只去掉 shutdown 会让它们永久阻塞，进程只能被 `kill -9` 收场（比原缺陷更糟）。
+
+### 二 修法（4 处，一处不多）
+
+| 位置 | 改动 |
+|---|---|
+| `px_io_accept`（单点收口，6 个调用点受益） | 裸 accept → `poll(POLLIN, 100ms)` + accept。signal(7)：`poll` **永不因 SA_RESTART 重启** |
+| `px_sigstop_handler` | 去掉 shutdown，只置位 `g_px_stop`（唤醒责任交给 poll） |
+| `px_serve` 停止段 | 先 `O_NONBLOCK` 排空 accept 队列 → `px_pool_push_tmo` 入池；顺序在「广播 worker 退出」**之前** ⇒ 排空进来的连接仍有消费者 |
+| `fserve` × 3 + `ws_serve` | `if (cfd < 0) { if (g_px_stop) break; continue; }` |
+| `g_px_stop` | `static` → 跨 TU 可见（`ws_serve` 在 runtime_ws.c） |
+
+- 不做 `SO_LINGER{1,0}`：那是把「慢一点丢」变成「更快丢」，语义更差。
+- 排空时队列满 → 复用现有 `push_tmo` 有界等待 + `g_diag_push_tmo` 计数告警，不新造通道。
+
+### 三 判据（新门 m376 · 252 → 253 门）
+
+| 层 | 判据 |
+|---|---|
+| 前提自证 | `/proc/net/tcp` 的 LISTEN `rx_queue ≥ 8`（SIGSTOP 构造是否成功）。不成立判**门坏 rc=2**，不判绿 |
+| 静态 5 | 信号处理器**代码**内无 `shutdown(`（先剥注释）· 只置位 `g_px_stop` · `px_io_accept` 走 poll · 排空段在场 · `g_px_stop` 检查 ≥5 处 |
+| 主判据 | K=12 条排队连接，SIGTERM 后 **ok=12 / bad=0 / refused=0**，进程 3s 内自行退出（非 kill -9），3 轮全过 |
+| 负控 | 把 `shutdown` 塞回处理器（还原缺陷）⇒ **bad=12 判红**；sha256 逐字节还原后复绿 |
+
+### 四 为什么换了夹具（这条比修复本身更该记）
+
+旧夹具（边打边 TERM）**修前也不能稳定红**：
+
+```
+修前 bootstrap/pxi   首次 10 轮出现 bad=3 → 随后 15 轮 bad=0
+修后 /tmp/pxidev     12 轮出现 bad=3     → 随后 15 轮 bad=0
+```
+
+窗口只有微秒级，靠调度与负载撞 ⇒ 拿它说「修好了」是自欺（CRITERIA §3：判据必须有够牙的负控）。
+新夹具用 **SIGSTOP 把 accept 冻住**：K 条连接必然全部堆进内核队列，再投递 SIGTERM + SIGCONT
+⇒ 「停止瞬间队列非空」是**构造出来的**，不靠抢时间窗。
+
+```
+修前 10/10 轮   queued=16 → bad=16 refused=0   （确定性红）
+修后 10/10 轮   queued=16 → ok=16  bad=0       （确定性绿）
+门内 NC         bad=12 判红 → 还原逐字节 → 复绿
+```
+
+### 五 未覆盖边界（登记，不装作已解决）
+
+- `wss://` 的 TLS 握手与读响应头（来自 M375 §四.1，BIO 是 `mbedtls_net_recv`）—— 仍是独立任务。
+- 服务端 `ws_serve` accept 之后的**握手空闲超时**（连上不发字节占满 worker 池）—— 修法不同，独立任务。
+  本轮只给它补了停止检查（不改握手语义）。
+
+### 六 本批改动面
+
+- `runtime/runtime.c`：`px_io_accept` 重写 · 信号处理器 · `px_serve` 停止段排空 · 4 个循环的停止检查
+- `runtime/runtime_ws.c`：`ws_serve` 循环停止检查 · `runtime/runtime.h`：`g_px_stop` extern
+- 新增门 `examples/m376_sigterm_drain/`（`srv.px` · `probe.px` · `verify.sh`）· `selfhost/gates.registry.sh` · `.github/workflows/ci.yml`
+- `selfhost/golden/emitc_freeze.sha`：冻结集 511 → 513（两个新 .px 夹具，`--emit-c` 逐字节一致）
+- `bootstrap/*`：14 件 `--rebake-all` 重烘（改 runtime ⇒ 源码链指纹全变）
+- 文档：本文件 · `docs/PX_DEF_TRIAGE.md` §21.6（659 结案 · 663 登记）
+
+### 七 顺带登记：缺陷 663（判据测的不是用户依赖的端点）
+
+v0.2.375 的发布观察器把「RPM 可取」判成 `raw.githubusercontent.com/.../rpm/9/...` = 200，
+**但节点 `dnf upgrade puxian` 取的是 `soft.xiusoft.cn/puxian`**（`install-rpm.sh` 的 `MIRROR_ROOT`）。
+⇒ 判据在跑，测的是我们自己能看到的东西，不是用户真正依赖的东西。
+与 649/662 同族（判据不自证），登记为 663，修法随后续发布面改动落地。
+
 ## M375（缺陷 PX-BUG-20261023-01）：WS 客户端建链与握手全程无超时 —— 晨曦 P0，挂了 12 天
 
 > **令源**：用户 2026-11-04 10:59「其他节点有没有 PuXian 问题反馈过来的？」→ 13:58「继续自主决策、自主立项、自主推进、打 tag 后通知到我的 ws-android」。

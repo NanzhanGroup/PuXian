@@ -31,7 +31,12 @@ rm -rf "$W"; mkdir -p "$W"
 NEG=1
 [ "${1:-}" = "--neg-skip" ] && NEG=0
 pass=0; fail=0
-chk() { if eval "$2"; then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL $1"; fail=$((fail+1)); fi }
+# M376（缺陷 662）：失败时必须**自证现场** —— 只打一行 FAIL 等于让人去翻私有 tmp
+#   （M375 那次就是靠 /data/gatevm/tmp4 残存才查到 bad=1）。判据不动，只补失败时的证据输出。
+chk() { if eval "$2"; then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL $1"; fail=$((fail+1));
+        if [ -n "${CURTAG:-}" ] && [ -f "$W/sc.$CURTAG.log" ]; then
+            echo "    ↳ 现场（$W/sc.$CURTAG.log 尾 20 行）："; tail -20 "$W/sc.$CURTAG.log" | sed 's/^/      /'
+        fi; fi }
 snapshot() { cp -f "$RT" "$BAK"; }
 restore_all() { [ -f "$BAK" ] && cp -f "$BAK" "$RT"; }
 trap 'restore_all; [ -n "${APID:-}" ] && kill -TERM $APID 2>/dev/null; [ -n "${BPID:-}" ] && kill -TERM $BPID 2>/dev/null; rm -f "$BAK"' EXIT
@@ -59,6 +64,7 @@ kill_wait() { local p=$1 i=0; kill -TERM $p 2>/dev/null; while [ $i -lt 60 ]; do
 
 run_scenario() {   # $1=标签（把结论写进 $W/sc.$1.*）
     local tag=$1
+    CURTAG=$tag
     : > "$W/sc.$tag.log"
     "$D/build/srv" $PORT 1 > "$W/sc.$tag.a.log" 2>&1 & APID=$!
     if ! wait_health $PORT 2; then echo "A-NOT-READY" >> "$W/sc.$tag.log"; kill -9 $APID 2>/dev/null; return 1; fi

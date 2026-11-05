@@ -1897,3 +1897,18 @@ run m374_data_enum_named bash examples/m374_data_enum_named/verify.sh
 #     给同一 fd 设 SO_RCVTIMEO 会与 mbedtls 的 read_timeout 打架）· 服务端 ws_serve 的 accept 后握手。
 #   ⚠ 本门改 runtime/*.c ⇒ **必须先 --rebake-all 重烘 14 件**，否则门测的是旧运行时（假红/假绿）。
 run m375_ws_connect_timeout bash examples/m375_ws_connect_timeout/verify.sh
+
+#  m376_sigterm_drain —— SIGTERM 丢弃「已建连、未 accept」的连接（M376 · 缺陷 659）
+#   来历：M375 全量门里 m176（零停机换二进制）出现 bad=1，定性为**与 M375 无因果的真缺口**：
+#     信号处理器为了把裸 accept 从阻塞里拉出来而 shutdown(listen_fd) ⇒ 主循环 break → close
+#     ⇒ 内核 accept 队列里「已完成三次握手、尚未 accept」的连接被 RST（客户端 connect 成功、
+#     随后读到 EOF）。只在 serve 停止的那一瞬间发生，空载撞不到 ⇒ 必须构造。
+#   判据：[前提] 队列长度 ≥ 8（读 /proc/net/tcp LISTEN 的 rx_queue；不成立判「门坏」rc=2，不判绿）
+#     [1] 静态：处理器**代码**里没有 shutdown（先剥注释）· px_io_accept 走 poll · 排空段在场
+#         · g_px_stop 检查 ≥5 处（4 个循环 + 主循环）
+#     [2] 主判据：SIGSTOP 冻住 accept ⇒ K=12 条连接**必然**堆进队列 ⇒ SIGTERM 后必须
+#         ok=12 / bad=0 / refused=0 / 未被 kill -9，3 轮全过
+#     [3] 负控：把 shutdown 塞回处理器（还原缺陷）⇒ 必须 bad=12 判红；sha256 逐字节还原后复绿
+#   为何不用「边打边 TERM」：旧夹具窗口为微秒级，修前 3/10 轮才红、修后同样会红 ⇒ 判据无牙。
+#   ⚠ 本门改 runtime/*.c ⇒ **必须先 --rebake-all 重烘 14 件**。
+run m376_sigterm_drain bash examples/m376_sigterm_drain/verify.sh
