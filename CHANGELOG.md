@@ -128,6 +128,60 @@ M376 = 修 659（含 662 量具修）；bootstrap 种子最小化顺延 M377。
 - `docs/PX_DEF_TRIAGE.md` §21.6（659 / 661 / 662 的证据与处置）
 - 产品面零改动 ⇒ **不重烘**；门只跑 `check_defect_refs` 与 `gate_timeouts`（约 20s）
 
+## M375 · 三（发布收账）：Release 8/8 全绿 · rpm 双站可取 · 撤回 M374「体积即 checkout 超时根因」
+
+> **收账时点**：2026-11-05 15:5x（发布后 5 小时复查，所有数值均为本轮重新取证，不沿用旧报告）。
+
+### 一 交付面（四层全部实测）
+
+| 层 | 实测值 |
+|---|---|
+| Actions · Release | run 303 **success** · `54fa51a` · 02:29:39Z → 02:52:08Z（**12m29s**）· 8/8 job 全绿 |
+| Actions · Tag Guard | **success** · `54fa51a` · 02:29:39Z → 02:31:16Z（**97s**） |
+| Actions · CI | **success** · `54fa51a` · 02:29:39Z → 03:26:21Z（56m42s） |
+| Release 资产 | draft=false · 4 件 · tgz 73,778,214 B · aarch64 bootstrap 23,118,348 B · sha256 ×2 |
+| gh-pages rpm | el7 `puxian-0.2.375-1.m375.el7.x86_64.rpm` **200** · el9 同名 **200** · `repodata/repomd.xml` **200** |
+| 镜像站 | `soft.xiusoft.cn/puxian` / `soft.wsai.chat` 双域 el7 **200**（63,328,532 B）· el9 **200**（61,468,685 B） |
+| 镜像 version.json | `version` = **v0.2.375** · `commit` = `54fa51a3` · `synced_at` = **2026-11-05T10:49:51+08:00** |
+| releases/latest | **v0.2.375** |
+
+- rpm 链是本仓**首次完整走通**：构建发布包 · el7 构建 · aarch64 自举件 · el9 签名 + 代签 el7 ·
+  assets-verify · **el7 终验 8m40s** · **openEuler 终验 15m46s** · Pages 合并，8 个 job 无一失败。
+- 镜像侧时点为 `10:49:51`，落在 tag（10:29）之后 **20 分 51 秒**，属常规 25 分钟同步窗口内 ——
+  M374 遗留的「镜像陈旧」缺口（缺陷 656 探针口径）随本次发布**自然收敛**，无需人工介入。
+- 节点口径：`dnf upgrade puxian` 可直接取到 0.2.375（el7 / el9），**不需要 clone 源码仓库**。
+
+### 二 撤回一条旧结论：M374「仓库体积 ⇒ checkout 超时」不成立
+
+- M374 时的叙述：仓库 10.0 GB ⇒ CI checkout 顶 `timeout-minutes` 被 cancel（el7 单 job 卡 44m43s）。
+- **本仓反证**：同一仓库现 **8.06 GB**（API `size` = 8,450,891 KB），检出实耗 **2–3 min**
+  （el7 构建 job 02:29:41 → +2m19s 即完成检出）；Tag Guard 从 M374 的 **20.1 min cancelled**
+  降到 **97 s**；整条 Release 链 12m29s 走完。
+- ⇒ 「根因定死 = 仓库体积」**不充分**，降级为「**窗口性 / 远端 pack 状态 —— 待证**」。
+  瘦身与「减少取数」（`filter: blob:none` / 按需 `--depth=1`）的建议**保留**，但**不得再被当成已验证根因**。
+- 这条降级同步写进 `docs/GATE_TIMEOUTS.md` §8，避免后来者引用一个已被反证的因果。
+
+### 三 已知缺陷与不修的边界（如实登记，不掩盖）
+
+- **缺陷 659**（SIGTERM 瞬间丢「已建连未 accept」的请求）**在 v0.2.375 中依然存在** ——
+  本次发布是用户 11-05 10:35 明确批准「带已知缺陷发布」。
+  依据：659 在 v0.2.371–374 全部存在，与 M375 主修（WS 建链/握手无超时）无因果关系；
+  `git diff` 对 `sigstop|accept|listen|shutdown` 零命中。
+- **m176 判据不放宽、不跳过**：全量门如实记 **251/252**，唯一红即 659。
+  修好 659 后 m176 必须**真绿**，不接受「靠调阈值转绿」。
+- **缺陷 663**（发布观察器判 OK 的端点错）：观察器判据打的是
+  `raw.githubusercontent gh-pages`，而节点实际取包走 `soft.xiusoft.cn/puxian`
+  ⇒ 判据在跑却没测到用户真正依赖的端点（与 649 / 662 同型：量具看起来在跑，其实没测到东西）。
+  本条在 §21.6 落仓前只存在于口头，随本节一并登记。
+
+### 四 本轮改动面
+
+- `CHANGELOG.md`（本节）· `docs/GATE_TIMEOUTS.md` §8（反证段）
+- 产品面 `runtime/` `stdlib/` `tools/` **零改动** ⇒ **不重烘**、无需全量门；
+  门只跑 `check_defect_refs` + `gate_timeouts`（约 20s）
+- 不动 tag、不重发 Release、不改 workflow
+
+
 ## M374 · 六（tag 重建决策 + bootstrap 种子实验）· 登记缺陷 660
 
 > **令源**：用户 2026-11-04 13:31「自主决策处理」（处置 11:36 报告中挂起的四项）。
