@@ -16,6 +16,16 @@
 #       也把「双方都要 opt-in」这条内核契约变成判据）
 #   [5] 负控（源码）：把 px_sock_set_reuseport 变成 no-op ⇒ [2] 必须变红（B 起不来）
 #       + sha256 逐字节还原复绿
+#   [6] 重试路径自证：对面 accept 后立刻 RST（零字节）时，客户端必须**重试到 3 次上界**
+#       再记 bad（retried=9 / bad=3 / RC=1） —— 不依赖竞态，证明 [3] 里的重试分支不是死代码
+#
+# ⚠️ 2026-11-06 [3] 判据变更（用户批准「方案 A」· 见 client.px 头注释）：
+#   「关闭瞬间零丢失」经 M376 四组实验证明**不可达**（TCP：唯一能停止接收新连接的原语就是
+#   close 本体；shutdown(SHUT_RDWR) 对 listening socket 返回 ENOTCONN）。故契约分层：
+#     · refused == 0 —— 严格不放松（没有监听空窗，这才是零停机）
+#     · 零字节即断 ⇒ 允许幂等 GET 重试（每请求至多 3 次），与浏览器/curl 真实行为一致
+#     · 收到响应但非 200 / refused ⇒ 不重试，直接判红
+#     · 防掩盖：retried 上界 n/100（700 次 ⇒ ≤7）；实测窗口恒丢 1 条（0.14%），留 7 倍余量
 # CI 用 --neg-skip（负控要重编 runtime，~1min）。
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -98,7 +108,7 @@ else
     chk "A 与换上的 B 是两个不同进程" "[ \"\$(grep -o 'A-READY PID=[0-9]*' $W/sc.main.log | grep -o '[0-9]*')\" != \"\$(grep -o 'AFTER-A-EXIT PID=[0-9]*' $W/sc.main.log | grep -o '[0-9]*')\" ]"
     chk "C（reuse=0）bind **失败**（双方都要 opt-in）" "grep -q 'C-RC=1' $W/sc.main.log && grep -q 'EADDRINUSE\|Address already in use\|绑定端口' $W/sc.main.log"
     chk "A 优雅退出后 B 仍服务" "grep -q 'AFTER-A-EXIT PID=' $W/sc.main.log"
-    chk "**零停机**：客户端 700 次 refused=0 bad=0" "grep -q 'CLIENT-RC=0 CLIENT ok=700 refused=0 bad=0' $W/sc.main.log"
+    chk "**零停机**：客户端 700 次 refused=0 bad=0（零字节可重试，有界）" "grep -q 'CLIENT-RC=0 CLIENT ok=700 refused=0 bad=0 retried=' $W/sc.main.log"
 fi
 
 if [ $NEG -eq 1 ]; then
@@ -123,7 +133,40 @@ restore_all
 chk "NC 还原逐字节" "[ \"\$(sha256sum $RT | cut -c1-16)\" = \"$SHA0\" ]"
 build_pair >/dev/null 2>&1
 run_scenario pos
-chk "NC 还原后复绿" "grep -q 'B-ALIVE PID=' $W/sc.pos.log && grep -q 'CLIENT-RC=0 CLIENT ok=700 refused=0 bad=0' $W/sc.pos.log"
+chk "NC 还原后复绿" "grep -q 'B-ALIVE PID=' $W/sc.pos.log && grep -q 'CLIENT-RC=0 CLIENT ok=700 refused=0 bad=0 retried=' $W/sc.pos.log"
+fi
+
+echo "=== [6] 重试路径自证（对面 accept 即 RST ⇒ 零字节 ⇒ 必须重试到上界再记 bad）"
+# 目的：不让「零字节重试」变成没人跑过的死代码。低负载下竞态可能一次都不触发（retried=0），
+#   那样 [3] 就只是「恰好没撞上窗口」，证明不了重试分支还在。
+# 判据：n=3 ⇒ retried=9（每请求 3 次）、bad=3、ok=0、RC=1 —— 既证明重试生效，也证明**有界**。
+if [ -x "$D/build/client" ]; then
+    RPORT=18399
+    python3 - "$RPORT" > "$W/sc.rst.log" 2>&1 <<'PYEOF' & RPID=$!
+import socket, struct, sys
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", port)); s.listen(64)
+# 只服务有限个连接（客户端最多 3 请求 × 3 次 = 9 次连接），避免测试吊住
+for _ in range(40):
+    try:
+        c, _a = s.accept()
+    except OSError:
+        break
+    # SO_LINGER{1,0} ⇒ close 发 RST，客户端一个字节都收不到（正是我们要构造的「零字节即断」）
+    c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    c.close()
+s.close()
+PYEOF
+    sleep 0.3
+    timeout 30 "$D/build/client" $RPORT 3 > "$W/sc.rst.client.out" 2>&1; RRC=$?
+    kill -TERM $RPID 2>/dev/null; wait $RPID 2>/dev/null
+    echo "     RST 夹具: RC=$RRC $(cat $W/sc.rst.client.out)" | sed 's/^ *//' >&2
+    chk "重试路径生效且**有界**（3 请求 ⇒ retried=9 bad=3 ok=0）" \
+        "[ \"$RRC\" = \"1\" ] && grep -q 'CLIENT ok=0 refused=0 bad=3 retried=9' $W/sc.rst.client.out"
+else
+    chk "重试路径自证（需要 client 构建产物）" "false"
 fi
 
 echo

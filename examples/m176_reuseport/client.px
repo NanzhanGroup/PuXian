@@ -1,36 +1,63 @@
-# M176 门 · 客户端：`client.px <port> <count>` —— 高频打请求，统计「连接被拒 / 非 200」
+# M176 门 · 客户端：`client.px <port> <count>` —— 高频打请求，统计「连接被拒 / 非 200 / 重试」
 #   换二进制的空窗期表现为 **connection refused**（监听套接字在旧进程关闭与新进程 bind 之间空缺）
 #   ⇒ 本客户端就是那根「探测空窗」的针：refused 必须恒为 0。
+#
+# ── 2026-11-06 判据变更（东月 · 用户批准「方案 A」）──────────────────────────
+#   背景：M376 四组实验证明 —— 进程收到 SIGTERM 时，内核 accept 队列里「已建连、未 accept」
+#   且落在「排空完成 → close(sfd) 生效」这段窗口里的连接，必然被 RST 掉 1 条。
+#   这是 TCP 语义（唯一能停止接收新连接的原语就是 close 本身，shutdown(SHUT_RDWR)
+#   对 listening socket 返回 ENOTCONN），不是本项目的 bug ⇒ 「关闭瞬间零丢失」不可达。
+#   契约随之分层：
+#     · 严格不放松：**refused 必须为 0** —— 那才是「零停机」（没有监听空窗）。
+#     · 允许一次重试：**零字节即断**（raw 一个字节都没收到）视为「已握手后被 RST」，
+#       与浏览器 / curl 对幂等 GET 的真实行为一致，重试同一请求（每请求至多 3 次）。
+#     · 不重试：**收到响应但不是 200**（真错误）、以及 refused（真停机）。
+#   防「重试掩盖真回归」：retried 有上界 n/100（700 次 ⇒ 至多 7 次），
+#   实测窗口只丢 1 条（0.14%），留 7 倍余量；若变成「每 N 条丢一条」，上界当场判红。
+# ────────────────────────────────────────────────────────────────────────────
 let a = args()
 let port = int(a[1])
 let n = int(a[2])
 var refused = 0
 var bad = 0
 var ok = 0
+var retried = 0
 var i = 0
 while i < n:
-    let c = tcp_connect_ex("127.0.0.1", port)
-    if not c["ok"]:
-        refused += 1
-    else:
-        let fd = c["fd"]
-        tcp_send_ex(fd, "GET /index.html HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
-        var raw = bytes("")
-        var k = 0
-        while k < 20:
-            let r = tcp_recv_ex(fd, 4096)
-            if r["n"] > 0:
-                raw = bytes_concat(raw, r["data"])
-            if r["eof"] or not r["ok"]:
-                k = 20
-            k += 1
-        tcp_close(fd)
-        if contains(bytes_to_str(raw), "200 OK"):
-            ok += 1
+    var attempt = 0
+    var settled = 0
+    while settled == 0:
+        let c = tcp_connect_ex("127.0.0.1", port)
+        if not c["ok"]:
+            refused += 1
+            settled = 1
         else:
-            bad += 1
+            let fd = c["fd"]
+            tcp_send_ex(fd, "GET /index.html HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+            var raw = bytes("")
+            var k = 0
+            while k < 20:
+                let r = tcp_recv_ex(fd, 4096)
+                if r["n"] > 0:
+                    raw = bytes_concat(raw, r["data"])
+                if r["eof"] or not r["ok"]:
+                    k = 20
+                k += 1
+            tcp_close(fd)
+            if contains(bytes_to_str(raw), "200 OK"):
+                ok += 1
+                settled = 1
+            elif bytes_len(raw) == 0:
+                attempt += 1
+                retried += 1
+                if attempt >= 3:
+                    bad += 1
+                    settled = 1
+            else:
+                bad += 1
+                settled = 1
     sleep_us(4000)
     i += 1
-print("CLIENT ok=" + str(ok) + " refused=" + str(refused) + " bad=" + str(bad))
-if refused > 0 or bad > 0 or ok == 0:
+print("CLIENT ok=" + str(ok) + " refused=" + str(refused) + " bad=" + str(bad) + " retried=" + str(retried))
+if refused > 0 or bad > 0 or ok != n or retried * 100 > n:
     exit(1)
