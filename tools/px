@@ -89,7 +89,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.377"
+SELFHOST_VER="0.2.378"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -967,6 +967,109 @@ run_subset_ok() { # $1=脚本；stdout 输出违例名单（空=通过）
     printf '%s' "$bad"; return 1
 }
 
+# ── M378（晨曦 PX-BUG-20261106-01）：--fast 沙箱必须带项目内依赖 ─────────────
+# 病根：旧实现只把主脚本 cp 进 mktemp 沙箱，不带它 import 的项目内 .px，也不传
+#   include 路径；编译器找不到模块时**只警告、仍退出 0 并出产物**（非
+#   PX_STRICT_MODULE 口径）⇒ 缓存写进一条必然 R1001 的二进制，此后每次命中都
+#   exec 它 —— 把编译期错误静默固化成运行期错误。
+# 口径：① 沙箱 = 「与源目录可编译性等价的最小树」；② 依赖提取结果**同时**驱动
+#   沙箱内容与缓存 key（分两处写会漂移 ⇒ 改依赖不失效 = 跑旧逻辑）。
+px_import_keys() { # $1=文件 ⇒ stdout 每行一个 module key（点分：module: ["std","time"]）
+    "$PXPAR_BIN_RUN" "$1" 2>/dev/null | awk '
+        /^[[:space:]]*Import \{/ { inimp = 1; inmod = 0; key = ""; next }
+        inimp && /^[[:space:]]*module: \[[[:space:]]*$/ { inmod = 1; next }
+        inmod && /^[[:space:]]*\],?[[:space:]]*$/ {
+            inmod = 0; inimp = 0
+            if (key != "") { print key; key = "" }
+            next
+        }
+        inmod {
+            rest = $0
+            while (match(rest, /"[^"]*"/)) {
+                s = substr(rest, RSTART + 1, RLENGTH - 2)
+                key = (key == "" ? s : key "." s)
+                rest = substr(rest, RSTART + RLENGTH)
+            }
+        }
+    '
+}
+
+px_resolve_import() { # $1=module key  $2=base_dir ⇒ stdout 绝对路径（std / c/ / 无解 ⇒ 空）
+    # 解析口径对齐 selfhost/cg_module.px 的 cg_find_module_path：
+    #   相对路径 / std.* / 用户点分包（base_dir → .px_modules → 其无点子目录 → mod.px）
+    local key="$1" base="$2" dst="" m
+    case "$key" in
+        std|std.*|c/*) return 0 ;;          # std 由 PX_STDLIB 解析；c/ 是显式 C 库声明
+    esac
+    case "$key" in
+        */*|*.px)                            # 相对 / 绝对路径导入
+            case "$key" in
+                /*) [ -f "$key" ] && readlink -f "$key" ;;
+                *)  [ -f "$base/$key" ] && readlink -f "$base/$key" ;;
+            esac
+            return 0 ;;
+    esac
+    local -a mods; IFS='.' read -r -a mods <<< "$key"
+    local -a bases; bases=("$base")
+    if [ -d "$base/.px_modules" ]; then
+        bases+=("$base/.px_modules")
+        for m in "$base/.px_modules"/*; do
+            [ -d "$m" ] || continue
+            case "${m##*/}" in *.*) continue ;; esac
+            bases+=("$m")
+        done
+    fi
+    for base in "${bases[@]}"; do
+        dst="$base"
+        for m in "${mods[@]}"; do dst="$dst/$m"; done
+        [ -f "$dst.px" ] && { readlink -f "$dst.px"; return 0; }
+        [ -f "$dst/mod.px" ] && { readlink -f "$dst/mod.px"; return 0; }
+    done
+    return 0
+}
+
+px_dep_closure() { # $1=主脚本 ⇒ stdout：主脚本 + 全部项目内 .px 依赖（绝对路径、去重、BFS）
+    # ⚠️ 递归基准 = **被 import 文件自己的目录**（对齐 cg_load_module 的 mod_dir），
+    #   不是主脚本目录 —— 否则子目录里的相对 import 会解析错。
+    local cur d rp
+    local -a queue; queue=()
+    local -A seen; seen=()
+    cur="$(readlink -f "$1")"
+    seen["$cur"]=1; printf '%s\n' "$cur"; queue=("$cur")
+    while [ "${#queue[@]}" -gt 0 ]; do
+        cur="${queue[0]}"; queue=("${queue[@]:1}")
+        while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            rp="$(px_resolve_import "$d" "$(dirname "$cur")")"
+            [ -n "$rp" ] || continue
+            if [ -n "${seen[$rp]:-}" ]; then continue; fi
+            seen["$rp"]=1; printf '%s\n' "$rp"; queue+=("$rp")
+        done < <(px_import_keys "$cur")
+    done
+}
+
+px_is_under() { # $1=路径 $2=目录 ⇒ 0=在下面（含相等）
+    [ "$1" = "$2" ] && return 0
+    case "$1" in "$2"/*) return 0 ;; esac
+    return 1
+}
+
+px_common_root() { # $@=文件/目录 ⇒ 公共祖先目录（沙箱内保持相对路径用）
+    [ "$#" -gt 0 ] || { printf '/\n'; return 0; }
+    local root="$1" p
+    [ -d "$root" ] || root="$(dirname "$root")"
+    shift
+    for p in "$@"; do
+        [ -d "$p" ] || p="$(dirname "$p")"
+        while ! px_is_under "$p" "$root"; do
+            [ "$root" = "/" ] && break
+            root="$(dirname "$root")"
+        done
+        [ "$root" = "/" ] && break
+    done
+    printf '%s\n' "$root"
+}
+
 run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产物"的东西决定）
     # ⚠️ **必须含脚本内容** —— .rtcache 的 key 不含（那是 runtime 的缓存且按"引用集
     #    cuts"分桶，正确）；这里若不含脚本内容，改了脚本还命中旧产物 = 错误的缓存。
@@ -975,6 +1078,15 @@ run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产�
     #   可自动挑选的东西必须也可自动核对；mtime 会因 touch/cp/解包而漂移）。
     {
         sha256sum "$1" | cut -c1-16
+        # M378（晨曦 PX-BUG-20261106-01 B）：**依赖内容也进 key**。
+        #   旧 key 只含主脚本 ⇒ 改 lib.px 仍命中旧产物（跑旧逻辑、毫无提示），
+        #   与本函数「key 必须由真正决定行为的输入驱动」的注释口径相悖。
+        #   与沙箱复制共用 px_dep_closure ⇒ 两处判据不漂移。
+        #   无依赖脚本不追加任何行 ⇒ 既有缓存不作废（不做无谓重建）。
+        while IFS= read -r _df; do
+            [ "$_df" = "$1" ] && continue
+            sha256sum "$_df" 2>/dev/null | cut -c1-16
+        done < <(px_dep_closure "$1") | LC_ALL=C sort
         "$PXC_SELF" --version 2>/dev/null | head -1
         "$PXC_SELF" rtkey "" gcc 0 2>/dev/null | head -1      # runtime 源内容哈希（不编译）
         sha256sum "$PXC_HOME/bootstrap/pxc_vm" 2>/dev/null | cut -c1-16
@@ -1012,6 +1124,14 @@ cmd_run_fast() {
     fi
 
     local key; key="$(run_cache_key "$abs")"
+    # D（晨曦建议）：PX_RUN_VERBOSE=1 打印 key + 依赖清单 —— 出问题能一眼看出缓存里
+    #   到底装了哪些输入（命中与未命中都打，命中时另标一行）。
+    if [ "${PX_RUN_VERBOSE:-0}" = "1" ]; then
+        local -a _dl; _dl=()
+        while IFS= read -r _d; do [ -n "$_d" ] && _dl+=("$_d"); done < <(px_dep_closure "$abs")
+        echo "[px run --fast] key=$key deps=${#_dl[@]}" >&2
+        printf '  · %s\n' "${_dl[@]}" >&2
+    fi
     local dir="$RUN_CACHE/$key"
     local prog="$dir/prog"
     local progsum="$dir/prog.sha256"
@@ -1021,25 +1141,62 @@ cmd_run_fast() {
     #   不符 ⇒ 当作**未命中** ⇒ 重建（重建同样满足契约，且比「响亮失败」体验好）。
     if [ -x "$prog" ] && [ -f "$progsum" ] \
        && [ "$(sha256sum "$prog" 2>/dev/null | cut -c1-16)" = "$(cat "$progsum" 2>/dev/null)" ]; then
+        [ "${PX_RUN_VERBOSE:-0}" = "1" ] && echo "[px run --fast] 缓存命中 key=$key" >&2
         exec "$prog" "$@"
     fi
 
     echo "[px run --fast] 首次运行：编译并缓存（此后命中缓存直接 exec，约 30 ms）" >&2
     local work; work="$(mktemp -d "${TMPDIR:-/tmp}/pxrun.XXXXXX")"
     local base; base="$(basename "$abs")"
-    cp "$abs" "$work/$base"
+    # ── M378（晨曦 PX-BUG-20261106-01 A）：**沙箱 = 主脚本 + 项目内依赖闭包** ──
+    #   按「公共根」复制并保持相对路径 ⇒ 沙箱内的模块解析与源目录一致（含 ../ 上跳、
+    #   .px_modules、子目录 mod.px）。旧实现只 cp 主脚本 ⇒ 依赖缺席 ⇒ 警告+退出 0。
+    local -a deps; deps=()
+    while IFS= read -r _d; do [ -n "$_d" ] && deps+=("$_d"); done < <(px_dep_closure "$abs")
+    [ "${#deps[@]}" -gt 0 ] || deps=("$abs")
+    local root; root="$(px_common_root "${deps[@]}")"
+    local tree="$work/tree" _rel
+    mkdir -p "$tree"
+    for _d in "${deps[@]}"; do
+        _rel="${_d#"$root"/}"
+        mkdir -p "$tree/$(dirname "$_rel")"
+        cp -p "$_d" "$tree/$_rel" || {
+            echo "[px run --fast] ❌ 依赖复制失败: $_d" >&2; return 1; }
+    done
+    local sdir; sdir="$(dirname "$abs")"
+    local rundir; rundir="$tree"
+    [ "$sdir" != "$root" ] && rundir="$tree/${sdir#"$root"/}"
+    # 严格模式：依赖已进沙箱 ⇒ 再「找不到模块」就是真缺失，必须**响亮失败**而不是
+    #   警告+成功（这正是本缺陷的根）。stdlib 未装全的布局除外（保持旧兼容口径）。
+    local -a benv; benv=()
+    if [ -n "${PX_STDLIB:-}" ] && [ -d "${PX_STDLIB:-/nonexistent}" ]; then
+        benv=("PX_STRICT_MODULE=1")
+    fi
+    # D：verbose 下补沙箱口径（公共根 / 严格模式），与上面的 key/依赖清单互补
+    if [ "${PX_RUN_VERBOSE:-0}" = "1" ]; then
+        echo "[px run --fast] 沙箱: root=$root strict=${benv[*]:-off} 文件=${#deps[@]}" >&2
+    fi
     # ── M271（晨曦 D1 第 3 条）：编译失败**响亮失败**，禁止回落解释轨 ────────
     #   到这里脚本已确认**在子集内** ⇒ 编译本应成功 ⇒ 失败就是真故障
     #   （编译器 bug / 工具链缺失 / 磁盘）⇒ 回落会把「故障」静默成「慢但正确」
     #   ⇒ 同一个 flag 两种行为、CI 结果随机器状态变化。口径照 `px build`。
-    if ! ( cd "$work" && "$PXC_SELF" build "$base" ) >"$work/build.log" 2>&1; then
+    if ! ( cd "$rundir" && env ${benv[@]+"${benv[@]}"} "$PXC_SELF" build "$base" ) >"$work/build.log" 2>&1; then
         echo "[px run --fast] ❌ 编译失败（脚本在 Mini 子集内，本应编译成功）—— **不回落解释轨**" >&2
         echo "  · 日志：$work/build.log（保留供排查）" >&2
         tail -8 "$work/build.log" >&2
         echo "  · 若要强制走解释轨：px run --interp $file" >&2
         return 1
     fi
-    local out="$work/build/${base%.px}"
+    # 兜底（严格模式未开时）：诊断文件里出现「找不到模块」⇒ 产物必然在运行期报
+    #   未定义 —— **绝不写缓存**（写进去就是本缺陷：缓存固化坏死产物）。
+    if grep -qs '找不到模块' "$rundir/build"/*.c.stderr 2>/dev/null; then
+        echo "[px run --fast] ❌ 沙箱内仍缺模块 —— 产物必然 R1001，**不写缓存、不回落**" >&2
+        grep -hs '找不到模块' "$rundir/build"/*.c.stderr 2>/dev/null | head -5 >&2
+        echo "  · 日志：$work/build.log  产物目录：$rundir/build（保留供排查）" >&2
+        echo "  · 逃生舱：px build $file（在源目录编译，任意相对路径都能解析）" >&2
+        return 1
+    fi
+    local out="$rundir/build/${base%.px}"
     if [ ! -x "$out" ]; then
         echo "[px run --fast] ❌ 产物缺失（$out）—— 同上，**不回落解释轨**" >&2
         echo "  · 日志：$work/build.log（保留供排查）" >&2

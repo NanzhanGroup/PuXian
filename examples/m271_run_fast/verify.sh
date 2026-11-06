@@ -189,6 +189,52 @@ grep -q 'px run --fast' "$W/e.slow2" \
 grep -q 'px run --fast' "$W/e.tiny" && bad "[6.2] 秒起脚本也打提示（噪声）" || ok "[6.2] 秒起脚本不打提示"
 
 # ─────────────────────────────────────────────────────────────
+# [8] 依赖闭包（M378 · 晨曦 PX-BUG-20261106-01）
+#   缺陷：`--fast` 只把主脚本 cp 进沙箱、不带它 import 的项目内 .px ⇒ 编译器
+#     「警告 + 退出 0」⇒ 缓存写进一条**必然 R1001** 的产物，此后每次命中都 exec 它
+#     （编译期错误被静默固化成运行期错误）。
+#   次级缺陷：`run_cache_key` 只哈希主脚本 ⇒ 改依赖不失效（命中旧产物、跑旧逻辑）。
+#   判据：① 静态两条（依赖提取在位 / key 与沙箱共用同一份提取 ⇒ 不会漂移）
+#         ② 动态（三形态一致 / 改依赖必须 miss / 缺依赖必须在**构建期**响亮失败且不入缓存）
+#   ⚠️ 静态只能证「有代码」，不能证「有效」⇒ 动态那几条是真判据；[7] 另加两道负控。
+# ─────────────────────────────────────────────────────────────
+echo "── [8] 依赖闭包（--fast 带 import 的项目内 .px）"
+grep -q 'px_dep_closure' "$CODE" && ok "[8.1] 依赖闭包提取在位" || bad "[8.1] 缺依赖闭包提取"
+_n=$(grep -c 'px_dep_closure' "$CODE")
+[ "$_n" -ge 2 ] && ok "[8.2] key 与沙箱共用同一份提取（出现 $_n 处）" \
+    || bad "[8.2] 依赖提取只有 $_n 处 ⇒ key/沙箱口径会漂移"
+
+DW="$W/dep"; mkdir -p "$DW"
+printf 'def add(a, b):\n    return a + b\n' > "$DW/lib_import.px"
+printf 'import "lib_import.px"\n\ndef main():\n    print("dep-ok " + str(add(2, 3)))\n' > "$DW/uses_import.px"
+DCACHE="$W/depcache"; mkdir -p "$DCACHE"
+"$PX" run "$DW/uses_import.px" > "$W/o.di" 2>"$W/e.di"; r_di=$?
+PX_RUNCACHE_DIR="$DCACHE" "$PX" run --fast "$DW/uses_import.px" > "$W/o.df1" 2>"$W/e.df1"; r_df1=$?
+PX_RUNCACHE_DIR="$DCACHE" "$PX" run --fast "$DW/uses_import.px" > "$W/o.df2" 2>"$W/e.df2"; r_df2=$?
+chk "[8.3] 三形态退出码一致" "$r_di,$r_df1,$r_df2" "0,0,0"
+cmp -s "$W/o.di" "$W/o.df1" && ok "[8.4] interp == --fast(冷)（不再 R1001）" \
+    || bad "[8.4] interp ≠ --fast(冷)（依赖缺席 ⇒ 运行期未定义）"
+cmp -s "$W/o.di" "$W/o.df2" && ok "[8.5] interp == --fast(热)" || bad "[8.5] interp ≠ --fast(热)"
+
+printf 'def add(a, b):\n    return a * b\n' > "$DW/lib_import.px"
+PX_RUNCACHE_DIR="$DCACHE" "$PX" run --fast "$DW/uses_import.px" > "$W/o.dm" 2>"$W/e.dm"
+cmp -s "$W/o.di" "$W/o.dm" && bad "[8.6] 改依赖后输出不变 ⇒ key 未含依赖（命中旧产物）" \
+    || ok "[8.6] 改依赖后输出已变（key 含依赖内容）"
+
+# 负控：依赖真缺失 ⇒ 必须在**构建期**失败，不得拖到运行期（拖过去就是本缺陷）
+#   ⚠️ 前提自证（CRIT_4）：缺失模块名不能与新脚本同名 —— 同名 import 会被解析成
+#      「导入自己」（loaded 去重后静默跳过），那样这条负控是空操作。
+printf 'import "gone_mod.px"\n\ndef main():\n    print(str(nothing(1)))\n' > "$DW/gone.px"
+_dn0=$(find "$DCACHE" -name prog 2>/dev/null | wc -l)
+PX_RUNCACHE_DIR="$DCACHE" "$PX" run --fast "$DW/gone.px" > /dev/null 2>"$W/e.gone"; r_gone=$?
+_dn1=$(find "$DCACHE" -name prog 2>/dev/null | wc -l)
+grep -q 'R1001' "$W/e.gone" \
+    && bad "[8.7] 缺依赖被拖到运行期（R1001）⇒ 静默固化未修" \
+    || ok "[8.7] 缺依赖在构建期响亮失败（rc=$r_gone）"
+grep -q '找不到模块' "$W/e.gone" && ok "[8.8] 缺依赖真因可读" || bad "[8.8] 缺依赖无真因"
+chk "[8.9] 缺依赖不写缓存" "$_dn0" "$_dn1"
+
+# ─────────────────────────────────────────────────────────────
 # [7] 负控（3 道，各自独立判红）
 # ─────────────────────────────────────────────────────────────
 if [ "$NEG" = 1 ] && [ "$NEG_SKIP" = 0 ]; then
@@ -207,6 +253,12 @@ if [ "$NEG" = 1 ] && [ "$NEG_SKIP" = 0 ]; then
     neg "B-完整性" 's@^    sha256sum "\$prog".*@    : M271-NEG@'
     # C 撤回 key 里的**源码哈希** ⇒ 改一格仍命中 ⇒ [5.2] 必红
     neg "C-key源码" 's#sha256sum "\$1" | cut -c1-16#sha256sum /dev/null | cut -c1-16#'
+    # D 撤回「依赖进沙箱」（只 cp 主脚本）⇒ [8.4] 必红（M378 · 晨曦 PX-BUG-20261106-01）
+    neg "D-依赖沙箱" 's#< <(px_dep_closure "\$abs")#< <(echo "\$abs")#'
+    # E 撤回「key 含依赖哈希」⇒ [8.6] 必红（改依赖仍命中旧产物）
+    #   ⚠️ 不能把整条 done 删掉（会破语法）；把哈希塌成常量即可：依赖**个数**仍进 key，
+    #      但**内容**不进 ⇒ 改 lib 内容时不失效，正是要抓的那个失效面。
+    neg "E-key依赖" 's#| LC_ALL=C sort#| LC_ALL=C sort | sed "s/.*/dep/"#'
 fi
 
 echo "── 结果：$PASS 通过 / $FAIL 失败"
