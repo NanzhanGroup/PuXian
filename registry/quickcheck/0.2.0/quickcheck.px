@@ -62,13 +62,13 @@ def qc_check(prop, n=100):
         i += 1
     return true
 
-# 整数属性测试 → bool
+# 整数属性测试 → Ok(n) | Err(反例)
 def qc_for_int(lo, hi, prop, n=100):
-    return qc_forall(qc_int(lo, hi), prop, n).unwrap()
+    return qc_forall(qc_int(lo, hi), prop, n)
 
-# 字符串属性测试 → bool
+# 字符串属性测试 → Ok(n) | Err(反例)
 def qc_for_str(maxlen, prop, n=100):
-    return qc_forall(qc_str(maxlen), prop, n).unwrap()
+    return qc_forall(qc_str(maxlen), prop, n)
 
 # 生成随机布尔 → bool
 def qc_bool():

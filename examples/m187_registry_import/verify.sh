@@ -85,6 +85,29 @@ for i in $(seq 0 $((N-1))); do
     [ "$actual_sha" = "$sh" ] || { echo "    入口 sha 不符 $p/$v：表=$sh 实际=$actual_sha"; bad=$((bad+1)); }
 done
 chk "[1] $N 包的 sha256/文件数 全部与登记表一致（漂移 0）" "[ $bad = 0 ]"
+# ── M377：**反向对拍** —— 磁盘上有这个包、表里却没有行 ⇒ 红 ──
+#   由来：14 个本地自有包（pxml/collections/…）上游 registry-px **从未收录**（该库 2026-09-20 才建，
+#   本仓 09-05/09-06 已引入；中间换过仓库，旧库不可查）⇒ 生成器只遍历上游时它们**不在表内**。
+#   旧判据是**单向**的（表有 → 查磁盘），所以台账被整份覆盖抹平也照样绿
+#   —— 与 649/662/663 同族：判据看起来在跑，实际没测到东西。本条把它补成双向。
+#   负控 NC-F：把表里 checksum 那一行删掉 ⇒ 磁盘有、表无 ⇒ 必红。
+locrows_ok() {   # 返回 0 = 磁盘每个包在表内都有 >=1 行
+    # ⚠️ 必须**每次重新读表**，不能复用 [0] 段解析出的 PKGS 快照。
+    #   M377 首版就是这么写的：负控 NC-F 删掉 checksum 行后，PKGS 里仍有 checksum
+    #   ⇒ 判据照样绿 ⇒ 负控当场报「没有牙」。这正是「判据读缓存」族（与 649/662/663 同族）：
+    #   判据看起来在跑，实际测的是门启动那一刻的世界。
+    local miss=0 p tbl
+    tbl="$(mktemp)"
+    awk -F'|' '/^\| [a-zA-Z0-9_.-]+ \| [0-9]/ {gsub(/[ \t]/,"",$2); print $2}' "$PROV" | sort -u > "$tbl"
+    for d in "$REG"/*/; do
+        p="$(basename "$d")"
+        ls "$d"*/"$p.px" >/dev/null 2>&1 || continue
+        grep -qxF "$p" "$tbl" || { miss=$((miss+1)); echo "    表内无行：$p"; }
+    done
+    rm -f "$tbl"
+    [ "$miss" = 0 ]
+}
+chk "[1] 反向对拍：磁盘每个包在 THIRD_PARTY.md 都有行（漏登记即红）" "locrows_ok"
 # M189：passhash 已补齐引入（此前因 M184 严格 int() 而暂缓）。
 # M198：上游 `7da3397e` **自修**（`is_int_str` 守卫，与我们的补丁同法）⇒ **撤销本地补丁**，
 #   包内容回到逐字节照搬；补丁**通道**保留（M189 能力，用于"上游未修但我方语言面收紧"的场景）。
@@ -316,6 +339,9 @@ if [ "$NEG" = 1 ]; then
     patch_col_ok() { patch_col_audit; [ "$NPAT_ILLEGAL" = 0 ] && [ "$NPAT_FILE" -ge 1 ]; }
     neg E "! patch_col_ok" patch_bogus "tools/patches/registry-px/zz_nc_bogus.patch" "MISSING"
     rm_bogus
+    # NC-F（M377 反向对拍的牙）：删掉表里 checksum 那一行 ⇒ 磁盘有、表无 ⇒ locrows_ok 必须判红
+    patch_droploc() { grep -vE '^\| *checksum *\|' "$BACK/THIRD_PARTY.md" > "$PROV"; }
+    neg F "! locrows_ok" patch_droploc "$PROV" "$P0"
     restore_all
     [ "$(sha_v)" = "$V0" ] && [ "$(sha_p)" = "$P0" ] && [ "$(sha_a)" = "$A0" ] || { echo "  FAIL 源未逐字节还原"; fail=$((fail+1)); }
 else

@@ -77,7 +77,14 @@ def hant_is_simplified(c):
 
 # 判断字符是否为繁体 → bool
 def hant_is_traditional(c):
-    return o_lookup(c) != c
+    # 繁体字 = 在 S2T 表的值域中（即 T→S 逆映射的键）
+    var ks = HANT_S2T.keys()
+    var i = 0
+    while i < len(ks):
+        if HANT_S2T[ks[i]] == c:
+            return true
+        i += 1
+    return false
 
 # 批量简转繁（保持非汉字不变）→ str
 def hant_s2t_batch(text):
@@ -93,8 +100,7 @@ def hant_count_traditional(text):
     var i = 0
     while i < len(text):
         var c = text[i]
-        var s = hant_t2s(c)
-        if s != c:
+        if hant_is_traditional(c):
             count += 1
         i += 1
     return count
@@ -105,8 +111,7 @@ def hant_count_simplified(text):
     var i = 0
     while i < len(text):
         var c = text[i]
-        var t = hant_s2t(c)
-        if t != c:
+        if hant_is_simplified(c):
             count += 1
         i += 1
     return count

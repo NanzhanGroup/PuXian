@@ -62,11 +62,27 @@ def di_poisson(lambda_v):
 # 0.2.0 新增：mean / variance / std / median / percentile
 # ============================================================
 
+# erf 近似（Abramowitz-Stegun 7.1.26，最大误差 1.5e-7）
+def di_erf(x):
+    var p = 0.3275911
+    var a1 = 0.254829592
+    var a2 = -0.284496736
+    var a3 = 1.421413741
+    var a4 = -1.453152027
+    var a5 = 1.061405429
+    var sign = 1.0
+    var xx = x
+    if x < 0.0:
+        sign = -1.0
+        xx = 0.0 - x
+    var t = 1.0 / (1.0 + p * xx)
+    var poly = (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * exp(0.0 - xx * xx))
+
 # 正态分布 CDF → float
 def di_normal_cdf(x, mean, sd):
-    # 简化近似
     var z = (float(x) - float(mean)) / float(sd)
-    return 0.5 * (1.0 + erf(z / 1.41421356))
+    return 0.5 * (1.0 + di_erf(z / 1.41421356))
 
 # 指数分布 CDF → float
 def di_exponential_cdf(x, rate):
@@ -87,8 +103,9 @@ def di_poisson_var(lambda_v):
     return float(lambda_v)
 
 # 设置随机种子 → null
+# 注：PuXian 无 srand 内建，使用 random_seed() 若可用，否则为 no-op
 def di_seed(s):
-    srand(s)
+    random_seed(s)
 
 # 从列表中随机选择 → any
 def di_choice(items):

@@ -202,8 +202,31 @@ def df_unified(a, b, context=3):
             block_end += 1
         if block_end > len(diff_lines):
             block_end = len(diff_lines)
-        # 输出 @@ 头
-        out = out + "@@ -" + str(block_start + 1) + "," + str(block_end - block_start) + " @@\n"
+        # 统计旧侧/新侧行数（context + delete = old, context + add = new）
+        var old_count = 0
+        var new_count = 0
+        var k0 = block_start
+        while k0 < block_end:
+            if diff_lines[k0][0] == " ":
+                old_count += 1
+                new_count += 1
+            elif diff_lines[k0][0] == "-":
+                old_count += 1
+            else:
+                new_count += 1
+            k0 += 1
+        # 计算旧侧/新侧起始行号（1-based）
+        var old_start = 0
+        var new_start = 0
+        var k0s = 0
+        while k0s < block_start:
+            if diff_lines[k0s][0] != "+":
+                old_start += 1
+            if diff_lines[k0s][0] != "-":
+                new_start += 1
+            k0s += 1
+        # 输出 @@ 头（标准 unified diff 格式：@@ -old_start,old_count +new_start,new_count @@）
+        out = out + "@@ -" + str(old_start + 1) + "," + str(old_count) + " +" + str(new_start + 1) + "," + str(new_count) + " @@\n"
         var k2 = block_start
         while k2 < block_end:
             var line = diff_lines[k2]

@@ -216,21 +216,21 @@ def bp_size(fmt):
 # 0.2.0 新增：pack_u16/u32/u64, unpack_u16/u32/u64, pack_string
 # ============================================================
 
-# 打包 uint16 (小端) → str
+# 打包 uint16 (小端) → bytes
 def bp_pack_u16_le(n):
-    return chr(n & 0xFF) + chr((n >> 8) & 0xFF)
+    return int_to_bytes(n, 2, "little", false)
 
-# 打包 uint16 (大端) → str
+# 打包 uint16 (大端) → bytes
 def bp_pack_u16_be(n):
-    return chr((n >> 8) & 0xFF) + chr(n & 0xFF)
+    return int_to_bytes(n, 2, "big", false)
 
-# 打包 uint32 (小端) → str
+# 打包 uint32 (小端) → bytes
 def bp_pack_u32_le(n):
-    return chr(n & 0xFF) + chr((n >> 8) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 24) & 0xFF)
+    return int_to_bytes(n, 4, "little", false)
 
-# 打包 uint32 (大端) → str
+# 打包 uint32 (大端) → bytes
 def bp_pack_u32_be(n):
-    return chr((n >> 24) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 8) & 0xFF) + chr(n & 0xFF)
+    return int_to_bytes(n, 4, "big", false)
 
 # 解包 uint16 (小端) → int
 def bp_unpack_u16_le(data, off):
@@ -248,9 +248,9 @@ def bp_unpack_u32_le(data, off):
 def bp_unpack_u32_be(data, off):
     return (ord(data[off]) << 24) | (ord(data[off + 1]) << 16) | (ord(data[off + 2]) << 8) | ord(data[off + 3])
 
-# 打包长度前缀字符串 → str
+# 打包长度前缀字符串 → bytes
 def bp_pack_string(s):
-    return bp_pack_u32_le(len(s)) + s
+    return bytes_concat(bp_pack_u32_le(len(s)), bytes(s))
 
 # 解包长度前缀字符串 → {str, next_off}
 def bp_unpack_string(data, off):

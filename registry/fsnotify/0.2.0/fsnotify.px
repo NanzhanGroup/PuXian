@@ -79,7 +79,17 @@ def fs_snapshot(dir):
         i += 1
     return Ok(out)
 # diff：added / modified / removed（均为路径列表）
+# before/after 可传 Ok(dict) 或裸 dict（兼容两种调用方式）
 def fs_diff(before, after):
+    # 兼容 Result 输入：fs_snapshot 返回 Ok(dict)，用户可能直接传入
+    if type(before) == "result":
+        if before.is_err():
+            return {"added": [], "modified": [], "removed": []}
+        before = before.unwrap()
+    if type(after) == "result":
+        if after.is_err():
+            return {"added": [], "modified": [], "removed": []}
+        after = after.unwrap()
     var added = []
     var modified = []
     var removed = []

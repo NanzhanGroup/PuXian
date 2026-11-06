@@ -215,3 +215,139 @@ def csv_filter_rows(rows, idx, val):
             result.append(rows[i])
         i += 1
     return result
+# ============================================================
+# 从 csvutil 合并的函数（2026-10-06 异名同功能合并）
+# 迁入函数：csv_escape_field / csv_unescape_field / csv_sort / csv_unique /
+#           csv_build / csv_build_header / csv_filter / csv_column
+# csvutil 库已删除，全部功能由 csv 提供
+# 注意：csvutil 的 csv_parse / csv_parse_header 与 csv 已有同名函数冲突，
+#       csv 已有等价功能（csv_parse / csv_parse_header），不再迁入。
+# ============================================================
+
+# 辅助：全局替换
+def csv_replace_all(text, old, new):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if i + len(old) <= len(text) and text[i : i + len(old)] == old:
+            result = result + new
+            i = i + len(old)
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# 转义字段
+def csv_escape_field(field, delimiter = ",", quote = "\""):
+    var needs_quote = false
+    if field.contains(delimiter) or field.contains(quote) or field.contains("\n") or field.contains("\r"):
+        needs_quote = true
+    if needs_quote:
+        var escaped = csv_replace_all(field, quote, quote + quote)
+        return quote + escaped + quote
+    return field
+
+# 反转义字段
+def csv_unescape_field(field, quote = "\""):
+    if len(field) >= 2 and field[0] == quote and field[len(field) - 1] == quote:
+        var inner = field[1 : len(field) - 1]
+        return csv_replace_all(inner, quote + quote, quote)
+    return field
+
+# 构建 CSV 文本（csvutil 风格，支持自定义分隔符/引号）
+def csv_build(rows, delimiter = ",", quote = "\""):
+    var result = ""
+    var i = 0
+    while i < len(rows):
+        var row = rows[i]
+        var j = 0
+        while j < len(row):
+            result = result + csv_escape_field(str(row[j]), delimiter, quote)
+            if j < len(row) - 1:
+                result = result + delimiter
+            j += 1
+        result = result + "\n"
+        i += 1
+    return result
+
+# 构建带表头 CSV（csvutil 风格，dict 行）
+def csv_build_header(rows, headers):
+    var all_rows = [headers]
+    var i = 0
+    while i < len(rows):
+        var row = []
+        var j = 0
+        while j < len(headers):
+            if rows[i].contains(headers[j]):
+                row.append(rows[i][headers[j]])
+            else:
+                row.append("")
+            j += 1
+        all_rows.append(row)
+        i += 1
+    return csv_build(all_rows)
+
+# 按列过滤（dict 行，列名+值）
+def csv_filter(rows, column, value):
+    var result = []
+    var i = 0
+    while i < len(rows):
+        if rows[i].contains(column) and rows[i][column] == value:
+            result.append(rows[i])
+        i += 1
+    return result
+
+# 按列排序（冒泡，dict 行）
+def csv_sort(rows, column, ascending = true):
+    var result = []
+    var i = 0
+    while i < len(rows):
+        result.append(rows[i])
+        i += 1
+    i = 0
+    while i < len(result):
+        var j = 0
+        while j < len(result) - i - 1:
+            var swapped = false
+            if result[j].contains(column) and result[j + 1].contains(column):
+                if ascending:
+                    if result[j][column] > result[j + 1][column]:
+                        var tmp = result[j]
+                        result[j] = result[j + 1]
+                        result[j + 1] = tmp
+                        swapped = true
+                else:
+                    if result[j][column] < result[j + 1][column]:
+                        var tmp = result[j]
+                        result[j] = result[j + 1]
+                        result[j + 1] = tmp
+                        swapped = true
+            j += 1
+        i += 1
+    return result
+
+# 提取单列（dict 行）
+def csv_column(rows, column):
+    var result = []
+    var i = 0
+    while i < len(rows):
+        if rows[i].contains(column):
+            result.append(rows[i][column])
+        i += 1
+    return result
+
+# 去重（按指定列）
+def csv_unique(rows, column):
+    var seen = {}
+    var result = []
+    var i = 0
+    while i < len(rows):
+        if rows[i].contains(column):
+            var val = rows[i][column]
+            if not seen.contains(val):
+                seen[val] = true
+                result.append(rows[i])
+        else:
+            result.append(rows[i])
+        i += 1
+    return result

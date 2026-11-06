@@ -148,12 +148,12 @@ bisect2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 bitset2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 bloom2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 bson2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
-bytes_pack2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+bytes_pack2_test	XFAIL	XFAIL	上游 03cc339 把 bp_pack_u16_le/be、bp_pack_u32_* 的返回类型 str→bytes（修「打包返 string 骗人」），而**用例没跟着改**：仍写 ord(le16[0])。本仓 b[i] 返回 **int 字节值**（cheatsheet 事实 211，对齐 Python bytes / Go []byte）⇒ ord(52) 取「52」首字符码点 = 53 ≠ 0x34，必然失败。属上游用例滞后（与 T1/T2 同族），非我方缺陷。M377 实测：type=<bytes 2> · le16[0]=52（int）· ord(le16[0])=53
 cache2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 captcha2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 checksum2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 cli2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
-concurrent_map2_test	XFAIL	SKIP	build：上游缺陷 L1（仅 build 轨）：0.2.0 新增的 cm_clear/cm_values/cm_to_string 用 m["data"]，而 0.1.0 全集用 m["m"] ⇒ 清空后长度仍 2 ｜ interp：解释轨不支持 通道/mutex（Mini 子集排除，设计如此）
+concurrent_map2_test	PASS	SKIP	M377 复核：上游 03cc339 已修缺陷 L1（cm_clear/cm_values/cm_to_string 的 m["data"] → m["m"]，并改用 keys() 取键）⇒ build 轨实测**通过**（反向判据抓出，据此由 XFAIL 改 PASS）｜ interp：解释轨不支持 通道/mutex（Mini 子集排除，设计如此，不变）
 config2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 counter2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 csv2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
@@ -210,7 +210,7 @@ protobuf2_test	XFAIL	XFAIL	上游缺陷 T1：0.2.0 用例把 schema 传成 list�
 punycode2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 pwgen2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 qrcode2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
-quickcheck2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
+quickcheck2_test	XFAIL	XFAIL	上游 03cc339 修「qc_for_int 内部 unwrap ⇒ 反例直接终结进程」：改为返回 qc_forall 的 Result（Ok(n)|Err(反例)），而**用例没跟着改**：仍按裸 int 断言 result == 50 ⇒ 实测得 Ok(50)，必然失败。属上游用例滞后（与 T1/T2 同族），非我方缺陷。M377 实测输出：FAIL: for_int positive: Ok(50)
 rate2_test	PASS	PASS	上游 01f6048c 新增 0.2.0
 readstat2_test	XFAIL	XFAIL	上游缺陷 T7：0.2.0 用例断言 rs_words == 12，而该句按空白切是 11（rs_words 未变）
 redis2_test	SKIP	SKIP	需真实 Redis 127.0.0.1:6379（本机与 CI 均无；用例自身会打印 SKIP，--run-skipped 可跑）

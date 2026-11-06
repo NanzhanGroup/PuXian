@@ -179,7 +179,10 @@ def tar_unpack(buf):
 
 # 列出归档中的文件名 → [str]
 def tar_list_files(buf):
-    var files = tar_unpack(buf).unwrap()
+    var r = tar_unpack(buf)
+    if r.is_err():
+        return []
+    var files = r.unwrap()
     var names = []
     var i = 0
     while i < len(files):
@@ -189,7 +192,10 @@ def tar_list_files(buf):
 
 # 检查归档是否有文件 → bool
 def tar_has_file(buf, name):
-    var files = tar_unpack(buf).unwrap()
+    var r = tar_unpack(buf)
+    if r.is_err():
+        return false
+    var files = r.unwrap()
     var i = 0
     while i < len(files):
         if files[i]["name"] == name:
@@ -199,7 +205,10 @@ def tar_has_file(buf, name):
 
 # 获取文件大小 → int
 def tar_get_file_size(buf, name):
-    var files = tar_unpack(buf).unwrap()
+    var r = tar_unpack(buf)
+    if r.is_err():
+        return -1
+    var files = r.unwrap()
     var i = 0
     while i < len(files):
         if files[i]["name"] == name:

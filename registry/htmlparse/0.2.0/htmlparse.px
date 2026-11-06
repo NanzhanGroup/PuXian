@@ -158,7 +158,7 @@ def hp_text(el):
     while i < len(kids):
         var k = kids[i]
         if type(k) == "string":
-            out = out + k
+            out = out + hp_decode_entities(k)
         else:
             out = out + hp_text(k)
         i += 1

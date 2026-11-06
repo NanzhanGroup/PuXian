@@ -61,23 +61,35 @@ def cm_keys(m):
 # ---- 0.2.0 新增 ----
 # 清空 → cm
 def cm_clear(m):
-    m["data"] = {}
+    m["mu"].lock()
+    m.set("m", {})
+    m["mu"].unlock()
     return m
 
 # 取所有值 → [any]
 def cm_values(m):
+    m["mu"].lock()
     var vals = []
-    for k in m["data"]:
-        vals = vals + [m["data"][k]]
+    var ks = m["m"].keys()
+    var i = 0
+    while i < len(ks):
+        vals.append(m["m"][ks[i]])
+        i += 1
+    m["mu"].unlock()
     return vals
 
 # 转字符串 → string
 def cm_to_string(m):
+    m["mu"].lock()
     var s = "{"
     var first = true
-    for k in m["data"]:
+    var ks = m["m"].keys()
+    var i = 0
+    while i < len(ks):
         if not first:
             s = s + ", "
         first = false
-        s = s + str(k) + ": " + str(m["data"][k])
+        s = s + str(ks[i]) + ": " + str(m["m"][ks[i]])
+        i += 1
+    m["mu"].unlock()
     return s + "}"

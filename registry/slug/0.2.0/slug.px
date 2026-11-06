@@ -131,3 +131,131 @@ def sl_unslug(s):
 def sl_slug_id(s, suffix):
     var base = sl_slug(s)
     return base + "-" + suffix
+# ============================================================
+# 从 slugify 合并的函数（2026-10-06 异名同功能合并）
+# 迁入函数：sl_strip_accents / sl_transliterate / sl_slugify_unicode / sl_custom_map /
+#           sl_slugify / sl_truncate_slug / sl_make_unique
+# slugify 库已删除，全部功能由 slug 提供（2026-10-06 异名同功能合并）
+# ============================================================
+# 去除重音符号（常见 Latin-1 Supplement）
+def sl_strip_accents(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        var code = ord(c)
+        if code == 224 or code == 225 or code == 226 or code == 227 or code == 228 or code == 229:
+            result = result + "a"
+        elif code == 232 or code == 233 or code == 234 or code == 235:
+            result = result + "e"
+        elif code == 236 or code == 237 or code == 238 or code == 239:
+            result = result + "i"
+        elif code == 242 or code == 243 or code == 244 or code == 245 or code == 246:
+            result = result + "o"
+        elif code == 249 or code == 250 or code == 251 or code == 252:
+            result = result + "u"
+        elif code == 241:
+            result = result + "n"
+        elif code == 231:
+            result = result + "c"
+        elif code == 192 or code == 193 or code == 194 or code == 195 or code == 196 or code == 197:
+            result = result + "A"
+        elif code == 200 or code == 201 or code == 202 or code == 203:
+            result = result + "E"
+        elif code == 204 or code == 205 or code == 206 or code == 207:
+            result = result + "I"
+        elif code == 210 or code == 211 or code == 212 or code == 213 or code == 214:
+            result = result + "O"
+        elif code == 217 or code == 218 or code == 219 or code == 220:
+            result = result + "U"
+        elif code == 209:
+            result = result + "N"
+        elif code == 199:
+            result = result + "C"
+        else:
+            result = result + c
+        i += 1
+    return result
+# 音译（常见 Unicode → ASCII）
+def sl_transliterate(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        var code = ord(c)
+        if code < 128:
+            result = result + c
+        elif code == 8217 or code == 8216:
+            result = result + "'"
+        elif code == 8220 or code == 8221:
+            result = result + "\""
+        elif code == 8211:
+            result = result + "-"
+        elif code == 8212:
+            result = result + "--"
+        elif code == 8230:
+            result = result + "..."
+        elif code == 8482:
+            result = result + "TM"
+        elif code == 169:
+            result = result + "(c)"
+        elif code == 174:
+            result = result + "(R)"
+        else:
+            result = result + sl_strip_accents(c)
+        i += 1
+    return result
+# Unicode slugify（先音译再 slugify）
+def sl_slugify_unicode(text, separator = "-"):
+    var trans = sl_transliterate(text)
+    return sl_slugify(trans, separator)
+# 自定义字符映射
+def sl_custom_map(text, char_map):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        if char_map.contains(c):
+            result = result + char_map[c]
+        else:
+            result = result + c
+        i += 1
+    return result
+# slugify 风格的 slug 生成（支持自定义分隔符）
+def sl_slugify(text, separator = "-"):
+    var result = ""
+    var i = 0
+    var last_was_sep = false
+    while i < len(text):
+        var c = text[i]
+        var code = ord(c)
+        if (code >= 65 and code <= 90) or (code >= 97 and code <= 122) or (code >= 48 and code <= 57):
+            if code >= 65 and code <= 90:
+                c = chr(code + 32)
+            result = result + c
+            last_was_sep = false
+        else:
+            if not last_was_sep and len(result) > 0:
+                result = result + separator
+                last_was_sep = true
+        i += 1
+    if len(result) > 0:
+        var last = result[len(result) - 1]
+        if last == separator[0]:
+            result = result[0 : len(result) - 1]
+    return result
+# 截断 slug
+def sl_truncate_slug(slug, max_len):
+    if len(slug) <= max_len:
+        return slug
+    return slug[0 : max_len]
+# 确保 slug 唯一（与 sl_slug_unique 功能相同，保留兼容）
+def sl_make_unique(slug, existing):
+    if not sl_contains(existing, slug):
+        return slug
+    var n = 2
+    while true:
+        var candidate = slug + "-" + str(n)
+        if not sl_contains(existing, candidate):
+            return candidate
+        n += 1

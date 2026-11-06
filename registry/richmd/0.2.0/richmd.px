@@ -235,19 +235,187 @@ def mdr_strip(s):
 def mdr_render_plain(src):
     return mdr_strip(mdr_render(src).unwrap()).unwrap()
 
-# 渲染为 HTML → str
+# 剥除 Markdown 标记 → 纯文本（不渲染样式，只去标记符号）
+def mdr_strip_md(src):
+    var lines = split(src, "\n")
+    var out = ""
+    var in_code = false
+    var code_fence = ""
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        var trim = ln.strip()
+        if in_code:
+            if trim == code_fence:
+                in_code = false
+            else:
+                if len(out) > 0:
+                    out = out + "\n"
+                out = out + ln
+            i += 1
+            continue
+        if len(trim) >= 3 and (trim.has_prefix("```") or trim.has_prefix("~~~")):
+            in_code = true
+            code_fence = "```"
+            if trim.has_prefix("~~~"):
+                code_fence = "~~~"
+            i += 1
+            continue
+        if len(out) > 0:
+            out = out + "\n"
+        out = out + mdr_strip_md_inline(ln)
+        i += 1
+    return out
+
+# 行内 Markdown 标记剥离
+def mdr_strip_md_inline(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var mk = o_next_marker(s, i)
+        if mk[1] < 0:
+            out = out + s[i:len(s)]
+            break
+        out = out + s[i:mk[1]]
+        var kind = mk[0]
+        var j = mk[1]
+        if kind == "`":
+            var end = o_find(s, "`", j + 1)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + s[j + 1:end]
+            i = end + 1
+        elif kind == "**":
+            var end = o_find(s, "**", j + 2)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + mdr_strip_md_inline(s[j + 2:end])
+            i = end + 2
+        elif kind == "*":
+            var end = o_find(s, "*", j + 1)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + s[j + 1:end]
+            i = end + 1
+        elif kind == "~~":
+            var end = o_find(s, "~~", j + 2)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + s[j + 2:end]
+            i = end + 2
+        elif kind == "[":
+            var closer = o_find(s, "](", j)
+            if closer < 0:
+                out = out + s[j:len(s)]
+                break
+            var endparen = o_find(s, ")", closer + 2)
+            if endparen < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + s[j + 1:closer]
+            i = endparen + 1
+    return out
+
+# 行内 Markdown → HTML
+def mdr_inline_html(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var mk = o_next_marker(s, i)
+        if mk[1] < 0:
+            out = out + s[i:len(s)]
+            break
+        out = out + s[i:mk[1]]
+        var kind = mk[0]
+        var j = mk[1]
+        if kind == "`":
+            var end = o_find(s, "`", j + 1)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + "<code>" + s[j + 1:end] + "</code>"
+            i = end + 1
+        elif kind == "**":
+            var end = o_find(s, "**", j + 2)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + "<strong>" + mdr_inline_html(s[j + 2:end]) + "</strong>"
+            i = end + 2
+        elif kind == "*":
+            var end = o_find(s, "*", j + 1)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + "<em>" + s[j + 1:end] + "</em>"
+            i = end + 1
+        elif kind == "~~":
+            var end = o_find(s, "~~", j + 2)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + "<del>" + s[j + 2:end] + "</del>"
+            i = end + 2
+        elif kind == "[":
+            var closer = o_find(s, "](", j)
+            if closer < 0:
+                out = out + s[j:len(s)]
+                break
+            var endparen = o_find(s, ")", closer + 2)
+            if endparen < 0:
+                out = out + s[j:len(s)]
+                break
+            var text = s[j + 1:closer]
+            var url = s[closer + 2:endparen]
+            out = out + "<a href=\"" + url + "\">" + text + "</a>"
+            i = endparen + 1
+    return out
+
+# 渲染为 HTML → str（支持行内标记）
 def mdr_render_html(src):
     var lines = split(src, "\n")
     var out = ""
+    var in_code = false
+    var code_fence = ""
     var i = 0
     while i < len(lines):
-        var line = trim(lines[i])
-        if starts_with(line, "# "):
-            out = out + "<h1>" + line[2:len(line)] + "</h1>\n"
-        elif starts_with(line, "## "):
-            out = out + "<h2>" + line[3:len(line)] + "</h2>\n"
-        elif len(line) > 0:
-            out = out + "<p>" + line + "</p>\n"
+        var line = lines[i]
+        var trim_line = trim(line)
+        if in_code:
+            if trim_line == code_fence:
+                in_code = false
+                out = out + "</code></pre>\n"
+            else:
+                out = out + line + "\n"
+            i += 1
+            continue
+        if len(trim_line) >= 3 and (trim_line.has_prefix("```") or trim_line.has_prefix("~~~")):
+            in_code = true
+            code_fence = "```"
+            if trim_line.has_prefix("~~~"):
+                code_fence = "~~~"
+            out = out + "<pre><code>\n"
+            i += 1
+            continue
+        if trim_line == "":
+            i += 1
+            continue
+        if starts_with(trim_line, "# "):
+            out = out + "<h1>" + mdr_inline_html(trim_line[2:len(trim_line)]) + "</h1>\n"
+        elif starts_with(trim_line, "## "):
+            out = out + "<h2>" + mdr_inline_html(trim_line[3:len(trim_line)]) + "</h2>\n"
+        elif starts_with(trim_line, "### "):
+            out = out + "<h3>" + mdr_inline_html(trim_line[4:len(trim_line)]) + "</h3>\n"
+        elif starts_with(trim_line, "> "):
+            out = out + "<blockquote>" + mdr_inline_html(trim_line[2:len(trim_line)]) + "</blockquote>\n"
+        elif starts_with(trim_line, "- ") or starts_with(trim_line, "* "):
+            out = out + "<li>" + mdr_inline_html(trim_line[2:len(trim_line)]) + "</li>\n"
+        elif len(trim_line) > 0:
+            out = out + "<p>" + mdr_inline_html(line) + "</p>\n"
         i += 1
     return out
 

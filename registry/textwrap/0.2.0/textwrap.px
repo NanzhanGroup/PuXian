@@ -195,14 +195,59 @@ def tw_split_paragraphs(s):
 # 统计行数
 def tw_line_count(s):
     return len(s.split("\n"))
-# 统计词数
+# 判断字符是否为 CJK 汉字 → bool
+def tw_is_cjk(c):
+    var cp = ord(c)
+    # CJK 统一表意文字基本区：U+4E00..U+9FFF
+    if cp >= 0x4E00 and cp <= 0x9FFF:
+        return true
+    # CJK 扩展 A：U+3400..U+4DBF
+    if cp >= 0x3400 and cp <= 0x4DBF:
+        return true
+    # CJK 兼容表意文字：U+F900..U+FAFF
+    if cp >= 0xF900 and cp <= 0xFAFF:
+        return true
+    return false
+
+# 统计词数（支持中文：CJK 每字算一个词）
 def tw_word_count(s):
     var count = 0
     var lines = s.split("\n")
     var i = 0
     while i < len(lines):
-        var words = tw_split_words(lines[i])
-        count = count + len(words)
+        var line = lines[i]
+        var words = tw_split_words(line)
+        var j = 0
+        while j < len(words):
+            var w = words[j]
+            # 检查词中是否含 CJK 字符；若有则按字计数
+            var has_cjk = false
+            var k = 0
+            while k < len(w):
+                if tw_is_cjk(w[k]):
+                    has_cjk = true
+                    break
+                k += 1
+            if has_cjk:
+                # CJK 词：每个 CJK 字算一个词，非 CJK 连续段算一个词
+                var cjk_count = 0
+                var non_cjk = ""
+                var k2 = 0
+                while k2 < len(w):
+                    if tw_is_cjk(w[k2]):
+                        if len(non_cjk) > 0:
+                            cjk_count += 1
+                            non_cjk = ""
+                        cjk_count += 1
+                    else:
+                        non_cjk = non_cjk + w[k2]
+                    k2 += 1
+                if len(non_cjk) > 0:
+                    cjk_count += 1
+                count = count + cjk_count
+            else:
+                count = count + 1
+            j += 1
         i += 1
     return count
 # 制表符展开为空格

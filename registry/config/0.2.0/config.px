@@ -73,19 +73,41 @@ def cfg_cast_env(s):
         return true
     if s == "false":
         return false
-    # 整数
-    if s != "" and s[0] >= "0" and s[0] <= "9" or (starts_with(s, "-") and len(s) > 1):
-        var all_num = true
-        var i = 0
-        while i < len(s):
-            var c = s[i]
-            if not ((c >= "0" and c <= "9") or c == "-" or c == "."):
-                all_num = false
-            i += 1
-        if all_num:
-            if contains(s, "."):
-                return float(s)
-            return int(s)
+    # 尝试解析为整数或浮点数（严格校验，避免 IP 地址等误转）
+    var t = s
+    var neg = false
+    if len(t) > 0 and t[0] == "-":
+        neg = true
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return s
+    # 统计小数点数和数字数
+    var dot_count = 0
+    var digit_count = 0
+    var i = 0
+    while i < len(t):
+        var c = t[i]
+        if c >= "0" and c <= "9":
+            digit_count += 1
+        elif c == ".":
+            dot_count += 1
+        else:
+            # 非数字非小数点 → 不是数字
+            return s
+        i += 1
+    if digit_count == 0:
+        return s
+    # 整数：无小数点
+    if dot_count == 0:
+        if neg:
+            return 0 - int(t)
+        return int(t)
+    # 浮点：恰好一个小数点且不在首尾
+    if dot_count == 1 and t[0] != "." and t[len(t) - 1] != ".":
+        if neg:
+            return 0.0 - float(t)
+        return float(t)
+    # 多个小数点（如 IP 地址 10.0.0.9）→ 不是数字
     return s
 # 用环境变量 <prefix>_<KEY> 覆盖 dict 顶层键（KEY 大写、- 转 _）。
 # 例如 prefix=APP：环境变量 APP_PORT 覆盖 d["port"]。

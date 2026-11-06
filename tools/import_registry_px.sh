@@ -99,7 +99,16 @@ prov_note() {   # 三轨验证列（口径 = **最新一轮**的上游用例回�
         dns) echo "**双轨 SKIP** · 用例要求外网 UDP 解析器 223.5.5.5:53" ;;
         ftp|pop3|oauth2|imap) echo "**双轨 PASS**（本仓自建 mock 服务端，见 upstream-tests/fixtures/）" ;;
         passhash) echo "**双轨 PASS**（M189：打本地补丁后 \`passhash_test\` 通过；M198 起补丁已撤销）" ;;
-        *) echo "**双轨 PASS**（M282 上游用例回归 · 238 用例 × 双轨 —— 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`）" ;;
+        # M377：**默认值不再是 PASS**。原实现在这里给「双轨 PASS（M282 上游用例回归）」——
+        #   而「双轨 PASS」是 M282 那一轮**真跑过**的结论；此后新引入的包一次用例都没跑，
+        #   照样被写成 PASS ⇒ 台账替未验证的包**盖章**（与 649/663 同族：看起来在记录，实际没测）。
+        #   现在：只有登记在 tools/registry_px_verified.txt（M282 实证集）的包才写 PASS，
+        #   其余一律「未验证」；跑通上游用例后**追加名字**到那份清单，才算数。
+        *) if [ -f "$ROOT/tools/registry_px_verified.txt" ] && grep -qxF "$1" "$ROOT/tools/registry_px_verified.txt"; then
+               echo "**双轨 PASS**（M282 上游用例回归 · 逐条结果与 XFAIL 登记见 \`docs/UPSTREAM_020_DEFECTS.md\`）"
+           else
+               echo "**未验证**（M377：本包**没跑过**上游用例 —— 不盖章；跑通后登记进 \`tools/registry_px_verified.txt\`）"
+           fi ;;
     esac
 }
 
@@ -132,7 +141,11 @@ for libdir in "$SRC_REG"/*/; do
                 echo "  [补丁失败] $name/$ver：$PATCHDIR/$pf 未能应用（锚点漂移？）" >&2
                 CONFLICT=$((CONFLICT+1)); continue 2
             fi
-            if [ -z "$patch_name" ]; then patch_name="$pf"; else patch_name="$patch_name,$pf"; fi
+            # M377：**每个**补丁名各自用反引号包起来（`a.patch`,`b.patch`）。
+            #   旧写法把多个名字塞进同一对反引号（`a.patch,b.patch`），m187 的补丁列
+            #   审计按「反引号内 = 一个文件名」逐个取（verify.sh NPAT_LIST），会抽出
+            #   「a.patch,b.patch」这个不存在的文件 ⇒ 误报「缺文件 1 / 未登记 1」。
+            if [ -z "$patch_name" ]; then patch_name="\`$pf\`"; else patch_name="$patch_name,\`$pf\`"; fi
             PATCHED=$((PATCHED+1))
         done
         dst="$ROOT/registry/$name/$ver"
@@ -178,7 +191,7 @@ for libdir in "$SRC_REG"/*/; do
         fi
         entry_sha="$(sha256sum "$stage/$name.px" | cut -c1-16)"
         extra=""
-        [ -n "$patch_name" ] && extra="补丁：\`$patch_name\`"
+        [ -n "$patch_name" ] && extra="补丁：$patch_name"
         printf '| %s | %s | %d | `%s` | %s | %s | %s |\n' \
             "$name" "$ver" "${#files[@]}" "$entry_sha" "$(prov_note "$name")" "$state" "$extra" >> "$PROV"
         if [ "$APPLY" = 1 ]; then
@@ -188,8 +201,44 @@ for libdir in "$SRC_REG"/*/; do
     done
 done
 
+# ── § 本地自有包（上游没有的包）──────────────────────────────
+# M377：这批包是本仓**自研/自维护**的（pxml collections cookiejar edge gfx html lunar
+#   multipart png semver smtp webroute yaml），上游 registry-px **从未收录**：
+#   该库 2026-09-20 才建首个提交，本仓 09-05/09-06 就已引入（比它早 15 天）；
+#   中间**换过仓库**，旧库已不可查（用户 2026-11-06 11:21 说明）。
+#   ⇒ 台账必须自己记，否则 --apply 整份覆盖 THIRD_PARTY.md 后，它们在自己的台账里**一条不剩**
+#     （实测：13 个包不在表内，只有 checksum 因为 M187 从上游引入过才在表里）。
+#   列形状与上游表一致 ⇒ m187 的逐行对拍 / 补丁列守恒照旧吃这些行，无需改门。
+cat >> "$PROV" <<'EOF'
+
+## § 本地自有包（**本仓维护 · 不由上游覆盖**）
+
+> 判定口径：`registry/` 下有、**上游 `registry-px` 同版本目录没有** ⇒ 本地自有。
+> 生成器每次重算 sha256 与文件数（与上游表同形），故 m187 的「表 ⇔ 磁盘」对拍对它们同样有效。
+> ⚠️ 不要因为「上游没有」就当缺失删掉 —— 它们是本仓的包，只是上游不收录。
+
+| 包 | 版本 | 文件数 | 入口 sha256（前 16） | 三轨验证 | 备注 | 补丁 |
+|---|---|---|---|---|---|---|
+EOF
+LOCALN=0
+for ld in "$ROOT/registry"/*/; do
+    [ -d "$ld" ] || continue
+    lname="$(basename "$ld")"
+    [ -d "$SRC_REG/$lname" ] && continue
+    for lverd in "$ld"*/; do
+        [ -d "$lverd" ] || continue
+        lver="$(basename "$lverd")"
+        [ -f "$lverd/$lname.px" ] || continue
+        n_files="$(ls "$lverd"/*.px 2>/dev/null | wc -l)"
+        l_sha="$(sha256sum "$lverd/$lname.px" | cut -c1-16)"
+        printf '| %s | %s | %d | `%s` | —（本仓自研 · 无上游用例） | **本地自有**（上游无此包） |  |\n' \
+            "$lname" "$lver" "$n_files" "$l_sha" >> "$PROV"
+        LOCALN=$((LOCALN+1))
+    done
+done
+
 echo "── 源：$UPSTREAM_URL @ $UPSTREAM_REV（凭据已剥离）"
-echo "── 新引入 $NEW 件 · 已存在 $SKIP 件 · **就地更新 $UPD 件**（上游已删 $REMOVED 个文件）· 冲突/拒收 $CONFLICT 件 · 其中带本地补丁 $PATCHED 件"
+echo "── 新引入 $NEW 件 · 已存在 $SKIP 件 · **就地更新 $UPD 件**（上游已删 $REMOVED 个文件）· 冲突/拒收 $CONFLICT 件 · 其中带本地补丁 $PATCHED 件 · **本地自有 $LOCALN 行**（上游无此包）"
 if [ "$APPLY" = 1 ]; then
     cp -f "$PROV" "$ROOT/registry/THIRD_PARTY.md"
     echo "── 已写入 registry/THIRD_PARTY.md（来源与许可表）"

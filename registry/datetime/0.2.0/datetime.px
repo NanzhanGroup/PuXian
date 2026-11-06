@@ -276,3 +276,242 @@ def dt_minute(sec):
     return int(time_format(int(sec), "%M"))
 def dt_second(sec):
     return int(time_format(int(sec), "%S"))
+# ============================================================
+# 从 dateutil 合并的函数（2026-10-06 异名同功能合并）
+# 迁入全部 du_ 函数，保留原前缀以兼容旧代码
+# dateutil 库已删除，全部功能由 datetime 提供
+# 独有功能：du_to_rfc822 / du_to_julian / du_from_julian / du_relative_time /
+#           du_day_of_year / du_to_timestamp / du_components / du_day_of_week
+# ============================================================
+
+# 辅助：判断闰年（du_ 前缀）
+def du_is_leap_year(year):
+    if year % 400 == 0:
+        return true
+    if year % 100 == 0:
+        return false
+    if year % 4 == 0:
+        return true
+    return false
+
+# 月天数
+def du_days_in_month(year, month):
+    var days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if month < 1 or month > 12:
+        return 0
+    var d = days[month - 1]
+    if month == 2 and du_is_leap_year(year):
+        d = 29
+    return d
+
+# 从时间戳提取年月日时分秒
+def du_components(ts):
+    var secs = int(ts)
+    var days = int(secs / 86400)
+    var rem = secs % 86400
+    var hour = int(rem / 3600)
+    rem = rem % 3600
+    var minute = int(rem / 60)
+    var second = rem % 60
+    var year = 1970
+    while true:
+        var yd = 365
+        if du_is_leap_year(year):
+            yd = 366
+        if days < yd:
+            break
+        days = days - yd
+        year += 1
+    var month = 1
+    while month <= 12:
+        var md = du_days_in_month(year, month)
+        if days < md:
+            break
+        days = days - md
+        month += 1
+    var day = days + 1
+    return [year, month, day, hour, minute, second]
+
+# 辅助：替换
+def du_replace(text, old, new):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if i + len(old) <= len(text) and text[i : i + len(old)] == old:
+            result = result + new
+            i = i + len(old)
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# 辅助：补零2位
+def du_pad2(n):
+    if n < 10:
+        return "0" + str(n)
+    return str(n)
+
+# 辅助：补零4位
+def du_pad4(n):
+    if n < 10:
+        return "000" + str(n)
+    if n < 100:
+        return "00" + str(n)
+    if n < 1000:
+        return "0" + str(n)
+    return str(n)
+
+# 格式化（du_ 风格）
+def du_format(ts, fmt):
+    var c = du_components(ts)
+    var year = c[0]
+    var month = c[1]
+    var day = c[2]
+    var hour = c[3]
+    var minute = c[4]
+    var second = c[5]
+    var result = fmt
+    result = du_replace(result, "YYYY", du_pad4(year))
+    result = du_replace(result, "YY", du_pad2(year % 100))
+    result = du_replace(result, "mm", du_pad2(month))
+    result = du_replace(result, "dd", du_pad2(day))
+    result = du_replace(result, "HH", du_pad2(hour))
+    result = du_replace(result, "MM", du_pad2(minute))
+    result = du_replace(result, "SS", du_pad2(second))
+    return result
+
+# 当前时间戳
+def du_now():
+    return time()
+
+# RFC 822 格式
+def du_to_rfc822(ts):
+    var c = du_components(ts)
+    var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    var dow = du_day_of_week(c[0], c[1], c[2])
+    return days[dow] + ", " + du_pad2(c[2]) + " " + months[c[1] - 1] + " " + du_pad4(c[0]) + " " + du_pad2(c[3]) + ":" + du_pad2(c[4]) + ":" + du_pad2(c[5]) + " GMT"
+
+# ISO 8601 格式
+def du_to_iso8601(ts):
+    var c = du_components(ts)
+    return du_pad4(c[0]) + "-" + du_pad2(c[1]) + "-" + du_pad2(c[2]) + "T" + du_pad2(c[3]) + ":" + du_pad2(c[4]) + ":" + du_pad2(c[5]) + "Z"
+
+# 年月日时分秒 → 时间戳
+def du_to_timestamp(year, month, day, hour, minute, second):
+    var days = 0
+    var y = 1970
+    while y < year:
+        var yd = 365
+        if du_is_leap_year(y):
+            yd = 366
+        days = days + yd
+        y += 1
+    var m = 1
+    while m < month:
+        days = days + du_days_in_month(year, m)
+        m += 1
+    days = days + day - 1
+    return days * 86400 + hour * 3600 + minute * 60 + second
+
+# 从 ISO 8601 解析
+def du_from_iso8601(s):
+    var year = int(s[0 : 4])
+    var month = int(s[5 : 7])
+    var day = int(s[8 : 10])
+    var hour = 0
+    var minute = 0
+    var second = 0
+    if len(s) >= 19:
+        hour = int(s[11 : 13])
+        minute = int(s[14 : 16])
+        second = int(s[17 : 19])
+    return du_to_timestamp(year, month, day, hour, minute, second)
+
+# 加减时间
+def du_add_seconds(ts, n):
+    return ts + n
+
+def du_add_minutes(ts, n):
+    return ts + n * 60
+
+def du_add_hours(ts, n):
+    return ts + n * 3600
+
+def du_add_days(ts, n):
+    return ts + n * 86400
+
+# 差值
+def du_diff(ts1, ts2):
+    return ts2 - ts1
+
+def du_diff_days(ts1, ts2):
+    return int((ts2 - ts1) / 86400)
+
+# 星期几（0=周日）
+def du_day_of_week(year, month, day):
+    var y = year
+    var m = month
+    if m < 3:
+        m = m + 12
+        y = y - 1
+    var k = y % 100
+    var j = int(y / 100)
+    var h = (day + int(13 * (m + 1) / 5) + k + int(k / 4) + int(j / 4) + 5 * j) % 7
+    return int((h + 6) % 7)
+
+# 年中第几天
+def du_day_of_year(year, month, day):
+    var doy = 0
+    var m = 1
+    while m < month:
+        doy = doy + du_days_in_month(year, m)
+        m += 1
+    doy = doy + day
+    return doy
+
+# 年中第几周
+def du_week_of_year(year, month, day):
+    var doy = du_day_of_year(year, month, day)
+    return int((doy - 1) / 7) + 1
+
+# 儒略日
+def du_to_julian(year, month, day):
+    var a = int((14 - month) / 12)
+    var y = year + 4800 - a
+    var m = month + 12 * a - 3
+    return day + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045
+
+# 从儒略日
+def du_from_julian(jd):
+    var a = jd + 32044
+    var b = int((4 * a + 3) / 146097)
+    var c = a - int(b * 146097 / 4)
+    var d = int((4 * c + 3) / 1461)
+    var e = c - int(d * 1461 / 4)
+    var m = int((5 * e + 2) / 153)
+    var day = e - int((153 * m + 2) / 5) + 1
+    var month = m + 3 - 12 * int(m / 10)
+    var year = 100 * b + d - 4800 + int(m / 10)
+    return [year, month, day]
+
+# 相对时间描述
+def du_relative_time(ts):
+    var now = du_now()
+    var diff = now - ts
+    if diff < 0:
+        diff = 0 - diff
+        if diff < 60:
+            return "in " + str(int(diff)) + " seconds"
+        if diff < 3600:
+            return "in " + str(int(diff / 60)) + " minutes"
+        if diff < 86400:
+            return "in " + str(int(diff / 3600)) + " hours"
+        return "in " + str(int(diff / 86400)) + " days"
+    if diff < 60:
+        return str(int(diff)) + " seconds ago"
+    if diff < 3600:
+        return str(int(diff / 60)) + " minutes ago"
+    if diff < 86400:
+        return str(int(diff / 3600)) + " hours ago"
+    return str(int(diff / 86400)) + " days ago"

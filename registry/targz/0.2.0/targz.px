@@ -152,13 +152,16 @@ def o_str_end(b, off, width):
     return off + width
 
 # ---- 0.2.0 新增 ----
+# gunzip + untar → Ok(dict) | Err
+def tz_unpack(data):
+    var raw = gzip_uncompress(data)
+    return tz_unpack_tar(raw)
 # 列出包内文件名 → [string]
 def tz_list_files(data):
-    var files = tz_unpack_tar(data)
-    var names = []
-    for f in files:
-        names = names + [f["name"]]
-    return names
+    var r = tz_unpack(data)
+    if r.is_err():
+        return []
+    return r.unwrap().keys()
 
 # 是否包含文件 → bool
 def tz_has_file(data, name):
@@ -170,8 +173,10 @@ def tz_has_file(data, name):
 
 # 取文件内容 → bytes | null
 def tz_get_file(data, name):
-    var files = tz_unpack_tar(data)
-    for f in files:
-        if f["name"] == name:
-            return f["data"]
+    var r = tz_unpack(data)
+    if r.is_err():
+        return null
+    var files = r.unwrap()
+    if files.has(name):
+        return files[name]
     return null

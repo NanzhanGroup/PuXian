@@ -298,7 +298,8 @@ def pb_decode(schema, data):
 # 编码单字段 → bytes
 def pb_encode_field(fno, type, value):
     var key = pb_key(fno, pb_wire(type))
-    return pb_enc_varint(key) + pb_enc_value(type, value, null)
+    var body = pb_enc_value(type, value, null)
+    return bytes_concat(pb_enc_varint(key), body[0])
 
 # 解码单字段 → [fno, type, value]
 def pb_decode_field(data, ip):
@@ -315,5 +316,7 @@ def pb_decode_field(data, ip):
 
 # 估算编码后大小 → int
 def pb_size(schema, obj):
-    var data = pb_encode(schema, obj)
-    return len(data)
+    var r = pb_encode(schema, obj)
+    if r.is_err():
+        return 0
+    return bytes_len(r.unwrap())
