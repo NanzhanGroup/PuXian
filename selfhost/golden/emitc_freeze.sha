@@ -482,6 +482,8 @@ examples/m96_s3/m96_net_cmp.px src=972a6678e6794366 rc=0 out=a6437ff54c72d227d48
 examples/m96_s3/m96_s3_daemon.px src=a2ab7f803642778c rc=0 out=47d5730fa142be801a569af1d4ea623b err=e3b0c44298fc1c14
 examples/m97_s2/m97_s2_client.px src=afa10621f42c9d3b rc=0 out=53cd450be29fce7c899a55156f3daaf5 err=e3b0c44298fc1c14
 examples/m97_s2/m97_s2_upstream.px src=2eee8ce0fe75643c rc=0 out=10b289a3eb773e548f480b4c6ebbb4dd err=e3b0c44298fc1c14
+examples/m97_s2b/m97_s2b_client.px src=1ffa92ab44972c28 rc=0 out=07d930f0867976fce776f8fb846aff2d err=e3b0c44298fc1c14
+examples/m97_s2b/m97_s2b_upstream.px src=3e6dbc91c5d2a05b rc=0 out=75393feddd861e2221b06c5b5468b8ea err=e3b0c44298fc1c14
 examples/m97_s3/m97_s3_daemon.px src=633127c937de3e04 rc=0 out=7b55179a9dc0ab4e174e52ccde84ee8d err=e3b0c44298fc1c14
 examples/m98_s2/m98_s2_daemon.px src=21967ed732a7da10 rc=0 out=38c99b0f6b3c637a0c249fa9bf859013 err=e3b0c44298fc1c14
 examples/m99_s2/m99_s2_daemon.px src=9cd76d1c297e0c18 rc=0 out=e5efb124436039eb7db30fc470d3ad8e err=e3b0c44298fc1c14

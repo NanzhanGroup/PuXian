@@ -1,0 +1,53 @@
+# M97-S2b 验证用上游：HTTP/1.1 保活语义 + **应答后立刻 close**（伪造"池内死连接"）
+# ------------------------------------------------------------
+# 病灶（DEFECT-hpool-dead-conn）：客户端按 HTTP/1.1 默认保活把连接回池，对端却已 close
+#   ⇒ 复用 = 本地立即失败（1ms，无 RTT）⇒ 池内死连接数 ≥ retries+2 时 502。
+#
+# 本上游要让客户端**同一 host:port 的池里同时攒满 4 条死连接**（HTTP_POOL_PER_HOST）：
+#   · 路径含 "/fill" 的请求（蓄池用）：**压着应答不发**，攒到 4 条一起应答 + 各自 close。
+#     压应答是关键 —— 请求不返回，客户端 4 路并发就必然各建一条连接（不会被"先完成的
+#     请求把连接放回池"污染）；4 条应答后再 close ⇒ 客户端池里 4 条全是死连接。
+#   · 其余请求（判定用 /probe）：立即应答 + close（正常业务语义，只是不复用）。
+#
+# 每 accept 一条打印 "UP:<n>"，且每次"攒满 4 条"打印 "UP:HELD4"（verify 断言用）。
+def read_req(c):
+    var buf = ""
+    while not contains(buf, "\r\n\r\n"):
+        if len(buf) > 16384:
+            break
+        var s = tcp_recv(c, 4096)
+        if s == "":
+            break
+        buf = buf + s
+    return buf
+
+def reply(c, tag):
+    var body = "S2B-" + tag
+    var resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + str(len(body)) + "\r\n\r\n" + body
+    tcp_send(c, resp)
+    tcp_close(c)
+
+def main():
+    var l = tcp_listen(18891)
+    var held = []
+    var total = 0
+    while total < 60:
+        var c = tcp_accept(l)
+        var req = read_req(c)
+        total = total + 1
+        print("UP:" + str(total))
+        if contains(req, "/fill"):
+            held = held + [c]
+            if len(held) == 4:
+                print("UP:HELD4")
+                var j = 0
+                while j < len(held):
+                    reply(held[j], "fill" + str(j))
+                    j = j + 1
+                held = []
+        else:
+            reply(c, "probe")
+    print("UPSTREAM_EXIT_" + str(total))
+    exit(0)
+
+main()

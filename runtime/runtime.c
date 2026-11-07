@@ -16138,16 +16138,25 @@ static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx) {
 
 // ==================== std.net（M5.2）：TCP + HTTP 客户端 ====================
 
-static int sock_send_all(int fd, const char* data, int len) {
+// DEFECT-hpool-dead-conn（M379）：带回填「已写出字节数」的版本。
+//   修前失败只 `return -1`，调用方**分不清「一个字节都没写出」还是「写出了 k 字节」**
+//   ⇒ http_request 无法安全判断「这条池连接失败后能不能重发」（POST 写接口重发 = 重复提交）。
+//   `sock_send_all` 保留为薄壳（其余调用点零改动）。
+static int sock_send_all_ex(int fd, const char* data, int len, int* out_sent) {
     int sent = 0;
     while (sent < len) {
         int n = (int)send(fd, data + sent, len - sent, 0);
         if (n > 0) { sent += n; continue; }
         // M152（缺陷 146）：EINTR 重试（stop-the-world GC 的暂停信号会打断阻塞写）
         if (n < 0 && errno == EINTR) continue;
+        if (out_sent) *out_sent = sent;
         return -1;
     }
+    if (out_sent) *out_sent = sent;
     return sent;
+}
+static int sock_send_all(int fd, const char* data, int len) {
+    return sock_send_all_ex(fd, data, len, NULL);
 }
 
 static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx) {
@@ -17369,15 +17378,18 @@ PxConn* px_pxconn_from_https(void* hs) {
 //   （实测：m144 门 VM 轨在大请求体 + 字节阈值触发 GC 时稳定报
 //    `net: http_unix 请求失败: 连接关闭 (4)` —— 4 就是 EINTR）。
 //   POSIX 口径：EINTR 是「信号打断、调用未成功」，**重试**是唯一正确处理。
-static int conn_send(HttpsSession* tls, int fd, const char* data, int len) {
-    if (!tls) return sock_send_all(fd, data, len);
+// DEFECT-hpool-dead-conn（M379）：增 `out_sent` 回填（失败时也回填已写出字节数），
+//   供 h_exchange 精确判定 stage 0（一个字节都没写出 ⇒ 任何方法都可安全重发）。
+static int conn_send(HttpsSession* tls, int fd, const char* data, int len, int* out_sent) {
+    if (!tls) return sock_send_all_ex(fd, data, len, out_sent);
     int sent = 0;
     while (sent < len) {
         int w = mbedtls_ssl_write(&tls->ssl, (const unsigned char*)data + sent, (size_t)(len - sent));
         if (w == MBEDTLS_ERR_SSL_WANT_WRITE || w == MBEDTLS_ERR_SSL_WANT_READ) continue;
-        if (w < 0) return -1;
+        if (w < 0) { if (out_sent) *out_sent = sent; return -1; }
         sent += w;
     }
+    if (out_sent) *out_sent = sent;
     return sent;
 }
 static int conn_recv(HttpsSession* tls, int fd, char* buf, int len) {
@@ -17410,6 +17422,10 @@ typedef struct {
 } HPoolSlot;
 static pthread_mutex_t g_hpool_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct { char key[256]; int n; HPoolSlot slots[HTTP_POOL_PER_HOST]; } g_hpool[HTTP_POOL_MAX_HOSTS];
+// DEFECT-hpool-dead-conn（M379）可观测计数：M3 探活丢弃 / 复用后才发现死 / M1 额外重发次数
+static _Atomic long g_hpool_dead_dropped = 0;
+static _Atomic long g_hpool_reused_dead = 0;
+static _Atomic long g_http_extra_attempt = 0;
 
 static int hpool_take(const char* key, HPoolSlot* out) {
     pthread_mutex_lock(&g_hpool_mu);
@@ -17941,12 +17957,25 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
                       const char* body, int body_n,
                       int* out_status, LXValue* out_headers,
                       char** out_body, int* out_body_len, int* out_keep_alive,
-                      int gzip_decode) {
+                      int gzip_decode, int* out_stage) {
     int fd = slot->fd;
     HttpsSession* tls = slot->is_tls ? slot->tls : NULL;
-    if (conn_send(tls, fd, req, rlen) < 0) return -1;
+    // DEFECT-hpool-dead-conn（M379）：失败阶段 ——
+    //   0 = 一个字节都没写出（send 前就失败）⇒ 任何方法可安全重发
+    //   1 = 请求已写出、对端连接已断（EOF/RST）、未收到任何响应字节 ⇒ 仅幂等可重发
+    //   2 = 已收到部分响应后失败（含超长头 EMSGSIZE）⇒ 永不自动重发
+    //   3 = 请求已写出但**读超时**（EAGAIN/EWOULDBLOCK）⇒ 服务端可能仍在处理，
+    //       不可重发（M173 语义：timeout_ms 是每次调用的，超时就是超时，不能被内部重试放大）
+    if (out_stage) *out_stage = 0;
+    int hdr_sent = 0;
+    if (conn_send(tls, fd, req, rlen, &hdr_sent) < 0) {
+        if (out_stage) *out_stage = (hdr_sent > 0) ? 1 : 0;
+        return -1;
+    }
+    if (out_stage) *out_stage = 1;
     if (body && body_n > 0) {
-        if (conn_send(tls, fd, body, body_n) < 0) return -1;
+        int body_sent = 0;
+        if (conn_send(tls, fd, body, body_n, &body_sent) < 0) return -1;   // 已写出请求头 ⇒ 仍是 stage 1
     }
     // 读响应头
     int cap = 16384, len = 0;
@@ -17957,12 +17986,17 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
         int n = conn_recv(tls, fd, buf + len, 4096);
         // M133：把成因留在 errno 上供 os_errno() 读取（n==0 = 对端干净关闭 → 0 表 EOF；
         //   n<0 = 真实 errno，如 EAGAIN(11) 表读超时、ECONNRESET(104)/EPIPE(32)）。
-        if (n <= 0) { int e = (n == 0) ? 0 : errno; xfree(buf); errno = e; return -1; }
+        if (n <= 0) {
+            int e = (n == 0) ? 0 : errno;
+            // 读超时不算「连接死」——它是「服务端还在想」，重发会放大用户可见延迟（M173）
+            if (out_stage) *out_stage = (n < 0 && (e == EAGAIN || e == EWOULDBLOCK)) ? 3 : ((len > 0) ? 2 : 1);
+            xfree(buf); errno = e; return -1;
+        }
         len += n;
         buf[len] = 0;
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
-        if (len > 65536) { xfree(buf); errno = EMSGSIZE; return -1; }
+        if (len > 65536) { if (out_stage) *out_stage = 2; xfree(buf); errno = EMSGSIZE; return -1; }
     }
     // 解析状态码 + 头部
     // M97-S2（qg-issue 31）：解析响应协议版本——keep_alive 判定须按 HTTP 版本语义
@@ -18326,10 +18360,43 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     //   时池连接失败路径直接返回 Err（奇偶失败：1/3/5 新建成功、2/4/6 取死连接失败）。
     //   安全性：池连接复用首次 IO 失败 = 连接已死（请求未发出或未收到任何业务响应
     //   字节），重发无半响应污染；仅「新建连接」失败才按原 attempt 预算返回 Err。
-    int dead_rebuilt = 0;
+    // DEFECT-hpool-dead-conn（M379）：池内死连接是**逐条**被取走、close、不放回的
+    //   ⇒ 每条死连接 = 一次「本地立即失败」（无 RTT，累加 ~1ms）。单次 dead_rebuilt
+    //   只能兜住 1 条：池内死连接数 ≥ opts.retries + 2 就 502（Ma 现场：retries=2 ⇒ 满池 4 条）。
+    //   M1：显式重发预算（不能靠「池已空」保证有界 —— hpool_put 可被其它线程在循环期间补池）。
+    //   M2：按 stage 判可重发性 —— stage 0 任何方法；stage 1 仅幂等（POST 写接口不重发）；
+    //       stage 2（已收到部分响应）永不重发。
+    int pool_budget = HTTP_POOL_PER_HOST;
+    int idem = (!strcmp(method, "GET") || !strcmp(method, "HEAD") ||
+                !strcmp(method, "OPTIONS") || !strcmp(method, "PUT") || !strcmp(method, "DELETE"));
+    (void)idem;   // --no-quic / 裁剪构建下仍被下面的判定使用
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         HPoolSlot slot;
         int from_pool = (hpool_take(key, &slot) == 0);
+        // M3（DEFECT-hpool-dead-conn）：复用**前**先探活 —— 空闲连接上出现可读事件 =
+        //   对端已关或已推数据（408/GOAWAY）⇒ 直接丢弃重建，省掉一次用户可见失败。
+        //   TLS 只 poll 不 peek（避免与 mbedtls 内部缓冲冲突）；明文再 peek 一次确认。
+        if (from_pool) {
+            struct pollfd pfd;
+            pfd.fd = slot.fd;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            int pr = poll(&pfd, 1, 0);
+            int dead = (pr > 0 && (pfd.revents & (POLLIN | POLLERR | POLLHUP | POLLRDHUP)));
+            if (!dead && pr > 0 && !slot.is_tls) {
+                char pb[1];
+                int r = (int)recv(slot.fd, pb, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (r <= 0 && !(r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) dead = 1;
+            }
+            if (dead) {
+                if (slot.tls) https_close(slot.tls); else close(slot.fd);
+                __atomic_add_fetch(&g_hpool_dead_dropped, 1, __ATOMIC_RELAXED);
+                from_pool = 0;
+                slot.is_tls = is_https;
+                slot.fd = -1;
+                slot.tls = NULL;
+            }
+        }
         if (!from_pool) {
             // 池中无空闲连接：新建（http 明文 TCP；https TLS 握手）
             slot.is_tls = is_https;
@@ -18375,10 +18442,11 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             slot.to_ms = timeout_ms;
         }
         int status = 0, body_len = 0, keep_alive = 1;
+        int hstage = 0;   // DEFECT-hpool-dead-conn（M2）：失败阶段（见 h_exchange 头注释）
         LXValue headers = px_null();
         char* resp_body = NULL;
         if (h_exchange(&slot, req, rlen, body, body_n, &status, &headers, &resp_body, &body_len, &keep_alive,
-                       gzip_decode) == 0) {
+                       gzip_decode, &hstage) == 0) {
             // M182（缺陷 192）：**登记作用域必须在第一个分配之前建立**。
             //   修前形状 = `LXValue d = px_dict(); px_root_push(); PX_KEEP(headers);` ——
             //   `headers` 是 h_exchange 的返回值，而 h_exchange 返回前已 `px_root_pop()`
@@ -18402,15 +18470,23 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         }
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
-        if (from_pool && !dead_rebuilt) {
-            // 池连接复用失败（死连接）→ 丢弃重建：不消耗 attempt（for 的 attempt++
-            //   抵消本处 attempt--），下一轮池已空 → 新建连接重发一次。
-            dead_rebuilt = 1;
-            attempt--;
+        // M1（DEFECT-hpool-dead-conn）：池内死连接逐条丢弃重建，用**显式预算**保证有界。
+        //   stage 0 任何方法可重发；stage 1 仅幂等（POST 写接口绝不重发）；stage 2 永不重发。
+        if (from_pool && pool_budget > 0 && (hstage == 0 || (hstage == 1 && idem))) {
+            pool_budget--;
+            __atomic_add_fetch(&g_http_extra_attempt, 1, __ATOMIC_RELAXED);
+            attempt--;   // 不消耗 attempt 预算（for 的 attempt++ 抵消）
             continue;
         }
+        if (from_pool) __atomic_add_fetch(&g_hpool_reused_dead, 1, __ATOMIC_RELAXED);
         if (attempt < max_attempts - 1) continue; // 新建连接失败重试（原 retries 语义）
-        return px_net_err("net: http_request 失败: 连接关闭");
+        {
+            char emsg[256];
+            snprintf(emsg, sizeof(emsg),
+                     "net: http_request 失败: 连接关闭 (stage=%d, from_pool=%d, errno=%d)",
+                     hstage, from_pool, (int)errno);
+            return px_net_err("%s", emsg);
+        }
     }
     return px_null();
 }
@@ -18560,7 +18636,7 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     int status = 0, body_len = 0, keep_alive = 1;
     LXValue headers = px_null();
     char* resp_body = NULL;
-    if (h_exchange(&slot, req, rlen, send_body, send_body_n, &status, &headers, &resp_body, &body_len, &keep_alive, 1) != 0) {
+    if (h_exchange(&slot, req, rlen, send_body, send_body_n, &status, &headers, &resp_body, &body_len, &keep_alive, 1, NULL) != 0) {
         int e = errno;   // M133：close() 会覆盖 errno ⇒ 先取成因
         if (chunk_buf) xfree(chunk_buf);
         close(fd);
@@ -18722,7 +18798,7 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     int status = 0, resp_len = 0, keep = 0;
     LXValue hdrs = px_null();
     char* resp = NULL;
-    if (h_exchange(&slot, req, rlen, blen > 0 ? pbody : NULL, blen, &status, &hdrs, &resp, &resp_len, &keep, 1) != 0) {
+    if (h_exchange(&slot, req, rlen, blen > 0 ? pbody : NULL, blen, &status, &hdrs, &resp, &resp_len, &keep, 1, NULL) != 0) {
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
         xfree(pbody);
@@ -19056,7 +19132,7 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     int rlen = snprintf(req, sizeof(req),
         "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
         path, host, port);
-    if (conn_send(tls, fd, req, rlen) < 0) { if (tls) https_close(tls); else close(fd); return px_net_err("net: 发送请求失败"); }
+    if (conn_send(tls, fd, req, rlen, NULL) < 0) { if (tls) https_close(tls); else close(fd); return px_net_err("net: 发送请求失败"); }
     // 读响应头
     int cap = 16384, len = 0;
     char* buf = xmalloc(cap);
@@ -23525,14 +23601,14 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
                        "Content-Type: %s\r\nContent-Length: %d\r\n", ctype, g_sse_clients[slot].req_body_len);
     }
     rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "\r\n");
-    if (rl <= 0 || rl >= (int)sizeof(req) || conn_send(tls, fd, req, rl) < 0) {
+    if (rl <= 0 || rl >= (int)sizeof(req) || conn_send(tls, fd, req, rl, NULL) < 0) {
         int e = errno;
         if (tls) https_close(tls); else close(fd);
         sse_cli_fail(slot, 3, e);
         return -1;
     }
     if (g_sse_clients[slot].req_body && g_sse_clients[slot].req_body_len > 0) {
-        if (conn_send(tls, fd, g_sse_clients[slot].req_body, g_sse_clients[slot].req_body_len) < 0) {
+        if (conn_send(tls, fd, g_sse_clients[slot].req_body, g_sse_clients[slot].req_body_len, NULL) < 0) {
             int e = errno;
             if (tls) https_close(tls); else close(fd);
             sse_cli_fail(slot, 3, e);

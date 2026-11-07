@@ -133,6 +133,15 @@ run m138_regex_go_parity bash examples/m138_regex_go_parity/verify.sh
 run m139_bare_ident_stmt bash examples/m139_bare_ident_stmt/verify.sh
 # m140（连接失败成因分类 + 双栈）：**不依赖任何外部服务**，CI 也跑
 run m140_http_conn_errno bash examples/m140_http_conn_errno/verify.sh
+# ── M379（DEFECT-hpool-dead-conn）补注册：本缺陷族的**正门**此前从未进过清单 ──
+#   局部根因 = hpool 死连接被逐条取走、close、不放回 ⇒ 池内死连接数 ≥ retries+2 即 502。
+#   m97_s2b 是本缺陷的专项回归门（新建：HTTP/1.1 上游 + 池内满 4 条死连接 + retries=1/2）；
+#   m97_s2 / m97_s3 / m123_http_conn_alive 是同族历史门（keep-alive 生命周期 / 连接存活原语），
+#   长期只有 examples 目录、没有注册 ⇒ 从未在本地全量门与 CI 里跑过（缺陷带病活到 M378 的结构原因）。
+run m97_s2b_http_hpool_dead bash examples/m97_s2b/verify.sh
+run m97_s2_http_keepalive bash examples/m97_s2/verify.sh
+run m97_s3_http_keepalive_long bash examples/m97_s3/verify.sh
+run m123_http_conn_alive bash examples/m123_http_conn_alive/verify.sh
 # m141（墙钟纳秒 now_ns + unix 服务端 remote = "@"，缺陷 109/110）：**不依赖任何外部服务**
 #   （门内自带 unix + TCP 本地服务端），CI 也跑。
 run m141_now_ns bash examples/m141_now_ns/verify.sh

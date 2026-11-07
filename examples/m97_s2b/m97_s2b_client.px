@@ -1,0 +1,84 @@
+# M97-S2b 验证客户端：池内 4 条死连接 + retries=1/2 ⇒ 必须 200
+# ------------------------------------------------------------
+# 每一轮：阶段 A（蓄池）4 个并发 spawn 各发一次 GET /fill*
+#   上游压着应答直到 4 条连接到齐 ⇒ 客户端池里留下 4 条「对端已 close」的连接（满池）。
+# 阶段 B（判定）单发一次 GET /probe：
+#   · retries=1（max_attempts=2）：池内死连接 ≥3 即必失败
+#   · retries=2（max_attempts=3）：需满池 4 条死连接才失败
+#   修复前：两者都 Err、耗时 ~1ms（失败全在本地已持有 socket 上，无 RTT）。
+#   修复后（M1 pool_budget + M2 stage + M3 探活）：死连接逐条丢弃重建 ⇒ 两者都 200。
+# 判定输出：M97S2B_ALL_OK（退出 0）/ M97S2B_REPRO_502（退出 1，即负控该有的红）。
+var ch = chan(8)
+
+def fill(i):
+    var o = json_parse("{}")
+    o.set("retries", 0)
+    o.set("timeout_ms", 5000)
+    var h = json_parse("{}")
+    var r = http_request("http://127.0.0.1:18891/fill" + str(i), "GET", "", h, o)
+    if type(r) == "dict":
+        ch.send("ok")
+    else:
+        ch.send("err:" + str(r))
+
+def probe(retries):
+    var o = json_parse("{}")
+    o.set("retries", retries)
+    o.set("timeout_ms", 5000)
+    var h = json_parse("{}")
+    var t0 = now_ms()
+    var r = http_request("http://127.0.0.1:18891/probe", "GET", "", h, o)
+    var dt = now_ms() - t0
+    if type(r) == "dict":
+        if r["status"] == 200:
+            return "200"
+        return "status=" + str(r["status"])
+    return "err(" + str(dt) + "ms): " + str(r)
+
+# spawn 只支持「直接函数调用」（E2011）⇒ 4 路各绑一个命名函数
+def fill0():
+    fill(0)
+
+def fill1():
+    fill(1)
+
+def fill2():
+    fill(2)
+
+def fill3():
+    fill(3)
+
+def fill_pool():
+    spawn fill0()
+    spawn fill1()
+    spawn fill2()
+    spawn fill3()
+    var got = 0
+    var bad = 0
+    while got < 4:
+        var t = ch.recv()
+        if t != "ok":
+            bad = bad + 1
+            print("fill#" + str(got) + " " + t)
+        got = got + 1
+    return bad
+
+def main():
+    var bad = 0
+    bad = bad + fill_pool()
+    print("round1 filled bad=" + str(bad))
+    var p1 = probe(1)
+    print("probe retries=1 → " + p1)
+
+    bad = bad + fill_pool()
+    print("round2 filled bad=" + str(bad))
+    var p2 = probe(2)
+    print("probe retries=2 → " + p2)
+
+    if bad == 0 and p1 == "200" and p2 == "200":
+        print("M97S2B_ALL_OK")
+        exit(0)
+    print("M97S2B_REPRO_502")
+    exit(1)
+
+main()

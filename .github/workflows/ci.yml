@@ -379,6 +379,12 @@ jobs:
           bash examples/m138_regex_go_parity/verify.sh > /tmp/v_m138.log 2>&1 || { echo "❌ m138_regex_go_parity verify 失败"; tail -40 /tmp/v_m138.log; FAILED="${FAILED:-} v_m138"; }
           bash examples/m139_bare_ident_stmt/verify.sh > /tmp/v_m139.log 2>&1 || { echo "❌ m139_bare_ident_stmt verify 失败"; tail -40 /tmp/v_m139.log; FAILED="${FAILED:-} v_m139"; }
           bash examples/m140_http_conn_errno/verify.sh > /tmp/v_m140.log 2>&1 || { echo "❌ m140_http_conn_errno verify 失败"; tail -40 /tmp/v_m140.log; FAILED="${FAILED:-} v_m140"; }
+          # ── M379（DEFECT-hpool-dead-conn）：本缺陷族正门补注册（此前从未进过清单）──
+          #   m97_s2b 专项（池内满 4 条死连接 + retries=1/2 必须 200）· m97_s2 / m97_s3 / m123 同族
+          bash examples/m97_s2b/verify.sh > /tmp/v_m97s2b.log 2>&1 || { echo "❌ m97_s2b verify 失败"; tail -40 /tmp/v_m97s2b.log; FAILED="${FAILED:-} v_m97_s2b"; }
+          bash examples/m97_s2/verify.sh > /tmp/v_m97s2.log 2>&1 || { echo "❌ m97_s2 verify 失败"; tail -40 /tmp/v_m97s2.log; FAILED="${FAILED:-} v_m97_s2"; }
+          bash examples/m97_s3/verify.sh > /tmp/v_m97s3.log 2>&1 || { echo "❌ m97_s3 verify 失败"; tail -40 /tmp/v_m97s3.log; FAILED="${FAILED:-} v_m97_s3"; }
+          bash examples/m123_http_conn_alive/verify.sh > /tmp/v_m123.log 2>&1 || { echo "❌ m123_http_conn_alive verify 失败"; tail -40 /tmp/v_m123.log; FAILED="${FAILED:-} v_m123"; }
           bash examples/m141_now_ns/verify.sh > /tmp/v_m141.log 2>&1 || { echo "❌ m141_now_ns verify 失败"; tail -40 /tmp/v_m141.log; FAILED="${FAILED:-} v_m141"; }
           bash examples/m142_go_json_indent/verify.sh > /tmp/v_m142.log 2>&1 || { echo "❌ m142_go_json_indent verify 失败"; tail -40 /tmp/v_m142.log; FAILED="${FAILED:-} v_m142"; }
           bash examples/m143_float32/verify.sh > /tmp/v_m143.log 2>&1 || { echo "❌ m143_float32 verify 失败"; tail -40 /tmp/v_m143.log; FAILED="${FAILED:-} v_m143"; }
