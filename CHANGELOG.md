@@ -1,3 +1,44 @@
+## M379（缺陷 669）：hpool 死连接被逐条取走、close、不放回 —— Ma 边缘反代偶发 502 的运行时根因
+
+> **令源**：任务交接单 `DEFECT-hpool-dead-conn`（2026-11-07 自驱 local 档执行，档位记录 `data/handoff/.mutate.json`）。
+> **定性**：不是网络抖动、也不是上游不可用 —— 是**池内死连接只要数量 ≥ retries+2 就必然失败**。
+> `bi_http_request` 的 `dead_rebuilt` 只允许重建**一次**，而池里的死连接是**逐条**被取走、close、不放回，
+> 每取一条 = 一次本地立即失败（~0ms，无 RTT）。Ma 现场 `retries=2`、`HTTP_POOL_PER_HOST=4`
+> ⇒ 满池死连接时一次请求要吃满 4 次本地失败 ⇒ 502。
+
+### 一 复现（先让门红，再谈修好）
+
+`examples/m97_s2b`：上游 HTTP/1.1，应答后立刻 close；对 `/fill*` 请求压着应答直到 4 条连接到齐，
+客户端 4 路并发蓄池 ⇒ 池内同时存在 **4 条**死连接（不是 1 条，`dead_rebuilt` 兜不住）。
+
+| 代码版本 | `m97_s2b` 结果 | probe retries=1 / retries=2 |
+|---|---|---|
+| 修前（b2b0e60 / M378） | `M97S2B_REPRO_502` · PASS=2 FAIL=1 · rc=1 | `err(0ms): 连接关闭` / 同 |
+| 修后（本里程碑） | `M97S2B_ALL_OK` · PASS=3 FAIL=0 · rc=0 | `200` / `200` |
+
+负控即上表第一行：把 `runtime/runtime.c` 退回 b2b0e60 跑同一门 ⇒ 必红并打印复现标记。
+（本轮实跑复核：复现 rc=1，复原后 rc=0，工作树 `git status` 干净。）
+
+### 二 改了什么（M2 → M3 → M1 → M4）
+
+- **M2｜写出阶段可分**：`sock_send_all_ex` / `conn_send` 回填 `out_sent`，`h_exchange` 增 `out_stage` 四态
+  （0 未写出 / 1 已写出无响应 / 2 部分响应 / 3 读超时）⇒ **2、3 不重发**，避免非幂等请求重复副作用。
+- **M3｜复用前先判死**：取池连接后 `poll(POLLIN,0)`（明文再加一次 peek）判死即丢弃重建，死连接不再进入重发预算。
+- **M1｜重发有界**：`pool_budget = HTTP_POOL_PER_HOST`；stage1 只对幂等请求重发，POST 不重发。
+- **M4｜可诊断**：三计数 + `Err` 文案带 `stage/from_pool/errno`（下次不再是「连接关闭」四个字）。
+
+### 三 门与结构原因
+
+- 新增 `run m97_s2b_http_hpool_dead bash examples/m97_s2b/verify.sh`（本缺陷族**首次有正门**）。
+- 同族历史门 `m97_s2` / `m97_s3` / `m123_http_conn_alive` 长期只有 examples 目录、**从未进 registry**
+  ⇒ 本地全量门与 CI 都没跑过它们，这是缺陷带病活到 M378 的结构原因。本轮一并注册 + 进 `ci.yml`。
+- `selfhost/golden/emitc_freeze.sha` 重定基：仅新增 2 个 example `.px`，类别 B 为空（无发射回归）。
+
+### 四 成本与回滚
+
+- `runtime/runtime.c` 变更 ⇒ 内嵌 14 件指纹全过期，**必须重烘**（`rebake_bin.sh --rebake-all`）后才可发版。
+- 回滚：`git revert` 本提交 + 重烘；运行时改动无数据面副作用（仅 HTTP 池重发策略）。
+
 ## M378（缺陷 664–666）：`px run --fast` 抛下本地 import 独自进沙箱 —— 修的是「静默给错答案」，不是「跑得慢」
 
 > **令源**：晨曦 `wsa-chenxi` 2026-11-06 23:17 缺陷单 `PX-BUG-20261106-01`（总线 `m18e57db219bba9b94c69feb0`）
