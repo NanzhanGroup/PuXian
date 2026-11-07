@@ -18382,10 +18382,15 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             pfd.events = POLLIN;
             pfd.revents = 0;
             int pr = poll(&pfd, 1, 0);
+            // M379b（eintr_guard）：poll 永不 SA_RESTART ⇒ 被打断 = 本轮无法判定，
+            //   保守按「无事件」处理（不误杀活连接），后续 exchange 各有超时兜底。
+            if (pr < 0 && errno == EINTR) pr = 0;
             int dead = (pr > 0 && (pfd.revents & (POLLIN | POLLERR | POLLHUP | POLLRDHUP)));
             if (!dead && pr > 0 && !slot.is_tls) {
                 char pb[1];
                 int r = (int)recv(slot.fd, pb, 1, MSG_PEEK | MSG_DONTWAIT);
+                // M379b：EINTR（GC 暂停信号）≠ 对端关闭 ⇒ 不判死，按「活着」继续。
+                if (r < 0 && errno == EINTR) r = 1;
                 if (r <= 0 && !(r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) dead = 1;
             }
             if (dead) {

@@ -39,6 +39,21 @@
 - `runtime/runtime.c` 变更 ⇒ 内嵌 14 件指纹全过期，**必须重烘**（`rebake_bin.sh --rebake-all`）后才可发版。
 - 回滚：`git revert` 本提交 + 重烘；运行时改动无数据面副作用（仅 HTTP 池重发策略）。
 
+### 五 全量门首轮唯一红：`eintr_guard` —— 已修（M379b）
+
+257 门分片 4 首轮只红一门（`❌ eintr_guard`，其余 148 门已完成部分全绿）。
+判红点正是本轮新增的池探活两行：
+`runtime.c:18384 poll(&pfd,1,0)` 与 `:18388 recv(..., MSG_PEEK|MSG_DONTWAIT)` ——
+`check_eintr.py` 要求「裸 IO 必须就地重试 EINTR，或带 `PX_IO_EINTR_OK` + 理由」。
+
+**不豁免，改就地重试**（豁免会把「被 GC 暂停信号打断」的语义永久放行）：
+
+- `poll` 返回 `EINTR` ⇒ `pr = 0`：本轮无法判定，保守按「无事件」处理，不误杀活连接；
+- `recv` 返回 `EINTR` ⇒ 视作活着（`EINTR ≠ 对端关闭`，否则 GC 暂停期间会把好连接误丢）。
+
+自证：`python3 selfhost/check_eintr.py` ⇒ `A 段 0 · B 段 0` · `--self-test` 9/9。
+代价：`runtime.c` 再变一次 ⇒ 14 件重烘 + 全量门重跑（语义面零变化，仅错误路径保守化）。
+
 ## M378（缺陷 664–666）：`px run --fast` 抛下本地 import 独自进沙箱 —— 修的是「静默给错答案」，不是「跑得慢」
 
 > **令源**：晨曦 `wsa-chenxi` 2026-11-06 23:17 缺陷单 `PX-BUG-20261106-01`（总线 `m18e57db219bba9b94c69feb0`）
