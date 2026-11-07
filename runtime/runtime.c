@@ -17423,9 +17423,13 @@ typedef struct {
 static pthread_mutex_t g_hpool_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct { char key[256]; int n; HPoolSlot slots[HTTP_POOL_PER_HOST]; } g_hpool[HTTP_POOL_MAX_HOSTS];
 // DEFECT-hpool-dead-conn（M379）可观测计数：M3 探活丢弃 / 复用后才发现死 / M1 额外重发次数
-static _Atomic long g_hpool_dead_dropped = 0;
-static _Atomic long g_hpool_reused_dead = 0;
-static _Atomic long g_http_extra_attempt = 0;
+// M379c（cross_ports 跨档红）：这三个计数只经 __atomic_* 内建访问 ⇒ 声明必须是**普通 long**。
+//   clang（musl 交叉档）对「_Atomic(long)* 传给 __atomic_add_fetch」直接报
+//   「address argument to atomic operation must be a pointer to integer」（3 处 error ⇒ 预编译缓存建立失败）。
+//   GCC 内建本身提供原子性，_Atomic 限定是多余的；改回 long 后 aarch64/armv7/riscv64 三档可编。
+static long g_hpool_dead_dropped = 0;
+static long g_hpool_reused_dead = 0;
+static long g_http_extra_attempt = 0;
 
 static int hpool_take(const char* key, HPoolSlot* out) {
     pthread_mutex_lock(&g_hpool_mu);

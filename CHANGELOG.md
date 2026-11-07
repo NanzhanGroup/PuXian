@@ -54,6 +54,36 @@
 自证：`python3 selfhost/check_eintr.py` ⇒ `A 段 0 · B 段 0` · `--self-test` 9/9。
 代价：`runtime.c` 再变一次 ⇒ 14 件重烘 + 全量门重跑（语义面零变化，仅错误路径保守化）。
 
+### 六 全量门二轮唯一红：`cross_ports` —— 已修（M379c）
+
+第二轮全量门（257 门 · 分片 4 · HEAD `cc2fb0c`，`/data/gatevm/chain-m379-20261107-134642-1047759`）
+红 3 门：`m256_eintr`、`eintr_guard`（同一根因，§五 已修）与 `cross_ports`。
+
+`cross_ports` 判红原文（`/data/gatevm/shard-20261107-134643/shard2.log`）：
+
+```
+runtime.c:18481:24: error: address argument to atomic operation must be a pointer to
+  integer, pointer or supported floating point type ('_Atomic(long) *' invalid)
+  if (from_pool) __atomic_add_fetch(&g_hpool_reused_dead, 1, __ATOMIC_RELAXED);
+合计：绿 0 · 红 3（aarch64/armv7/riscv64）⇒ ❌ CROSS-PORT FAIL
+```
+
+**根因**：M379 的三个可观测计数声明成 `_Atomic long`，却只用 `__atomic_*` 内建访问。
+GCC 容忍（内建自己保证原子性），musl 交叉档的 clang 直接判 `_Atomic(long)*` 不是合法地址参数
+⇒ 三档的 runtime 预编译缓存都建不起来 ⇒ 整门红。全量门在 x86 上跑不会暴露这一档。
+
+**修**：三个声明改回普通 `long`（与仓内 `g_gcs_runs` 等「只经 `__atomic_*` 访问的计数」一致）。
+
+**自证**（同 worktree、同一门、只换 runtime.c 单文件）：
+
+| runtime.c | cross_ports |
+|---|---|
+| HEAD（`_Atomic long`） | `绿 0 · 红 3` ⇒ ❌ CROSS-PORT FAIL（负控，判据有牙） |
+| 本提交（`long`） | `绿 3 · 红 0` ⇒ ✅ CROSS-PORT-OK |
+
+代价：`runtime.c` 第三次变更 ⇒ 14 件重烘 + 全量门重跑。
+回滚：`git revert` 本提交 + 重烘；纯声明限定符，无语义/数据面变化。
+
 ## M378（缺陷 664–666）：`px run --fast` 抛下本地 import 独自进沙箱 —— 修的是「静默给错答案」，不是「跑得慢」
 
 > **令源**：晨曦 `wsa-chenxi` 2026-11-06 23:17 缺陷单 `PX-BUG-20261106-01`（总线 `m18e57db219bba9b94c69feb0`）
