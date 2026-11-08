@@ -143,8 +143,12 @@ echo "=== [6] 重试路径自证（对面 accept 即 RST ⇒ 零字节 ⇒ 必�
 if [ -x "$D/build/client" ]; then
     RPORT=18399
     python3 - "$RPORT" > "$W/sc.rst.log" 2>&1 <<'PYEOF' & RPID=$!
-import socket, struct, sys
+import os, socket, struct, sys, time
 port = int(sys.argv[1])
+# 可注入启动延迟（只给负控/复现用）：模拟满负载下解释器启动慢于固定等待
+_d = float(os.environ.get("M176_FIXTURE_DELAY_MS", "0")) / 1000.0
+if _d > 0:
+    time.sleep(_d)
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port)); s.listen(64)
@@ -159,7 +163,16 @@ for _ in range(40):
     c.close()
 s.close()
 PYEOF
-    sleep 0.3
+    # 就绪判据（缺陷 675）：固定 `sleep 0.3` 在 8 分片满负载下**不够** —— 夹具尚未 listen 时
+    #   客户端第 1 条请求直接记 refused（M381 全量门实证：refused=1 bad=2 retried=6 ⇒ 假红）。
+    #   改为有界探活：连得上即证明 listen 已就绪；15s 内连不上就判「夹具未就绪」并 rc=2，
+    #   绝不让判据在夹具没起来的情况下说谎。探活那一条会占掉夹具 40 个 accept 中的 1 个（余量充足）。
+    RDY=0
+    for _ in $(seq 1 300); do
+        if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$RPORT" 2>/dev/null; then RDY=1; break; fi
+        sleep 0.05
+    done
+    if [ "$RDY" != 1 ]; then echo "❌ [6] 夹具未就绪（127.0.0.1:$RPORT 15s 内不可连）"; kill -TERM $RPID 2>/dev/null; exit 2; fi
     timeout 30 "$D/build/client" $RPORT 3 > "$W/sc.rst.client.out" 2>&1; RRC=$?
     kill -TERM $RPID 2>/dev/null; wait $RPID 2>/dev/null
     echo "     RST 夹具: RC=$RRC $(cat $W/sc.rst.client.out)" | sed 's/^ *//' >&2

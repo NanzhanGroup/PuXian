@@ -12,4 +12,4 @@
 #   与 chunk 的形状不同：chunk 的内层用**另一个计数器 j** 与外层**参数 n** 组合
 #   （`while j < n and i < len(items)`）⇒ n ≤ 0 时 `j < n` 恒假 ⇒ i 永不推进。
 stdlib/html.px:175 内层 `while i < n and hx_is_name_char(...)` 与外层同界（i< n）：i 增到 n 则双层同时退出 ⇒ 安全
-stdlib/pxml.px:190 内层 `while i < n and text[i] != "\n"` 与外层同界（i < n）：同上；另有 `i += 1; continue` 分支兜底
+stdlib/pxml.px:196 内层 `while i < n and text[i] != "\n"` 与外层同界（i < n）：同上；另有 `i += 1; continue` 分支兜底

@@ -153,13 +153,13 @@ self_test() {
     cp "$T/stdlib/foo.px" "$T/registry/foo/0.1.0/foo.px"
     local out rc
     out="$(MIN_PAIRS=1 REPO_ROOT="$T" bash "$SELF" --check-only 2>&1)"; rc=$?
-    if [ "$rc" = 0 ] && echo "$out" | grep -q "PARITY-OK"; then sok "正控：一致 ⇒ rc=0"
+    if [ "$rc" = 0 ] && grep -q "PARITY-OK" <<< "$out"; then sok "正控：一致 ⇒ rc=0"
     else sbad "正控失败：rc=$rc"; echo "$out" | tail -5; fi
 
     # C 负控：改一个字节 ⇒ 红且点名
     echo '# drift' >> "$T/registry/foo/0.1.0/foo.px"
     out="$(MIN_PAIRS=1 REPO_ROOT="$T" bash "$SELF" --check-only 2>&1)"; rc=$?
-    if [ "$rc" = 1 ] && echo "$out" | grep -q "foo：registry 最高版与 stdlib 不一致"; then
+    if [ "$rc" = 1 ] && grep -q "foo：registry 最高版与 stdlib 不一致" <<< "$out"; then
         sok "负控 1：内容漂移 ⇒ rc=1 且点名 foo"
     else sbad "负控 1 失败：rc=$rc（判据没牙）"; echo "$out" | tail -5; fi
 
@@ -167,14 +167,14 @@ self_test() {
     cp "$T/stdlib/foo.px" "$T/registry/foo/0.1.0/foo.px"
     printf 'foo|暂挂（自测故意过期）\n' > "$T/allow.txt"
     out="$(MIN_PAIRS=1 REPO_ROOT="$T" ALLOW_OVERRIDE="$T/allow.txt" bash "$SELF" --check-only 2>&1)"; rc=$?
-    if [ "$rc" = 1 ] && echo "$out" | grep -q "豁免已过期"; then
+    if [ "$rc" = 1 ] && grep -q "豁免已过期" <<< "$out"; then
         sok "负控 2：豁免过期 ⇒ rc=1"
     else sbad "负控 2 失败：rc=$rc"; echo "$out" | tail -5; fi
 
     # E 负控：规模锚点失守 ⇒ 红
     rm -rf "$T/stdlib"; mkdir -p "$T/stdlib"
     out="$(MIN_PAIRS=10 REPO_ROOT="$T" bash "$SELF" --check-only 2>&1)"; rc=$?
-    if [ "$rc" = 1 ] && echo "$out" | grep -q "规模锚点失守"; then
+    if [ "$rc" = 1 ] && grep -q "规模锚点失守" <<< "$out"; then
         sok "负控 3：配对为 0 ⇒ rc=1（防空集假绿）"
     else sbad "负控 3 失败：rc=$rc"; echo "$out" | tail -5; fi
 

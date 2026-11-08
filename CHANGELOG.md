@@ -1,3 +1,51 @@
+## M381b：M381 全量门三红收口（缺陷 673–675）
+
+> **令源**：东月自驱（运维台账 `dy-ops-m381-gate-no-go` · M381 chain `7b68be9` 判 NO-GO：绿 255 · 红 3）。
+> **证据**：`/data/gatevm/chain-m381-20261108-214008-931305`（分片日志 `/data/gatevm/shard-20261108-214012`）。
+> **定性**：三条红**都与 M381 的 pxml 契约变更无因果** —— 一条是行号漂移，两条是门/夹具自身的判据缺陷。
+> 这正是「门坏了会假红」的老账：修门而不是修代码，但必须先证明代码没坏（下面每条都有正控）。
+
+### 一 `m279_std_surface` 红 —— 豁免表行号随 pxml 头注释漂移（缺陷 673）
+
+- 现象：`[1b] 违例 got=1 want=0` · `[1c] 豁免 got=1 want=2` · `[1d] 过期 got=1 want=0`。
+- 根因（可复现）：`stdlib/pxml.px` 头部合约注释 M381 扩写 **+6 行**，`px_tokenize` 的
+  `while i < n:` 由 190 → **196**；`selfhost/stdlib_loops.allow` 键在行号上 ⇒ 豁免落空 + 旧条目过期。
+  同一形状（外层 i 只在内层 `while i < n and text[i] != "\n"` 推进）此前已逐行核对安全，不是新缺陷。
+- 动作：豁免条目 `stdlib/pxml.px:190` → `:196`（理由原文保留）。
+- 证据：`python3 selfhost/check_stdlib_loops.py --root . --allow selfhost/stdlib_loops.allow`
+  ⇒ `文件 27 · 违例 0 · 豁免 2 · 豁免过期 0` · `M279-LOOPSCAN-OK`；门复跑 `✅ m279_std_surface（15s）`。
+- **遗留（不修则复发）**：豁免键是行号，头注释一改就假红。下一轮候选：扫描器改用「文件+锚点文本」定位。
+
+### 二 `pkg_pipe_grep` 红 —— 新门自己违纪（缺陷 674）
+
+- 现象：`selfhost/check_stdlib_registry_parity.sh：4 条 > 基线 0（新增 4）` · `PIPE-GREP-VERDICT=REGRESS`。
+- 根因：M381 新门的自测里有 4 处 `echo "$out" | grep -q "…"`（`set -o pipefail` ⇒ grep 命中即退出，
+  生产者吃 SIGPIPE，rc 可能翻成 141）。本仓棘轮口径：**新文件基线 0**。
+- 动作：4 处改 here-string `grep -q "…" <<< "$out"`（门自测 B 项正是这条口径）。
+- 证据：`bash selfhost/check_pipe_grep.sh --gate` ⇒ `PIPE-GREP-VERDICT=OK remaining=8 files=5`；
+  `bash selfhost/check_stdlib_registry_parity.sh --self-test` ⇒ `自测：PASS 5 · FAIL 0`。
+
+### 三 `m176_reuseport` 红 —— RST 夹具固定 `sleep 0.3` 无就绪探活（缺陷 675）
+
+- 现象（shard2）：`[6] RST 夹具: RC=1 CLIENT ok=0 refused=1 bad=2 retried=6`，want `refused=0 bad=3 retried=9`。
+- 根因：请求 #1 记 `refused`（等价「监听还没起」），#2/#3 各重试 3 次正常 ⇒ 夹具解释器启动**慢过**固定 300ms
+  的等待，不是运行时重试逻辑坏。8 分片满负载（每片 2 核 × JOBS=2）下 python 启动被推迟即可撞上。
+- 正控（证明代码没坏）：单独跑 `bash examples/m176_reuseport/verify.sh` ⇒ `10 通过 / 0 失败` · `M176-VERIFY-OK`。
+- 负控 A（证明机制）：夹具注入启动延迟 1000ms + 旧口径固定等 300ms ⇒ `CLIENT ok=0 refused=3 bad=0 retried=0`
+  （`/data/gatevm/m381-evidence/m176-negctl-a.log`）—— 与 shard 现象同族。
+- 动作：`[6]` 的 `sleep 0.3` 换成**有界就绪探活**（每 50ms 连一次，15s 上限；连不上判「夹具未就绪」rc=2，
+  绝不让判据在夹具没起来时说谎）；夹具加 `M176_FIXTURE_DELAY_MS` 注入延迟（只给负控用）。
+- 负控 B（新判据有牙）：`M176_FIXTURE_DELAY_MS=1000` ⇒ 仍 `10 通过 / 0 失败`（探活吸收了慢启动）；
+  `M176_FIXTURE_DELAY_MS=60000` ⇒ `❌ [6] 夹具未就绪` · **rc=2**（不静默放过）。
+  证据：`/data/gatevm/m381-evidence/m176-fix-verify.log` · `m176-negctl-b.log`。
+
+### 四 副作用面 / 回滚
+
+- 改动文件 4 个：`selfhost/stdlib_loops.allow`（1 行行号）· `selfhost/check_stdlib_registry_parity.sh`（4 处管道改 here-string，
+  行为等价）· `examples/m176_reuseport/verify.sh`（就绪探活 + 可选延迟注入）· 本 CHANGELOG。
+- **未改**：`runtime/*.c` · `stdlib/*` · `bootstrap/` ⇒ **不需要重烘**，版本位不动（仍 0.2.381）。
+- 回滚：`git revert <本提交>` 单提交可整体回退（三处互不依赖）。
+
 ## M381：pxml 契约统一 Result（破约件）+ stdlib ⇄ registry 内容对拍门
 
 > **令源**：用户 2026-11-08 21:12「开始 M381 吧」；欠账来自 M377 CHANGELOG §四「pxml（第 4 条契约缺陷）拆到 M378」。
