@@ -1,0 +1,49 @@
+# ldap 0.1.0 测试
+import "../registry/ldap/0.1.0/ldap.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # BER encoding
+    var len1 = ldap_ber_length(5)
+    expect(len1 == [5], "short length")
+    var len2 = ldap_ber_length(200)
+    expect(len2 == [0x81, 200], "long length: " + str(len2))
+    var int1 = ldap_ber_integer(3)
+    expect(int1 == [0x02, 1, 3], "ber int 3: " + str(int1))
+    # negative int
+    var int_neg = ldap_ber_integer(-1)
+    expect(int_neg == [0x02, 1, 0xFF], "ber int -1: " + str(int_neg))
+    var int_neg2 = ldap_ber_integer(-100)
+    expect(int_neg2[0] == 0x02, "ber int -100 tag")
+    expect(int_neg2[2] == 156, "ber int -100 byte: " + str(int_neg2[2]))
+    # large positive int
+    var int_big = ldap_ber_integer(300)
+    expect(int_big[0] == 0x02, "ber int 300 tag")
+    expect(int_big[1] == 2, "ber int 300 len 2")
+    var str1 = ldap_ber_octet_string("cn=admin")
+    expect(str1[0] == 0x04, "ber string tag")
+    expect(str1[1] == 8, "ber string len")
+    # bind request
+    var bind = ldap_bind_request(1, "cn=admin,dc=example,dc=com", "secret")
+    expect(len(bind) > 0, "bind request non-empty")
+    # search request
+    var search = ldap_search_request(2, "dc=example,dc=com", 2, "(objectClass=*)")
+    expect(len(search) > 0, "search request non-empty")
+    # unbind request
+    var unbind = ldap_unbind_request(3)
+    expect(len(unbind) > 0, "unbind request non-empty")
+    # compare request
+    var cmp = ldap_compare_request(4, "cn=admin", "sn", "Smith")
+    expect(len(cmp) > 0, "compare request non-empty")
+    # DN parse
+    var parts = ldap_parse_dn("cn=admin,ou=staff,dc=example")
+    expect(len(parts) == 3, "3 DN parts")
+    expect(parts[0]["type"] == "cn", "first type cn")
+    expect(parts[0]["value"] == "admin", "first value admin")
+    expect(parts[2]["type"] == "dc", "third type dc")
+    # DN build
+    var dn = ldap_build_dn(parts)
+    expect(dn == "cn=admin,ou=staff,dc=example", "build DN: " + dn)
+    print("ldap: PASS")

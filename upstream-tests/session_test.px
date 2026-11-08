@@ -1,0 +1,41 @@
+# session 0.1.0 测试
+import "../registry/session/0.1.0/session.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var store = ss_new({"max_idle": 1800})
+    # start session
+    var sid = ss_start(store)
+    expect(len(sid) > 0, "start: sid non-empty")
+    expect(ss_has(store, sid) == true, "has session")
+    # set/get
+    expect(ss_set(store, sid, "user", "alice") == true, "set user")
+    expect(ss_get(store, sid, "user") == "alice", "get user: " + str(ss_get(store, sid, "user")))
+    expect(ss_get(store, sid, "missing") == null, "get missing")
+    # delete key
+    expect(ss_delete(store, sid, "user") == true, "delete user")
+    expect(ss_get(store, sid, "user") == null, "get after delete")
+    # multiple sessions
+    var sid2 = ss_start(store)
+    expect(sid != sid2, "different sids")
+    ss_set(store, sid2, "role", "admin")
+    expect(ss_get(store, sid2, "role") == "admin", "sid2 role")
+    expect(ss_get(store, sid, "role") == null, "sid no role")
+    # all
+    var all = ss_all(store)
+    expect(len(all) == 2, "all 2: " + str(len(all)))
+    # regenerate
+    var new_sid = ss_regenerate(store, sid)
+    expect(len(new_sid) > 0, "regenerate non-empty")
+    expect(ss_has(store, sid) == false, "old sid gone")
+    expect(ss_has(store, new_sid) == true, "new sid exists")
+    # destroy
+    expect(ss_destroy(store, sid2) == true, "destroy sid2")
+    expect(ss_has(store, sid2) == false, "sid2 gone")
+    # gc (max_age=0 should clean all)
+    ss_start(store)
+    var cleaned = ss_gc(store, -1)
+    expect(cleaned >= 1, "gc cleaned: " + str(cleaned))
+    print("session: PASS")

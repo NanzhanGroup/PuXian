@@ -1,0 +1,39 @@
+# xpath 0.1.0 测试
+import "../registry/xpath/0.1.0/xpath.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var root = dom_new("root", {}, [])
+    var a = dom_new("item", {"id": "1"}, [])
+    dom_append(a, dom_text("first"))
+    var b = dom_new("item", {"id": "2"}, [])
+    dom_append(b, dom_text("second"))
+    var c = dom_new("item", {"id": "3"}, [])
+    dom_append(c, dom_text("third"))
+    dom_append(root, a)
+    dom_append(root, b)
+    dom_append(root, c)
+    # select all
+    var items = xp_select_all(root, "item")
+    expect(len(items) == 3, "3 items")
+    # select first
+    var first = xp_select_first(root, "item")
+    expect(first != null, "first not null")
+    # select by attr
+    var matched = xp_select_by_attr(root, "item", "id", "2")
+    expect(len(matched) == 1, "1 matched by id")
+    # count
+    expect(xp_count(root, "item") == 3, "count 3")
+    # text
+    expect(xp_text(root, "item") == "first", "text first: " + xp_text(root, "item"))
+    # attr
+    expect(xp_attr(root, "item", "id") == "1", "attr id=1")
+    # exists
+    expect(xp_exists(root, "item") == true, "exists item")
+    expect(xp_exists(root, "nonexistent") == false, "not exists")
+    # children
+    var children = xp_select_children(root, "item")
+    expect(len(children) == 3, "3 children")
+    print("xpath: PASS")

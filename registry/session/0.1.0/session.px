@@ -1,0 +1,96 @@
+# session.px — Session 会话管理（纯函数，无 IO）
+# 版本: 0.1.0
+# 依赖: os_random_hex、now_sec（native）
+#
+# 函数列表:
+#   ss_new(opts)                  → dict   # 创建会话存储
+#   ss_start(store)               → string  # 启动会话，返回 session id
+#   ss_get(store, sid, key)       → any    # 获取会话数据
+#   ss_set(store, sid, key, val)  → bool   # 设置会话数据
+#   ss_delete(store, sid, key)    → bool   # 删除会话键
+#   ss_destroy(store, sid)        → bool   # 销毁会话
+#   ss_gc(store, max_age)         → int    # 垃圾回收，返回清理数
+#   ss_has(store, sid)            → bool   # 会话是否存在
+#   ss_all(store)                 → list   # 列出所有 session id
+#   ss_regenerate(store, sid)     → string  # 重新生成 session id
+
+# 创建会话存储
+def ss_new(opts):
+    return {"_sessions": {}, "_opts": opts}
+
+# 生成 session id
+def ss_gen_id():
+    return os_random_hex(16)
+
+# 启动会话
+def ss_start(store):
+    var sid = ss_gen_id()
+    var now = now_sec()
+    store["_sessions"].set(sid, {"_created": now, "_last_access": now})
+    return sid
+
+# 会话是否存在
+def ss_has(store, sid):
+    return store["_sessions"].has(sid)
+
+# 获取会话数据
+def ss_get(store, sid, key):
+    if not ss_has(store, sid):
+        return null
+    var sess = store["_sessions"][sid]
+    sess["_last_access"] = now_sec()
+    if sess.has(key):
+        return sess[key]
+    return null
+
+# 设置会话数据
+def ss_set(store, sid, key, val):
+    if not ss_has(store, sid):
+        return false
+    store["_sessions"][sid].set(key, val)
+    return true
+
+# 删除会话键
+def ss_delete(store, sid, key):
+    if not ss_has(store, sid):
+        return false
+    if store["_sessions"][sid].has(key):
+        store["_sessions"][sid].remove(key)
+        return true
+    return false
+
+# 销毁会话
+def ss_destroy(store, sid):
+    if ss_has(store, sid):
+        store["_sessions"].remove(sid)
+        return true
+    return false
+
+# 垃圾回收
+def ss_gc(store, max_age):
+    var now = now_sec()
+    var cleaned = 0
+    var sids = store["_sessions"].keys()
+    var i = 0
+    while i < len(sids):
+        var sid = sids[i]
+        var sess = store["_sessions"][sid]
+        if now - sess["_last_access"] > max_age:
+            store["_sessions"].remove(sid)
+            cleaned += 1
+        i += 1
+    return cleaned
+
+# 列出所有 session id
+def ss_all(store):
+    return store["_sessions"].keys()
+
+# 重新生成 session id
+def ss_regenerate(store, sid):
+    if not ss_has(store, sid):
+        return ""
+    var old_sess = store["_sessions"][sid]
+    store["_sessions"].remove(sid)
+    var new_sid = ss_gen_id()
+    store["_sessions"].set(new_sid, old_sess)
+    return new_sid

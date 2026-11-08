@@ -1,0 +1,102 @@
+# ldap.px — LDAP 协议构造/解析（纯函数，BER 编码）
+# 版本: 0.1.0
+def ldap_ber_length(len_val):
+    if len_val < 0x80:
+        return [len_val]
+    if len_val < 0x100:
+        return [0x81, len_val]
+    return [0x82, (len_val >> 8) & 0xFF, len_val & 0xFF]
+def ldap_ber_integer(val):
+    var result = [0x02]
+    if val >= 0 and val < 0x80:
+        result.append(1)
+        result.append(val)
+    elif val >= 0 and val < 0x8000:
+        result.append(2)
+        result.append((val >> 8) & 0xFF)
+        result.append(val & 0xFF)
+    elif val < 0 and val >= -128:
+        result.append(1)
+        result.append((val + 256) & 0xFF)
+    elif val < 0 and val >= -32768:
+        result.append(2)
+        result.append(((val + 65536) >> 8) & 0xFF)
+        result.append((val + 65536) & 0xFF)
+    else:
+        result.append(4)
+        result.append((val >> 24) & 0xFF)
+        result.append((val >> 16) & 0xFF)
+        result.append((val >> 8) & 0xFF)
+        result.append(val & 0xFF)
+    return result
+def ldap_ber_octet_string(s):
+    var result = [0x04]
+    var len_bytes = ldap_ber_length(s.len())
+    var i = 0
+    while i < len(len_bytes):
+        result.append(len_bytes[i])
+        i += 1
+    i = 0
+    while i < s.len():
+        result.append(ord(s[i]))
+        i += 1
+    return result
+def ldap_bind_request(message_id, dn, password):
+    var msg = []
+    msg = msg + ldap_ber_integer(message_id)
+    msg = msg + [0x60]
+    msg = msg + ldap_ber_integer(3)
+    msg = msg + ldap_ber_octet_string(dn)
+    msg = msg + [0x80]
+    msg = msg + [password.len()]
+    var i = 0
+    while i < password.len():
+        msg.append(ord(password[i]))
+        i += 1
+    return msg
+def ldap_search_request(message_id, base_dn, scope, filter_str):
+    var msg = []
+    msg = msg + ldap_ber_integer(message_id)
+    msg = msg + [0x63]
+    msg = msg + ldap_ber_octet_string(base_dn)
+    msg = msg + ldap_ber_integer(scope)
+    msg = msg + ldap_ber_integer(0)
+    msg = msg + ldap_ber_integer(0)
+    msg = msg + ldap_ber_octet_string(filter_str)
+    return msg
+def ldap_parse_dn(dn):
+    var parts = []
+    var components = dn.split(",")
+    var i = 0
+    while i < len(components):
+        var eq = components[i].find("=")
+        if eq > 0:
+            var pair = {}
+            pair.set("type", components[i][:eq])
+            pair.set("value", components[i][eq + 1:])
+            parts.append(pair)
+        i += 1
+    return parts
+def ldap_build_dn(parts):
+    var dn = ""
+    var i = 0
+    while i < len(parts):
+        if i > 0:
+            dn = dn + ","
+        dn = dn + parts[i]["type"] + "=" + parts[i]["value"]
+        i += 1
+    return dn
+
+def ldap_unbind_request(message_id):
+    var msg = []
+    msg = msg + ldap_ber_integer(message_id)
+    msg = msg + [0x42, 0x00]
+    return msg
+def ldap_compare_request(message_id, dn, attr, value):
+    var msg = []
+    msg = msg + ldap_ber_integer(message_id)
+    msg = msg + [0x6E]
+    msg = msg + ldap_ber_octet_string(dn)
+    msg = msg + ldap_ber_octet_string(attr)
+    msg = msg + ldap_ber_octet_string(value)
+    return msg

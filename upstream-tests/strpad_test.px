@@ -1,0 +1,34 @@
+# strpad 0.1.0 测试
+import "../registry/strpad/0.1.0/strpad.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # sp_repeat
+    expect(sp_repeat("ab", 3) == "ababab", "repeat 3: " + sp_repeat("ab", 3))
+    expect(sp_repeat("x", 0) == "", "repeat 0")
+    expect(sp_repeat("x", 1) == "x", "repeat 1")
+    expect(sp_repeat("", 5) == "", "repeat empty")
+    # sp_pad right
+    expect(sp_pad("hi", 5) == "hi   ", "pad right default: '" + sp_pad("hi", 5) + "'")
+    expect(sp_pad("hi", 5, "*") == "hi***", "pad right star: '" + sp_pad("hi", 5, "*") + "'")
+    expect(sp_pad("hello", 3) == "hello", "pad no-op (already wide)")
+    # sp_pad left
+    expect(sp_pad_left("42", 5, "0") == "00042", "pad left zero: '" + sp_pad_left("42", 5, "0") + "'")
+    expect(sp_pad("42", 5, " ", "left") == "   42", "pad left space: '" + sp_pad("42", 5, " ", "left") + "'")
+    # sp_pad both
+    expect(sp_pad_both("ab", 6, "-") == "--ab--", "pad both: '" + sp_pad_both("ab", 6, "-") + "'")
+    expect(sp_pad_both("abc", 8, "-") == "--abc---", "pad both odd: '" + sp_pad_both("abc", 8, "-") + "'")
+    # sp_truncate
+    expect(sp_truncate("Hello World", 8) == "Hello...", "truncate: '" + sp_truncate("Hello World", 8) + "'")
+    expect(sp_truncate("Hi", 10) == "Hi", "truncate no-op")
+    expect(sp_truncate("Hello World", 8, "!") == "Hello W!", "truncate custom suffix: '" + sp_truncate("Hello World", 8, "!") + "'")
+    # sp_limit
+    expect(sp_limit("Hello World", 5) == "Hello", "limit: '" + sp_limit("Hello World", 5) + "'")
+    expect(sp_limit("Hi", 10) == "Hi", "limit no-op")
+    # sp_zeropad
+    expect(sp_zeropad(42, 5) == "00042", "zeropad: " + sp_zeropad(42, 5))
+    expect(sp_zeropad(12345, 3) == "12345", "zeropad no-op: " + sp_zeropad(12345, 3))
+    expect(sp_zeropad(0, 4) == "0000", "zeropad zero: " + sp_zeropad(0, 4))
+    print("strpad: PASS")

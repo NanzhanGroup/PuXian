@@ -1,0 +1,114 @@
+# ntp.px — NTP 协议客户端（纯函数：构造/解析 NTP 包）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   ntp_build_request()           → list[int]  # 构造 NTPv4 请求包（48 字节）
+#   ntp_parse_response(data)      → dict       # 解析 NTP 响应
+#   ntp_offset(t1, t2, t3, t4)    → float      # 计算时钟偏移（秒）
+#   ntp_roundtrip(t1, t2, t3, t4) → float      # 计算往返延迟（秒）
+#   ntp_to_unix(ntp_ts)            → float      # NTP 时间戳 → Unix 时间戳
+
+# NTP 纪元 (1900-01-01) 到 Unix 纪元 (1970-01-01) 的秒数
+var NTP_EPOCH_DELTA = 2208988800
+
+# 构造 NTPv4 客户端请求（48 字节）
+def ntp_build_request():
+    var pkt = []
+    # LI=0, VN=4, Mode=3 (client)
+    pkt.append(0x1B)
+    # Stratum=0, Poll=6, Precision=-20
+    pkt.append(0)
+    pkt.append(6)
+    pkt.append(236)  # -20 as unsigned
+    # Root Delay = 0 (4 bytes)
+    var i = 0
+    while i < 4:
+        pkt.append(0)
+        i += 1
+    # Root Dispersion = 0 (4 bytes)
+    i = 0
+    while i < 4:
+        pkt.append(0)
+        i += 1
+    # Reference ID = 0 (4 bytes)
+    i = 0
+    while i < 4:
+        pkt.append(0)
+        i += 1
+    # Reference Timestamp = 0 (8 bytes)
+    i = 0
+    while i < 8:
+        pkt.append(0)
+        i += 1
+    # Origin Timestamp = 0 (8 bytes)
+    i = 0
+    while i < 8:
+        pkt.append(0)
+        i += 1
+    # Receive Timestamp = 0 (8 bytes)
+    i = 0
+    while i < 8:
+        pkt.append(0)
+        i += 1
+    # Transmit Timestamp = current time (8 bytes)
+    var now = now_sec()
+    var secs = now + NTP_EPOCH_DELTA
+    pkt.append((secs >> 24) & 0xFF)
+    pkt.append((secs >> 16) & 0xFF)
+    pkt.append((secs >> 8) & 0xFF)
+    pkt.append(secs & 0xFF)
+    i = 0
+    while i < 4:
+        pkt.append(0)
+        i += 1
+    return pkt
+
+# 解析 NTP 响应
+# data: 48 字节 NTP 响应包
+# t1: 客户端发送时间（Unix 秒），用于计算 offset/roundtrip
+def ntp_parse_response(data, t1):
+    var result = {}
+    result.set("li", (data[0] >> 6) & 0x03)
+    result.set("vn", (data[0] >> 3) & 0x07)
+    result.set("mode", data[0] & 0x07)
+    result.set("stratum", data[1])
+    result.set("poll", data[2])
+    result.set("precision", data[3])
+    # Origin Timestamp (bytes 24-31) = T1 (客户端发送时间，由服务器回显)
+    var t1_secs = (data[24] << 24) | (data[25] << 16) | (data[26] << 8) | data[27]
+    var t1_frac = (data[28] << 24) | (data[29] << 16) | (data[30] << 8) | data[31]
+    result.set("t1", ntp_to_unix([t1_secs, t1_frac]))
+    # Receive Timestamp (bytes 32-39) = T2 (服务器接收时间)
+    var t2_secs = (data[32] << 24) | (data[33] << 16) | (data[34] << 8) | data[35]
+    var t2_frac = (data[36] << 24) | (data[37] << 16) | (data[38] << 8) | data[39]
+    result.set("t2", ntp_to_unix([t2_secs, t2_frac]))
+    # Transmit Timestamp (bytes 40-47) = T3 (服务器发送时间)
+    var t3_secs = (data[40] << 24) | (data[41] << 16) | (data[42] << 8) | data[43]
+    var t3_frac = (data[44] << 24) | (data[45] << 16) | (data[46] << 8) | data[47]
+    result.set("t3", ntp_to_unix([t3_secs, t3_frac]))
+    # T4 = 客户端接收时间（传入参数）
+    result.set("t4", float(t1))
+    # 如果传入了 t1（客户端发送时间），计算 offset 和 roundtrip
+    if t1 > 0:
+        result.set("offset", ntp_offset(float(t1), result["t2"], result["t3"], result["t4"]))
+        result.set("roundtrip", ntp_roundtrip(float(t1), result["t2"], result["t3"], result["t4"]))
+    return result
+
+# NTP 时间戳 → Unix 时间戳
+def ntp_to_unix(ntp_ts):
+    var secs = ntp_ts[0]
+    var frac = ntp_ts[1]
+    return float(secs - NTP_EPOCH_DELTA) + float(frac) / 4294967296.0
+
+# 计算时钟偏移
+# offset = ((T2 - T1) + (T3 - T4)) / 2
+# T1 = 客户端发送时间, T2 = 服务器接收时间
+# T3 = 服务器发送时间, T4 = 客户端接收时间
+def ntp_offset(t1, t2, t3, t4):
+    return ((t2 - t1) + (t3 - t4)) / 2.0
+
+# 计算往返延迟
+# roundtrip = (T4 - T1) - (T3 - T2)
+def ntp_roundtrip(t1, t2, t3, t4):
+    return (t4 - t1) - (t3 - t2)

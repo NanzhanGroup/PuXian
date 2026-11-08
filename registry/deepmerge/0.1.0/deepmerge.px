@@ -1,0 +1,89 @@
+# deepmerge.px — 深度递归合并（对应 PHP array_replace_recursive）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   dm_merge(base, override)      → dict   # 递归合并两个 dict
+#   dm_merge_many(dicts)          → dict   # 合并多个 dict
+#   dm_merge_lists(base, over)    → list   # 合并两个 list（override 覆盖同位置）
+#   dm_deep_copy(val)             → any    # 深拷贝
+#   dm_path_get(d, path)          → any    # 按点分路径取值
+#   dm_path_set(d, path, val)     → dict   # 按点分路径设值
+
+def dm_merge(base, override):
+    var result = dm_deep_copy(base)
+    var ks = override.keys()
+    var i = 0
+    while i < len(ks):
+        var k = ks[i]
+        if result.has(k) and type(result[k]) == "dict" and type(override[k]) == "dict":
+            result.set(k, dm_merge(result[k], override[k]))
+        else:
+            result.set(k, dm_deep_copy(override[k]))
+        i += 1
+    return result
+
+def dm_merge_many(dicts):
+    var result = {}
+    var i = 0
+    while i < len(dicts):
+        result = dm_merge(result, dicts[i])
+        i += 1
+    return result
+
+def dm_merge_lists(base, over):
+    var result = []
+    var max_len = len(base)
+    if len(over) > max_len:
+        max_len = len(over)
+    var i = 0
+    while i < max_len:
+        if i < len(over):
+            result.append(dm_deep_copy(over[i]))
+        elif i < len(base):
+            result.append(dm_deep_copy(base[i]))
+        i += 1
+    return result
+
+def dm_deep_copy(val):
+    var t = type(val)
+    if t == "dict":
+        var d = {}
+        var ks = val.keys()
+        var i = 0
+        while i < len(ks):
+            d.set(ks[i], dm_deep_copy(val[ks[i]]))
+            i += 1
+        return d
+    if t == "list":
+        var l = []
+        var i = 0
+        while i < len(val):
+            l.append(dm_deep_copy(val[i]))
+            i += 1
+        return l
+    return val
+
+def dm_path_get(d, path):
+    var parts = path.split(".")
+    var cur = d
+    var i = 0
+    while i < len(parts):
+        if type(cur) == "dict" and cur.has(parts[i]):
+            cur = cur[parts[i]]
+        else:
+            return null
+        i += 1
+    return cur
+
+def dm_path_set(d, path, val):
+    var parts = path.split(".")
+    var cur = d
+    var i = 0
+    while i < len(parts) - 1:
+        if not cur.has(parts[i]):
+            cur.set(parts[i], {})
+        cur = cur[parts[i]]
+        i += 1
+    cur.set(parts[len(parts) - 1], val)
+    return d

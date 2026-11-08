@@ -105,7 +105,10 @@ prov_note() {   # 三轨验证列（口径 = **最新一轮**的上游用例回�
         #   现在：只有登记在 tools/registry_px_verified.txt（M282 实证集）的包才写 PASS，
         #   其余一律「未验证」；跑通上游用例后**追加名字**到那份清单，才算数。
         *) if [ -f "$ROOT/tools/registry_px_verified.txt" ] && grep -qxF "$1" "$ROOT/tools/registry_px_verified.txt"; then
-               echo "**双轨 PASS**（M282 上游用例回归 · 逐条结果与 XFAIL 登记见 \`docs/UPSTREAM_020_DEFECTS.md\`）"
+               # M380：文案去掉具体里程碑号 —— 本文件登记的是「跑过且双轨通过」这一**事实**，
+               #   不是「M282 那一次跑过」。写死 M282 会让 M380 新跑的 60 个包也显示成 M282 的成果
+               #   （文案与事实不符，且随轮次腐烂）。里程碑出处看 tools/registry_px_verified.txt 与 CHANGELOG。
+               echo "**双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 \`docs/UPSTREAM_020_DEFECTS.md\`）"
            else
                echo "**未验证**（M377：本包**没跑过**上游用例 —— 不盖章；跑通后登记进 \`tools/registry_px_verified.txt\`）"
            fi ;;

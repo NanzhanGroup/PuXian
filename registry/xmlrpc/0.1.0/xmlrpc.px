@@ -1,0 +1,102 @@
+# xmlrpc.px — XML-RPC 协议构造/解析（纯函数）
+# 版本: 0.1.0
+def xr_build_request(method, params):
+    var xml = "<?xml version=\"1.0\"?>"
+    xml = xml + "<methodCall><methodName>" + method + "</methodName><params>"
+    var i = 0
+    while i < len(params):
+        xml = xml + "<param>" + xr_encode_value(params[i]) + "</param>"
+        i += 1
+    xml = xml + "</params></methodCall>"
+    return xml
+def xr_encode_value(val):
+    var t = type(val)
+    if t == "null":
+        return "<value><nil/></value>"
+    if t == "bool":
+        if val:
+            return "<value><boolean>1</boolean></value>"
+        return "<value><boolean>0</boolean></value>"
+    if t == "int":
+        return "<value><int>" + str(val) + "</int></value>"
+    if t == "float":
+        return "<value><double>" + str(val) + "</double></value>"
+    if t == "string":
+        return "<value><string>" + val + "</string></value>"
+    if t == "list":
+        var s = "<value><array><data>"
+        var i = 0
+        while i < len(val):
+            s = s + xr_encode_value(val[i])
+            i += 1
+        return s + "</data></array></value>"
+    if t == "dict":
+        var s = "<value><struct>"
+        var ks = val.keys()
+        var i = 0
+        while i < len(ks):
+            s = s + "<member><name>" + ks[i] + "</name>" + xr_encode_value(val[ks[i]]) + "</member>"
+            i += 1
+        return s + "</struct></value>"
+    return "<value><string>" + str(val) + "</string></value>"
+def xr_build_response(value):
+    var xml = "<?xml version=\"1.0\"?>"
+    xml = xml + "<methodResponse><params><param>" + xr_encode_value(value) + "</param></params></methodResponse>"
+    return xml
+def xr_build_fault(code, msg):
+    return "<?xml version=\"1.0\"?><methodResponse><fault><value><struct><member><name>faultCode</name><value><int>" + str(code) + "</int></value></member><member><name>faultString</name><value><string>" + msg + "</string></value></member></struct></value></fault></methodResponse>"
+def xr_extract_method(xml):
+    var start = xml.find("<methodName>")
+    if start < 0:
+        return ""
+    start += 12
+    var end = xml.find("</methodName>")
+    if end < 0:
+        return ""
+    return xml[start:end]
+
+def xr_parse_response(xml):
+    var fault_start = xml.find("<fault>")
+    if fault_start >= 0:
+        var fc_start = _xr_find_str(xml, "<int>", fault_start)
+        var fc_end = _xr_find_str(xml, "</int>", fc_start)
+        var fs_start = _xr_find_str(xml, "<string>", fc_end)
+        var fs_end = _xr_find_str(xml, "</string>", fs_start)
+        if fc_start >= 0 and fc_end >= 0:
+            return {"ok": false, "code": int(xml[fc_start + 5:fc_end]), "message": xml[fs_start + 8:fs_end]}
+    var val_start = xml.find("<value>")
+    if val_start < 0:
+        return {"ok": false, "error": "no value found"}
+    return {"ok": true, "value": xr_extract_value(xml, val_start)}
+def xr_extract_value(xml, start):
+    var p = start + 7
+    var int_start = _xr_find_str(xml, "<int>", p)
+    if int_start >= 0 and int_start < p + 20:
+        var int_end = _xr_find_str(xml, "</int>", int_start)
+        return int(xml[int_start + 5:int_end])
+    var dbl_start = _xr_find_str(xml, "<double>", p)
+    if dbl_start >= 0 and dbl_start < p + 20:
+        var dbl_end = _xr_find_str(xml, "</double>", dbl_start)
+        return float(xml[dbl_start + 8:dbl_end])
+    var str_start = _xr_find_str(xml, "<string>", p)
+    if str_start >= 0 and str_start < p + 20:
+        var str_end = _xr_find_str(xml, "</string>", str_start)
+        return xml[str_start + 8:str_end]
+    var bool_start = _xr_find_str(xml, "<boolean>", p)
+    if bool_start >= 0 and bool_start < p + 20:
+        var bool_end = _xr_find_str(xml, "</boolean>", bool_start)
+        return xml[bool_start + 9:bool_end] == "1"
+    return null
+def _xr_find_str(s, sub, start):
+    var i = start
+    while i <= len(s) - len(sub):
+        var ok = true
+        var j = 0
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                ok = false
+            j += 1
+        if ok:
+            return i
+        i += 1
+    return -1

@@ -1,0 +1,86 @@
+# exif.px — EXIF 元数据解析（纯函数，解析 JPEG EXIF 字节）
+# 版本: 0.1.0
+def exif_has_marker(data):
+    if len(data) < 3:
+        return false
+    return data[0] == 0xFF and data[1] == 0xD8
+def exif_find_segment(data, marker):
+    var i = 2
+    while i < len(data) - 1:
+        if data[i] == 0xFF and data[i + 1] == marker:
+            return i
+        i += 1
+    return -1
+def exif_read_little_endian_u16(data, offset):
+    return data[offset] + (data[offset + 1] << 8)
+def exif_read_u16(data, offset):
+    return (data[offset] << 8) + data[offset + 1]
+def exif_read_u32(data, offset):
+    return (data[offset] << 24) + (data[offset + 1] << 16) + (data[offset + 2] << 8) + data[offset + 3]
+def exif_parse_tiff(data, tiff_offset):
+    var result = {}
+    var byte_order = data[tiff_offset]
+    if byte_order != 0x4D:
+        return result
+    var ifd_offset = exif_read_u32(data, tiff_offset + 4)
+    var entry_count = exif_read_u16(data, tiff_offset + ifd_offset)
+    var i = 0
+    while i < entry_count:
+        var entry_offset = tiff_offset + ifd_offset + 2 + i * 12
+        var tag = exif_read_u16(data, entry_offset)
+        var type_id = exif_read_u16(data, entry_offset + 2)
+        var count = exif_read_u32(data, entry_offset + 4)
+        var value_offset = entry_offset + 8
+        if type_id == 2:
+            var s = ""
+            var j = 0
+            while j < count and data[value_offset + j] != 0:
+                s = s + chr(data[value_offset + j])
+                j += 1
+            result.set("tag_" + str(tag), s)
+        elif type_id == 3:
+            result.set("tag_" + str(tag), exif_read_u16(data, value_offset))
+        elif type_id == 4:
+            result.set("tag_" + str(tag), exif_read_u32(data, value_offset))
+        i += 1
+    return result
+def exif_tag_name(tag):
+    if tag == 0x010E:
+        return "ImageDescription"
+    if tag == 0x010F:
+        return "Make"
+    if tag == 0x0110:
+        return "Model"
+    if tag == 0x0112:
+        return "Orientation"
+    if tag == 0x011A:
+        return "XResolution"
+    if tag == 0x011B:
+        return "YResolution"
+    if tag == 0x0132:
+        return "DateTime"
+    if tag == 0x8769:
+        return "ExifIFDPointer"
+    if tag == 0x9003:
+        return "DateTimeOriginal"
+    if tag == 0x9004:
+        return "DateTimeDigitized"
+    if tag == 0x9201:
+        return "ShutterSpeedValue"
+    if tag == 0x9202:
+        return "ApertureValue"
+    if tag == 0x9204:
+        return "ExposureBiasValue"
+    if tag == 0x9207:
+        return "MeteringMode"
+    if tag == 0x9208:
+        return "LightSource"
+    if tag == 0x9209:
+        return "Flash"
+    if tag == 0x920A:
+        return "FocalLength"
+    if tag == 0xA002:
+        return "ExifImageWidth"
+    if tag == 0xA003:
+        return "ExifImageHeight"
+    return "Tag_" + str(tag)

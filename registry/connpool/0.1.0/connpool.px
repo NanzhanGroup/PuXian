@@ -1,0 +1,33 @@
+# connpool.px — 连接池（纯函数，状态管理）
+# 版本: 0.1.0
+def cp_new(max_size):
+    return {"_max": max_size, "_idle": [], "_active": 0, "_created": 0}
+def cp_acquire(pool):
+    if len(pool["_idle"]) > 0:
+        var conn = pool["_idle"][0]
+        pool["_idle"] = pool["_idle"][1:]
+        pool["_active"] = pool["_active"] + 1
+        return {"id": conn, "ok": true}
+    if pool["_created"] < pool["_max"]:
+        var id = pool["_created"]
+        pool["_created"] = pool["_created"] + 1
+        pool["_active"] = pool["_active"] + 1
+        return {"id": id, "ok": true}
+    return {"id": -1, "ok": false}
+def cp_release(pool, conn_id):
+    pool["_idle"].append(conn_id)
+    pool["_active"] = pool["_active"] - 1
+    return true
+def cp_idle_count(pool):
+    return len(pool["_idle"])
+def cp_active_count(pool):
+    return pool["_active"]
+def cp_total_count(pool):
+    return pool["_created"]
+def cp_available(pool):
+    return len(pool["_idle"]) > 0 or pool["_created"] < pool["_max"]
+
+def cp_max_size(pool):
+    return pool["_max"]
+def cp_stats(pool):
+    return {"idle": len(pool["_idle"]), "active": pool["_active"], "total": pool["_created"], "max": pool["_max"]}

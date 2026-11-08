@@ -1,0 +1,44 @@
+# currency.px — 货币转换
+# 版本: 0.1.0
+def cur_new(rates):
+    return {"_rates": rates}
+def cur_add_rate(c, from_code, to_code, rate):
+    c["_rates"].set(from_code + "->" + to_code, rate)
+def cur_convert(c, from_code, to_code, amount):
+    if from_code == to_code:
+        return float(amount)
+    var key = from_code + "->" + to_code
+    if c["_rates"].has(key):
+        return float(amount) * c["_rates"][key]
+    var rev_key = to_code + "->" + from_code
+    if c["_rates"].has(rev_key):
+        return float(amount) / c["_rates"][rev_key]
+    var to_usd = from_code + "->USD"
+    var usd_to = "USD->" + to_code
+    if c["_rates"].has(to_usd) and c["_rates"].has(usd_to):
+        return float(amount) * c["_rates"][to_usd] * c["_rates"][usd_to]
+    return null
+def cur_format(amount, code):
+    var neg = false
+    var val = float(amount)
+    if val < 0:
+        neg = true
+        val = -val
+    var s = str(val)
+    var dot = s.find(".")
+    if dot < 0:
+        s = s + ".00"
+    elif s.len() - dot < 3:
+        s = s + "0"
+    if neg:
+        s = "-" + s
+    return s + " " + code
+def cur_round(amount):
+    return float(int(float(amount) * 100 + 0.5)) / 100.0
+def cur_format_signed(amount, code):
+    var s = cur_format(amount, code)
+    if float(amount) >= 0:
+        return "+" + s
+    return s
+def cur_list(c):
+    return c["_rates"].keys()

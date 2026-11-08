@@ -1,0 +1,56 @@
+# sprintf 0.1.0 测试
+import "../registry/sprintf/0.1.0/sprintf.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # 基础 %s
+    expect(sf_format("Hello %s", ["World"]) == "Hello World", "basic %s: " + sf_format("Hello %s", ["World"]))
+    # %d
+    expect(sf_format("Age: %d", [25]) == "Age: 25", "basic %d: " + sf_format("Age: %d", [25]))
+    # 多参数
+    expect(sf_format("%s is %d", ["Alice", 30]) == "Alice is 30", "multi: " + sf_format("%s is %d", ["Alice", 30]))
+    # %f 默认 6 位
+    expect(sf_format("Pi = %f", [3.14159]) == "Pi = 3.141590", "float default: " + sf_format("Pi = %f", [3.14159]))
+    # %.2f
+    expect(sf_format("%.2f", [3.14159]) == "3.14", "float .2: " + sf_format("%.2f", [3.14159]))
+    # %.0f
+    expect(sf_format("%.0f", [3.7]) == "4", "float .0: " + sf_format("%.0f", [3.7]))
+    # %x 十六进制
+    expect(sf_format("%x", [255]) == "ff", "hex: " + sf_format("%x", [255]))
+    # %X 大写十六进制
+    expect(sf_format("%X", [255]) == "FF", "HEX: " + sf_format("%X", [255]))
+    # %o 八进制
+    expect(sf_format("%o", [8]) == "10", "oct: " + sf_format("%o", [8]))
+    # %b 二进制
+    expect(sf_format("%b", [10]) == "1010", "bin: " + sf_format("%b", [10]))
+    # 宽度
+    expect(sf_format("%5d", [42]) == "   42", "width 5: " + sf_format("%5d", [42]))
+    # 左对齐
+    expect(sf_format("%-5d|", [42]) == "42   |", "left align: " + sf_format("%-5d|", [42]))
+    # 零填充
+    expect(sf_format("%05d", [42]) == "00042", "zero pad: " + sf_format("%05d", [42]))
+    # %c 字符
+    expect(sf_format("%c", [65]) == "A", "char: " + sf_format("%c", [65]))
+    # %% 字面量
+    expect(sf_format("100%%", []) == "100%", "percent: " + sf_format("100%%", []))
+    # 负数
+    expect(sf_format("%d", [-42]) == "-42", "negative: " + sf_format("%d", [-42]))
+    # 正数显式 +
+    expect(sf_format("%+d", [42]) == "+42", "plus sign: " + sf_format("%+d", [42]))
+    # 字符串截断
+    expect(sf_format("%.3s", ["Hello"]) == "Hel", "str trunc: " + sf_format("%.3s", ["Hello"]))
+    # 科学计数法
+    var e_result = sf_format("%e", [1234.5])
+    expect(len(e_result) > 0, "scientific non-empty: " + e_result)
+    # 便捷函数
+    expect(sf_sprintf2("Hi %s", "Bob") == "Hi Bob", "sprintf2: " + sf_sprintf2("Hi %s", "Bob"))
+    expect(sf_sprintf3("%s=%d", "x", 5) == "x=5", "sprintf3: " + sf_sprintf3("%s=%d", "x", 5))
+    # 混合
+    expect(sf_format("Name: %-10s Age: %3d", ["Joe", 25]) == "Name: Joe        Age:  25", "mixed: " + sf_format("Name: %-10s Age: %3d", ["Joe", 25]))
+    # %u 无符号
+    expect(sf_format("%u", [42]) == "42", "unsigned: " + sf_format("%u", [42]))
+    print("sprintf: PASS")

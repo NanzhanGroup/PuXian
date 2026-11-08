@@ -1,0 +1,323 @@
+# ============================================================
+# 普贤生态库：registry/colorutil — 颜色工具
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP color tools / Python colormath / Go color：
+#   co_hex_to_rgb(hex)        → "#FF8800" → [255, 136, 0]
+#   co_rgb_to_hex(r, g, b)    → [255,136,0] → "#FF8800"
+#   co_rgb_to_hsl(r, g, b)    → RGB → HSL [h(0-360), s(0-1), l(0-1)]
+#   co_hsl_to_rgb(h, s, l)    → HSL → RGB [r,g,b]
+#   co_rgb_to_hsv(r, g, b)    → RGB → HSV
+#   co_hsv_to_rgb(h, s, v)    → HSV → RGB
+#   co_lighten(hex, amount)   → 颜色变亮
+#   co_darken(hex, amount)    → 颜色变暗
+#   co_saturate(hex, amount)  → 增加饱和度
+#   co_desaturate(hex, amount)→ 降低饱和度
+#   co_grayscale(hex)         → 灰度化
+#   co_invert(hex)            → 反色
+#   co_complement(hex)        → 互补色
+#   co_mix(hex1, hex2, weight)→ 混合两个颜色
+#   co_luminance(r, g, b)     → 相对亮度
+#   co_contrast_ratio(c1, c2) → 对比度比
+#   co_is_light(hex)          → 是否浅色
+#   co_is_dark(hex)           → 是否深色
+#   co_random()               → 随机颜色
+#   co_named(name)            → 命名颜色查表
+# ============================================================
+
+# ---- HEX → RGB ----
+def co_hex_to_rgb(hex_str):
+    var s = hex_str
+    if s[0] == "#":
+        s = s[1 : len(s)]
+    var r = co_hex_pair(s[0 : 2])
+    var g = co_hex_pair(s[2 : 4])
+    var b = co_hex_pair(s[4 : 6])
+    return [r, g, b]
+
+# ---- 辅助：两位 hex → int ----
+def co_hex_pair(s):
+    return co_hex_digit(s[0]) * 16 + co_hex_digit(s[1])
+
+def co_hex_digit(c):
+    if c >= "0" and c <= "9":
+        return ord(c) - ord("0")
+    if c >= "a" and c <= "f":
+        return ord(c) - ord("a") + 10
+    if c >= "A" and c <= "F":
+        return ord(c) - ord("A") + 10
+    return 0
+
+# ---- RGB → HEX ----
+def co_rgb_to_hex(r, g, b):
+    return "#" + co_to_hex(r) + co_to_hex(g) + co_to_hex(b)
+
+def co_to_hex(n):
+    if n < 0:
+        n = 0
+    if n > 255:
+        n = 255
+    var hex = "0123456789ABCDEF"
+    return hex[int(n / 16)] + hex[n % 16]
+
+# ---- RGB → HSL ----
+def co_rgb_to_hsl(r, g, b):
+    var rf = r / 255.0
+    var gf = g / 255.0
+    var bf = b / 255.0
+    var maxv = rf
+    if gf > maxv:
+        maxv = gf
+    if bf > maxv:
+        maxv = bf
+    var minv = rf
+    if gf < minv:
+        minv = gf
+    if bf < minv:
+        minv = bf
+    var l = (maxv + minv) / 2.0
+    var s = 0.0
+    var h = 0.0
+    if maxv != minv:
+        var d = maxv - minv
+        if l > 0.5:
+            s = d / (2.0 - maxv - minv)
+        else:
+            s = d / (maxv + minv)
+        if maxv == rf:
+            h = (gf - bf) / d
+            if gf < bf:
+                h = h + 6.0
+        elif maxv == gf:
+            h = (bf - rf) / d + 2.0
+        else:
+            h = (rf - gf) / d + 4.0
+        h = h * 60.0
+    return [h, s, l]
+
+# ---- HSL → RGB ----
+def co_hsl_to_rgb(h, s, l):
+    h = h / 360.0
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
+    if s == 0:
+        r = l
+        g = l
+        b = l
+    else:
+        var q = l
+        if l < 0.5:
+            q = l * (1.0 + s)
+        else:
+            q = l + s - l * s
+        var p = 2.0 * l - q
+        r = co_hue_to_rgb(p, q, h + 1.0 / 3.0)
+        g = co_hue_to_rgb(p, q, h)
+        b = co_hue_to_rgb(p, q, h - 1.0 / 3.0)
+    return [int(r * 255), int(g * 255), int(b * 255)]
+
+def co_hue_to_rgb(p, q, t):
+    if t < 0:
+        t = t + 1.0
+    if t > 1:
+        t = t - 1.0
+    if t < 1.0 / 6.0:
+        return p + (q - p) * 6.0 * t
+    if t < 1.0 / 2.0:
+        return q
+    if t < 2.0 / 3.0:
+        return p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    return p
+
+# ---- RGB → HSV ----
+def co_rgb_to_hsv(r, g, b):
+    var rf = r / 255.0
+    var gf = g / 255.0
+    var bf = b / 255.0
+    var maxv = rf
+    if gf > maxv:
+        maxv = gf
+    if bf > maxv:
+        maxv = bf
+    var minv = rf
+    if gf < minv:
+        minv = gf
+    if bf < minv:
+        minv = bf
+    var v = maxv
+    var d = maxv - minv
+    var s = 0.0
+    if maxv != 0:
+        s = d / maxv
+    var h = 0.0
+    if maxv != minv:
+        if maxv == rf:
+            h = (gf - bf) / d
+            if gf < bf:
+                h = h + 6.0
+        elif maxv == gf:
+            h = (bf - rf) / d + 2.0
+        else:
+            h = (rf - gf) / d + 4.0
+        h = h * 60.0
+    return [h, s, v]
+
+# ---- HSV → RGB ----
+def co_hsv_to_rgb(h, s, v):
+    h = h / 60.0
+    var i = int(h)
+    var f = h - i
+    var p = v * (1.0 - s)
+    var q = v * (1.0 - s * f)
+    var t = v * (1.0 - s * (1.0 - f))
+    i = i % 6
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
+    if i == 0:
+        r = v
+        g = t
+        b = p
+    elif i == 1:
+        r = q
+        g = v
+        b = p
+    elif i == 2:
+        r = p
+        g = v
+        b = t
+    elif i == 3:
+        r = p
+        g = q
+        b = v
+    elif i == 4:
+        r = t
+        g = p
+        b = v
+    else:
+        r = v
+        g = p
+        b = q
+    return [int(r * 255), int(g * 255), int(b * 255)]
+
+# ---- 变亮 ----
+def co_lighten(hex_str, amount):
+    var rgb = co_hex_to_rgb(hex_str)
+    var hsl = co_rgb_to_hsl(rgb[0], rgb[1], rgb[2])
+    hsl[2] = hsl[2] + amount
+    if hsl[2] > 1.0:
+        hsl[2] = 1.0
+    var nrgb = co_hsl_to_rgb(hsl[0], hsl[1], hsl[2])
+    return co_rgb_to_hex(nrgb[0], nrgb[1], nrgb[2])
+
+# ---- 变暗 ----
+def co_darken(hex_str, amount):
+    var rgb = co_hex_to_rgb(hex_str)
+    var hsl = co_rgb_to_hsl(rgb[0], rgb[1], rgb[2])
+    hsl[2] = hsl[2] - amount
+    if hsl[2] < 0:
+        hsl[2] = 0
+    var nrgb = co_hsl_to_rgb(hsl[0], hsl[1], hsl[2])
+    return co_rgb_to_hex(nrgb[0], nrgb[1], nrgb[2])
+
+# ---- 增加饱和度 ----
+def co_saturate(hex_str, amount):
+    var rgb = co_hex_to_rgb(hex_str)
+    var hsl = co_rgb_to_hsl(rgb[0], rgb[1], rgb[2])
+    hsl[1] = hsl[1] + amount
+    if hsl[1] > 1.0:
+        hsl[1] = 1.0
+    var nrgb = co_hsl_to_rgb(hsl[0], hsl[1], hsl[2])
+    return co_rgb_to_hex(nrgb[0], nrgb[1], nrgb[2])
+
+# ---- 降低饱和度 ----
+def co_desaturate(hex_str, amount):
+    var rgb = co_hex_to_rgb(hex_str)
+    var hsl = co_rgb_to_hsl(rgb[0], rgb[1], rgb[2])
+    hsl[1] = hsl[1] - amount
+    if hsl[1] < 0:
+        hsl[1] = 0
+    var nrgb = co_hsl_to_rgb(hsl[0], hsl[1], hsl[2])
+    return co_rgb_to_hex(nrgb[0], nrgb[1], nrgb[2])
+
+# ---- 灰度化 ----
+def co_grayscale(hex_str):
+    var rgb = co_hex_to_rgb(hex_str)
+    var gray = int(0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2])
+    return co_rgb_to_hex(gray, gray, gray)
+
+# ---- 反色 ----
+def co_invert(hex_str):
+    var rgb = co_hex_to_rgb(hex_str)
+    return co_rgb_to_hex(255 - rgb[0], 255 - rgb[1], 255 - rgb[2])
+
+# ---- 互补色 ----
+def co_complement(hex_str):
+    var rgb = co_hex_to_rgb(hex_str)
+    var hsl = co_rgb_to_hsl(rgb[0], rgb[1], rgb[2])
+    hsl[0] = (hsl[0] + 180.0) % 360.0
+    var nrgb = co_hsl_to_rgb(hsl[0], hsl[1], hsl[2])
+    return co_rgb_to_hex(nrgb[0], nrgb[1], nrgb[2])
+
+# ---- 混合 ----
+def co_mix(hex1, hex2, weight = 0.5):
+    var rgb1 = co_hex_to_rgb(hex1)
+    var rgb2 = co_hex_to_rgb(hex2)
+    var r = int(rgb1[0] * (1.0 - weight) + rgb2[0] * weight)
+    var g = int(rgb1[1] * (1.0 - weight) + rgb2[1] * weight)
+    var b = int(rgb1[2] * (1.0 - weight) + rgb2[2] * weight)
+    return co_rgb_to_hex(r, g, b)
+
+# ---- 相对亮度 ----
+def co_luminance(r, g, b):
+    var rs = r / 255.0
+    var gs = g / 255.0
+    var bs = b / 255.0
+    if rs <= 0.03928:
+        rs = rs / 12.92
+    else:
+        rs = pow((rs + 0.055) / 1.055, 2.4)
+    if gs <= 0.03928:
+        gs = gs / 12.92
+    else:
+        gs = pow((gs + 0.055) / 1.055, 2.4)
+    if bs <= 0.03928:
+        bs = bs / 12.92
+    else:
+        bs = pow((bs + 0.055) / 1.055, 2.4)
+    return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs
+
+# ---- 对比度比 ----
+def co_contrast_ratio(hex1, hex2):
+    var rgb1 = co_hex_to_rgb(hex1)
+    var rgb2 = co_hex_to_rgb(hex2)
+    var l1 = co_luminance(rgb1[0], rgb1[1], rgb1[2])
+    var l2 = co_luminance(rgb2[0], rgb2[1], rgb2[2])
+    if l1 > l2:
+        return (l1 + 0.05) / (l2 + 0.05)
+    return (l2 + 0.05) / (l1 + 0.05)
+
+# ---- 是否浅色 ----
+def co_is_light(hex_str):
+    var rgb = co_hex_to_rgb(hex_str)
+    var l = co_luminance(rgb[0], rgb[1], rgb[2])
+    return l > 0.5
+
+# ---- 是否深色 ----
+def co_is_dark(hex_str):
+    return not co_is_light(hex_str)
+
+# ---- 随机颜色 ----
+def co_random():
+    var r = random_int(256)
+    var g = random_int(256)
+    var b = random_int(256)
+    return co_rgb_to_hex(r, g, b)
+
+# ---- 命名颜色查表 ----
+def co_named(name):
+    var colors = {"black": "#000000", "white": "#FFFFFF", "red": "#FF0000", "green": "#00FF00", "blue": "#0000FF", "yellow": "#FFFF00", "cyan": "#00FFFF", "magenta": "#FF00FF", "gray": "#808080", "orange": "#FFA500", "purple": "#800080", "pink": "#FFC0CB", "brown": "#A52A2A", "navy": "#000080", "teal": "#008080", "olive": "#808000", "silver": "#C0C0C0", "lime": "#00FF00", "maroon": "#800000", "aqua": "#00FFFF"}
+    if colors.contains(name):
+        return colors[name]
+    return "#000000"

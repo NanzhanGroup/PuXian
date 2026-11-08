@@ -1,0 +1,52 @@
+# csrf.px — CSRF 令牌生成与验证
+# 版本: 0.1.0
+# 依赖: os_random_hex（native）
+#
+# 函数列表:
+#   csrf_generate(length=32)        → string  # 生成随机 CSRF 令牌（hex）
+#   csrf_generate_b64(length=24)    → string  # 生成 base64url 编码令牌
+#   csrf_verify(token, expected)    → bool    # 恒定时间比较
+#   csrf_field_name()               → string  # 默认字段名
+#   csrf_meta_tag(token)            → string  # 生成 HTML meta 标签
+#   csrf_input_tag(token)           → string  # 生成 HTML hidden input
+#   csrf_session_key()              → string  # 默认 session 键名
+
+# 生成随机 CSRF 令牌（hex 编码）
+def csrf_generate(length=32):
+    return os_random_hex(length)
+
+# 生成 base64url 编码令牌
+def csrf_generate_b64(length=24):
+    var hex = os_random_hex(length)
+    var b64 = bytes_base64(hex_to_bytes(hex))
+    b64 = replace(b64, "+", "-")
+    b64 = replace(b64, "/", "_")
+    b64 = replace(b64, "=", "")
+    return b64
+
+# 恒定时间比较（防时序攻击）
+def csrf_verify(token, expected):
+    if len(token) != len(expected):
+        return false
+    var result = 0
+    var i = 0
+    while i < len(token):
+        result = result | (ord(token[i]) ^ ord(expected[i]))
+        i += 1
+    return result == 0
+
+# 默认字段名
+def csrf_field_name():
+    return "_csrf_token"
+
+# 默认 session 键名
+def csrf_session_key():
+    return "csrf_token"
+
+# 生成 HTML meta 标签
+def csrf_meta_tag(token):
+    return '<meta name="csrf-token" content="' + token + '">'
+
+# 生成 HTML hidden input
+def csrf_input_tag(token):
+    return '<input type="hidden" name="_csrf_token" value="' + token + '">'

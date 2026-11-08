@@ -1,0 +1,49 @@
+# vardump 0.1.0 测试
+import "../registry/vardump/0.1.0/vardump.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # vd_type
+    expect(vd_type(42) == "int", "type int")
+    expect(vd_type("hi") == "string", "type string")
+    expect(vd_type(true) == "bool", "type bool")
+    expect(vd_type(null) == "null", "type null")
+    # vd_dump
+    var d1 = vd_dump(42)
+    expect(d1 == "int(42)", "dump int: " + d1)
+    var d2 = vd_dump("hello")
+    expect(d2 == 'string(5) "hello"', "dump string: " + d2)
+    var d3 = vd_dump(true)
+    expect(d3 == "bool(true)", "dump bool: " + d3)
+    var d4 = vd_dump(null)
+    expect(d4 == "NULL", "dump null: " + d4)
+    var d5 = vd_dump([1, 2, 3])
+    expect(d5.contains("array(3)"), "dump list: " + d5[:20])
+    var d6 = vd_dump({"a": 1, "b": 2})
+    expect(d6.contains("array(2)"), "dump dict: " + d6[:20])
+    # vd_export
+    var e1 = vd_export(42)
+    expect(e1 == "42", "export int: " + e1)
+    var e2 = vd_export("hello")
+    expect(e2 == "'hello'", "export string: " + e2)
+    var e3 = vd_export([1, 2, 3])
+    expect(e3.contains("1") and e3.contains("2") and e3.contains("3"), "export list: " + e3)
+    var e4 = vd_export({"x": 1})
+    expect(e4.contains('"x"') and e4.contains("1"), "export dict: " + e4)
+    var e5 = vd_export(true)
+    expect(e5 == "true", "export bool: " + e5)
+    var e6 = vd_export(null)
+    expect(e6 == "null", "export null: " + e6)
+    # vd_print_r
+    var p1 = vd_print_r([1, 2, 3])
+    expect(p1.contains("Array"), "print_r list: " + p1[:20])
+    var p2 = vd_print_r({"a": 1})
+    expect(p2.contains("Array"), "print_r dict: " + p2[:20])
+    # vd_repr
+    expect(vd_repr("hi") == '"hi"', "repr string: " + vd_repr("hi"))
+    expect(vd_repr(42) == "42", "repr int: " + vd_repr(42))
+    expect(vd_repr(true) == "true", "repr bool: " + vd_repr(true))
+    expect(vd_repr(null) == "null", "repr null: " + vd_repr(null))
+    print("vardump: PASS")

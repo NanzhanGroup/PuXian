@@ -1,0 +1,32 @@
+# channel 0.1.0 测试
+import "../registry/channel/0.1.0/channel.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var ch = ch_new(2)
+    expect(ch_cap(ch) == 2, "cap 2")
+    expect(ch_len(ch) == 0, "len 0")
+    # send
+    expect(ch_try_send(ch, "a") == true, "send a")
+    expect(ch_try_send(ch, "b") == true, "send b")
+    expect(ch_try_send(ch, "c") == false, "send c (full)")
+    expect(ch_len(ch) == 2, "len 2")
+    # recv
+    var r1 = ch_try_recv(ch)
+    expect(r1["ok"] == true, "recv ok")
+    expect(r1["value"] == "a", "recv a: " + str(r1["value"]))
+    var r2 = ch_try_recv(ch)
+    expect(r2["value"] == "b", "recv b")
+    var r3 = ch_try_recv(ch)
+    expect(r3["ok"] == false, "recv empty")
+    # close
+    ch_close(ch)
+    expect(ch_is_closed(ch) == true, "closed")
+    expect(ch_try_send(ch, "x") == false, "send after close")
+    # unbounded (cap=0 means unlimited)
+    var ch2 = ch_new(0)
+    expect(ch_try_send(ch2, 1) == true, "unbounded send ok")
+    expect(ch_try_send(ch2, 2) == true, "unbounded send ok 2")
+    print("channel: PASS")

@@ -1,0 +1,38 @@
+# advstruct 0.1.0 测试
+import "../registry/advstruct/0.1.0/advstruct.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # union-find
+    var uf = uf_new(6)
+    expect(uf_count(uf) == 6, "6 components")
+    uf_union(uf, 0, 1)
+    uf_union(uf, 2, 3)
+    uf_union(uf, 4, 5)
+    expect(uf_count(uf) == 3, "3 components: " + str(uf_count(uf)))
+    expect(uf_connected(uf, 0, 1) == true, "0-1 connected")
+    expect(uf_connected(uf, 0, 2) == false, "0-2 not connected")
+    uf_union(uf, 1, 2)
+    expect(uf_connected(uf, 0, 3) == true, "0-3 connected after union")
+    expect(uf_count(uf) == 2, "2 components: " + str(uf_count(uf)))
+    # skip list
+    var sk = sk_new()
+    sk_insert(sk, 5, "five")
+    sk_insert(sk, 1, "one")
+    sk_insert(sk, 3, "three")
+    sk_insert(sk, 7, "seven")
+    expect(sk_search(sk, 3) == "three", "search 3: " + str(sk_search(sk, 3)))
+    expect(sk_search(sk, 5) == "five", "search 5")
+    expect(sk_search(sk, 99) == null, "search missing")
+    expect(sk_min(sk) == "one", "min: " + str(sk_min(sk)))
+    expect(sk_max(sk) == "seven", "max: " + str(sk_max(sk)))
+    # update existing
+    sk_insert(sk, 3, "THREE")
+    expect(sk_search(sk, 3) == "THREE", "updated: " + str(sk_search(sk, 3)))
+    # delete
+    expect(sk_delete(sk, 5) == true, "delete 5")
+    expect(sk_search(sk, 5) == null, "deleted 5")
+    expect(sk_delete(sk, 99) == false, "delete missing")
+    print("advstruct: PASS")

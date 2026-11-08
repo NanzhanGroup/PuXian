@@ -1,0 +1,42 @@
+# simtext 0.1.0 测试
+import "../registry/simtext/0.1.0/simtext.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # similar_chars
+    expect(st_similar_chars("Hello", "Hello") == 5, "sim chars same: " + str(st_similar_chars("Hello", "Hello")))
+    expect(st_similar_chars("abc", "xyz") == 0, "sim chars none: " + str(st_similar_chars("abc", "xyz")))
+    expect(st_similar_chars("abc", "abd") == 2, "sim chars 2: " + str(st_similar_chars("abc", "abd")))
+    # similar percentage
+    expect(st_similar("Hello", "Hello") == 100.0, "sim same: " + str(st_similar("Hello", "Hello")))
+    expect(st_similar("abc", "xyz") == 0.0, "sim none: " + str(st_similar("abc", "xyz")))
+    # PHP: similar_text("Hello World", "Hello Php") = 7/22*200 ≈ 63.6
+    var sim = st_similar("Hello World", "Hello Php")
+    expect(sim >= 60.0 and sim < 70.0, "sim Hello World/Php: " + str(sim))
+    # LCS
+    expect(st_lcs("ABCBDAB", "BDCAB") == 4, "lcs: " + str(st_lcs("ABCBDAB", "BDCAB")))
+    expect(st_lcs("", "abc") == 0, "lcs empty: " + str(st_lcs("", "abc")))
+    # LCS string
+    var lcs_s = st_lcs_str("ABCBDAB", "BDCAB")
+    expect(len(lcs_s) == 4, "lcs_str len: " + lcs_s)
+    # LCS substring
+    expect(st_lcs_substr("abcdef", "zcdem") == "cde", "lcs_substr: " + st_lcs_substr("abcdef", "zcdem"))
+    # Jaro
+    expect(st_jaro("MARTHA", "MARHTA") > 0.94 and st_jaro("MARTHA", "MARHTA") < 0.95, "jaro: " + str(st_jaro("MARTHA", "MARHTA")))
+    expect(st_jaro("", "") == 1.0, "jaro empty: " + str(st_jaro("", "")))
+    expect(st_jaro("abc", "xyz") == 0.0, "jaro none: " + str(st_jaro("abc", "xyz")))
+    # Jaro-Winkler
+    expect(st_jaro_winkler("MARTHA", "MARHTA") > 0.96, "jaro_winkler: " + str(st_jaro_winkler("MARTHA", "MARHTA")))
+    # Hamming
+    expect(st_hamming("abc", "abc") == 0, "hamming same: " + str(st_hamming("abc", "abc")))
+    expect(st_hamming("abc", "abd") == 1, "hamming 1: " + str(st_hamming("abc", "abd")))
+    expect(st_hamming("abc", "ab") == -1, "hamming diff len: " + str(st_hamming("abc", "ab")))
+    # Rabin-Karp
+    expect(st_rabin_karp("Hello World", "World") == 6, "rk found: " + str(st_rabin_karp("Hello World", "World")))
+    expect(st_rabin_karp("Hello World", "xyz") == -1, "rk not found: " + str(st_rabin_karp("Hello World", "xyz")))
+    expect(st_rabin_karp("abcabc", "abc") == 0, "rk at 0: " + str(st_rabin_karp("abcabc", "abc")))
+    print("simtext: PASS")

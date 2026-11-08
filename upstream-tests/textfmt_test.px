@@ -1,0 +1,37 @@
+# textfmt 0.1.0 测试
+import "../registry/textfmt/0.1.0/textfmt.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # nl2br
+    expect(tf_nl2br("Hello\nWorld") == "Hello<br>\nWorld", "nl2br: " + tf_nl2br("Hello\nWorld"))
+    # nl2br xhtml
+    expect(tf_nl2br_xhtml("Hello\nWorld") == "Hello<br />\nWorld", "nl2br xhtml: " + tf_nl2br_xhtml("Hello\nWorld"))
+    # chunk_split
+    expect(tf_chunk_split("HelloWorld", 3, "-") == "Hel-loW-orl-d-", "chunk_split: " + tf_chunk_split("HelloWorld", 3, "-"))
+    # strtr
+    expect(tf_strtr("Hello", "lo", "LO") == "HeLLO", "strtr: " + tf_strtr("Hello", "lo", "LO"))
+    # strtr table
+    var result = tf_strtr_table("Hello World", {"Hello": "Hi", "World": "Earth"})
+    expect(result == "Hi Earth", "strtr table: " + result)
+    # QP encode/decode
+    var qp = tf_qp_encode("Hello = World")
+    var decoded = tf_qp_decode(qp)
+    expect(decoded == "Hello = World", "qp roundtrip: " + qp + " → " + decoded)
+    # QP 多字节受限于 PuXian chr() 按 Unicode 码点工作（PX-DEF-xxx）
+    var qp2 = tf_qp_encode("Hello=World")
+    var decoded2 = tf_qp_decode(qp2)
+    expect(decoded2 == "Hello=World", "qp roundtrip eq sign: " + qp2 + " → " + decoded2)
+    # wordwrap
+    expect(tf_wordwrap("Hello World Foo Bar", 11) == "Hello World\nFoo Bar", "wordwrap: " + tf_wordwrap("Hello World Foo Bar", 11))
+    # strip_tags
+    expect(tf_strip_tags("<p>Hello <b>World</b></p>") == "Hello World", "strip_tags: " + tf_strip_tags("<p>Hello <b>World</b></p>"))
+    # addslashes
+    expect(tf_addslashes("Hello 'World'") == "Hello \\'World\\'", "addslashes: " + tf_addslashes("Hello 'World'"))
+    # stripslashes
+    expect(tf_stripslashes("Hello \\'World\\'") == "Hello 'World'", "stripslashes: " + tf_stripslashes("Hello \\'World\\'"))
+    print("textfmt: PASS")

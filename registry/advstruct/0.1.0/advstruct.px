@@ -1,0 +1,82 @@
+# advstruct.px — 高级数据结构（并查集 + 跳表）
+# 版本: 0.1.0
+def uf_new(n):
+    var parent = []
+    var rank = []
+    var i = 0
+    while i < n:
+        parent.append(i)
+        rank.append(0)
+        i += 1
+    return {"_parent": parent, "_rank": rank, "_count": n}
+def uf_find(uf, x):
+    while uf["_parent"][x] != x:
+        uf["_parent"][x] = uf["_parent"][uf["_parent"][x]]
+        x = uf["_parent"][x]
+    return x
+def uf_union(uf, x, y):
+    var rx = uf_find(uf, x)
+    var ry = uf_find(uf, y)
+    if rx == ry:
+        return false
+    if uf["_rank"][rx] < uf["_rank"][ry]:
+        uf["_parent"][rx] = ry
+    elif uf["_rank"][rx] > uf["_rank"][ry]:
+        uf["_parent"][ry] = rx
+    else:
+        uf["_parent"][ry] = rx
+        uf["_rank"][rx] = uf["_rank"][rx] + 1
+    uf["_count"] = uf["_count"] - 1
+    return true
+def uf_connected(uf, x, y):
+    return uf_find(uf, x) == uf_find(uf, y)
+def uf_count(uf):
+    return uf["_count"]
+def sk_new():
+    return {"_keys": [], "_vals": []}
+def sk_insert(sk, key, val):
+    var keys = sk["_keys"]
+    var i = 0
+    while i < len(keys) and keys[i] < key:
+        i += 1
+    if i < len(keys) and keys[i] == key:
+        sk["_vals"][i] = val
+    else:
+        sk["_keys"] = sk["_keys"][:i] + [key] + sk["_keys"][i:]
+        sk["_vals"] = sk["_vals"][:i] + [val] + sk["_vals"][i:]
+def sk_search(sk, key):
+    var keys = sk["_keys"]
+    var lo = 0
+    var hi = len(keys) - 1
+    while lo <= hi:
+        var mid = int((lo + hi) / 2)
+        if keys[mid] == key:
+            return sk["_vals"][mid]
+        if keys[mid] < key:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return null
+def sk_delete(sk, key):
+    var keys = sk["_keys"]
+    var lo = 0
+    var hi = len(keys) - 1
+    while lo <= hi:
+        var mid = int((lo + hi) / 2)
+        if keys[mid] == key:
+            sk["_keys"] = keys[:mid] + keys[mid + 1:]
+            sk["_vals"] = sk["_vals"][:mid] + sk["_vals"][mid + 1:]
+            return true
+        if keys[mid] < key:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return false
+def sk_min(sk):
+    if len(sk["_keys"]) == 0:
+        return null
+    return sk["_vals"][0]
+def sk_max(sk):
+    if len(sk["_keys"]) == 0:
+        return null
+    return sk["_vals"][len(sk["_vals"]) - 1]

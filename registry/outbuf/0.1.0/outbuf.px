@@ -1,0 +1,56 @@
+# outbuf.px — 输出缓冲区（对应 PHP ob_start/ob_get_clean）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   ob_new()                      → dict   # 创建缓冲区管理器
+#   ob_start(buf)                 → int    # 开始缓冲（返回层级）
+#   ob_get_contents(buf)          → string # 获取当前缓冲内容
+#   ob_get_clean(buf)             → string # 获取并清空当前缓冲
+#   ob_clean(buf)                 → void   # 清空当前缓冲
+#   ob_end_flush(buf)             → string # 结束缓冲并返回内容
+#   ob_get_level(buf)             → int    # 当前缓冲层级
+
+def ob_new():
+    return {"_stack": [], "_level": 0}
+
+def ob_start(buf):
+    buf["_stack"].append("")
+    buf["_level"] = buf["_level"] + 1
+    return buf["_level"]
+
+def ob_write(buf, text):
+    if buf["_level"] > 0:
+        var idx = buf["_level"] - 1
+        buf["_stack"][idx] = buf["_stack"][idx] + text
+    return true
+
+def ob_get_contents(buf):
+    if buf["_level"] == 0:
+        return ""
+    return buf["_stack"][buf["_level"] - 1]
+
+def ob_get_clean(buf):
+    if buf["_level"] == 0:
+        return ""
+    var content = buf["_stack"][buf["_level"] - 1]
+    buf["_stack"][buf["_level"] - 1] = ""
+    buf["_stack"].pop()
+    buf["_level"] = buf["_level"] - 1
+    return content
+
+def ob_clean(buf):
+    if buf["_level"] > 0:
+        buf["_stack"][buf["_level"] - 1] = ""
+    return true
+
+def ob_end_flush(buf):
+    if buf["_level"] == 0:
+        return ""
+    var content = buf["_stack"][buf["_level"] - 1]
+    buf["_stack"].pop()
+    buf["_level"] = buf["_level"] - 1
+    return content
+
+def ob_get_level(buf):
+    return buf["_level"]

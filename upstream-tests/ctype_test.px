@@ -1,0 +1,50 @@
+# ctype 0.1.0 测试
+import "../registry/ctype/0.1.0/ctype.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # alpha
+    expect(ct_alpha("Hello") == true, "alpha Hello")
+    expect(ct_alpha("Hello123") == false, "not alpha Hello123")
+    expect(ct_alpha("") == false, "not alpha empty")
+    # digit
+    expect(ct_digit("12345") == true, "digit 12345")
+    expect(ct_digit("12a") == false, "not digit 12a")
+    # alnum
+    expect(ct_alnum("Hello123") == true, "alnum Hello123")
+    expect(ct_alnum("Hello 123") == false, "not alnum Hello 123")
+    # upper
+    expect(ct_upper("HELLO") == true, "upper HELLO")
+    expect(ct_upper("Hello") == false, "not upper Hello")
+    # lower
+    expect(ct_lower("hello") == true, "lower hello")
+    expect(ct_lower("Hello") == false, "not lower Hello")
+    # space
+    expect(ct_space("   \t\n") == true, "space")
+    expect(ct_space("  a") == false, "not space")
+    # punct
+    expect(ct_punct("!?.,") == true, "punct")
+    expect(ct_punct("!?a") == false, "not punct")
+    # xdigit
+    expect(ct_xdigit("0123456789abcdef") == true, "xdigit")
+    expect(ct_xdigit("0x") == false, "not xdigit")
+    # print
+    expect(ct_print("Hello World!") == true, "print")
+    # graph
+    expect(ct_graph("Hello") == true, "graph")
+    expect(ct_graph("Hello ") == false, "not graph (space)")
+    # ascii
+    expect(ct_ascii("Hello") == true, "ascii")
+    # 单字符
+    expect(ct_is_alpha("a") == true, "is_alpha a")
+    expect(ct_is_digit("5") == true, "is_digit 5")
+    expect(ct_is_upper("A") == true, "is_upper A")
+    expect(ct_is_lower("a") == true, "is_lower a")
+    expect(ct_is_space(" ") == true, "is_space")
+    expect(ct_is_punct("!") == true, "is_punct")
+    expect(ct_is_xdigit("f") == true, "is_xdigit f")
+    print("ctype: PASS")

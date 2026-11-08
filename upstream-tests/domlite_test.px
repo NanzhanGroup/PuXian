@@ -1,0 +1,36 @@
+# domlite 0.1.0 测试
+import "../registry/domlite/0.1.0/domlite.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var root = dom_new("html", {}, [])
+    var head = dom_new("head", {}, [])
+    var body = dom_new("body", {"class": "main"}, [])
+    var title = dom_new("title", {}, [])
+    dom_append(title, dom_text("Hello"))
+    dom_append(head, title)
+    dom_append(root, head)
+    dom_append(root, body)
+    # count
+    expect(dom_count(root) == 5, "count 5: " + str(dom_count(root)))
+    # attrs
+    expect(dom_get_attr(body, "class") == "main", "get attr")
+    expect(dom_get_attr(body, "id") == null, "get missing attr")
+    # find by tag
+    var titles = dom_find_by_tag(root, "title")
+    expect(len(titles) == 1, "find 1 title")
+    # inner text
+    expect(dom_inner_text(title) == "Hello", "inner text: " + dom_inner_text(title))
+    # to xml
+    var xml = dom_to_xml(root, "")
+    expect(xml.find("<html>") >= 0, "xml has html")
+    expect(xml.find("<body class=\"main\" />") >= 0, "xml has body attr: " + xml)
+    expect(xml.find("Hello") >= 0, "xml has text")
+    expect(xml.find("</html>") >= 0, "xml has closing")
+    # self-closing
+    var br = dom_new("br", {}, [])
+    var br_xml = dom_to_xml(br, "")
+    expect(br_xml.find(" />") >= 0, "self-closing: " + br_xml)
+    print("domlite: PASS")

@@ -1,0 +1,64 @@
+# mathx 0.1.0 测试
+import "../registry/mathx/0.1.0/mathx.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def approx(a, b, eps=0.0001):
+    return abs(a - b) < eps
+def main():
+    # 双曲函数
+    expect(approx(mx_sinh(0), 0), "sinh(0)=" + str(mx_sinh(0)))
+    expect(approx(mx_cosh(0), 1), "cosh(0)=" + str(mx_cosh(0)))
+    expect(approx(mx_tanh(0), 0), "tanh(0)=" + str(mx_tanh(0)))
+    expect(approx(mx_sinh(1), 1.1752, 0.001), "sinh(1)=" + str(mx_sinh(1)))
+    expect(approx(mx_cosh(1), 1.5431, 0.001), "cosh(1)=" + str(mx_cosh(1)))
+    expect(approx(mx_tanh(1), 0.7616, 0.001), "tanh(1)=" + str(mx_tanh(1)))
+    # 反双曲
+    expect(approx(mx_asinh(0), 0), "asinh(0)=" + str(mx_asinh(0)))
+    expect(approx(mx_acosh(1), 0), "acosh(1)=" + str(mx_acosh(1)))
+    expect(approx(mx_atanh(0), 0), "atanh(0)=" + str(mx_atanh(0)))
+    # fmod
+    expect(approx(mx_fmod(5.7, 2.0), 1.7, 0.01), "fmod(5.7,2)=" + str(mx_fmod(5.7, 2.0)))
+    expect(approx(mx_fmod(10.5, 3.0), 1.5, 0.01), "fmod(10.5,3)=" + str(mx_fmod(10.5, 3.0)))
+    # deg2rad / rad2deg
+    expect(approx(mx_deg2rad(180), 3.14159, 0.001), "deg2rad(180)=" + str(mx_deg2rad(180)))
+    expect(approx(mx_rad2deg(3.14159), 180, 0.01), "rad2deg(pi)=" + str(mx_rad2deg(3.14159)))
+    expect(approx(mx_deg2rad(90), 1.5708, 0.001), "deg2rad(90)=" + str(mx_deg2rad(90)))
+    # hypot
+    expect(approx(mx_hypot(3, 4), 5), "hypot(3,4)=" + str(mx_hypot(3, 4)))
+    # sign
+    expect(mx_sign(5) == 1, "sign(5)")
+    expect(mx_sign(-3) == -1, "sign(-3)")
+    expect(mx_sign(0) == 0, "sign(0)")
+    # clamp
+    expect(mx_clamp(5, 1, 10) == 5, "clamp no-op")
+    expect(mx_clamp(-1, 1, 10) == 1, "clamp low")
+    expect(mx_clamp(15, 1, 10) == 10, "clamp high")
+    # lerp
+    expect(approx(mx_lerp(0, 10, 0.5), 5), "lerp(0,10,0.5)=" + str(mx_lerp(0, 10, 0.5)))
+    expect(approx(mx_lerp(0, 10, 0), 0), "lerp 0")
+    expect(approx(mx_lerp(0, 10, 1), 10), "lerp 1")
+    # gcd / lcm
+    expect(mx_gcd(12, 18) == 6, "gcd(12,18)=" + str(mx_gcd(12, 18)))
+    expect(mx_gcd(7, 13) == 1, "gcd(7,13)")
+    expect(mx_lcm(4, 6) == 12, "lcm(4,6)=" + str(mx_lcm(4, 6)))
+    # is_prime
+    expect(mx_is_prime(2) == true, "prime 2")
+    expect(mx_is_prime(7) == true, "prime 7")
+    expect(mx_is_prime(8) == false, "not prime 8")
+    expect(mx_is_prime(1) == false, "not prime 1")
+    expect(mx_is_prime(97) == true, "prime 97")
+    # factorial
+    expect(mx_factorial(0) == 1, "fact 0")
+    expect(mx_factorial(5) == 120, "fact 5=" + str(mx_factorial(5)))
+    expect(mx_factorial(10) == 3628800, "fact 10=" + str(mx_factorial(10)))
+    # fibonacci
+    expect(mx_fibonacci(0) == 0, "fib 0")
+    expect(mx_fibonacci(1) == 1, "fib 1")
+    expect(mx_fibonacci(10) == 55, "fib 10=" + str(mx_fibonacci(10)))
+    # 常数
+    expect(approx(MX_PI, 3.14159, 0.001), "MX_PI=" + str(MX_PI))
+    expect(approx(MX_E, 2.71828, 0.001), "MX_E=" + str(MX_E))
+    expect(approx(MX_GOLDEN, 1.618, 0.001), "MX_GOLDEN=" + str(MX_GOLDEN))
+    print("mathx: PASS")

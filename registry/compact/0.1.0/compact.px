@@ -1,0 +1,76 @@
+# compact.px — 变量↔数组互转（对应 PHP compact/extract）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   cp_compact(names, values)     → dict   # 从 names+values 构建 dict
+#   cp_extract(d, keys, prefix)   → dict   # 从 dict 提取指定键到新 dict
+#   cp_only(d, keys)              → dict   # 只保留指定键
+#   cp_except(d, keys)            → dict   # 排除指定键
+#   cp_pluck(list, key)           → list   # 从 list[dict] 中提取某键的值
+#   cp_flip(d)                    → dict   # 键值互换
+
+def cp_compact(names, values):
+    var result = {}
+    var i = 0
+    while i < len(names):
+        result.set(names[i], values[i])
+        i += 1
+    return result
+
+def cp_extract(d, keys, prefix):
+    var result = {}
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        if d.has(k):
+            var nk = prefix + k
+            result.set(nk, d[k])
+        i += 1
+    return result
+
+def cp_only(d, keys):
+    var result = {}
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        if d.has(k):
+            result.set(k, d[k])
+        i += 1
+    return result
+
+def cp_except(d, keys):
+    var result = {}
+    var ks = d.keys()
+    var i = 0
+    while i < len(ks):
+        var skip = false
+        var j = 0
+        while j < len(keys):
+            if ks[i] == keys[j]:
+                skip = true
+            j += 1
+        if not skip:
+            result.set(ks[i], d[ks[i]])
+        i += 1
+    return result
+
+def cp_pluck(lst, key):
+    var result = []
+    var i = 0
+    while i < len(lst):
+        if type(lst[i]) == "dict" and lst[i].has(key):
+            result.append(lst[i][key])
+        else:
+            result.append(null)
+        i += 1
+    return result
+
+def cp_flip(d):
+    var result = {}
+    var ks = d.keys()
+    var i = 0
+    while i < len(ks):
+        result.set(str(d[ks[i]]), ks[i])
+        i += 1
+    return result

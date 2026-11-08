@@ -1,0 +1,33 @@
+# snapshot 0.1.0 测试
+import "../registry/snapshot/0.1.0/snapshot.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var snap = snap_new("test1")
+    expect(not snap_has_snapshot(snap), "no snapshot initially")
+    # update
+    snap_update(snap, "hello")
+    expect(snap_has_snapshot(snap), "has snapshot after update")
+    # match
+    expect(snap_match(snap, "hello"), "match same string")
+    expect(not snap_match(snap, "world"), "no match different")
+    # diff
+    var d = snap_diff(snap, "world")
+    expect(d.len() > 0, "diff non-empty: " + d)
+    var d2 = snap_diff(snap, "hello")
+    expect(d2 == "", "diff empty for match")
+    # serialize
+    expect(snap_serialize("abc") == "abc", "serialize string")
+    expect(snap_serialize(null) == "null", "serialize null")
+    expect(snap_serialize(true) == "true", "serialize true")
+    expect(snap_serialize(false) == "false", "serialize false")
+    expect(snap_serialize([1, 2, 3]) == "[1, 2, 3]", "serialize list: " + snap_serialize([1, 2, 3]))
+    var ds = snap_serialize({"a": 1, "b": 2})
+    expect(ds.len() > 0, "serialize dict: " + ds)
+    # list match
+    snap_update(snap, [1, 2, 3])
+    expect(snap_match(snap, [1, 2, 3]), "match list")
+    expect(not snap_match(snap, [1, 2]), "no match different list")
+    print("snapshot: PASS")

@@ -1,0 +1,70 @@
+# gettext 0.1.0 测试
+import "../registry/gettext/0.1.0/gettext.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # 解析 .po
+    var po = "msgid \"\"\n"
+    po = po + "msgstr \"\"\n"
+    po = po + "\"Content-Type: text/plain; charset=UTF-8\\n\"\n"
+    po = po + "\"Language: zh_CN\\n\"\n\n"
+    po = po + "msgid \"Hello\"\n"
+    po = po + "msgstr \"你好\"\n\n"
+    po = po + "msgid \"Goodbye\"\n"
+    po = po + "msgstr \"再见\"\n\n"
+    var catalog = gt_parse_po(po)
+    expect(catalog.contains("Hello"), "parse has Hello")
+    expect(catalog["Hello"] == "你好", "parse Hello: " + catalog["Hello"])
+    expect(catalog.contains("Goodbye"), "parse has Goodbye")
+    expect(catalog["Goodbye"] == "再见", "parse Goodbye: " + catalog["Goodbye"])
+    # 翻译查找
+    expect(gt_get_translation(catalog, "Hello") == "你好", "translate Hello: " + gt_get_translation(catalog, "Hello"))
+    expect(gt_get_translation(catalog, "Goodbye") == "再见", "translate Goodbye: " + gt_get_translation(catalog, "Goodbye"))
+    # 未翻译回退
+    expect(gt_get_translation(catalog, "Unknown") == "Unknown", "translate unknown: " + gt_get_translation(catalog, "Unknown"))
+    # 空 msgstr 回退
+    catalog["Empty"] = ""
+    expect(gt_get_translation(catalog, "Empty") == "Empty", "translate empty: " + gt_get_translation(catalog, "Empty"))
+    # 构建 .po
+    var entries = {"Yes": "是", "No": "否"}
+    var built = gt_build_po(entries)
+    expect(built.contains("msgid \"Yes\""), "build has Yes: " + built)
+    expect(built.contains("msgstr \"是\""), "build has 是: " + built)
+    expect(built.contains("msgid \"No\""), "build has No: " + built)
+    # 往返
+    var reparsed = gt_parse_po(built)
+    expect(reparsed["Yes"] == "是", "roundtrip Yes: " + reparsed["Yes"])
+    expect(reparsed["No"] == "否", "roundtrip No: " + reparsed["No"])
+    # header 解析
+    var header = "Content-Type: text/plain; charset=UTF-8\nLanguage: zh_CN\nPlural-Forms: nplurals=2; plural=(n != 1);\n"
+    var meta = gt_parse_header(header)
+    expect(meta["Content-Type"] == "text/plain; charset=UTF-8", "header content-type: " + meta["Content-Type"])
+    expect(meta["Language"] == "zh_CN", "header language: " + meta["Language"])
+    # header 构建
+    var built_header = gt_build_header({"Language": "ja", "Content-Type": "text/plain; charset=UTF-8"})
+    expect(built_header.contains("Language: ja"), "build header language: " + built_header)
+    # 复数
+    expect(gt_parse_plural_form(1, "nplurals=2; plural=(n != 1);") == 0, "plural 1")
+    expect(gt_parse_plural_form(2, "nplurals=2; plural=(n != 1);") == 1, "plural 2")
+    # 添加条目
+    var cat = gt_new_catalog()
+    gt_add_entry(cat, "Save", "保存")
+    gt_add_entry(cat, "Cancel", "取消")
+    expect(cat["Save"] == "保存", "add entry Save: " + cat["Save"])
+    expect(cat["Cancel"] == "取消", "add entry Cancel: " + cat["Cancel"])
+    # compile mo
+    var mo = gt_compile_mo(cat)
+    expect(mo["count"] == 2, "compile mo count: " + str(mo["count"]))
+    # 多行 msgid
+    var multi_po = "msgid \"line1\\n"
+    multi_po = multi_po + "line2\"\n"
+    multi_po = multi_po + "msgstr \"行1\\n"
+    multi_po = multi_po + "行2\"\n"
+    var multi_cat = gt_parse_po(multi_po)
+    expect(multi_cat.contains("line1\nline2"), "multi line msgid: " + str(multi_cat.contains("line1\nline2")))
+    expect(multi_cat["line1\nline2"] == "行1\n行2", "multi line msgstr: " + multi_cat["line1\nline2"])
+    print("gettext: PASS")

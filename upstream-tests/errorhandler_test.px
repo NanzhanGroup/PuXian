@@ -1,0 +1,34 @@
+# errorhandler 0.1.0 测试
+import "../registry/errorhandler/0.1.0/errorhandler.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+var captured = ""
+def my_handler(level, msg):
+    captured = "L" + str(level) + ":" + msg
+    return null
+def main():
+    var eh = eh_new()
+    eh_set_handler(eh, my_handler)
+    # trigger
+    eh_trigger(eh, 2, "test warning")
+    expect(captured == "L2:test warning", "handler called: " + captured)
+    # last error
+    var last = eh_last_error(eh)
+    expect(last["message"] == "test warning", "last error msg")
+    expect(last["level"] == 2, "last error level")
+    # level filter
+    eh_set_level(eh, 1)
+    captured = ""
+    eh_trigger(eh, 4, "notice")
+    expect(captured == "", "notice filtered")
+    # restore
+    eh_restore(eh)
+    captured = ""
+    eh_trigger(eh, 1, "error")
+    expect(captured == "", "after restore no handler")
+    # clear
+    eh_clear(eh)
+    expect(eh_last_error(eh) == null, "cleared")
+    print("errorhandler: PASS")

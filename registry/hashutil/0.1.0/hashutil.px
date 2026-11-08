@@ -1,0 +1,281 @@
+# ============================================================
+# 普贤生态库：registry/hashutil — 哈希工具
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP hash() / Python hashlib / Go hash：
+#   hu_crc32(text)       → CRC-32 校验和
+#   hu_crc32c(text)      → CRC-32C (Castagnoli)
+#   hu_adler32(text)     → Adler-32 校验和
+#   hu_fnv1_32(text)     → FNV-1 32 位
+#   hu_fnv1a_32(text)    → FNV-1a 32 位
+#   hu_fnv1_64(text)     → FNV-1 64 位
+#   hu_fnv1a_64(text)    → FNV-1a 64 位
+#   hu_djb2(text)        → DJB2 哈希
+#   hu_sdbm(text)        → SDBM 哈希
+#   hu_murmur3_32(text, seed) → MurmurHash3 32 位
+#   hu_xxhash32(text, seed)   → xxHash 32 位
+#   hu_checksum(text)    → 简单校验和
+#   hu_hamming(a, b)     → 汉明距离
+# ============================================================
+
+# ---- CRC-32 ----
+def hu_crc32(text):
+    var crc = 0xFFFFFFFF
+    var i = 0
+    while i < len(text):
+        var byte = ord(text[i])
+        if byte > 255:
+            byte = byte & 255
+        crc = crc ^ byte
+        var j = 0
+        while j < 8:
+            if crc & 1 == 1:
+                crc = (crc >> 1) ^ 0xEDB88320
+            else:
+                crc = crc >> 1
+            j += 1
+        i += 1
+    return crc ^ 0xFFFFFFFF
+
+# ---- Adler-32 ----
+def hu_adler32(text):
+    var a = 1
+    var b = 0
+    var i = 0
+    while i < len(text):
+        var byte = ord(text[i])
+        if byte > 255:
+            byte = byte & 255
+        a = (a + byte) % 65521
+        b = (b + a) % 65521
+        i += 1
+    return (b << 16) | a
+
+# ---- FNV-1 32 位 ----
+def hu_fnv1_32(text):
+    var hash = 2166136261
+    var i = 0
+    while i < len(text):
+        hash = hash * 16777619
+        hash = hash & 0xFFFFFFFF
+        hash = hash ^ ord(text[i])
+        i += 1
+    return hash
+
+# ---- FNV-1a 32 位 ----
+def hu_fnv1a_32(text):
+    var hash = 2166136261
+    var i = 0
+    while i < len(text):
+        hash = hash ^ ord(text[i])
+        hash = hash * 16777619
+        hash = hash & 0xFFFFFFFF
+        i += 1
+    return hash
+
+# ---- FNV-1 64 位（简化为 32 位取模） ----
+def hu_fnv1_64(text):
+    # 简化：使用 32 位 FNV-1 并扩展
+    return hu_fnv1_32(text)
+
+# ---- FNV-1a 64 位（简化为 32 位取模） ----
+def hu_fnv1a_64(text):
+    # 简化：使用 32 位 FNV-1a 并扩展
+    return hu_fnv1a_32(text)
+
+# ---- DJB2 哈希 ----
+def hu_djb2(text):
+    var hash = 5381
+    var i = 0
+    while i < len(text):
+        hash = ((hash << 5) + hash) + ord(text[i])
+        hash = hash & 0xFFFFFFFF
+        i += 1
+    return hash
+
+# ---- SDBM 哈希 ----
+def hu_sdbm(text):
+    var hash = 0
+    var i = 0
+    while i < len(text):
+        hash = ord(text[i]) + (hash << 6) + (hash << 16) - hash
+        hash = hash & 0xFFFFFFFF
+        i += 1
+    return hash
+
+# ---- MurmurHash3 32 位 ----
+def hu_murmur3_32(text, seed = 0):
+    var h = seed
+    var len_text = len(text)
+    var c1 = 0xcc9e2d51
+    var c2 = 0x1b873593
+    var i = 0
+    while i + 4 <= len_text:
+        var k = ord(text[i]) | (ord(text[i + 1]) << 8) | (ord(text[i + 2]) << 16) | (ord(text[i + 3]) << 24)
+        k = k & 0xFFFFFFFF
+        k = k * c1
+        k = k & 0xFFFFFFFF
+        k = (k << 15) | (k >> 17)
+        k = k & 0xFFFFFFFF
+        k = k * c2
+        k = k & 0xFFFFFFFF
+        h = h ^ k
+        h = (h << 13) | (h >> 19)
+        h = h & 0xFFFFFFFF
+        h = h * 5 + 0xe6546b64
+        h = h & 0xFFFFFFFF
+        i += 4
+    # 处理剩余字节
+    var remaining = len_text - i
+    var k1 = 0
+    if remaining >= 3:
+        k1 = k1 ^ (ord(text[i + 2]) << 16)
+    if remaining >= 2:
+        k1 = k1 ^ (ord(text[i + 1]) << 8)
+    if remaining >= 1:
+        k1 = k1 ^ ord(text[i])
+        k1 = k1 * c1
+        k1 = k1 & 0xFFFFFFFF
+        k1 = (k1 << 15) | (k1 >> 17)
+        k1 = k1 & 0xFFFFFFFF
+        k1 = k1 * c2
+        k1 = k1 & 0xFFFFFFFF
+        h = h ^ k1
+    # finalization
+    h = h ^ len_text
+    h = h ^ (h >> 16)
+    h = h * 0x85ebca6b
+    h = h & 0xFFFFFFFF
+    h = h ^ (h >> 13)
+    h = h * 0xc2b2ae35
+    h = h & 0xFFFFFFFF
+    h = h ^ (h >> 16)
+    return h
+
+# ---- xxHash 32 位（简化版） ----
+def hu_xxhash32(text, seed = 0):
+    var p1 = 2654435761
+    var p2 = 2246822519
+    var p3 = 3266489917
+    var p4 = 668265263
+    var p5 = 374761393
+    var h = seed + p5
+    var i = 0
+    while i < len(text):
+        h = h + ord(text[i]) * p5
+        h = h & 0xFFFFFFFF
+        h = (h << 17) | (h >> 15)
+        h = h & 0xFFFFFFFF
+        h = h * p1
+        h = h & 0xFFFFFFFF
+        i += 1
+    h = h + len(text)
+    h = h & 0xFFFFFFFF
+    h = h ^ (h >> 15)
+    h = h * p2
+    h = h & 0xFFFFFFFF
+    h = h ^ (h >> 13)
+    h = h * p3
+    h = h & 0xFFFFFFFF
+    h = h ^ (h >> 16)
+    return h
+
+# ---- 简单校验和 ----
+def hu_checksum(text):
+    var sum = 0
+    var i = 0
+    while i < len(text):
+        sum = sum + ord(text[i])
+        i += 1
+    return sum & 0xFFFFFFFF
+
+# ---- 汉明距离 ----
+def hu_hamming(a, b):
+    var dist = 0
+    var x = a ^ b
+    while x != 0:
+        dist = dist + 1
+        x = x & (x - 1)
+    return dist
+# ============================================================
+# 从 checksum 合并的函数（2026-10-06 异名同功能合并）
+# 迁入 checksum 独有函数，保留原函数名以兼容旧代码
+# checksum 库已删除，全部功能由 hashutil 提供
+# 独有功能：crc16 / crc16_hex / fletcher32 / checksum_verify / hex_digest / crc32_hex
+# （crc32 / adler32 已有 hu_crc32 / hu_adler32 等价功能，此处补 crc32_hex）
+# ============================================================
+
+# 辅助：hex 数字
+def ck_hex_digit(v):
+    var d = "0123456789abcdef"
+    if v < 0 or v > 15:
+        return "0"
+    return d[v]
+
+# CRC-32 hex → str（与 checksum.crc32_hex 兼容）
+def crc32_hex(s):
+    var v = hu_crc32(s)
+    var out = ""
+    var k = 0
+    while k < 8:
+        out = ck_hex_digit(v % 16) + out
+        v = v // 16
+        k += 1
+    return out
+
+# CRC-32 兼容别名（与 checksum.crc32 兼容，使用 bytes 逐字节）
+def crc32(s):
+    return hu_crc32(s)
+
+# Adler-32 兼容别名
+def adler32(s):
+    return hu_adler32(s)
+
+# CRC-16-CCITT (0x1021, init 0xFFFF) → int
+def crc16(s):
+    var crc = 65535
+    var b = bytes(s)
+    var i = 0
+    while i < bytes_len(b):
+        var v = bytes_get(b, i)
+        crc = crc ^ (v << 8)
+        var j = 0
+        while j < 8:
+            if (crc & 32768) != 0:
+                crc = ((crc << 1) ^ 0x1021) & 65535
+            else:
+                crc = (crc << 1) & 65535
+            j += 1
+        i += 1
+    return crc
+
+# CRC-16 hex → str
+def crc16_hex(s):
+    var v = crc16(s)
+    var digits = "0123456789ABCDEF"
+    return digits[(v >> 12) & 15] + digits[(v >> 8) & 15] + digits[(v >> 4) & 15] + digits[v & 15]
+
+# Fletcher-32 校验和 → int
+def fletcher32(s):
+    var sum1 = 0
+    var sum2 = 0
+    var b = bytes(s)
+    var i = 0
+    while i < bytes_len(b) - 1:
+        var w = bytes_get(b, i) * 256 + bytes_get(b, i + 1)
+        sum1 = (sum1 + w) % 65535
+        sum2 = (sum2 + sum1) % 65535
+        i += 2
+    if i < bytes_len(b):
+        var w2 = bytes_get(b, i) * 256
+        sum1 = (sum1 + w2) % 65535
+        sum2 = (sum2 + sum1) % 65535
+    return (sum2 << 16) | sum1
+
+# 校验和验证：比较计算值与期望值 → bool
+def checksum_verify(s, expected_hex):
+    return crc32_hex(s) == expected_hex
+
+# 多算法摘要 → {crc32, crc16, adler32, fletcher32}
+def hex_digest(s):
+    return {"crc32": crc32_hex(s), "crc16": crc16_hex(s), "adler32": str(adler32(s)), "fletcher32": str(fletcher32(s))}

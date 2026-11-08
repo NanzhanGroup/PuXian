@@ -1,0 +1,27 @@
+# exif 0.1.0 测试
+import "../registry/exif/0.1.0/exif.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # JPEG SOI marker
+    var jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]
+    expect(exif_has_marker(jpeg) == true, "has JPEG marker")
+    expect(exif_has_marker([1, 2, 3]) == false, "no JPEG marker")
+    # find segment
+    var seg = exif_find_segment(jpeg, 0xE0)
+    expect(seg == 2, "find APP0: " + str(seg))
+    var seg2 = exif_find_segment(jpeg, 0xE1)
+    expect(seg2 == -1, "no APP1")
+    # tag names
+    expect(exif_tag_name(0x010F) == "Make", "tag Make")
+    expect(exif_tag_name(0x0110) == "Model", "tag Model")
+    expect(exif_tag_name(0x0132) == "DateTime", "tag DateTime")
+    expect(exif_tag_name(0x9003) == "DateTimeOriginal", "tag DateTimeOriginal")
+    expect(exif_tag_name(0x9209) == "Flash", "tag Flash")
+    expect(exif_tag_name(999) == "Tag_999", "unknown tag: " + exif_tag_name(999))
+    # u16/u32
+    expect(exif_read_u16([0x01, 0x02], 0) == 0x0102, "u16 big endian")
+    expect(exif_read_little_endian_u16([0x01, 0x02], 0) == 0x0201, "u16 little endian")
+    print("exif: PASS")

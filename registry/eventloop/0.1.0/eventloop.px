@@ -1,0 +1,85 @@
+# eventloop.px — 事件循环（同步模拟，纯函数）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   el_new()                      → dict   # 创建事件循环
+#   el_tick(loop)                 → int    # 执行一轮，返回处理的事件数
+#   el_run(loop)                  → int    # 运行到清空
+#   el_add_task(loop, fn, arg)    → int    # 添加任务，返回 task id
+#   el_add_timer(loop, fn, delay) → int    # 添加定时器（delay 为虚拟 tick 数）
+#   el_cancel(loop, task_id)      → bool   # 取消任务
+#   el_pending_count(loop)        → int    # 待处理任务数
+
+# 创建事件循环
+def el_new():
+    return {"_tasks": [], "_next_id": 1, "_tick": 0}
+
+# 添加任务
+def el_add_task(loop, callback, arg):
+    var task_id = loop["_next_id"]
+    loop["_next_id"] = task_id + 1
+    var task = {"id": task_id, "fn": callback, "arg": arg, "delay": 0, "cancelled": false}
+    loop["_tasks"].append(task)
+    return task_id
+
+# 添加定时器
+def el_add_timer(loop, callback, delay):
+    var task_id = loop["_next_id"]
+    loop["_next_id"] = task_id + 1
+    var task = {"id": task_id, "fn": callback, "arg": null, "delay": delay, "cancelled": false}
+    loop["_tasks"].append(task)
+    return task_id
+
+# 取消任务
+def el_cancel(loop, task_id):
+    var tasks = loop["_tasks"]
+    var i = 0
+    while i < len(tasks):
+        if tasks[i]["id"] == task_id:
+            tasks[i]["cancelled"] = true
+            return true
+        i += 1
+    return false
+
+# 执行一轮
+def el_tick(loop):
+    var tasks = loop["_tasks"]
+    var processed = 0
+    var remaining = []
+    var i = 0
+    while i < len(tasks):
+        var task = tasks[i]
+        if task["cancelled"]:
+            i += 1
+            continue
+        if task["delay"] > 0:
+            task["delay"] = task["delay"] - 1
+            remaining.append(task)
+        else:
+            task["fn"](task["arg"])
+            processed += 1
+        i += 1
+    loop["_tasks"] = remaining
+    loop["_tick"] = loop["_tick"] + 1
+    return processed
+
+# 运行到清空
+def el_run(loop):
+    var total = 0
+    var guard = 0
+    while el_pending_count(loop) > 0 and guard < 10000:
+        total += el_tick(loop)
+        guard += 1
+    return total
+
+# 待处理任务数
+def el_pending_count(loop):
+    var cnt = 0
+    var tasks = loop["_tasks"]
+    var i = 0
+    while i < len(tasks):
+        if not tasks[i]["cancelled"]:
+            cnt += 1
+        i += 1
+    return cnt

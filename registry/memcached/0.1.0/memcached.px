@@ -1,0 +1,52 @@
+# memcached.px — Memcached 协议构造/解析（纯函数，文本协议）
+# 版本: 0.1.0
+def mc_build_set(key, value, flags, exptime):
+    return "set " + key + " " + str(flags) + " " + str(exptime) + " " + str(len(value)) + "\r\n" + value + "\r\n"
+def mc_build_get(key):
+    return "get " + key + "\r\n"
+def mc_build_get_multi(keys):
+    var cmd = "get"
+    var i = 0
+    while i < len(keys):
+        cmd = cmd + " " + keys[i]
+        i += 1
+    cmd = cmd + "\r\n"
+    return cmd
+def mc_build_delete(key):
+    return "delete " + key + "\r\n"
+def mc_build_increment(key, value):
+    return "incr " + key + " " + str(value) + "\r\n"
+def mc_build_decrement(key, value):
+    return "decr " + key + " " + str(value) + "\r\n"
+def mc_build_flush():
+    return "flush_all\r\n"
+def mc_build_stats():
+    return "stats\r\n"
+def mc_parse_response(text):
+    var lines = text.split("\n")
+    var result = []
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if line.len() > 0 and line[line.len() - 1] == "\r":
+            line = line[:line.len() - 1]
+        if line == "END":
+            break
+        if line == "STORED" or line == "NOT_STORED" or line == "DELETED" or line == "NOT_FOUND":
+            result.append({"type": "status", "value": line})
+        elif line.len() > 5 and line[:6] == "VALUE ":
+            var parts = line[6:].split(" ")
+            if len(parts) >= 3:
+                result.append({"type": "value", "key": parts[0], "flags": int(parts[1]), "length": int(parts[2])})
+        elif line.len() > 5 and line[:6] == "STATS ":
+            result.append({"type": "stats", "data": line[6:]})
+        i += 1
+    return result
+def mc_extract_value(response_text):
+    var lines = response_text.split("\n")
+    if len(lines) >= 2:
+        var val = lines[1]
+        if val.len() > 0 and val[val.len() - 1] == "\r":
+            val = val[:val.len() - 1]
+        return val
+    return ""

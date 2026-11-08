@@ -1,0 +1,80 @@
+# querybuilder 0.1.0 测试
+import "../registry/querybuilder/0.1.0/querybuilder.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # SELECT 基本
+    var q = qb_select("users")
+    var sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users`", "select basic: " + sql)
+    # WHERE
+    q = qb_select("users")
+    qb_where(q, "id", "=", 42)
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `id` = 42", "select where: " + sql)
+    # WHERE string
+    q = qb_select("users")
+    qb_where(q, "name", "=", "Alice")
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `name` = 'Alice'", "select where str: " + sql)
+    # WHERE IN
+    q = qb_select("users")
+    qb_where_in(q, "id", [1, 2, 3])
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `id` IN (1, 2, 3)", "select where in: " + sql)
+    # WHERE LIKE
+    q = qb_select("users")
+    qb_where_like(q, "name", "%abc%")
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `name` LIKE '%abc%'", "select where like: " + sql)
+    # ORDER BY + LIMIT + OFFSET
+    q = qb_select("users")
+    qb_where(q, "age", ">", 18)
+    qb_order_by(q, "name", "DESC")
+    qb_limit(q, 10)
+    qb_offset(q, 20)
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `age` > 18 ORDER BY `name` DESC LIMIT 10 OFFSET 20", "select complex: " + sql)
+    # DISTINCT
+    q = qb_select("users")
+    qb_distinct(q)
+    sql = qb_build(q)
+    expect(sql == "SELECT DISTINCT * FROM `users`", "select distinct: " + sql)
+    # JOIN
+    q = qb_select("orders")
+    qb_join(q, "users", "orders.user_id", "users.id", "INNER")
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `orders` INNER JOIN `users` ON `orders.user_id` = `users.id`", "select join: " + sql)
+    # GROUP BY + HAVING
+    q = qb_select("orders")
+    qb_group_by(q, "user_id")
+    qb_having(q, "COUNT(*)", ">", 5)
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `orders` GROUP BY user_id HAVING COUNT(*) > 5", "select group having: " + sql)
+    # INSERT
+    q = qb_insert("users", {"name": "Bob", "age": 30})
+    sql = qb_build(q)
+    expect(sql == "INSERT INTO `users` (`name`, `age`) VALUES ('Bob', 30)", "insert: " + sql)
+    # UPDATE
+    q = qb_update("users", {"name": "Charlie", "age": 25})
+    qb_where(q, "id", "=", 1)
+    sql = qb_build(q)
+    expect(sql == "UPDATE `users` SET `name` = 'Charlie', `age` = 25 WHERE `id` = 1", "update: " + sql)
+    # DELETE
+    q = qb_delete("users")
+    qb_where(q, "id", "=", 1)
+    sql = qb_build(q)
+    expect(sql == "DELETE FROM `users` WHERE `id` = 1", "delete: " + sql)
+    # 转义
+    expect(qb_escape("it's") == "'it''s'", "escape quote: " + qb_escape("it's"))
+    expect(qb_escape(null) == "NULL", "escape null: " + qb_escape(null))
+    # WHERE NULL
+    q = qb_select("users")
+    qb_where_null(q, "email")
+    sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `email` IS NULL", "select where null: " + sql)
+    print("querybuilder: PASS")

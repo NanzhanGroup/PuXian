@@ -1,0 +1,67 @@
+# cldr.px — CLDR 复数规则 + Locale 管理
+# 版本: 0.1.0
+# 依赖: 无
+def cldr_plural(locale, n):
+    var lang = locale
+    var dot = locale.find("-")
+    if dot > 0:
+        lang = locale[:dot]
+    if lang == "en":
+        if n == 1:
+            return "one"
+        return "other"
+    if lang == "zh" or lang == "ja" or lang == "ko":
+        return "other"
+    if lang == "ru":
+        var mod10 = n % 10
+        var mod100 = n % 100
+        if mod10 == 1 and mod100 != 11:
+            return "one"
+        if mod10 >= 2 and mod10 <= 4 and (mod100 < 10 or mod100 >= 20):
+            return "few"
+        return "many"
+    if lang == "fr":
+        if n <= 1:
+            return "one"
+        return "other"
+    if lang == "ar":
+        if n == 0:
+            return "zero"
+        if n == 1:
+            return "one"
+        if n == 2:
+            return "two"
+        return "other"
+    if n == 1:
+        return "one"
+    return "other"
+def cldr_locale_new(lang, region):
+    return {"_lang": lang, "_region": region}
+def cldr_locale_code(loc):
+    if loc["_region"] == "":
+        return loc["_lang"]
+    return loc["_lang"] + "-" + loc["_region"]
+def cldr_locale_lang(loc):
+    return loc["_lang"]
+def cldr_locale_region(loc):
+    return loc["_region"]
+def cldr_format_number(loc, n):
+    var s = str(n)
+    var lang = loc["_lang"]
+    if lang == "fr":
+        return s.replace(".", ",")
+    if lang == "de":
+        return s.replace(".", ",")
+    return s
+
+def cldr_format_currency(loc, amount, code):
+    var s = cldr_format_number(loc, amount)
+    if loc["_lang"] == "en":
+        return code + " " + s
+    return s + " " + code
+def cldr_list_separator(loc):
+    if loc["_lang"] == "en":
+        return ", "
+    if loc["_lang"] == "zh" or loc["_lang"] == "ja":
+        return "、"
+    return ", "

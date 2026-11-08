@@ -1,0 +1,323 @@
+# ============================================================
+# 普贤生态库：registry/textfmt — 文本格式化工具
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP nl2br / chunk_split / strtr / quoted_printable_encode/decode / wordwrap：
+#   tf_nl2br(s)           → \n → <br>\n
+#   tf_nl2br_xhtml(s)     → \n → <br />
+#   tf_chunk_split(s, chunklen, end) → 按固定宽度分块+分隔符
+#   tf_strtr(s, from, to) → 字符/串映射表批量替换
+#   tf_strtr_table(s, table) → dict 映射表替换
+#   tf_qp_encode(s)       → Quoted-Printable 编码
+#   tf_qp_decode(s)       → Quoted-Printable 解码
+#   tf_wordwrap(s, width, break, cut) → 按宽度换行（PHP wordwrap 语义）
+#   tf_strip_tags(s)      → 去除 HTML 标签
+#   tf_addslashes(s)      → PHP addslashes（' " \ NUL 前加 \）
+#   tf_stripslashes(s)    → PHP stripslashes（去除 \ 转义）
+#   tf_quoted_printable_encode = tf_qp_encode（别名）
+# ============================================================
+
+# ---- nl2br ----
+def tf_nl2br(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var b = bytes_get(bytes(s[i]), 0)
+        if b == 10:
+            out = out + "<br>\n"
+        else:
+            out = out + s[i]
+        i += 1
+    return out
+
+# ---- nl2br XHTML ----
+def tf_nl2br_xhtml(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var b = bytes_get(bytes(s[i]), 0)
+        if b == 10:
+            out = out + "<br />\n"
+        else:
+            out = out + s[i]
+        i += 1
+    return out
+
+# ---- chunk_split ----
+def tf_chunk_split(s, chunklen = 76, end = "\r\n"):
+    if chunklen <= 0:
+        return s
+    var out = ""
+    var i = 0
+    while i < len(s):
+        if i + chunklen <= len(s):
+            out = out + s[i:i + chunklen] + end
+        else:
+            out = out + s[i:len(s)] + end
+        i = i + chunklen
+    return out
+
+# ---- strtr（两等长字符串映射） ----
+def tf_strtr(s, from_str, to_str):
+    if len(from_str) != len(to_str):
+        return s
+    var table = {}
+    var i = 0
+    while i < len(from_str):
+        table[from_str[i]] = to_str[i]
+        i += 1
+    var out = ""
+    i = 0
+    while i < len(s):
+        if table.contains(s[i]):
+            out = out + table[s[i]]
+        else:
+            out = out + s[i]
+        i += 1
+    return out
+
+# ---- strtr（dict 映射表） ----
+def tf_strtr_table(s, table):
+    var keys = table.keys()
+    # 按 key 长度降序排列（优先匹配长 key）
+    var sorted_keys = []
+    var i = 0
+    while i < len(keys):
+        sorted_keys.append(keys[i])
+        i += 1
+    # 简单冒泡排序（按长度降序）
+    i = 0
+    while i < len(sorted_keys):
+        var j = 0
+        while j < len(sorted_keys) - 1 - i:
+            if len(sorted_keys[j]) < len(sorted_keys[j + 1]):
+                var tmp = sorted_keys[j]
+                sorted_keys[j] = sorted_keys[j + 1]
+                sorted_keys[j + 1] = tmp
+            j += 1
+        i += 1
+    var out = ""
+    i = 0
+    while i < len(s):
+        var matched = false
+        var k = 0
+        while k < len(sorted_keys):
+            var key = sorted_keys[k]
+            if i + len(key) <= len(s) and s[i:i + len(key)] == key:
+                out = out + table[key]
+                i = i + len(key)
+                matched = true
+                break
+            k += 1
+        if not matched:
+            out = out + s[i]
+            i += 1
+    return out
+
+# ---- Quoted-Printable 编码 ----
+def tf_qp_encode(s):
+    var out = ""
+    var line_len = 0
+    var i = 0
+    while i < len(s):
+        var b = bytes_get(bytes(s[i]), 0)
+        var encoded = ""
+        # 可打印 ASCII (33-126) 且非 = → 直接输出
+        if (b >= 33 and b <= 126) and b != 61:
+            encoded = s[i]
+        elif b == 32 or b == 9:
+            # 空格/Tab：行尾需编码，中间直接输出
+            var is_line_end = (i + 1 >= len(s)) or (bytes_get(bytes(s[i + 1]), 0) == 10) or (bytes_get(bytes(s[i + 1]), 0) == 13)
+            if is_line_end:
+                encoded = "=" + tf_hex_byte(b)
+            else:
+                encoded = s[i]
+        else:
+            encoded = "=" + tf_hex_byte(b)
+        # 检查行长度（QP 行最多 76 字符，含软换行 =）
+        if line_len + len(encoded) > 75:
+            out = out + "=\r\n"
+            line_len = 0
+        out = out + encoded
+        line_len = line_len + len(encoded)
+        i += 1
+    return out
+
+# ---- 辅助：字节转十六进制（大写） ----
+def tf_hex_byte(b):
+    var hex_chars = "0123456789ABCDEF"
+    return hex_chars[b // 16] + hex_chars[b % 16]
+
+# ---- Quoted-Printable 解码 ----
+def tf_qp_decode(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var b = bytes_get(bytes(s[i]), 0)
+        if b == 61:
+            # = 开头
+            if i + 2 < len(s) and bytes_get(bytes(s[i + 1]), 0) == 13 and bytes_get(bytes(s[i + 2]), 0) == 10:
+                # 软换行 =\r\n → 跳过
+                i = i + 3
+                continue
+            if i + 1 < len(s) and bytes_get(bytes(s[i + 1]), 0) == 10:
+                # 软换行 =\n → 跳过
+                i = i + 2
+                continue
+            if i + 2 < len(s):
+                # =XX 十六进制
+                var hex_str = s[i + 1:i + 3]
+                var val = tf_hex_to_int(hex_str)
+                if val >= 0:
+                    out = out + chr(val)
+                    i = i + 3
+                    continue
+            # 无法解码，原样输出
+            out = out + s[i]
+            i += 1
+        else:
+            out = out + s[i]
+            i += 1
+    return out
+
+# ---- 辅助：十六进制字符串转整数 ----
+def tf_hex_to_int(h):
+    if len(h) != 2:
+        return -1
+    var result = 0
+    var i = 0
+    while i < 2:
+        var c = h[i]
+        var v = 0
+        if c >= "0" and c <= "9":
+            v = bytes_get(bytes(c), 0) - 48
+        elif c >= "A" and c <= "F":
+            v = bytes_get(bytes(c), 0) - 55
+        elif c >= "a" and c <= "f":
+            v = bytes_get(bytes(c), 0) - 87
+        else:
+            return -1
+        result = result * 16 + v
+        i += 1
+    return result
+
+# ---- wordwrap（PHP 语义） ----
+def tf_wordwrap(s, width = 75, br = "\n", cut = false):
+    if width <= 0:
+        return s
+    var lines = []
+    var current = ""
+    # 先按已有换行符分割
+    var segments = []
+    var seg = ""
+    var i = 0
+    while i < len(s):
+        var b = bytes_get(bytes(s[i]), 0)
+        if b == 10:
+            segments.append(seg)
+            seg = ""
+        else:
+            seg = seg + s[i]
+        i += 1
+    segments.append(seg)
+    # 对每段做换行
+    var result = ""
+    var si = 0
+    while si < len(segments):
+        var line = segments[si]
+        if len(line) <= width:
+            if si > 0:
+                result = result + br
+            result = result + line
+        else:
+            # 需要换行
+            var pos = 0
+            if si > 0:
+                result = result + br
+            while pos < len(line):
+                var chunk_end = pos + width
+                if chunk_end > len(line):
+                    chunk_end = len(line)
+                if cut:
+                    # 强制截断
+                    result = result + line[pos:chunk_end]
+                    pos = chunk_end
+                else:
+                    # PHP 语义：在宽度边界找断点
+                    var break_pos = chunk_end
+                    if break_pos < len(line):
+                        # 如果边界处是空格，在此断行
+                        if line[break_pos] == " ":
+                            break_pos = chunk_end
+                        else:
+                            # 向前找最后一个空格
+                            var j = chunk_end
+                            var found = false
+                            while j > pos:
+                                if line[j - 1] == " ":
+                                    break_pos = j - 1
+                                    found = true
+                                    break
+                                j = j - 1
+                            if not found:
+                                break_pos = chunk_end
+                    result = result + line[pos:break_pos]
+                    pos = break_pos
+                    # 跳过空格
+                    if pos < len(line) and line[pos] == " ":
+                        pos += 1
+                if pos < len(line):
+                    result = result + br
+        si += 1
+    return result
+
+# ---- strip_tags ----
+def tf_strip_tags(s):
+    var out = ""
+    var in_tag = false
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "<":
+            in_tag = true
+        elif c == ">":
+            in_tag = false
+        elif not in_tag:
+            out = out + c
+        i += 1
+    return out
+
+# ---- addslashes ----
+def tf_addslashes(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "'" or c == "\"" or c == "\\":
+            out = out + "\\" + c
+        elif bytes_get(bytes(c), 0) == 0:
+            out = out + "\\0"
+        else:
+            out = out + c
+        i += 1
+    return out
+
+# ---- stripslashes ----
+def tf_stripslashes(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            var next = s[i + 1]
+            if next == "'" or next == "\"" or next == "\\":
+                out = out + next
+                i += 2
+                continue
+            elif next == "0":
+                out = out + chr(0)
+                i += 2
+                continue
+        out = out + c
+        i += 1
+    return out

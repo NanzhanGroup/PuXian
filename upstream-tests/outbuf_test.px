@@ -1,0 +1,32 @@
+# outbuf 0.1.0 测试
+import "../registry/outbuf/0.1.0/outbuf.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var buf = ob_new()
+    expect(ob_get_level(buf) == 0, "level 0")
+    ob_start(buf)
+    expect(ob_get_level(buf) == 1, "level 1")
+    ob_write(buf, "hello ")
+    ob_write(buf, "world")
+    expect(ob_get_contents(buf) == "hello world", "contents: " + ob_get_contents(buf))
+    ob_clean(buf)
+    expect(ob_get_contents(buf) == "", "after clean")
+    ob_write(buf, "test")
+    var content = ob_get_clean(buf)
+    expect(content == "test", "get clean: " + content)
+    expect(ob_get_level(buf) == 0, "level 0 after clean")
+    # nested
+    ob_start(buf)
+    ob_write(buf, "outer ")
+    ob_start(buf)
+    ob_write(buf, "inner")
+    expect(ob_get_contents(buf) == "inner", "inner contents: " + ob_get_contents(buf))
+    var inner = ob_end_flush(buf)
+    expect(inner == "inner", "inner flush: " + inner)
+    ob_write(buf, " flushed")
+    var outer = ob_end_flush(buf)
+    expect(outer == "outer  flushed", "outer flush: " + outer)
+    print("outbuf: PASS")

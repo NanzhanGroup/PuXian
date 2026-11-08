@@ -1,0 +1,41 @@
+# migration 0.1.0 测试
+import "../registry/migration/0.1.0/migration.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var mig = mig_new()
+    mig_add(mig, 1, "create_users", "CREATE TABLE users (id INT);", "DROP TABLE users;")
+    mig_add(mig, 2, "create_posts", "CREATE TABLE posts (id INT);", "DROP TABLE posts;")
+    mig_add(mig, 3, "add_name_col", "ALTER TABLE users ADD name VARCHAR(255);", "ALTER TABLE users DROP name;")
+    expect(mig_count(mig) == 3, "3 migrations")
+    # get version
+    var v2 = mig_get_version(mig, 2)
+    expect(v2 != null, "version 2 exists")
+    expect(v2["version"] == 2, "v2 version")
+    expect(v2["up"] == "CREATE TABLE posts (id INT);", "v2 up sql: " + v2["up"])
+    var v_missing = mig_get_version(mig, 99)
+    expect(v_missing == null, "version 99 missing")
+    # latest
+    expect(mig_latest(mig) == 3, "latest is 3")
+    # pending
+    var pending = mig_get_pending(mig, [1])
+    expect(len(pending) == 2, "2 pending after v1: " + str(len(pending)))
+    expect(pending[0]["version"] == 2, "first pending v2")
+    # no pending
+    var pending2 = mig_get_pending(mig, [1, 2, 3])
+    expect(len(pending2) == 0, "no pending")
+    # applied count
+    expect(mig_applied_count([1, 2, 3]) == 3, "applied count 3")
+    # up/down sql
+    expect(mig_get_up_sql(mig, 1) == "CREATE TABLE users (id INT);", "up sql v1")
+    expect(mig_get_down_sql(mig, 1) == "DROP TABLE users;", "down sql v1")
+    # plan up
+    var plan = mig_plan_up(mig, [])
+    expect(len(plan) == 3, "plan up 3 from scratch")
+    # empty
+    var mig2 = mig_new()
+    expect(mig_latest(mig2) == 0, "empty latest 0")
+    expect(mig_count(mig2) == 0, "empty count 0")
+    print("migration: PASS")

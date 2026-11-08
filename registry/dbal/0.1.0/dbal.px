@@ -1,0 +1,90 @@
+# dbal.px — 数据库抽象层（查询构造器，纯函数）
+# 版本: 0.1.0
+def qb_new(table):
+    return {"_table": table, "_select": [], "_where": [], "_order": [], "_limit": -1, "_offset": -1, "_params": []}
+def qb_select(qb, columns):
+    qb["_select"] = columns
+    return qb
+def qb_where(qb, col, op, val):
+    qb["_where"].append(col + " " + op + " ?")
+    qb["_params"].append(val)
+    return qb
+def qb_order_by(qb, col, direction):
+    qb["_order"].append(col + " " + direction)
+    return qb
+def qb_limit(qb, n):
+    qb["_limit"] = n
+    return qb
+def qb_offset(qb, n):
+    qb["_offset"] = n
+    return qb
+def qb_to_sql(qb):
+    var sql = "SELECT "
+    if len(qb["_select"]) == 0:
+        sql = sql + "*"
+    else:
+        var i = 0
+        while i < len(qb["_select"]):
+            if i > 0:
+                sql = sql + ", "
+            sql = sql + qb["_select"][i]
+            i += 1
+    sql = sql + " FROM " + qb["_table"]
+    if len(qb["_where"]) > 0:
+        sql = sql + " WHERE "
+        var i = 0
+        while i < len(qb["_where"]):
+            if i > 0:
+                sql = sql + " AND "
+            sql = sql + qb["_where"][i]
+            i += 1
+    if len(qb["_order"]) > 0:
+        sql = sql + " ORDER BY "
+        var i = 0
+        while i < len(qb["_order"]):
+            if i > 0:
+                sql = sql + ", "
+            sql = sql + qb["_order"][i]
+            i += 1
+    if qb["_limit"] >= 0:
+        sql = sql + " LIMIT " + str(qb["_limit"])
+    if qb["_offset"] >= 0:
+        sql = sql + " OFFSET " + str(qb["_offset"])
+    return sql
+def qb_params(qb):
+    return qb["_params"]
+def qb_insert_sql(table, data):
+    var cols = data.keys()
+    var sql = "INSERT INTO " + table + " ("
+    var i = 0
+    while i < len(cols):
+        if i > 0:
+            sql = sql + ", "
+        sql = sql + cols[i]
+        i += 1
+    sql = sql + ") VALUES ("
+    i = 0
+    while i < len(cols):
+        if i > 0:
+            sql = sql + ", "
+        sql = sql + "?"
+        i += 1
+    sql = sql + ")"
+    return sql
+def qb_update_sql(table, data, where_clause):
+    var cols = data.keys()
+    var sql = "UPDATE " + table + " SET "
+    var i = 0
+    while i < len(cols):
+        if i > 0:
+            sql = sql + ", "
+        sql = sql + cols[i] + " = ?"
+        i += 1
+    if where_clause != "":
+        sql = sql + " WHERE " + where_clause
+    return sql
+def qb_delete_sql(table, where_clause):
+    var sql = "DELETE FROM " + table
+    if where_clause != "":
+        sql = sql + " WHERE " + where_clause
+    return sql

@@ -1,0 +1,80 @@
+# strtotime.px — 英文相对时间解析（简化版 strtotime）
+# 版本: 0.1.0
+# 依赖: datetime（dt_now_sec）
+import "../../datetime/0.2.0/datetime.px"
+def st_day_of_week(name):
+    var n = name.lower()
+    if n == "sun" or n == "sunday":
+        return 0
+    if n == "mon" or n == "monday":
+        return 1
+    if n == "tue" or n == "tuesday":
+        return 2
+    if n == "wed" or n == "wednesday":
+        return 3
+    if n == "thu" or n == "thursday":
+        return 4
+    if n == "fri" or n == "friday":
+        return 5
+    if n == "sat" or n == "saturday":
+        return 6
+    return -1
+def st_next_weekday(base, target):
+    var base_day = dt_weekday_from_sec(base)
+    var diff = target - base_day
+    if diff <= 0:
+        diff = diff + 7
+    return base + diff * 86400
+def st_parse_relative(expr, base):
+    var e = expr.lower()
+    var parts = e.split(" ")
+    var result = base
+    var i = 0
+    while i < len(parts):
+        var p = parts[i]
+        if p == "now":
+            result = base
+        elif p == "tomorrow":
+            result = result + 86400
+        elif p == "yesterday":
+            result = result - 86400
+        elif p == "next" and i + 1 < len(parts):
+            var wd = st_day_of_week(parts[i + 1])
+            if wd >= 0:
+                result = st_next_weekday(result, wd)
+                i += 1
+        elif p == "last" and i + 1 < len(parts):
+            var wd = st_day_of_week(parts[i + 1])
+            if wd >= 0:
+                var base_day = dt_weekday_from_sec(result)
+                var diff = base_day - wd
+                if diff <= 0:
+                    diff = diff + 7
+                result = result - diff * 86400
+                i += 1
+        elif p == "+" and i + 2 < len(parts):
+            var num = int(parts[i + 1])
+            var unit = parts[i + 2]
+            if unit == "day" or unit == "days":
+                result = result + num * 86400
+            elif unit == "hour" or unit == "hours":
+                result = result + num * 3600
+            elif unit == "minute" or unit == "minutes":
+                result = result + num * 60
+            elif unit == "week" or unit == "weeks":
+                result = result + num * 604800
+            i += 2
+        elif p == "-" and i + 2 < len(parts):
+            var num = int(parts[i + 1])
+            var unit = parts[i + 2]
+            if unit == "day" or unit == "days":
+                result = result - num * 86400
+            elif unit == "hour" or unit == "hours":
+                result = result - num * 3600
+            elif unit == "minute" or unit == "minutes":
+                result = result - num * 60
+            i += 2
+        i += 1
+    return result
+def st_parse(expr):
+    return st_parse_relative(expr, dt_now_sec())

@@ -1,0 +1,73 @@
+# hashutil 0.1.0 测试
+import "../registry/hashutil/0.1.0/hashutil.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # CRC-32
+    expect(hu_crc32("") == 0, "crc32 empty: " + str(hu_crc32("")))
+    expect(hu_crc32("a") != 0, "crc32 a nonzero: " + str(hu_crc32("a")))
+    expect(hu_crc32("abc") != 0, "crc32 abc nonzero: " + str(hu_crc32("abc")))
+    expect(hu_crc32("hello") != hu_crc32("world"), "crc32 different")
+    # Adler-32
+    expect(hu_adler32("") == 1, "adler32 empty: " + str(hu_adler32("")))
+    expect(hu_adler32("a") != 1, "adler32 a nonzero: " + str(hu_adler32("a")))
+    expect(hu_adler32("abc") != hu_adler32("xyz"), "adler32 different")
+    # FNV-1a 32
+    expect(hu_fnv1a_32("") == 2166136261, "fnv1a32 empty: " + str(hu_fnv1a_32("")))
+    var h1 = hu_fnv1a_32("hello")
+    var h2 = hu_fnv1a_32("hello")
+    expect(h1 == h2, "fnv1a32 consistent: " + str(h1))
+    expect(hu_fnv1a_32("hello") != hu_fnv1a_32("world"), "fnv1a32 different")
+    # FNV-1 32
+    expect(hu_fnv1_32("") == 2166136261, "fnv1_32 empty: " + str(hu_fnv1_32("")))
+    expect(hu_fnv1_32("hello") != hu_fnv1_32("world"), "fnv1_32 different")
+    # DJB2
+    expect(hu_djb2("") == 5381, "djb2 empty: " + str(hu_djb2("")))
+    expect(hu_djb2("hello") != hu_djb2("world"), "djb2 different")
+    var d1 = hu_djb2("test")
+    var d2 = hu_djb2("test")
+    expect(d1 == d2, "djb2 consistent: " + str(d1))
+    # SDBM
+    expect(hu_sdbm("") == 0, "sdbm empty: " + str(hu_sdbm("")))
+    expect(hu_sdbm("hello") != hu_sdbm("world"), "sdbm different")
+    # MurmurHash3
+    expect(hu_murmur3_32("") == 0, "murmur3 empty: " + str(hu_murmur3_32("")))
+    var m1 = hu_murmur3_32("hello")
+    var m2 = hu_murmur3_32("hello")
+    expect(m1 == m2, "murmur3 consistent: " + str(m1))
+    expect(hu_murmur3_32("hello") != hu_murmur3_32("world"), "murmur3 different")
+    # xxHash
+    var x1 = hu_xxhash32("hello")
+    var x2 = hu_xxhash32("hello")
+    expect(x1 == x2, "xxhash consistent: " + str(x1))
+    expect(hu_xxhash32("hello") != hu_xxhash32("world"), "xxhash different")
+    # 校验和
+    expect(hu_checksum("") == 0, "checksum empty: " + str(hu_checksum("")))
+    expect(hu_checksum("abc") == 294, "checksum abc: " + str(hu_checksum("abc")))
+    # 汉明距离
+    expect(hu_hamming(0, 0) == 0, "hamming same: " + str(hu_hamming(0, 0)))
+    expect(hu_hamming(0, 1) == 1, "hamming 0-1: " + str(hu_hamming(0, 1)))
+    expect(hu_hamming(0, 255) == 8, "hamming 0-255: " + str(hu_hamming(0, 255)))
+    expect(hu_hamming(0xF0, 0x0F) == 8, "hamming F0-0F: " + str(hu_hamming(240, 15)))
+    # 一致性
+    expect(hu_crc32("test") == hu_crc32("test"), "crc32 consistent")
+    expect(hu_adler32("test") == hu_adler32("test"), "adler32 consistent")
+    # ---- 从 checksum 合并的函数 ----
+    expect(crc32("hello") == 907060870, "crc32 compat: " + str(crc32("hello")))
+    expect(crc32_hex("hello") == "3610a686", "crc32_hex: " + crc32_hex("hello"))
+    expect(adler32("hello") == 103547413, "adler32 compat: " + str(adler32("hello")))
+    var c16 = crc16("123456789")
+    expect(c16 == 10673, "crc16 123456789: " + str(c16))
+    var c16h = crc16_hex("123456789")
+    expect(len(c16h) == 4, "crc16_hex len: " + c16h)
+    var f32 = fletcher32("hello")
+    expect(f32 > 0, "fletcher32: " + str(f32))
+    expect(checksum_verify("hello", "3610a686") == true, "checksum_verify true")
+    expect(checksum_verify("hello", "00000000") == false, "checksum_verify false")
+    var dg = hex_digest("hello")
+    expect(dg.contains("crc32") and dg.contains("crc16"), "hex_digest keys: " + str(dg))
+    print("hashutil: PASS")

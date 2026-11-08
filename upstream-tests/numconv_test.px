@@ -1,0 +1,44 @@
+# numconv 0.1.0 测试
+import "../registry/numconv/0.1.0/numconv.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # base_convert
+    expect(nc_base_convert("ff", 16, 10) == "255", "hex→dec: " + nc_base_convert("ff", 16, 10))
+    expect(nc_base_convert("255", 10, 16) == "ff", "dec→hex: " + nc_base_convert("255", 10, 16))
+    expect(nc_base_convert("1010", 2, 10) == "10", "bin→dec: " + nc_base_convert("1010", 2, 10))
+    expect(nc_base_convert("10", 10, 2) == "1010", "dec→bin: " + nc_base_convert("10", 10, 2))
+    expect(nc_base_convert("777", 8, 10) == "511", "oct→dec: " + nc_base_convert("777", 8, 10))
+    # 便捷函数
+    expect(nc_dec2bin(10) == "1010", "dec2bin: " + nc_dec2bin(10))
+    expect(nc_bin2dec("1010") == 10, "bin2dec: " + str(nc_bin2dec("1010")))
+    expect(nc_dec2hex(255) == "ff", "dec2hex: " + nc_dec2hex(255))
+    expect(nc_hex2dec("ff") == 255, "hex2dec: " + str(nc_hex2dec("ff")))
+    expect(nc_dec2oct(8) == "10", "dec2oct: " + nc_dec2oct(8))
+    expect(nc_oct2dec("10") == 8, "oct2dec: " + str(nc_oct2dec("10")))
+    # 高进制
+    expect(nc_to_base(63, 64) == "/", "base64 63: " + nc_to_base(63, 64))
+    expect(nc_from_base("10", 36) == 36, "base36 10: " + str(nc_from_base("10", 36)))
+    expect(nc_to_base(35, 36) == "z", "base36 35: " + nc_to_base(35, 36))
+    # 负数
+    expect(nc_to_base(-10, 2) == "-1010", "neg bin: " + nc_to_base(-10, 2))
+    # 罗马数字
+    expect(nc_dec2roman(1) == "I", "roman 1: " + nc_dec2roman(1))
+    expect(nc_dec2roman(4) == "IV", "roman 4: " + nc_dec2roman(4))
+    expect(nc_dec2roman(9) == "IX", "roman 9: " + nc_dec2roman(9))
+    expect(nc_dec2roman(49) == "XLIX", "roman 49: " + nc_dec2roman(49))
+    expect(nc_dec2roman(2024) == "MMXXIV", "roman 2024: " + nc_dec2roman(2024))
+    expect(nc_roman2dec("MMXXIV") == 2024, "roman2dec 2024: " + str(nc_roman2dec("MMXXIV")))
+    expect(nc_roman2dec("XLIX") == 49, "roman2dec 49: " + str(nc_roman2dec("XLIX")))
+    # 英文数字
+    expect(nc_dec2words(0) == "zero", "words 0: " + nc_dec2words(0))
+    expect(nc_dec2words(1) == "one", "words 1: " + nc_dec2words(1))
+    expect(nc_dec2words(15) == "fifteen", "words 15: " + nc_dec2words(15))
+    expect(nc_dec2words(42) == "forty-two", "words 42: " + nc_dec2words(42))
+    expect(nc_dec2words(100) == "one hundred", "words 100: " + nc_dec2words(100))
+    expect(nc_dec2words(1234) == "one thousand two hundred thirty-four", "words 1234: " + nc_dec2words(1234))
+    print("numconv: PASS")

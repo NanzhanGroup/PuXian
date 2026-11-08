@@ -1,0 +1,209 @@
+# ============================================================
+# 普贤生态库：registry/ctype — 字符类型检查
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP ctype_* 函数族：
+#   ct_alpha(s)    → 全字母
+#   ct_digit(s)    → 全数字
+#   ct_alnum(s)    → 全字母数字
+#   ct_upper(s)    → 全大写字母
+#   ct_lower(s)    → 全小写字母
+#   ct_space(s)    → 全空白字符
+#   ct_punct(s)    → 全标点符号
+#   ct_xdigit(s)   → 全十六进制数字
+#   ct_print(s)    → 全可打印字符
+#   ct_graph(s)    → 全可打印非空格字符
+#   ct_cntrl(s)    → 全控制字符
+#   ct_ascii(s)    → 全 ASCII
+# 单字符版本：ct_is_alpha(c) 等
+# ============================================================
+
+# ---- 单字符检查 ----
+def ct_is_alpha(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(to_lower(c)), 0)
+    return b >= 97 and b <= 122
+
+def ct_is_digit(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b >= 48 and b <= 57
+
+def ct_is_alnum(c):
+    return ct_is_alpha(c) or ct_is_digit(c)
+
+def ct_is_upper(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b >= 65 and b <= 90
+
+def ct_is_lower(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b >= 97 and b <= 122
+
+def ct_is_space(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b == 32 or b == 9 or b == 10 or b == 13 or b == 11 or b == 12
+
+def ct_is_punct(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return (b >= 33 and b <= 47) or (b >= 58 and b <= 64) or (b >= 91 and b <= 96) or (b >= 123 and b <= 126)
+
+def ct_is_xdigit(c):
+    if len(c) != 1:
+        return false
+    return ct_is_digit(c) or (to_lower(c) >= "a" and to_lower(c) <= "f")
+
+def ct_is_print(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b >= 32 and b <= 126
+
+def ct_is_graph(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b >= 33 and b <= 126
+
+def ct_is_cntrl(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b < 32 or b == 127
+
+def ct_is_ascii(c):
+    if len(c) != 1:
+        return false
+    var b = bytes_get(bytes(c), 0)
+    return b >= 0 and b <= 127
+
+# ---- 字符串检查（全字符满足条件） ----
+def ct_alpha(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_alpha(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_digit(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_digit(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_alnum(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_alnum(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_upper(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_upper(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_lower(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_lower(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_space(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_space(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_punct(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_punct(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_xdigit(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_xdigit(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_print(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_print(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_graph(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_graph(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_cntrl(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_cntrl(s[i]):
+            return false
+        i += 1
+    return true
+
+def ct_ascii(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not ct_is_ascii(s[i]):
+            return false
+        i += 1
+    return true

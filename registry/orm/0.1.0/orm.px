@@ -1,0 +1,61 @@
+# orm.px — 简化 ORM（对象关系映射，纯函数）
+# 版本: 0.1.0
+def orm_new(table, pk):
+    return {"_table": table, "_pk": pk, "_fields": [], "_hidden": []}
+def orm_field(orm_def, name, type_name):
+    orm_def["_fields"].append({"name": name, "type": type_name})
+    return orm_def
+def orm_hidden(orm_def, fields):
+    orm_def["_hidden"] = fields
+    return orm_def
+def orm_to_row(orm_def, obj):
+    var row = {}
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var name = orm_def["_fields"][i]["name"]
+        if obj.has(name):
+            row.set(name, obj[name])
+        i += 1
+    return row
+def orm_from_row(orm_def, row):
+    var obj = {}
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var name = orm_def["_fields"][i]["name"]
+        if row.has(name):
+            obj.set(name, row[name])
+        i += 1
+    return obj
+def orm_to_json(orm_def, obj):
+    var result = {}
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var name = orm_def["_fields"][i]["name"]
+        var skip = false
+        var j = 0
+        while j < len(orm_def["_hidden"]):
+            if orm_def["_hidden"][j] == name:
+                skip = true
+            j += 1
+        if not skip and obj.has(name):
+            result.set(name, obj[name])
+        i += 1
+    return result
+def orm_validate(orm_def, obj):
+    var errors = []
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var name = orm_def["_fields"][i]["name"]
+        var tp = orm_def["_fields"][i]["type"]
+        if not obj.has(name):
+            errors.append(name + " is missing")
+        elif tp == "int" and type(obj[name]) != "int":
+            errors.append(name + " must be int")
+        elif tp == "string" and type(obj[name]) != "string":
+            errors.append(name + " must be string")
+        i += 1
+    return errors
+def orm_table(orm_def):
+    return orm_def["_table"]
+def orm_pk(orm_def):
+    return orm_def["_pk"]

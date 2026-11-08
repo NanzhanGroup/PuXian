@@ -1,0 +1,79 @@
+# uuencode.px — uuencode/uudecode 编解码（PHP convert_uuencode/convert_uudecode）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   uu_encode(data)    → string  # uuencode 编码（list[int] → uu 格式）
+#   uu_decode(s)       → list[int]  # uudecode 解码
+
+def uu_get_byte(data, i, n):
+    if i < n:
+        return data[i]
+    return 0
+
+def uu_encode(data):
+    var n = len(data)
+    var out = "begin 644 <data>\n"
+    var i = 0
+    while i < n:
+        var cnt = n - i
+        if cnt > 45:
+            cnt = 45
+        out = out + chr(cnt + 32)
+        var j = i
+        var end = i + cnt
+        while j < end:
+            var b0 = uu_get_byte(data, j, n)
+            var b1 = uu_get_byte(data, j + 1, n)
+            var b2 = uu_get_byte(data, j + 2, n)
+            out = out + chr(((b0 >> 2) & 0x3F) + 32)
+            out = out + chr((((b0 << 4) | (b1 >> 4)) & 0x3F) + 32)
+            out = out + chr((((b1 << 2) | (b2 >> 6)) & 0x3F) + 32)
+            out = out + chr((b2 & 0x3F) + 32)
+            j += 3
+        out = out + "\n"
+        i += cnt
+    out = out + "`\nend\n"
+    return out
+
+def uu_decode_char(c):
+    var n = ord(c)
+    if n >= 32:
+        return n - 32
+    return 0
+
+def uu_decode(s):
+    var lines = s.split("\n")
+    var out = []
+    var i = 0
+    while i < len(lines):
+        if len(lines[i]) >= 6 and lines[i][:6] == "begin ":
+            i += 1
+            break
+        i += 1
+    while i < len(lines):
+        var line = lines[i]
+        if line == "`" or line == "end" or len(line) == 0:
+            break
+        var cnt = uu_decode_char(line[0])  # line[0] is a string char
+        if cnt <= 0:
+            break
+        var j = 1
+        var remaining = cnt
+        while j + 3 <= len(line) and remaining > 0:
+            var c0 = uu_decode_char(line[j])
+            var c1 = uu_decode_char(line[j + 1])
+            var c2 = uu_decode_char(line[j + 2])
+            var c3 = uu_decode_char(line[j + 3])
+            if remaining > 0:
+                out.append(((c0 << 2) | (c1 >> 4)) & 0xFF)
+                remaining -= 1
+            if remaining > 0:
+                out.append((((c1 << 4) | (c2 >> 2)) & 0xFF))
+                remaining -= 1
+            if remaining > 0:
+                out.append((((c2 << 6) | c3) & 0xFF))
+                remaining -= 1
+            j += 4
+        i += 1
+    return out

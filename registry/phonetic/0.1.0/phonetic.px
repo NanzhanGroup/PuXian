@@ -1,0 +1,311 @@
+# ============================================================
+# 普贤生态库：registry/phonetic —— 语音编码
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP soundex / metaphone、Python jellyfish、Go xstrings：
+#   ph_soundex(s)     → Soundex 编码（4 字符，如 "Robert" → "R163"）
+#   ph_metaphone(s)   → Metaphone 编码（简化版，如 "Smith" → "SM0"）
+#   ph_nysiis(s)      → NYSIIS 编码（New York State Identification）
+#   ph_match(a, b)    → 两字符串语音是否相似（soundex 相同）
+#   ph_distance(a, b) → 语音编辑距离（soundex 差异字符数）
+# ============================================================
+
+# ---- Soundex 编码 ----
+# 规则（美国国家标准 ANSI Z39.2）：
+# 1. 首字母保留 + 编码
+# 2. 编码表：b/f/p/v→1, c/g/j/k/q/s/x/z→2, d/t→3, l→4, m/n→5, r→6
+# 3. 元音 a/e/i/o/u/y/h/w → 0（不编码）
+# 4. 相邻相同编码只保留一个
+# 5. 补零至 4 字符，截断至 4 字符
+def ph_soundex(s):
+    if len(s) == 0:
+        return "0000"
+    s = to_upper(s)
+    var codes = {"B": "1", "F": "1", "P": "1", "V": "1",
+        "C": "2", "G": "2", "J": "2", "K": "2", "Q": "2", "S": "2", "X": "2", "Z": "2",
+        "D": "3", "T": "3",
+        "L": "4",
+        "M": "5", "N": "5",
+        "R": "6"}
+    var result = s[0]
+    var prev_code = "0"
+    if codes.contains(s[0]):
+        prev_code = codes[s[0]]
+    var i = 1
+    while i < len(s) and len(result) < 4:
+        var c = s[i]
+        if codes.contains(c):
+            var code = codes[c]
+            if code != prev_code:
+                result = result + code
+            prev_code = code
+        elif c == "H" or c == "W":
+            # H/W 不改变 prev_code（透明）
+            0
+        else:
+            prev_code = "0"
+        i += 1
+    while len(result) < 4:
+        result = result + "0"
+    return result
+
+# ---- Metaphone 编码（简化版） ----
+# 基于 Lawrence Philips Metaphone 算法的简化实现
+def ph_metaphone(s):
+    if len(s) == 0:
+        return ""
+    s = to_upper(s)
+    # 元音
+    var vowels = "AEIOU"
+    # 替换常见变体
+    # 静音开头字母
+    if len(s) >= 2 and s[0:2] == "GN" or s[0:2] == "KN" or s[0:2] == "PN" or s[0:2] == "WR" or s[0:2] == "AE":
+        s = s[1:len(s)]
+    if len(s) >= 1 and s[0] == "X":
+        s = "S" + s[1:len(s)]
+    var result = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        var next_c = ""
+        if i + 1 < n:
+            next_c = s[i + 1]
+        var next2_c = ""
+        if i + 2 < n:
+            next2_c = s[i + 2]
+        # 跳过重复字母（除 C 外）
+        if i > 0 and c == s[i - 1] and c != "C":
+            i += 1
+            continue
+        if c == "A" or c == "E" or c == "I" or c == "O" or c == "U":
+            if i == 0:
+                result = result + c
+            i += 1
+            continue
+        elif c == "B":
+            if not (i > 0 and s[i - 1] == "M"):
+                result = result + "B"
+            i += 1
+            continue
+        elif c == "C":
+            if next_c == "H":
+                result = result + "X"
+                i += 2
+                continue
+            elif next_c == "I" or next_c == "E" or next_c == "Y":
+                result = result + "S"
+            else:
+                result = result + "K"
+            i += 1
+            continue
+        elif c == "D":
+            if next_c == "G" and (next2_c == "I" or next2_c == "E" or next2_c == "Y"):
+                result = result + "J"
+                i += 2
+                continue
+            result = result + "T"
+            i += 1
+            continue
+        elif c == "F":
+            result = result + "F"
+            i += 1
+            continue
+        elif c == "G":
+            if next_c == "H":
+                if i + 2 < n and not (next2_c == "A" or next2_c == "E" or next2_c == "I" or next2_c == "O" or next2_c == "U"):
+                    # 静音 GH
+                    i += 2
+                    continue
+                result = result + "K"
+                i += 2
+                continue
+            elif next_c == "N":
+                i += 1
+                continue
+            elif i > 0 and s[i - 1] == "G":
+                i += 1
+                continue
+            result = result + "K"
+            i += 1
+            continue
+        elif c == "H":
+            if i > 0:
+                var prev = s[i - 1]
+                if prev == "A" or prev == "E" or prev == "I" or prev == "O" or prev == "U":
+                    result = result + "H"
+            i += 1
+            continue
+        elif c == "J":
+            result = result + "J"
+            i += 1
+            continue
+        elif c == "K":
+            result = result + "K"
+            i += 1
+            continue
+        elif c == "L":
+            result = result + "L"
+            i += 1
+            continue
+        elif c == "M":
+            result = result + "M"
+            i += 1
+            continue
+        elif c == "N":
+            result = result + "N"
+            i += 1
+            continue
+        elif c == "P":
+            if next_c == "H":
+                result = result + "F"
+                i += 2
+                continue
+            result = result + "P"
+            i += 1
+            continue
+        elif c == "Q":
+            result = result + "K"
+            i += 1
+            continue
+        elif c == "R":
+            result = result + "R"
+            i += 1
+            continue
+        elif c == "S":
+            if next_c == "H":
+                result = result + "X"
+                i += 2
+                continue
+            elif next_c == "I" or next_c == "O":
+                if next2_c == "A":
+                    result = result + "X"
+                    i += 3
+                    continue
+            result = result + "S"
+            i += 1
+            continue
+        elif c == "T":
+            if next_c == "H":
+                result = result + "0"
+                i += 2
+                continue
+            elif next_c == "I" or next_c == "O":
+                if next2_c == "A":
+                    result = result + "X"
+                    i += 3
+                    continue
+            result = result + "T"
+            i += 1
+            continue
+        elif c == "V":
+            result = result + "F"
+            i += 1
+            continue
+        elif c == "W":
+            if next_c == "H":
+                i += 2
+                continue
+            if next_c == "A" or next_c == "E" or next_c == "I" or next_c == "O" or next_c == "U":
+                result = result + "W"
+            i += 1
+            continue
+        elif c == "X":
+            result = result + "KS"
+            i += 1
+            continue
+        elif c == "Y":
+            if next_c == "A" or next_c == "E" or next_c == "I" or next_c == "O" or next_c == "U":
+                result = result + "Y"
+            i += 1
+            continue
+        elif c == "Z":
+            result = result + "S"
+            i += 1
+            continue
+        i += 1
+    return result
+
+# ---- NYSIIS 编码 ----
+def ph_nysiis(s):
+    if len(s) == 0:
+        return ""
+    s = to_upper(s)
+    # 前缀替换
+    if len(s) >= 2 and s[0:2] == "MA":
+        s = "M" + s[2:len(s)]
+    elif len(s) >= 2 and s[0:2] == "PH":
+        s = "F" + s[2:len(s)]
+    # 后缀替换
+    if len(s) >= 2 and s[len(s) - 2:len(s)] == "EE":
+        s = s[0:len(s) - 2] + "Y"
+    elif len(s) >= 1 and s[len(s) - 1] == "E":
+        s = s[0:len(s) - 1]
+    # 逐字符转换
+    var result = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        var next_c = ""
+        if i + 1 < len(s):
+            next_c = s[i + 1]
+        if c == "A" or c == "E" or c == "I" or c == "O" or c == "U":
+            if len(result) == 0 or result[len(result) - 1] != "A":
+                result = result + "A"
+        elif c == "J":
+            result = result + "Y"
+        elif c == "K":
+            result = result + "C"
+        elif c == "M" or c == "N":
+            if len(result) == 0 or result[len(result) - 1] != "N":
+                result = result + "N"
+        elif c == "Q":
+            result = result + "G"
+        elif c == "S" or c == "Z":
+            if len(result) == 0 or result[len(result) - 1] != "S":
+                result = result + "S"
+        elif c == "T":
+            result = result + "T"
+        elif c == "V":
+            result = result + "A"
+        elif c == "W":
+            result = result + "A"
+        elif c == "H":
+            if i > 0:
+                var prev = s[i - 1]
+                if prev == "A" or prev == "E" or prev == "I" or prev == "O" or prev == "U":
+                    0
+                else:
+                    result = result + c
+            else:
+                result = result + c
+        elif c == "Y":
+            0
+        else:
+            result = result + c
+        i += 1
+    # 去除连续重复
+    var final = ""
+    var j = 0
+    while j < len(result):
+        if len(final) == 0 or final[len(final) - 1] != result[j]:
+            final = final + result[j]
+        j += 1
+    return final
+
+# ---- 语音是否相似 ----
+def ph_match(a, b):
+    return ph_soundex(a) == ph_soundex(b)
+
+# ---- 语音编辑距离 ----
+def ph_distance(a, b):
+    var sa = ph_soundex(a)
+    var sb = ph_soundex(b)
+    var d = 0
+    var i = 0
+    while i < len(sa) and i < len(sb):
+        if sa[i] != sb[i]:
+            d += 1
+        i += 1
+    d = d + abs(len(sa) - len(sb))
+    return d

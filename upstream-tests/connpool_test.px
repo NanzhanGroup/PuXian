@@ -1,0 +1,35 @@
+# connpool 0.1.0 测试
+import "../registry/connpool/0.1.0/connpool.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var pool = cp_new(3)
+    expect(cp_max_size(pool) == 3, "max size 3")
+    # acquire 3 connections
+    var c1 = cp_acquire(pool)
+    expect(c1["ok"] == true, "c1 ok")
+    expect(c1["id"] == 0, "c1 id 0")
+    var c2 = cp_acquire(pool)
+    expect(c2["id"] == 1, "c2 id 1")
+    var c3 = cp_acquire(pool)
+    expect(c3["id"] == 2, "c3 id 2")
+    # pool full
+    expect(cp_available(pool) == false, "pool full")
+    var c4 = cp_acquire(pool)
+    expect(c4["ok"] == false, "c4 not ok")
+    # release one
+    cp_release(pool, 1)
+    expect(cp_available(pool) == true, "available after release")
+    expect(cp_idle_count(pool) == 1, "idle 1")
+    # acquire reused
+    var c5 = cp_acquire(pool)
+    expect(c5["ok"] == true, "c5 ok")
+    expect(c5["id"] == 1, "c5 reuses id 1: " + str(c5["id"]))
+    # stats
+    var stats = cp_stats(pool)
+    expect(stats["max"] == 3, "stats max 3")
+    expect(stats["total"] == 3, "stats total 3")
+    expect(stats["active"] == 3, "stats active 3: " + str(stats["active"]))
+    print("connpool: PASS")

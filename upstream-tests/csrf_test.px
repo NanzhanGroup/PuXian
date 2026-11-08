@@ -1,0 +1,28 @@
+# csrf 0.1.0 测试
+import "../registry/csrf/0.1.0/csrf.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # generate
+    var token = csrf_generate(16)
+    expect(len(token) == 32, "generate hex len: " + str(len(token)))
+    var token2 = csrf_generate(16)
+    expect(token != token2, "generate random")
+    # verify
+    expect(csrf_verify(token, token) == true, "verify same")
+    expect(csrf_verify(token, token2) == false, "verify different")
+    expect(csrf_verify("abc", "abcd") == false, "verify diff length")
+    expect(csrf_verify("", "") == true, "verify empty same")
+    # field name / session key
+    expect(csrf_field_name() == "_csrf_token", "field name")
+    expect(csrf_session_key() == "csrf_token", "session key")
+    # HTML tags
+    var meta = csrf_meta_tag(token)
+    expect(meta.contains('name="csrf-token"'), "meta tag: " + meta)
+    expect(meta.contains(token), "meta contains token")
+    var input = csrf_input_tag(token)
+    expect(input.contains('type="hidden"'), "input tag: " + input)
+    expect(input.contains(token), "input contains token")
+    print("csrf: PASS")

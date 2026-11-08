@@ -1,0 +1,262 @@
+# ============================================================
+# 普贤生态库：registry/htmlsanitizer — HTML 清洗 / XSS 防护
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP htmlspecialchars / HTML Purifier / Python bleach：
+#   hs_escape(text)           → HTML 实体转义（& < > " '）
+#   hs_unescape(text)         → HTML 实体反转义
+#   hs_strip_tags(text, allowed) → 去除不允许的 HTML 标签
+#   hs_strip_attrs(text, banned) → 去除危险属性
+#   hs_sanitize(text, options)   → 综合清洗（去标签+去属性+转义）
+#   hs_remove_scripts(text)   → 去除 <script> 标签及内容
+#   hs_remove_styles(text)    → 去除 <style> 标签及内容
+#   hs_remove_comments(text)  → 去除 HTML 注释
+#   hs_clean_url(url)         → 清洗 URL（去 javascript: 等）
+#   hs_is_safe_url(url)       → 判断 URL 是否安全
+#   hs_encode_attr(text)      → 属性值转义
+# ============================================================
+
+# ---- HTML 实体转义 ----
+def hs_escape(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        if c == "&":
+            result = result + "&amp;"
+        elif c == "<":
+            result = result + "&lt;"
+        elif c == ">":
+            result = result + "&gt;"
+        elif c == "\"":
+            result = result + "&quot;"
+        elif c == "'":
+            result = result + "&#39;"
+        else:
+            result = result + c
+        i += 1
+    return result
+
+# ---- HTML 实体反转义 ----
+def hs_unescape(text):
+    var result = text
+    result = hs_replace_all(result, "&amp;", "&")
+    result = hs_replace_all(result, "&lt;", "<")
+    result = hs_replace_all(result, "&gt;", ">")
+    result = hs_replace_all(result, "&quot;", "\"")
+    result = hs_replace_all(result, "&#39;", "'")
+    result = hs_replace_all(result, "&#x27;", "'")
+    result = hs_replace_all(result, "&nbsp;", " ")
+    return result
+
+# ---- 辅助：全局替换 ----
+def hs_replace_all(text, old, new):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if i + len(old) <= len(text) and text[i : i + len(old)] == old:
+            result = result + new
+            i = i + len(old)
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# ---- 去除 HTML 注释 ----
+def hs_remove_comments(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if i + 4 <= len(text) and text[i : i + 4] == "<!--":
+            var j = i + 4
+            while j + 3 <= len(text):
+                if text[j : j + 3] == "-->":
+                    i = j + 3
+                    break
+                j += 1
+            if j + 3 > len(text):
+                i = len(text)
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# ---- 去除 <script> 标签及内容 ----
+def hs_remove_scripts(text):
+    return hs_remove_tag_content(text, "script")
+
+# ---- 去除 <style> 标签及内容 ----
+def hs_remove_styles(text):
+    return hs_remove_tag_content(text, "style")
+
+# ---- 辅助：去除标签及其内容 ----
+def hs_remove_tag_content(text, tag):
+    var result = ""
+    var lower = hs_to_lower(text)
+    var open_tag = "<" + tag
+    var close_tag = "</" + tag
+    var i = 0
+    while i < len(text):
+        if i + len(open_tag) <= len(text) and lower[i : i + len(open_tag)] == open_tag:
+            # 找到 > 结束开标签
+            var j = i + len(open_tag)
+            while j < len(text) and text[j] != ">":
+                j += 1
+            j += 1
+            # 找到 </tag>
+            var k = j
+            var found = false
+            while k + len(close_tag) <= len(text):
+                if hs_to_lower(text[k : k + len(close_tag)]) == close_tag:
+                    # 找到 > 结束闭标签
+                    var m = k + len(close_tag)
+                    while m < len(text) and text[m] != ">":
+                        m += 1
+                    i = m + 1
+                    found = true
+                    break
+                k += 1
+            if not found:
+                i = len(text)
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# ---- 辅助：转小写 ----
+def hs_to_lower(s):
+    var result = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c >= "A" and c <= "Z":
+            result = result + chr(ord(c) + 32)
+        else:
+            result = result + c
+        i += 1
+    return result
+
+# ---- 去除不允许的 HTML 标签 ----
+# allowed = ["b", "i", "a", "p", "br"]
+def hs_strip_tags(text, allowed = []):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if text[i] == "<":
+            # 找到 >
+            var j = i + 1
+            while j < len(text) and text[j] != ">":
+                j += 1
+            if j < len(text):
+                var tag_content = text[i + 1 : j]
+                var tag_name = hs_extract_tag_name(tag_content)
+                var is_allowed = false
+                var k = 0
+                while k < len(allowed):
+                    if hs_to_lower(allowed[k]) == hs_to_lower(tag_name):
+                        is_allowed = true
+                        break
+                    k += 1
+                if is_allowed:
+                    result = result + text[i : j + 1]
+                i = j + 1
+            else:
+                result = result + text[i]
+                i += 1
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# ---- 辅助：提取标签名 ----
+def hs_extract_tag_name(content):
+    var name = ""
+    var i = 0
+    if i < len(content) and content[i] == "/":
+        i += 1
+    while i < len(content):
+        var c = content[i]
+        if c == " " or c == "/" or c == "\t" or c == "\n":
+            break
+        name = name + c
+        i += 1
+    return name
+
+# ---- 去除危险属性 ----
+# banned = ["onload", "onclick", "onerror", "onmouseover", "javascript"]
+def hs_strip_attrs(text, banned = []):
+    if len(banned) == 0:
+        banned = ["onload", "onclick", "onerror", "onmouseover", "onmouseout", "onfocus", "onblur", "onsubmit", "onchange", "onkeyup", "onkeydown", "javascript:"]
+    var result = text
+    var i = 0
+    while i < len(banned):
+        var lower = hs_to_lower(result)
+        var ban = hs_to_lower(banned[i])
+        # 去除属性（不区分大小写）
+        var new_result = ""
+        var j = 0
+        while j < len(result):
+            if j + len(ban) <= len(result) and lower[j : j + len(ban)] == ban:
+                j = j + len(ban)
+            else:
+                new_result = new_result + result[j]
+                j += 1
+        result = new_result
+        i += 1
+    return result
+
+# ---- 判断 URL 是否安全 ----
+def hs_is_safe_url(url):
+    var lower = hs_to_lower(url)
+    if lower.contains("javascript:"):
+        return false
+    if lower.contains("data:"):
+        return false
+    if lower.contains("vbscript:"):
+        return false
+    return true
+
+# ---- 清洗 URL ----
+def hs_clean_url(url):
+    if not hs_is_safe_url(url):
+        return ""
+    return url
+
+# ---- 属性值转义 ----
+def hs_encode_attr(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        if c == "&":
+            result = result + "&amp;"
+        elif c == "\"":
+            result = result + "&quot;"
+        elif c == "'":
+            result = result + "&#39;"
+        elif c == "<":
+            result = result + "&lt;"
+        elif c == ">":
+            result = result + "&gt;"
+        else:
+            result = result + c
+        i += 1
+    return result
+
+# ---- 综合清洗 ----
+def hs_sanitize(text, options = {}):
+    var result = text
+    # 去注释
+    result = hs_remove_comments(result)
+    # 去 script
+    result = hs_remove_scripts(result)
+    # 去 style
+    result = hs_remove_styles(result)
+    # 去危险属性
+    result = hs_strip_attrs(result)
+    # 去标签
+    var allowed = ["b", "i", "em", "strong", "p", "br"]
+    if options.contains("allowed"):
+        allowed = options["allowed"]
+    result = hs_strip_tags(result, allowed)
+    return result

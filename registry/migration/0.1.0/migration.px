@@ -1,0 +1,76 @@
+# migration.px — schema 迁移工具（纯函数）
+# 版本: 0.1.0
+def mig_new():
+    return {"_migrations": []}
+def mig_add(migrator, version, name, up_sql, down_sql):
+    migrator["_migrations"].append({"version": version, "name": name, "up": up_sql, "down": down_sql})
+    return migrator
+def mig_get_pending(migrator, applied_versions):
+    var result = []
+    var i = 0
+    while i < len(migrator["_migrations"]):
+        var m = migrator["_migrations"][i]
+        var is_applied = false
+        var j = 0
+        while j < len(applied_versions):
+            if applied_versions[j] == m["version"]:
+                is_applied = true
+            j += 1
+        if not is_applied:
+            result.append(m)
+        i += 1
+    return result
+def mig_get_up_sql(migrator, version):
+    var i = 0
+    while i < len(migrator["_migrations"]):
+        if migrator["_migrations"][i]["version"] == version:
+            return migrator["_migrations"][i]["up"]
+        i += 1
+    return ""
+def mig_get_down_sql(migrator, version):
+    var i = 0
+    while i < len(migrator["_migrations"]):
+        if migrator["_migrations"][i]["version"] == version:
+            return migrator["_migrations"][i]["down"]
+        i += 1
+    return ""
+def mig_plan_up(migrator, applied_versions):
+    var pending = mig_get_pending(migrator, applied_versions)
+    var result = []
+    var i = 0
+    while i < len(pending):
+        result.append({"version": pending[i]["version"], "name": pending[i]["name"], "sql": pending[i]["up"]})
+        i += 1
+    return result
+def mig_plan_rollback(migrator, target_version, applied_versions):
+    var result = []
+    var i = len(applied_versions) - 1
+    while i >= 0:
+        if applied_versions[i] <= target_version:
+            break
+        var down = mig_get_down_sql(migrator, applied_versions[i])
+        result.append({"version": applied_versions[i], "sql": down})
+        i -= 1
+    return result
+def mig_count(migrator):
+    return len(migrator["_migrations"])
+
+def mig_get_version(migrator, version):
+    var i = 0
+    while i < len(migrator["_migrations"]):
+        if migrator["_migrations"][i]["version"] == version:
+            return migrator["_migrations"][i]
+        i += 1
+    return null
+def mig_latest(migrator):
+    if len(migrator["_migrations"]) == 0:
+        return 0
+    var latest = 0
+    var i = 0
+    while i < len(migrator["_migrations"]):
+        if migrator["_migrations"][i]["version"] > latest:
+            latest = migrator["_migrations"][i]["version"]
+        i += 1
+    return latest
+def mig_applied_count(applied_versions):
+    return len(applied_versions)

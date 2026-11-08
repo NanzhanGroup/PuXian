@@ -1,0 +1,43 @@
+# memcached 0.1.0 测试
+import "../registry/memcached/0.1.0/memcached.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # set
+    var set_cmd = mc_build_set("key1", "value1", 0, 0)
+    expect(set_cmd.find("set key1 0 0 6") >= 0, "set cmd: " + set_cmd)
+    expect(set_cmd.find("value1") >= 0, "set has value")
+    # get
+    var get_cmd = mc_build_get("key1")
+    expect(get_cmd == "get key1\r\n", "get cmd: " + get_cmd)
+    # get multi
+    var getm = mc_build_get_multi(["k1", "k2", "k3"])
+    expect(getm.find("k1") >= 0, "get multi k1")
+    expect(getm.find("k3") >= 0, "get multi k3")
+    # delete
+    var del_cmd = mc_build_delete("key1")
+    expect(del_cmd == "delete key1\r\n", "delete: " + del_cmd)
+    # increment
+    var inc = mc_build_increment("counter", 1)
+    expect(inc.find("incr counter 1") >= 0, "incr: " + inc)
+    # flush
+    expect(mc_build_flush() == "flush_all\r\n", "flush")
+    # stats
+    expect(mc_build_stats() == "stats\r\n", "stats")
+    # parse response
+    var resp = "VALUE key1 0 6\r\nvalue1\r\nEND\r\n"
+    var parsed = mc_parse_response(resp)
+    expect(len(parsed) == 1, "parsed 1: " + str(len(parsed)))
+    expect(parsed[0]["type"] == "value", "parsed type")
+    expect(parsed[0]["key"] == "key1", "parsed key")
+    expect(parsed[0]["length"] == 6, "parsed length")
+    # extract value
+    var val = mc_extract_value(resp)
+    expect(val == "value1", "extract value: " + val)
+    # status
+    var st = mc_parse_response("STORED\r\n")
+    expect(st[0]["type"] == "status", "status type")
+    expect(st[0]["value"] == "STORED", "status value")
+    print("memcached: PASS")

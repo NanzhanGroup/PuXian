@@ -1,0 +1,196 @@
+# ============================================================
+# 普贤生态库：registry/numconv — 数制转换
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP base_convert / decbin / bindec / dechex / hexdec / decoct / octdec：
+#   nc_base_convert(num, from_base, to_base) → 任意进制转换
+#   nc_to_base(n, base)         → 整数→指定进制字符串
+#   nc_from_base(s, base)       → 指定进制字符串→整数
+#   nc_dec2bin(n) / nc_bin2dec(s)
+#   nc_dec2hex(n) / nc_hex2dec(s)
+#   nc_dec2oct(n) / nc_oct2dec(s)
+#   nc_dec2roman(n)             → 整数→罗马数字
+#   nc_roman2dec(s)             → 罗马数字→整数
+#   nc_dec2words(n)             → 英文数字单词（简易版）
+# ============================================================
+
+var NC_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+/"
+# 支持最高 64 进制
+
+# ---- 整数→指定进制字符串 ----
+def nc_to_base(n, base):
+    if base < 2 or base > 64:
+        return ""
+    if n == 0:
+        return "0"
+    var neg = false
+    if n < 0:
+        neg = true
+        n = 0 - n
+    var out = ""
+    while n > 0:
+        out = NC_DIGITS[n % base] + out
+        n = n // base
+    if neg:
+        out = "-" + out
+    return out
+
+# ---- 指定进制字符串→整数 ----
+def nc_from_base(s, base):
+    if base < 2 or base > 64:
+        return 0
+    if len(s) == 0:
+        return 0
+    var neg = false
+    if s[0] == "-":
+        neg = true
+        s = s[1:len(s)]
+    var result = 0
+    var i = 0
+    while i < len(s):
+        var c = to_lower(s[i])
+        var v = 0
+        if c >= "0" and c <= "9":
+            v = bytes_get(bytes(c), 0) - 48
+        elif c >= "a" and c <= "z":
+            v = bytes_get(bytes(c), 0) - 87
+        elif c == "+":
+            v = 62
+        elif c == "/":
+            v = 63
+        else:
+            return 0
+        if v >= base:
+            return 0
+        result = result * base + v
+        i += 1
+    if neg:
+        result = 0 - result
+    return result
+
+# ---- 任意进制转换 ----
+def nc_base_convert(num, from_base, to_base):
+    var n = nc_from_base(num, from_base)
+    return nc_to_base(n, to_base)
+
+# ---- 便捷函数 ----
+def nc_dec2bin(n):
+    return nc_to_base(n, 2)
+def nc_bin2dec(s):
+    return nc_from_base(s, 2)
+def nc_dec2hex(n):
+    return nc_to_base(n, 16)
+def nc_hex2dec(s):
+    return nc_from_base(s, 16)
+def nc_dec2oct(n):
+    return nc_to_base(n, 8)
+def nc_oct2dec(s):
+    return nc_from_base(s, 8)
+
+# ---- 罗马数字 ----
+def nc_dec2roman(n):
+    if n <= 0 or n >= 4000:
+        return ""
+    var values = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    var symbols = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    var out = ""
+    var i = 0
+    while i < len(values):
+        while n >= values[i]:
+            out = out + symbols[i]
+            n = n - values[i]
+        i += 1
+    return out
+
+# ---- 罗马数字→整数 ----
+def nc_roman2dec(s):
+    if len(s) == 0:
+        return 0
+    s = to_upper(s)
+    var result = 0
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        var next_c = ""
+        if i + 1 < len(s):
+            next_c = s[i + 1]
+        # 双字符优先
+        if i + 1 < len(s):
+            var two = c + next_c
+            if two == "CM":
+                result += 900
+                i += 2
+                continue
+            elif two == "CD":
+                result += 400
+                i += 2
+                continue
+            elif two == "XC":
+                result += 90
+                i += 2
+                continue
+            elif two == "XL":
+                result += 40
+                i += 2
+                continue
+            elif two == "IX":
+                result += 9
+                i += 2
+                continue
+            elif two == "IV":
+                result += 4
+                i += 2
+                continue
+        if c == "M":
+            result += 1000
+        elif c == "D":
+            result += 500
+        elif c == "C":
+            result += 100
+        elif c == "L":
+            result += 50
+        elif c == "X":
+            result += 10
+        elif c == "V":
+            result += 5
+        elif c == "I":
+            result += 1
+        else:
+            return 0
+        i += 1
+    return result
+
+# ---- 英文数字单词（简易版，0-9999） ----
+def nc_dec2words(n):
+    if n == 0:
+        return "zero"
+    var neg = false
+    if n < 0:
+        neg = true
+        n = 0 - n
+    var ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+    var teens = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+    var tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+    var out = ""
+    if n >= 1000:
+        out = ones[n // 1000] + " thousand"
+        n = n % 1000
+        if n > 0:
+            out = out + " "
+    if n >= 100:
+        out = out + ones[n // 100] + " hundred"
+        n = n % 100
+        if n > 0:
+            out = out + " "
+    if n >= 20:
+        out = out + tens[n // 10]
+        n = n % 10
+        if n > 0:
+            out = out + "-" + ones[n]
+    elif n >= 10:
+        out = out + teens[n - 10]
+    elif n > 0:
+        out = out + ones[n]
+    if neg:
+        out = "minus " + out
+    return out

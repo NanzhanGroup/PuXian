@@ -1,0 +1,123 @@
+# ============================================================
+# 普贤生态库：registry/phpser — PHP serialize/unserialize 格式
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP serialize() / unserialize()：
+#   ps_serialize(val)  → PHP 序列化字符串
+#   ps_unserialize(s)  → 反序列化（返回 dict/list/string/int/float/bool/null）
+#
+# 支持类型：
+#   N;          → null
+#   b:0; / b:1; → bool
+#   i:42;       → int
+#   d:3.14;     → double
+#   s:5:"Hello"; → string
+#   a:2:{i:0;s:1:"a";i:1;s:1:"b";} → array
+#
+# 限制：
+#   - PuXian dict 键必须为 string，整数键转为字符串
+#   - 不支持 PHP 对象序列化 (O:...)
+#   - 不支持引用 (R:;, r:;)
+# ============================================================
+
+# ---- 序列化 ----
+def ps_serialize(val):
+    var t = type(val)
+    if t == "null":
+        return "N;"
+    elif t == "bool":
+        if val:
+            return "b:1;"
+        return "b:0;"
+    elif t == "int":
+        return "i:" + str(val) + ";"
+    elif t == "float":
+        return "d:" + str(val) + ";"
+    elif t == "string":
+        return "s:" + str(len(val)) + ":\"" + val + "\";"
+    elif t == "list":
+        var out = "a:" + str(len(val)) + ":{"
+        var i = 0
+        while i < len(val):
+            out = out + ps_serialize(i)
+            out = out + ps_serialize(val[i])
+            i += 1
+        out = out + "}"
+        return out
+    elif t == "dict":
+        var keys = val.keys()
+        var out = "a:" + str(len(keys)) + ":{"
+        var i = 0
+        while i < len(keys):
+            out = out + ps_serialize(keys[i])
+            out = out + ps_serialize(val[keys[i]])
+            i += 1
+        out = out + "}"
+        return out
+    return "N;"
+
+# ---- 反序列化 ----
+# 返回 [value, consumed_chars]
+def ps_parse(s, pos):
+    if pos >= len(s):
+        return [null, 0]
+    var c = s[pos]
+    if c == "N":
+        return [null, 2]
+    elif c == "b":
+        var val = s[pos + 2] == "1"
+        return [val, 4]
+    elif c == "i":
+        var i = pos + 2
+        var num_str = ""
+        while i < len(s) and s[i] != ";":
+            num_str = num_str + s[i]
+            i += 1
+        return [int(num_str), i - pos + 1]
+    elif c == "d":
+        var i = pos + 2
+        var num_str = ""
+        while i < len(s) and s[i] != ";":
+            num_str = num_str + s[i]
+            i += 1
+        return [float(num_str), i - pos + 1]
+    elif c == "s":
+        # s:LEN:"VAL";
+        var i = pos + 2
+        var len_str = ""
+        while i < len(s) and s[i] != ":":
+            len_str = len_str + s[i]
+            i += 1
+        var str_len = int(len_str)
+        i += 2  # 跳过 :"
+        var val = s[i:i + str_len]
+        i = i + str_len + 2  # 跳过 ";
+        return [val, i - pos]
+    elif c == "a":
+        # a:COUNT:{...}
+        var i = pos + 2
+        var count_str = ""
+        while i < len(s) and s[i] != ":":
+            count_str = count_str + s[i]
+            i += 1
+        var count = int(count_str)
+        i += 2  # 跳过 :{
+        var result = {}
+        var idx = 0
+        while idx < count:
+            var key_parsed = ps_parse(s, i)
+            var key = key_parsed[0]
+            i = i + key_parsed[1]
+            var val_parsed = ps_parse(s, i)
+            var val = val_parsed[0]
+            i = i + val_parsed[1]
+            result[str(key)] = val
+            idx += 1
+        i += 1  # 跳过 }
+        return [result, i - pos]
+    return [null, 1]
+
+# ---- 反序列化（公开接口） ----
+def ps_unserialize(s):
+    var result = ps_parse(s, 0)
+    return result[0]

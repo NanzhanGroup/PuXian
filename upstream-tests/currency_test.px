@@ -1,0 +1,32 @@
+# currency 0.1.0 测试
+import "../registry/currency/0.1.0/currency.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var c = cur_new({})
+    cur_add_rate(c, "USD", "CNY", 7.2)
+    cur_add_rate(c, "USD", "EUR", 0.9)
+    # convert direct
+    var r1 = cur_convert(c, "USD", "CNY", 100)
+    expect(r1 == 720.0, "USD→CNY 100: " + str(r1))
+    # convert reverse
+    var r2 = cur_convert(c, "CNY", "USD", 720)
+    expect(r2 == 100.0, "CNY→USD 720: " + str(r2))
+    # convert same
+    var r3 = cur_convert(c, "USD", "USD", 50)
+    expect(r3 == 50.0, "same currency: " + str(r3))
+    # format
+    expect(cur_format(1234.5, "USD") == "1234.50 USD", "format: " + cur_format(1234.5, "USD"))
+    # format negative
+    expect(cur_format(-100, "EUR") == "-100.00 EUR", "format neg: " + cur_format(-100, "EUR"))
+    # round
+    expect(cur_round(1234.567) == 1234.57, "round: " + str(cur_round(1234.567)))
+    # format signed
+    expect(cur_format_signed(100, "USD") == "+100.00 USD", "signed pos: " + cur_format_signed(100, "USD"))
+    expect(cur_format_signed(-50, "EUR") == "-50.00 EUR", "signed neg: " + cur_format_signed(-50, "EUR"))
+    # list
+    var rates = cur_list(c)
+    expect(len(rates) == 2, "2 rates: " + str(len(rates)))
+    print("currency: PASS")

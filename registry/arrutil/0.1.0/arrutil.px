@@ -1,0 +1,296 @@
+# ============================================================
+# 普贤生态库：registry/arrutil —— 数组工具函数
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP 数组函数族 + Python itertools 补充：
+#   arr_flip(d)           → dict 键值翻转 {"a":1,"b":2} → {1:"a",2:"b"}
+#   arr_column(rows, key) → 从二维数组提取指定列
+#   arr_combine(keys, vals) → 两数组→键值 dict
+#   arr_fill(start, count, val) → 定长填充
+#   arr_product(arr)      → 所有元素乘积
+#   arr_range(start, end, step) → 步长序列
+#   arr_shuffle(arr)      → Fisher-Yates 洗牌（原地）
+#   arr_shuffle_copy(arr) → 洗牌副本（不改原数组）
+#   arr_rand(arr, n)      → 随机取 n 个元素
+#   arr_unique_stable(arr) → 去重保持顺序
+#   arr_intersect_n(arrs) → 多数组交集
+#   arr_diff_n(arrs)      → 多数组差集
+#   arr_chunk_fixed(arr, size) → 定长分块
+#   arr_flat(arr)         → 一维展开
+#   arr_zip(arrs)         → 多数组拉链
+#   arr_unzip(arr)        → 拉链逆操作
+#   arr_rotate(arr, n)    → 循环移位
+#   arr_partition(arr, pred) → 按谓词分组 [true组, false组]
+#   arr_group_by(arr, key_fn) → 按键分组
+#   arr_sliding(arr, size, step) → 滑动窗口
+# ============================================================
+
+# ---- 键值翻转 ----
+def arr_flip(d):
+    var result = {}
+    var keys = d.keys()
+    var i = 0
+    while i < len(keys):
+        result[str(d[keys[i]])] = keys[i]
+        i += 1
+    return result
+
+# ---- 提取列 ----
+def arr_column(rows, key):
+    var result = []
+    var i = 0
+    while i < len(rows):
+        result.append(rows[i][key])
+        i += 1
+    return result
+
+# ---- 组合键值 ----
+def arr_combine(keys, vals):
+    var result = {}
+    var i = 0
+    while i < len(keys) and i < len(vals):
+        result[keys[i]] = vals[i]
+        i += 1
+    return result
+
+# ---- 定长填充 ----
+def arr_fill(start, count, val):
+    var result = []
+    var i = 0
+    while i < count:
+        result.append(val)
+        i += 1
+    return result
+
+# ---- 所有元素乘积 ----
+def arr_product(arr):
+    if len(arr) == 0:
+        return 1
+    var p = arr[0]
+    var i = 1
+    while i < len(arr):
+        p = p * arr[i]
+        i += 1
+    return p
+
+# ---- 步长序列 ----
+def arr_range(start, end, step = 1):
+    var result = []
+    if step == 0:
+        return result
+    if step > 0:
+        var i = start
+        while i <= end:
+            result.append(i)
+            i = i + step
+    else:
+        var i = start
+        while i >= end:
+            result.append(i)
+            i = i + step
+    return result
+
+# ---- Fisher-Yates 洗牌（副本） ----
+def arr_shuffle_copy(arr):
+    var result = []
+    var i = 0
+    while i < len(arr):
+        result.append(arr[i])
+        i += 1
+    var n = len(result)
+    var j = n - 1
+    while j > 0:
+        var r = random_int(j + 1)
+        var tmp = result[j]
+        result[j] = result[r]
+        result[r] = tmp
+        j = j - 1
+    return result
+
+# ---- 随机取 n 个元素 ----
+def arr_rand(arr, n):
+    var shuffled = arr_shuffle_copy(arr)
+    var result = []
+    var i = 0
+    while i < n and i < len(shuffled):
+        result.append(shuffled[i])
+        i += 1
+    return result
+
+# ---- 去重保持顺序 ----
+def arr_unique_stable(arr):
+    var seen = {}
+    var result = []
+    var i = 0
+    while i < len(arr):
+        var key = str(arr[i])
+        if not seen.contains(key):
+            seen[key] = true
+            result.append(arr[i])
+        i += 1
+    return result
+
+# ---- 多数组交集 ----
+def arr_intersect_n(arrs):
+    if len(arrs) == 0:
+        return []
+    var result = []
+    var first = arrs[0]
+    var i = 0
+    while i < len(first):
+        var val = first[i]
+        var in_all = true
+        var j = 1
+        while j < len(arrs):
+            var found = false
+            var k = 0
+            while k < len(arrs[j]):
+                if arrs[j][k] == val:
+                    found = true
+                    break
+                k += 1
+            if not found:
+                in_all = false
+                break
+            j += 1
+        if in_all:
+            var already = false
+            var m = 0
+            while m < len(result):
+                if result[m] == val:
+                    already = true
+                    break
+                m += 1
+            if not already:
+                result.append(val)
+        i += 1
+    return result
+
+# ---- 多数组差集（第一个减去其余） ----
+def arr_diff_n(arrs):
+    if len(arrs) == 0:
+        return []
+    var result = []
+    var first = arrs[0]
+    var i = 0
+    while i < len(first):
+        var val = first[i]
+        var in_rest = false
+        var j = 1
+        while j < len(arrs):
+            var k = 0
+            while k < len(arrs[j]):
+                if arrs[j][k] == val:
+                    in_rest = true
+                    break
+                k += 1
+            if in_rest:
+                break
+            j += 1
+        if not in_rest:
+            var already = false
+            var m = 0
+            while m < len(result):
+                if result[m] == val:
+                    already = true
+                    break
+                m += 1
+            if not already:
+                result.append(val)
+        i += 1
+    return result
+
+# ---- 定长分块 ----
+def arr_chunk_fixed(arr, size):
+    if size <= 0:
+        return []
+    var result = []
+    var i = 0
+    while i < len(arr):
+        var chunk = []
+        var j = 0
+        while j < size and i + j < len(arr):
+            chunk.append(arr[i + j])
+            j += 1
+        result.append(chunk)
+        i = i + size
+    return result
+
+# ---- 一维展开 ----
+def arr_flat(arr):
+    var result = []
+    var i = 0
+    while i < len(arr):
+        var item = arr[i]
+        var j = 0
+        while j < len(item):
+            result.append(item[j])
+            j += 1
+        i += 1
+    return result
+
+# ---- 多数组拉链 ----
+def arr_zip(arrs):
+    if len(arrs) == 0:
+        return []
+    var min_len = len(arrs[0])
+    var i = 1
+    while i < len(arrs):
+        if len(arrs[i]) < min_len:
+            min_len = len(arrs[i])
+        i += 1
+    var result = []
+    var j = 0
+    while j < min_len:
+        var tuple = []
+        var k = 0
+        while k < len(arrs):
+            tuple.append(arrs[k][j])
+            k += 1
+        result.append(tuple)
+        j += 1
+    return result
+
+# ---- 循环移位 ----
+def arr_rotate(arr, n):
+    var l = len(arr)
+    if l == 0:
+        return []
+    var shift = n % l
+    if shift < 0:
+        shift = shift + l
+    var result = []
+    var i = 0
+    while i < l:
+        result.append(arr[(i + shift) % l])
+        i += 1
+    return result
+
+# ---- 按谓词分组 ----
+def arr_partition(arr, pred):
+    var yes = []
+    var no = []
+    var i = 0
+    while i < len(arr):
+        if pred(arr[i]):
+            yes.append(arr[i])
+        else:
+            no.append(arr[i])
+        i += 1
+    return [yes, no]
+
+# ---- 滑动窗口 ----
+def arr_sliding(arr, size, step):
+    if size <= 0 or step <= 0:
+        return []
+    var result = []
+    var i = 0
+    while i + size <= len(arr):
+        var window = []
+        var j = 0
+        while j < size:
+            window.append(arr[i + j])
+            j += 1
+        result.append(window)
+        i = i + step
+    return result

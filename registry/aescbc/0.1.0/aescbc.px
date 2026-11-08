@@ -1,0 +1,84 @@
+# aescbc.px — AES-CBC / AES-CTR 模式（基于 native AES-ECB）
+# 版本: 0.1.0
+# 依赖: native aes_encrypt / aes_decrypt (ECB mode)
+# 注意：native AES 是 ECB，此处实现 CBC 和 CTR 包装
+
+def _aes_xor_bytes(a, b):
+    var result = []
+    var i = 0
+    while i < len(a):
+        result.append(a[i] ^ b[i])
+        i += 1
+    return result
+def _aes_pkcs7_pad(data, block_size):
+    var pad_len = block_size - (len(data) % block_size)
+    var result = []
+    var i = 0
+    while i < len(data):
+        result.append(data[i])
+        i += 1
+    i = 0
+    while i < pad_len:
+        result.append(pad_len)
+        i += 1
+    return result
+def _aes_pkcs7_unpad(data):
+    if len(data) == 0:
+        return data
+    var pad_len = data[len(data) - 1]
+    if pad_len > len(data) or pad_len == 0:
+        return data
+    return data[:len(data) - pad_len]
+def aes_cbc_encrypt(key, iv, plaintext):
+    var padded = _aes_pkcs7_pad(plaintext, 16)
+    var result = []
+    var prev = iv
+    var i = 0
+    while i < len(padded):
+        var block = padded[i:i + 16]
+        var xored = _aes_xor_bytes(block, prev)
+        var enc = aes_encrypt(key, xored)
+        var j = 0
+        while j < len(enc):
+            result.append(enc[j])
+            j += 1
+        prev = enc
+        i += 16
+    return result
+def aes_cbc_decrypt(key, iv, ciphertext):
+    var result = []
+    var prev = iv
+    var i = 0
+    while i < len(ciphertext):
+        var block = ciphertext[i:i + 16]
+        var dec = aes_decrypt(key, block)
+        var plain = _aes_xor_bytes(dec, prev)
+        var j = 0
+        while j < len(plain):
+            result.append(plain[j])
+            j += 1
+        prev = block
+        i += 16
+    return _aes_pkcs7_unpad(result)
+def aes_ctr_crypt(key, nonce, data):
+    var result = []
+    var counter = 0
+    var i = 0
+    while i < len(data):
+        var ctr_block = []
+        var j = 0
+        while j < 12:
+            ctr_block.append(nonce[j])
+            j += 1
+        ctr_block.append((counter >> 24) & 0xFF)
+        ctr_block.append((counter >> 16) & 0xFF)
+        ctr_block.append((counter >> 8) & 0xFF)
+        ctr_block.append(counter & 0xFF)
+        var keystream = aes_encrypt(key, ctr_block)
+        j = 0
+        while j < 16 and i + j < len(data):
+            result.append(data[i + j] ^ keystream[j])
+            j += 1
+        counter += 1
+        i += 16
+    return result

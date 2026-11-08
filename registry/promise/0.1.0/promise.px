@@ -1,0 +1,96 @@
+# promise.px — Promise/Future 异步原语（同步模拟，纯函数）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   pr_new(resolver)              → dict   # 创建 Promise（resolver 是函数 fn(resolve, reject)）
+#   pr_resolve(val)               → dict   # 已完成的 Promise
+#   pr_reject(err)                → dict   # 已拒绝的 Promise
+#   pr_then(p, on_fulfilled)      → dict   # 链式 .then
+#   pr_catch(p, on_rejected)      → dict   # .catch
+#   pr_finally(p, on_finally)     → dict   # .finally
+#   pr_all(promises)              → dict   # 全部完成
+#   pr_race(promises)             → dict   # 第一个完成
+#   pr_is_pending(p)              → bool
+#   pr_is_fulfilled(p)            → bool
+#   pr_is_rejected(p)             → bool
+#   pr_value(p)                   → any    # 获取已完成值
+#   pr_error(p)                   → any    # 获取拒绝原因
+
+# 创建 Promise
+def pr_new(resolver):
+    var state = "pending"
+    var value = null
+    var reason = null
+    var r = resolver
+    var p = {"_state": state, "_value": value, "_reason": reason, "_resolver": r}
+    return p
+
+# 已完成的 Promise
+def pr_resolve(val):
+    return {"_state": "fulfilled", "_value": val, "_reason": null, "_resolver": null}
+
+# 已拒绝的 Promise
+def pr_reject(err):
+    return {"_state": "rejected", "_value": null, "_reason": err, "_resolver": null}
+
+# .then
+def pr_then(p, on_fulfilled):
+    if p["_state"] == "fulfilled":
+        return pr_resolve(on_fulfilled(p["_value"]))
+    if p["_state"] == "rejected":
+        return p
+    return p
+
+# .catch
+def pr_catch(p, on_rejected):
+    if p["_state"] == "rejected":
+        return pr_resolve(on_rejected(p["_reason"]))
+    return p
+
+# .finally
+def pr_finally(p, on_finally):
+    on_finally()
+    return p
+
+# 全部完成
+def pr_all(promises):
+    var results = []
+    var i = 0
+    while i < len(promises):
+        var p = promises[i]
+        if p["_state"] == "rejected":
+            return pr_reject(p["_reason"])
+        if p["_state"] != "fulfilled":
+            return pr_reject("pr_all: pending promise")
+        results.append(p["_value"])
+        i += 1
+    return pr_resolve(results)
+
+# 第一个完成
+def pr_race(promises):
+    var i = 0
+    while i < len(promises):
+        var p = promises[i]
+        if p["_state"] == "fulfilled":
+            return p
+        if p["_state"] == "rejected":
+            return p
+        i += 1
+    return pr_reject("pr_race: all pending")
+
+# 状态查询
+def pr_is_pending(p):
+    return p["_state"] == "pending"
+
+def pr_is_fulfilled(p):
+    return p["_state"] == "fulfilled"
+
+def pr_is_rejected(p):
+    return p["_state"] == "rejected"
+
+def pr_value(p):
+    return p["_value"]
+
+def pr_error(p):
+    return p["_reason"]

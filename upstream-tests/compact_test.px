@@ -1,0 +1,35 @@
+# compact 0.1.0 测试
+import "../registry/compact/0.1.0/compact.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # compact
+    var d = cp_compact(["name", "age", "city"], ["Alice", 30, "Beijing"])
+    expect(d["name"] == "Alice", "compact name")
+    expect(d["age"] == 30, "compact age")
+    # extract
+    var src = {"a": 1, "b": 2, "c": 3, "d": 4}
+    var ext = cp_extract(src, ["a", "c"], "p_")
+    expect(ext["p_a"] == 1, "extract p_a")
+    expect(ext["p_c"] == 3, "extract p_c")
+    # only
+    var only = cp_only(src, ["a", "d"])
+    expect(only["a"] == 1, "only a")
+    expect(only["d"] == 4, "only d")
+    expect(not only.has("b"), "only no b")
+    # except
+    var exc = cp_except(src, ["b", "c"])
+    expect(exc["a"] == 1, "except a")
+    expect(exc["d"] == 4, "except d")
+    expect(not exc.has("b"), "except no b")
+    # pluck
+    var rows = [{"id": 1, "name": "x"}, {"id": 2, "name": "y"}]
+    var ids = cp_pluck(rows, "id")
+    expect(ids == [1, 2], "pluck ids: " + str(ids))
+    # flip
+    var flipped = cp_flip({"a": "1", "b": "2"})
+    expect(flipped["1"] == "a", "flip 1")
+    expect(flipped["2"] == "b", "flip 2")
+    print("compact: PASS")

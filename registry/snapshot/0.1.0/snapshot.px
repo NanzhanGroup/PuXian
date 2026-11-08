@@ -1,0 +1,76 @@
+# snapshot.px — 快照测试（比对序列化输出与已存快照）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   snap_new(name)                → dict   # 创建快照上下文
+#   snap_match(snap, actual)      → bool   # 比对实际值与快照
+#   snap_diff(snap, actual)       → string  # 返回差异描述
+#   snap_update(snap, actual)     → string  # 更新快照（返回新快照值）
+#   snap_serialize(val)           → string  # 序列化值为可比较字符串
+#   snap_has_snapshot(snap)       → bool   # 是否有已存快照
+
+# 创建快照上下文
+def snap_new(name):
+    return {"_name": name, "_stored": null, "_has": false}
+
+# 设置已存快照值
+def snap_set_stored(snap, value):
+    snap["_stored"] = value
+    snap["_has"] = true
+
+# 序列化值为可比较字符串
+def snap_serialize(val):
+    var t = type(val)
+    if t == "string":
+        return val
+    if t == "null":
+        return "null"
+    if t == "bool":
+        if val:
+            return "true"
+        return "false"
+    if t == "list":
+        var s = "["
+        var i = 0
+        while i < len(val):
+            if i > 0:
+                s = s + ", "
+            s = s + snap_serialize(val[i])
+            i += 1
+        return s + "]"
+    if t == "dict":
+        var ks = val.keys()
+        var s = "{"
+        var i = 0
+        while i < len(ks):
+            if i > 0:
+                s = s + ", "
+            s = s + '"' + ks[i] + '": ' + snap_serialize(val[ks[i]])
+            i += 1
+        return s + "}"
+    return str(val)
+
+# 是否有已存快照
+def snap_has_snapshot(snap):
+    return snap["_has"]
+
+# 比对实际值与快照
+def snap_match(snap, actual):
+    if not snap["_has"]:
+        return false
+    return snap_serialize(snap["_stored"]) == snap_serialize(actual)
+
+# 返回差异描述
+def snap_diff(snap, actual):
+    var expected_str = snap_serialize(snap["_stored"])
+    var actual_str = snap_serialize(actual)
+    if expected_str == actual_str:
+        return ""
+    return "Expected: " + expected_str + "\nActual:   " + actual_str
+
+# 更新快照
+def snap_update(snap, actual):
+    snap["_stored"] = actual
+    snap["_has"] = true
+    return snap_serialize(actual)

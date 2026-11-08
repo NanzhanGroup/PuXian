@@ -1,0 +1,195 @@
+# ============================================================
+# 普贤生态库：registry/finance — 财务计算
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP 财务扩展 / numpy-financial / Excel 财务函数：
+#   fin_pmt(rate, nper, pv, fv = 0)          → 每期还款额（等额本息）
+#   fin_pv(rate, nper, pmt, fv = 0)          → 现值
+#   fin_fv(rate, nper, pmt, pv = 0)          → 终值
+#   fin_nper(rate, pmt, pv, fv = 0)          → 期数
+#   fin_rate_guess(pmt, pv, nper)            → 利率估算（牛顿迭代）
+#   fin_amortize(principal, rate, nper)      → 摊销表 [{period, payment, interest, principal, balance}]
+#   fin_simple_interest(principal, rate, time) → 单利
+#   fin_compound_interest(principal, rate, time, freq = 1) → 复利
+#   fin_effective_rate(nominal, freq)        → 实际年利率
+#   fin_nominal_rate(effective, freq)        → 名义年利率
+#   fin_npv(rate, cashflows)                 → 净现值
+#   fin_irr(cashflows)                       → 内部收益率（牛顿迭代）
+#   fin_payback(cashflows)                   → 投资回收期
+#   fin_roi(cost, gain)                      → 投资回报率
+#   fin_tax(amount, rate)                    → 税额
+#   fin_tax_bracket(amount, brackets)        → 阶梯税率
+#   fin_discount(price, discount_pct)        → 折后价
+#   fin_markdown(cost, margin_pct)           → 成本加成定价
+# ============================================================
+
+# ---- 每期还款额（等额本息） ----
+# rate: 每期利率, nper: 期数, pv: 现值(贷款额), fv: 终值(默认0)
+def fin_pmt(rate, nper, pv, fv = 0):
+    if rate == 0:
+        if nper == 0:
+            return 0
+        return -(pv + fv) / nper
+    var pvif = pow(1 + rate, nper)
+    var fvif = 1 / pvif
+    return -(pv * pvif + fv) * rate / (pvif - 1)
+
+# ---- 现值 ----
+def fin_pv(rate, nper, pmt, fv = 0):
+    if rate == 0:
+        return -(fv + pmt * nper)
+    var pvif = pow(1 + rate, nper)
+    return -(fv + pmt * (pvif - 1) / rate) / pvif
+
+# ---- 终值 ----
+def fin_fv(rate, nper, pmt, pv = 0):
+    if rate == 0:
+        return -(pv + pmt * nper)
+    var pvif = pow(1 + rate, nper)
+    return -(pv * pvif + pmt * (pvif - 1) / rate)
+
+# ---- 期数 ----
+def fin_nper(rate, pmt, pv, fv = 0):
+    if rate == 0:
+        if pmt == 0:
+            return 0
+        return -(pv + fv) / pmt
+    var num = pmt - fv * rate
+    var den = pmt + pv * rate
+    if den == 0:
+        return 0
+    return log(num / den) / log(1 + rate)
+
+# ---- 利率估算（牛顿迭代） ----
+def fin_rate_guess(pmt, pv, nper):
+    var rate = 0.1
+    var i = 0
+    while i < 100:
+        var f = pv * pow(1 + rate, nper) + pmt * (pow(1 + rate, nper) - 1) / rate
+        var fp = pv * nper * pow(1 + rate, nper - 1) + pmt * (nper * pow(1 + rate, nper - 1) * rate - pow(1 + rate, nper) + 1) / (rate * rate)
+        if fp == 0:
+            break
+        var new_rate = rate - f / fp
+        if abs(new_rate - rate) < 0.0000001:
+            rate = new_rate
+            break
+        rate = new_rate
+        i += 1
+    return rate
+
+# ---- 摊销表 ----
+def fin_amortize(principal, rate, nper):
+    var pmt = fin_pmt(rate, nper, principal)
+    var schedule = []
+    var balance = principal
+    var i = 1
+    while i <= nper:
+        var interest = balance * rate
+        var principal_pay = pmt - interest
+        balance = balance + pmt
+        if balance < 0:
+            balance = 0
+        var entry = {"period": i, "payment": -pmt, "interest": -interest, "principal": -principal_pay, "balance": balance}
+        schedule.append(entry)
+        i += 1
+    return schedule
+
+# ---- 单利 ----
+def fin_simple_interest(principal, rate, time):
+    return principal * rate * time
+
+# ---- 复利 ----
+def fin_compound_interest(principal, rate, time, freq = 1):
+    return principal * pow(1 + rate / freq, freq * time) - principal
+
+# ---- 实际年利率 ----
+def fin_effective_rate(nominal, freq):
+    return pow(1 + nominal / freq, freq) - 1
+
+# ---- 名义年利率 ----
+def fin_nominal_rate(effective, freq):
+    return (pow(1 + effective, 1.0 / freq) - 1) * freq
+
+# ---- 净现值 ----
+def fin_npv(rate, cashflows):
+    var total = 0
+    var i = 0
+    while i < len(cashflows):
+        total = total + cashflows[i] / pow(1 + rate, i)
+        i += 1
+    return total
+
+# ---- 内部收益率（牛顿迭代） ----
+def fin_irr(cashflows):
+    var rate = 0.1
+    var i = 0
+    while i < 100:
+        var npv = fin_npv(rate, cashflows)
+        # 数值导数
+        var h = 0.0001
+        var npv_h = fin_npv(rate + h, cashflows)
+        var deriv = (npv_h - npv) / h
+        if abs(deriv) < 0.0000001:
+            break
+        var new_rate = rate - npv / deriv
+        if abs(new_rate - rate) < 0.0000001:
+            rate = new_rate
+            break
+        rate = new_rate
+        i += 1
+    return rate
+
+# ---- 投资回收期 ----
+def fin_payback(cashflows):
+    var cumulative = 0
+    var i = 0
+    while i < len(cashflows):
+        cumulative = cumulative + cashflows[i]
+        if cumulative >= 0:
+            if i == 0:
+                return 0
+            var prev = cumulative - cashflows[i]
+            if cashflows[i] == 0:
+                return float(i)
+            return float(i - 1) + float(0 - prev) / float(cashflows[i])
+        i += 1
+    return -1
+
+# ---- 投资回报率 ----
+def fin_roi(cost, gain):
+    if cost == 0:
+        return 0
+    return (gain - cost) / cost
+
+# ---- 税额 ----
+def fin_tax(amount, rate):
+    return amount * rate
+
+# ---- 阶梯税率 ----
+# brackets = [{threshold, rate}] 按阈值升序
+# 例: [{threshold: 0, rate: 0.1}, {threshold: 10000, rate: 0.2}, {threshold: 50000, rate: 0.3}]
+def fin_tax_bracket(amount, brackets):
+    var tax = 0
+    var i = 0
+    while i < len(brackets):
+        var bracket = brackets[i]
+        var threshold = bracket["threshold"]
+        var rate = bracket["rate"]
+        var next_threshold = amount
+        if i + 1 < len(brackets):
+            next_threshold = brackets[i + 1]["threshold"]
+        if amount > threshold:
+            var taxable = amount
+            if amount > next_threshold:
+                taxable = next_threshold
+            tax = tax + (taxable - threshold) * rate
+        i += 1
+    return tax
+
+# ---- 折后价 ----
+def fin_discount(price, discount_pct):
+    return price * (1 - discount_pct / 100)
+
+# ---- 成本加成定价 ----
+def fin_markup(cost, margin_pct):
+    return cost * (1 + margin_pct / 100)

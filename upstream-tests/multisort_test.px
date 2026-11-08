@@ -1,0 +1,31 @@
+# multisort 0.1.0 测试
+import "../registry/multisort/0.1.0/multisort.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ms_sort: sort multiple arrays in tandem
+    var arr1 = [3, 1, 2]
+    var arr2 = ["c", "a", "b"]
+    var result = ms_sort([arr1, arr2], ["asc", "asc"])
+    expect(result[0] == [1, 2, 3], "sorted arr1: " + str(result[0]))
+    expect(result[1] == ["a", "b", "c"], "sorted arr2: " + str(result[1]))
+    # desc
+    var result2 = ms_sort([arr1, arr2], ["desc", "desc"])
+    expect(result2[0] == [3, 2, 1], "desc arr1: " + str(result2[0]))
+    # ms_sort_by: sort dict list by keys
+    var rows = [
+        {"name": "Charlie", "age": 30},
+        {"name": "Alice", "age": 25},
+        {"name": "Bob", "age": 25}
+    ]
+    var sorted = ms_sort_by(rows, ["age", "name"], ["asc", "asc"])
+    expect(sorted[0]["name"] == "Alice", "first: " + sorted[0]["name"])
+    expect(sorted[1]["name"] == "Bob", "second: " + sorted[1]["name"])
+    expect(sorted[2]["name"] == "Charlie", "third: " + sorted[2]["name"])
+    # sort by name desc
+    var sorted2 = ms_sort_by(rows, ["name"], ["desc"])
+    expect(sorted2[0]["name"] == "Charlie", "desc first: " + sorted2[0]["name"])
+    expect(sorted2[2]["name"] == "Alice", "desc last: " + sorted2[2]["name"])
+    print("multisort: PASS")

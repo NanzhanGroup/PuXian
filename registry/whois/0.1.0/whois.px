@@ -1,0 +1,75 @@
+# whois.px — Whois 协议客户端（纯函数：构造/解析）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   whois_build_query(domain)     → string    # 构造查询
+#   whois_parse_response(text)    → dict      # 解析响应为键值对
+#   whois_extract_field(text, key) → string   # 提取指定字段
+#   whois_get_server(domain)      → string    # 根据域名推断 whois 服务器
+
+# 构造查询
+def whois_build_query(domain):
+    return domain + "\r\n"
+
+# 解析响应为键值对
+def whois_parse_response(text):
+    var result = {}
+    var lines = text.split("\n")
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if line.len() > 0 and line[line.len() - 1] == "\r":
+            line = line[:line.len() - 1]
+        var colon = line.find(":")
+        if colon > 0:
+            var key = line[:colon]
+            var val = line[colon + 1:]
+            while val.len() > 0 and (val[0] == " " or val[0] == "\t"):
+                val = val[1:]
+            result.set(key, val)
+        i += 1
+    return result
+
+# 提取指定字段
+def whois_extract_field(text, key):
+    var lines = text.split("\n")
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if line.len() > 0 and line[line.len() - 1] == "\r":
+            line = line[:line.len() - 1]
+        var prefix = key + ":"
+        if line.len() >= prefix.len() and line[:prefix.len()] == prefix:
+            var val = line[prefix.len():]
+            while val.len() > 0 and val[0] == " ":
+                val = val[1:]
+            return val
+        i += 1
+    return ""
+
+# 根据域名推断 whois 服务器
+def whois_get_server(domain):
+    var parts = domain.split(".")
+    var tld = parts[len(parts) - 1]
+    if tld == "com":
+        return "whois.verisign-grs.com"
+    if tld == "net":
+        return "whois.verisign-grs.com"
+    if tld == "org":
+        return "whois.publicinterestregistry.org"
+    if tld == "io":
+        return "whois.nic.io"
+    if tld == "cn":
+        return "whois.cnnic.cn"
+    if tld == "jp":
+        return "whois.jprs.jp"
+    if tld == "uk":
+        return "whois.nic.uk"
+    if tld == "de":
+        return "whois.denic.de"
+    if tld == "fr":
+        return "whois.nic.fr"
+    if tld == "ru":
+        return "whois.tcinet.ru"
+    return "whois.iana.org"

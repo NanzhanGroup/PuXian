@@ -1,0 +1,53 @@
+# vcard 0.1.0 测试
+import "../registry/vcard/0.1.0/vcard.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # 解析 vCard
+    var text = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nEMAIL:john@example.com\r\nTEL:123-456-7890\r\nORG:ACME Corp\r\nEND:VCARD\r\n"
+    var cards = vc_parse(text)
+    expect(len(cards) == 1, "parse count: " + str(len(cards)))
+    expect(cards[0]["type"] == "VCARD", "parse type: " + cards[0]["type"])
+    expect(vc_get_prop(cards[0], "FN") == "John Doe", "parse FN: " + vc_get_prop(cards[0], "FN"))
+    expect(vc_get_prop(cards[0], "EMAIL") == "john@example.com", "parse EMAIL: " + vc_get_prop(cards[0], "EMAIL"))
+    expect(vc_get_prop(cards[0], "TEL") == "123-456-7890", "parse TEL: " + vc_get_prop(cards[0], "TEL"))
+    # 解析为联系人 dict
+    var contact = vc_parse_vcard(text)
+    expect(contact["fn"] == "John Doe", "contact fn: " + contact["fn"])
+    expect(contact["email"] == "john@example.com", "contact email: " + contact["email"])
+    # 构建 vCard
+    var built = vc_build_vcard({"fn": "Jane Smith", "email": "jane@test.com", "tel": "555-1234"})
+    expect(built.contains("BEGIN:VCARD"), "build begin: " + built)
+    expect(built.contains("FN:Jane Smith"), "build fn: " + built)
+    expect(built.contains("EMAIL:jane@test.com"), "build email: " + built)
+    # 往返
+    var reparsed = vc_parse_vcard(built)
+    expect(reparsed["fn"] == "Jane Smith", "roundtrip fn: " + reparsed["fn"])
+    expect(reparsed["email"] == "jane@test.com", "roundtrip email: " + reparsed["email"])
+    # 转义
+    expect(vc_escape("a;b,c\\d") == "a\\;b\\,c\\\\d", "escape: " + vc_escape("a;b,c\\d"))
+    expect(vc_unescape("a\\;b\\,c\\\\d") == "a;b,c\\d", "unescape: " + vc_unescape("a\\;b\\,c\\\\d"))
+    # 行折叠
+    var long_line = "NOTE:" + "x" * 100
+    var folded = vc_fold(long_line)
+    expect(len(folded) > len(long_line), "fold increases length")
+    # 行展开
+    var unfolded = vc_unfold(folded)
+    expect(len(unfolded) == 1, "unfold single line: " + str(len(unfolded)))
+    expect(unfolded[0] == long_line, "unfold correct: " + unfolded[0])
+    # 多属性
+    var multi = "BEGIN:VCARD\r\nFN:Bob\r\nTEL:111\r\nTEL:222\r\nEND:VCARD\r\n"
+    var mc = vc_parse(multi)
+    var tels = vc_get_all_props(mc[0], "TEL")
+    expect(len(tels) == 2, "multi tel count: " + str(len(tels)))
+    expect(tels[0] == "111", "multi tel 0: " + tels[0])
+    expect(tels[1] == "222", "multi tel 1: " + tels[1])
+    # 参数解析
+    var param_text = "BEGIN:VCARD\r\nTEL;TYPE=CELL;TYPE=VOICE:1234\r\nEND:VCARD\r\n"
+    var pc = vc_parse(param_text)
+    expect(vc_get_prop(pc[0], "TEL") == "1234", "param tel: " + vc_get_prop(pc[0], "TEL"))
+    print("vcard: PASS")

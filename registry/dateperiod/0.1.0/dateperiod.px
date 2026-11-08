@@ -1,0 +1,47 @@
+# dateperiod.px — 日期范围迭代器（对应 PHP DatePeriod）
+# 版本: 0.1.0
+import "../../datetime/0.2.0/datetime.px"
+def dp_new(start_sec, end_sec, interval_sec):
+    return {"_start": start_sec, "_end": end_sec, "_interval": interval_sec}
+def dp_to_list(dp):
+    var result = []
+    var cur = dp["_start"]
+    while cur <= dp["_end"]:
+        result.append(cur)
+        cur = cur + dp["_interval"]
+    return result
+def dp_count(dp):
+    var n = 0
+    var cur = dp["_start"]
+    while cur <= dp["_end"]:
+        n = n + 1
+        cur = cur + dp["_interval"]
+    return n
+def dp_contains(dp, ts):
+    if ts < dp["_start"] or ts > dp["_end"]:
+        return false
+    var diff = ts - dp["_start"]
+    return diff % dp["_interval"] == 0
+def dp_format(dp, fmt):
+    var result = []
+    var cur = dp["_start"]
+    while cur <= dp["_end"]:
+        result.append(dt_format(cur, fmt))
+        cur = cur + dp["_interval"]
+    return result
+def dp_days(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 86400)
+def dp_hours(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 3600)
+
+def dp_weeks(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 604800)
+def dp_months(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 2592000)
+def dp_next(dp, current):
+    var next_ts = current + dp["_interval"]
+    if next_ts > dp["_end"]:
+        return null
+    return next_ts
+def dp_at(dp, ts):
+    return ts >= dp["_start"] and ts <= dp["_end"]

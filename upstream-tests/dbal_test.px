@@ -1,0 +1,41 @@
+# dbal 0.1.0 测试
+import "../registry/dbal/0.1.0/dbal.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var qb = qb_new("users")
+    qb_select(qb, ["id", "name", "email"])
+    qb_where(qb, "age", ">", 18)
+    qb_where(qb, "status", "=", "active")
+    qb_order_by(qb, "id", "DESC")
+    qb_limit(qb, 10)
+    qb_offset(qb, 20)
+    var sql = qb_to_sql(qb)
+    expect(sql.find("SELECT id, name, email") >= 0, "select cols: " + sql)
+    expect(sql.find("FROM users") >= 0, "from table")
+    expect(sql.find("WHERE age > ?") >= 0, "where age")
+    expect(sql.find("AND status = ?") >= 0, "where status")
+    expect(sql.find("ORDER BY id DESC") >= 0, "order by")
+    expect(sql.find("LIMIT 10") >= 0, "limit")
+    expect(sql.find("OFFSET 20") >= 0, "offset")
+    var params = qb_params(qb)
+    expect(params == [18, "active"], "params: " + str(params))
+    # insert
+    var ins = qb_insert_sql("users", {"name": "Alice", "age": 30})
+    expect(ins.find("INSERT INTO users") >= 0, "insert: " + ins)
+    expect(ins.find("name") >= 0, "insert has name")
+    expect(ins.find("age") >= 0, "insert has age")
+    # update
+    var upd = qb_update_sql("users", {"name": "Bob"}, "id = ?")
+    expect(upd.find("UPDATE users SET") >= 0, "update: " + upd)
+    expect(upd.find("WHERE id = ?") >= 0, "update where")
+    # delete
+    var del = qb_delete_sql("users", "id = ?")
+    expect(del.find("DELETE FROM users") >= 0, "delete: " + del)
+    # select all
+    var qb2 = qb_new("posts")
+    var sql2 = qb_to_sql(qb2)
+    expect(sql2.find("SELECT *") >= 0, "select all: " + sql2)
+    print("dbal: PASS")

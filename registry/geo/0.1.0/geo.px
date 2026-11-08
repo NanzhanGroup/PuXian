@@ -1,0 +1,212 @@
+# ============================================================
+# 普贤生态库：registry/geo — 地理计算
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP geoip / haversine、Python geopy、Go geohash：
+#   geo_haversine(lat1, lon1, lat2, lon2) → 大圆距离（km）
+#   geo_haversine_m(...)                  → 大圆距离（米）
+#   geo_bearing(lat1, lon1, lat2, lon2)   → 初始方位角（度）
+#   geo_destination(lat, lon, bearing, dist) → 目的地坐标
+#   geo_wgs84_to_gcj02(lat, lon)          → WGS84→GCJ02（火星坐标）
+#   geo_gcj02_to_wgs84(lat, lon)          → GCJ02→WGS84
+#   geo_gcj02_to_bd09(lat, lon)           → GCJ02→BD09（百度坐标）
+#   geo_bd09_to_gcj02(lat, lon)           → BD09→GCJ02
+#   geo_wgs84_to_bd09(lat, lon)           → WGS84→BD09
+#   geo_bd09_to_wgs84(lat, lon)           → BD09→WGS84
+#   geo_geohash_encode(lat, lon, precision) → GeoHash 编码
+#   geo_geohash_decode(hash)              → GeoHash 解码
+#   geo_bbox_contains(bbox, lat, lon)     → 点是否在边界框内
+#   geo_bbox_intersects(b1, b2)           → 两边界框是否相交
+# ============================================================
+
+# ---- 辅助：度→弧度 ----
+def geo_deg2rad(d):
+    return d * 3.14159265358979323846 / 180.0
+
+# ---- 辅助：弧度→度 ----
+def geo_rad2deg(r):
+    return r * 180.0 / 3.14159265358979323846
+
+# ---- 辅助：asin（atan2 实现） ----
+def geo_asin(x):
+    if x >= 1.0:
+        return 3.14159265358979323846 / 2.0
+    if x <= -1.0:
+        return -3.14159265358979323846 / 2.0
+    return atan2(x, sqrt(1.0 - x * x))
+
+# ---- Haversine 大圆距离（km） ----
+def geo_haversine(lat1, lon1, lat2, lon2):
+    var R = 6371.0
+    var dlat = geo_deg2rad(lat2 - lat1)
+    var dlon = geo_deg2rad(lon2 - lon1)
+    var a = sin(dlat / 2.0) * sin(dlat / 2.0) + cos(geo_deg2rad(lat1)) * cos(geo_deg2rad(lat2)) * sin(dlon / 2.0) * sin(dlon / 2.0)
+    var c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a))
+    return R * c
+
+# ---- Haversine 距离（米） ----
+def geo_haversine_m(lat1, lon1, lat2, lon2):
+    return geo_haversine(lat1, lon1, lat2, lon2) * 1000.0
+
+# ---- 初始方位角（度） ----
+def geo_bearing(lat1, lon1, lat2, lon2):
+    var phi1 = geo_deg2rad(lat1)
+    var phi2 = geo_deg2rad(lat2)
+    var dlon = geo_deg2rad(lon2 - lon1)
+    var y = sin(dlon) * cos(phi2)
+    var x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dlon)
+    var theta = atan2(y, x)
+    var deg = geo_rad2deg(theta)
+    deg = deg % 360.0
+    if deg < 0:
+        deg = deg + 360.0
+    return deg
+
+# ---- 目的地坐标 ----
+def geo_destination(lat, lon, bearing, dist_km):
+    var R = 6371.0
+    var phi1 = geo_deg2rad(lat)
+    var lambda1 = geo_deg2rad(lon)
+    var theta = geo_deg2rad(bearing)
+    var delta = dist_km / R
+    var phi2 = geo_asin(sin(phi1) * cos(delta) + cos(phi1) * sin(delta) * cos(theta))
+    var lambda2 = lambda1 + atan2(sin(theta) * sin(delta) * cos(phi1), cos(delta) - sin(phi1) * sin(phi2))
+    return [geo_rad2deg(phi2), geo_rad2deg(lambda2)]
+
+# ---- WGS84→GCJ02 火星坐标偏移 ----
+def geo_wgs84_to_gcj02(lat, lon):
+    var a = 6378245.0
+    var ee = 0.00669342162296594323
+    var dlat = geo_transform_lat(lon - 105.0, lat - 35.0, a, ee)
+    var dlon = geo_transform_lon(lon - 105.0, lat - 35.0, a, ee)
+    var radlat = lat / 180.0 * 3.14159265358979323846
+    var magic = sin(radlat)
+    magic = 1 - ee * magic * magic
+    var sqrtmagic = sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * 3.14159265358979323846)
+    dlon = (dlon * 180.0) / (a / sqrtmagic * cos(radlat) * 3.14159265358979323846)
+    return [lat + dlat, lon + dlon]
+
+# ---- GCJ02→WGS84 ----
+def geo_gcj02_to_wgs84(lat, lon):
+    var gcj = geo_wgs84_to_gcj02(lat, lon)
+    return [lat * 2 - gcj[0], lon * 2 - gcj[1]]
+
+# ---- 辅助：变换纬度 ----
+def geo_transform_lat(x, y, a, ee):
+    var ret = -100.0 + 2.0 * x - 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
+    ret = ret + (20.0 * sin(6.0 * x * 3.14159265358979323846) + 20.0 * sin(2.0 * x * 3.14159265358979323846)) * 2.0 / 3.0
+    ret = ret + (20.0 * sin(y * 3.14159265358979323846) + 40.0 * sin(y / 3.0 * 3.14159265358979323846)) * 2.0 / 3.0
+    ret = ret + (160.0 * sin(y / 12.0 * 3.14159265358979323846) + 320 * sin(y * 3.14159265358979323846 / 30.0)) * 2.0 / 3.0
+    return ret
+
+# ---- 辅助：变换经度 ----
+def geo_transform_lon(x, y, a, ee):
+    var ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+    ret = ret + (20.0 * sin(6.0 * x * 3.14159265358979323846) + 20.0 * sin(2.0 * x * 3.14159265358979323846)) * 2.0 / 3.0
+    ret = ret + (20.0 * sin(x * 3.14159265358979323846) + 40.0 * sin(x / 3.0 * 3.14159265358979323846)) * 2.0 / 3.0
+    ret = ret + (150.0 * sin(x / 12.0 * 3.14159265358979323846) + 300.0 * sin(x / 30.0 * 3.14159265358979323846)) * 2.0 / 3.0
+    return ret
+
+# ---- GCJ02→BD09 ----
+def geo_gcj02_to_bd09(lat, lon):
+    var x = lon
+    var y = lat
+    var z = sqrt(x * x + y * y) + 0.00002 * sin(y * 3.14159265358979323846 * 3000.0 / 180.0)
+    var theta = atan2(y, x) + 0.000003 * cos(x * 3.14159265358979323846 * 3000.0 / 180.0)
+    return [z * sin(theta), z * cos(theta)]
+
+# ---- BD09→GCJ02 ----
+def geo_bd09_to_gcj02(lat, lon):
+    var x = lon - 0.0065
+    var y = lat - 0.006
+    var z = sqrt(x * x + y * y) - 0.00002 * sin(y * 3.14159265358979323846 * 3000.0 / 180.0)
+    var theta = atan2(y, x) - 0.000003 * cos(x * 3.14159265358979323846 * 3000.0 / 180.0)
+    return [z * sin(theta), z * cos(theta)]
+
+# ---- WGS84→BD09 ----
+def geo_wgs84_to_bd09(lat, lon):
+    var gcj = geo_wgs84_to_gcj02(lat, lon)
+    return geo_gcj02_to_bd09(gcj[0], gcj[1])
+
+# ---- BD09→WGS84 ----
+def geo_bd09_to_wgs84(lat, lon):
+    var gcj = geo_bd09_to_gcj02(lat, lon)
+    return geo_gcj02_to_wgs84(gcj[0], gcj[1])
+
+# ---- GeoHash 编码 ----
+def geo_geohash_encode(lat, lon, precision = 9):
+    var chars = "0123456789bcdefghjkmnpqrstuvwxyz"
+    var hash = ""
+    var lat_range = [-90.0, 90.0]
+    var lon_range = [-180.0, 180.0]
+    var bit = 0
+    var even = true
+    var idx = 0
+    while len(hash) < precision:
+        if even:
+            var mid = (lon_range[0] + lon_range[1]) / 2.0
+            if lon >= mid:
+                idx = idx * 2 + 1
+                lon_range[0] = mid
+            else:
+                idx = idx * 2
+                lon_range[1] = mid
+        else:
+            var mid = (lat_range[0] + lat_range[1]) / 2.0
+            if lat >= mid:
+                idx = idx * 2 + 1
+                lat_range[0] = mid
+            else:
+                idx = idx * 2
+                lat_range[1] = mid
+        even = not even
+        bit += 1
+        if bit == 5:
+            hash = hash + chars[idx]
+            bit = 0
+            idx = 0
+    return hash
+
+# ---- GeoHash 解码 ----
+def geo_geohash_decode(hash_str):
+    var chars = "0123456789bcdefghjkmnpqrstuvwxyz"
+    var lat_range = [-90.0, 90.0]
+    var lon_range = [-180.0, 180.0]
+    var even = true
+    var i = 0
+    while i < len(hash_str):
+        var idx = 0
+        var j = 0
+        while j < len(chars):
+            if chars[j] == hash_str[i]:
+                idx = j
+                break
+            j += 1
+        var bit = 4
+        while bit >= 0:
+            if even:
+                var mid = (lon_range[0] + lon_range[1]) / 2.0
+                if (idx >> bit) & 1 == 1:
+                    lon_range[0] = mid
+                else:
+                    lon_range[1] = mid
+            else:
+                var mid = (lat_range[0] + lat_range[1]) / 2.0
+                if (idx >> bit) & 1 == 1:
+                    lat_range[0] = mid
+                else:
+                    lat_range[1] = mid
+            even = not even
+            bit = bit - 1
+        i += 1
+    return [(lat_range[0] + lat_range[1]) / 2.0, (lon_range[0] + lon_range[1]) / 2.0]
+
+# ---- 边界框包含 ----
+# bbox = [min_lat, min_lon, max_lat, max_lon]
+def geo_bbox_contains(bbox, lat, lon):
+    return lat >= bbox[0] and lat <= bbox[2] and lon >= bbox[1] and lon <= bbox[3]
+
+# ---- 边界框相交 ----
+def geo_bbox_intersects(b1, b2):
+    return not (b1[2] < b2[0] or b2[2] < b1[0] or b1[3] < b2[1] or b2[3] < b1[1])

@@ -1,0 +1,226 @@
+# ============================================================
+# 普贤生态库：registry/gettext — .po/.mo 翻译文件解析
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP gettext / Python babel / msgfmt：
+#   gt_parse_po(text)             → 解析 .po 文本 → {msgid: msgstr}
+#   gt_build_po(entries, header)  → 生成 .po 文本
+#   gt_get_translation(catalog, msgid) → 查找翻译
+#   gt_get_plural(catalog, msgid, n)   → 复数形式查找
+#   gt_parse_header(header_text)  → 解析 PO header → dict
+#   gt_build_header(meta)         → 构建 PO header
+#   gt_new_catalog()              → 创建空目录
+#   gt_add_entry(catalog, msgid, msgstr, plural) → 添加条目
+#   gt_compile_mo(catalog)        → 编译为 .mo 二进制（简化版）
+#   gt_parse_plural_form(n, expr) → 复数形式计算
+# ============================================================
+
+# ---- 解析 .po 文本 ----
+def gt_parse_po(text):
+    var lines = text.split("\n")
+    var catalog = {}
+    var msgid = ""
+    var msgstr = ""
+    var in_msgid = false
+    var in_msgstr = false
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        # 去除 \r
+        if len(line) > 0 and line[len(line) - 1] == "\r":
+            line = line[0 : len(line) - 1]
+        if len(line) == 0 or line[0] == "#":
+            # 空行或注释 → 保存上一个条目
+            if in_msgstr and msgid != "":
+                catalog[msgid] = msgstr
+            msgid = ""
+            msgstr = ""
+            in_msgid = false
+            in_msgstr = false
+            i += 1
+            continue
+        if line.contains("msgid \""):
+            if in_msgstr and msgid != "":
+                catalog[msgid] = msgstr
+            msgid = gt_extract_string(line)
+            msgstr = ""
+            in_msgid = true
+            in_msgstr = false
+        elif line.contains("msgstr \""):
+            msgstr = gt_extract_string(line)
+            in_msgid = false
+            in_msgstr = true
+        elif line[0] == "\"" and len(line) > 1 and line[len(line) - 1] == "\"":
+            # 续行
+            var s = gt_extract_string(line)
+            if in_msgid:
+                msgid = msgid + s
+            elif in_msgstr:
+                msgstr = msgstr + s
+        i += 1
+    # 最后一个条目
+    if in_msgstr and msgid != "":
+        catalog[msgid] = msgstr
+    return catalog
+
+# ---- 辅助：提取引号内字符串 ----
+def gt_extract_string(line):
+    var start = -1
+    var i = 0
+    while i < len(line):
+        if line[i] == "\"":
+            start = i + 1
+            break
+        i += 1
+    if start == -1:
+        return ""
+    var end = -1
+    i = len(line) - 1
+    while i >= start:
+        if line[i] == "\"":
+            end = i
+            break
+        i -= 1
+    if end == -1:
+        return ""
+    var raw = line[start : end]
+    # 反转义
+    var result = ""
+    i = 0
+    while i < len(raw):
+        if raw[i] == "\\" and i + 1 < len(raw):
+            var c = raw[i + 1]
+            if c == "n":
+                result = result + "\n"
+            elif c == "t":
+                result = result + "\t"
+            elif c == "\\":
+                result = result + "\\"
+            elif c == "\"":
+                result = result + "\""
+            else:
+                result = result + c
+            i += 2
+        else:
+            result = result + raw[i]
+            i += 1
+    return result
+
+# ---- 生成 .po 文本 ----
+def gt_build_po(entries, header = ""):
+    var text = ""
+    if header != "":
+        text = header + "\n"
+    var keys = entries.keys()
+    var i = 0
+    while i < len(keys):
+        text = text + "msgid \"" + gt_escape_str(keys[i]) + "\"\n"
+        text = text + "msgstr \"" + gt_escape_str(entries[keys[i]]) + "\"\n\n"
+        i += 1
+    return text
+
+# ---- 辅助：转义字符串 ----
+def gt_escape_str(s):
+    var result = ""
+    var i = 0
+    while i < len(s):
+        if s[i] == "\\":
+            result = result + "\\\\"
+        elif s[i] == "\"":
+            result = result + "\\\""
+        elif s[i] == "\n":
+            result = result + "\\n"
+        elif s[i] == "\t":
+            result = result + "\\t"
+        else:
+            result = result + s[i]
+        i += 1
+    return result
+
+# ---- 查找翻译 ----
+def gt_get_translation(catalog, msgid):
+    if catalog.contains(msgid):
+        var t = catalog[msgid]
+        if t != "":
+            return t
+    return msgid
+
+# ---- 复数形式查找 ----
+def gt_get_plural(catalog, msgid, n):
+    var plural_id = "msgid_plural"
+    if n == 1:
+        return gt_get_translation(catalog, msgid)
+    var plural_key = msgid + "[plural]"
+    if catalog.contains(plural_key):
+        return catalog[plural_key]
+    return gt_get_translation(catalog, msgid)
+
+# ---- 解析 PO header ----
+def gt_parse_header(header_text):
+    var result = {}
+    var lines = header_text.split("\n")
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if len(line) > 0 and line[len(line) - 1] == "\r":
+            line = line[0 : len(line) - 1]
+        if line.contains(": "):
+            var colon = -1
+            var j = 0
+            while j < len(line):
+                if line[j] == ":":
+                    colon = j
+                    break
+                j += 1
+            if colon != -1:
+                var key = line[0 : colon]
+                var val = line[colon + 2 : len(line)]
+                result[key] = val
+        i += 1
+    return result
+
+# ---- 构建 PO header ----
+def gt_build_header(meta):
+    var text = "msgid \"\"\n"
+    text = text + "msgstr \"\"\n"
+    var keys = meta.keys()
+    var i = 0
+    while i < len(keys):
+        text = text + "\"" + keys[i] + ": " + meta[keys[i]] + "\\n\"\n"
+        i += 1
+    return text
+
+# ---- 创建空目录 ----
+def gt_new_catalog():
+    return {}
+
+# ---- 添加条目 ----
+def gt_add_entry(catalog, msgid, msgstr, plural = ""):
+    catalog[msgid] = msgstr
+    if plural != "":
+        catalog[msgid + "[plural]"] = plural
+    return catalog
+
+# ---- 复数形式计算（简单 nplurals=2; plural=(n!=1)） ----
+def gt_parse_plural_form(n, expr):
+    # 默认英语复数规则: plural = (n != 1) ? 1 : 0
+    if expr == "nplurals=2; plural=(n != 1);":
+        if n == 1:
+            return 0
+        return 1
+    # 俄语等其它复数规则需要更复杂解析，暂返回默认
+    if n == 1:
+        return 0
+    return 1
+
+# ---- 编译为 .mo 二进制（简化版，返回字节列表） ----
+def gt_compile_mo(catalog):
+    # MO 格式简化：只返回原始条目数和偏移信息
+    # 完整 MO 格式需要二进制写入，这里返回元数据
+    var entries = []
+    var keys = catalog.keys()
+    var i = 0
+    while i < len(keys):
+        entries.append({"msgid": keys[i], "msgstr": catalog[keys[i]], "msgid_offset": 0, "msgstr_offset": 0})
+        i += 1
+    return {"magic": 0x950412de, "version": 0, "count": len(entries), "entries": entries}

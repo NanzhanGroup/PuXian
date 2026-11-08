@@ -1,0 +1,56 @@
+# channel.px — CSP Channel（对应 Go channel / PHP Fiber）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   ch_new(capacity)              → dict   # 创建通道（capacity=0 为无缓冲）
+#   ch_send(ch, val)              → bool   # 发送值（缓冲未满时成功）
+#   ch_recv(ch)                   → any    # 接收值（缓冲非空时返回值，否则 null）
+#   ch_try_send(ch, val)          → bool   # 尝试发送（不阻塞）
+#   ch_try_recv(ch)               → dict   # 尝试接收 {ok, value}
+#   ch_len(ch)                    → int    # 缓冲区中元素数
+#   ch_cap(ch)                    → int    # 通道容量
+#   ch_close(ch)                  → bool   # 关闭通道
+#   ch_is_closed(ch)              → bool   # 通道是否已关闭
+
+def ch_new(capacity):
+    return {"_buf": [], "_cap": capacity, "_closed": false}
+
+def ch_is_closed(ch):
+    return ch["_closed"]
+
+def ch_len(ch):
+    return len(ch["_buf"])
+
+def ch_cap(ch):
+    return ch["_cap"]
+
+def ch_close(ch):
+    ch["_closed"] = true
+    return true
+
+def ch_try_send(ch, val):
+    if ch["_closed"]:
+        return false
+    if ch["_cap"] > 0 and len(ch["_buf"]) >= ch["_cap"]:
+        return false
+    ch["_buf"].append(val)
+    return true
+
+def ch_send(ch, val):
+    return ch_try_send(ch, val)
+
+def ch_try_recv(ch):
+    if len(ch["_buf"]) > 0:
+        var val = ch["_buf"][0]
+        ch["_buf"] = ch["_buf"][1:]
+        return {"ok": true, "value": val}
+    if ch["_closed"]:
+        return {"ok": false, "value": null}
+    return {"ok": false, "value": null}
+
+def ch_recv(ch):
+    var r = ch_try_recv(ch)
+    if r["ok"]:
+        return r["value"]
+    return null

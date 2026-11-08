@@ -1,0 +1,57 @@
+# splstruct.px — SPL 数据结构（双向链表 + 定长数组）
+# 版本: 0.1.0
+def dll_new():
+    return {"_data": []}
+def dll_push_front(dll, val):
+    dll["_data"] = [val] + dll["_data"]
+def dll_push_back(dll, val):
+    dll["_data"].append(val)
+def dll_pop_front(dll):
+    if len(dll["_data"]) == 0:
+        return null
+    var val = dll["_data"][0]
+    dll["_data"] = dll["_data"][1:]
+    return val
+def dll_pop_back(dll):
+    if len(dll["_data"]) == 0:
+        return null
+    return dll["_data"].pop()
+def dll_size(dll):
+    return len(dll["_data"])
+def dll_to_list(dll):
+    var result = []
+    var i = 0
+    while i < len(dll["_data"]):
+        result.append(dll["_data"][i])
+        i += 1
+    return result
+def fa_new(capacity):
+    var data = []
+    var i = 0
+    while i < capacity:
+        data.append(null)
+        i += 1
+    return {"_data": data, "_cap": capacity, "_size": 0}
+def fa_set(fa, index, val):
+    if index < 0 or index >= fa["_cap"]:
+        return false
+    if fa["_data"][index] == null and val != null:
+        fa["_size"] = fa["_size"] + 1
+    if fa["_data"][index] != null and val == null:
+        fa["_size"] = fa["_size"] - 1
+    fa["_data"][index] = val
+    return true
+def fa_get(fa, index):
+    if index < 0 or index >= fa["_cap"]:
+        return null
+    return fa["_data"][index]
+def fa_size(fa):
+    return fa["_size"]
+def fa_to_list(fa):
+    var result = []
+    var i = 0
+    while i < fa["_cap"]:
+        if fa["_data"][i] != null:
+            result.append(fa["_data"][i])
+        i += 1
+    return result

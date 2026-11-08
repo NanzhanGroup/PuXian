@@ -1,0 +1,28 @@
+# strtotime 0.1.0 测试
+import "../registry/strtotime/0.1.0/strtotime.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var base = 1791262781  # fixed base for deterministic tests
+    # tomorrow
+    var tm = st_parse_relative("tomorrow", base)
+    expect(tm - base == 86400, "tomorrow: " + str(tm - base))
+    # yesterday
+    var ys = st_parse_relative("yesterday", base)
+    expect(ys - base == -86400, "yesterday: " + str(ys - base))
+    # + 2 days
+    var p2d = st_parse_relative("+ 2 days", base)
+    expect(p2d - base == 172800, "+2 days: " + str(p2d - base))
+    # + 3 hours
+    var p3h = st_parse_relative("+ 3 hours", base)
+    expect(p3h - base == 10800, "+3 hours: " + str(p3h - base))
+    # - 1 day
+    var m1d = st_parse_relative("- 1 day", base)
+    expect(m1d - base == -86400, "-1 day: " + str(m1d - base))
+    # day of week
+    expect(st_day_of_week("monday") == 1, "monday=1")
+    expect(st_day_of_week("fri") == 5, "fri=5")
+    expect(st_day_of_week("sunday") == 0, "sunday=0")
+    print("strtotime: PASS")

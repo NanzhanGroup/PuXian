@@ -1,0 +1,33 @@
+# splstruct 0.1.0 测试
+import "../registry/splstruct/0.1.0/splstruct.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # doubly linked list
+    var dll = dll_new()
+    dll_push_back(dll, 1)
+    dll_push_back(dll, 2)
+    dll_push_front(dll, 0)
+    expect(dll_size(dll) == 3, "dll size 3")
+    expect(dll_to_list(dll) == [0, 1, 2], "dll list: " + str(dll_to_list(dll)))
+    var f = dll_pop_front(dll)
+    expect(f == 0, "pop front: " + str(f))
+    var b = dll_pop_back(dll)
+    expect(b == 2, "pop back: " + str(b))
+    expect(dll_size(dll) == 1, "dll size 1")
+    # fixed array
+    var fa = fa_new(5)
+    expect(fa_size(fa) == 0, "fa size 0")
+    fa_set(fa, 0, "a")
+    fa_set(fa, 2, "c")
+    fa_set(fa, 4, "e")
+    expect(fa_size(fa) == 3, "fa size 3: " + str(fa_size(fa)))
+    expect(fa_get(fa, 0) == "a", "fa get 0")
+    expect(fa_get(fa, 1) == null, "fa get 1 null")
+    expect(fa_get(fa, 2) == "c", "fa get 2")
+    expect(fa_set(fa, 10, "x") == false, "fa set out of bounds")
+    var lst = fa_to_list(fa)
+    expect(lst == ["a", "c", "e"], "fa to list: " + str(lst))
+    print("splstruct: PASS")

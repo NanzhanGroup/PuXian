@@ -1,0 +1,331 @@
+# ============================================================
+# 普贤生态库：registry/mimebuilder — MIME 邮件构造
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP mail() / PHPMailer / Python email.mime：
+#   mb_new()                       → 创建空邮件
+#   mb_set_from(msg, addr, name)   → 设置发件人
+#   mb_set_to(msg, addr, name)     → 添加收件人
+#   mb_set_cc(msg, addr, name)     → 添加抄送
+#   mb_set_subject(msg, subject)   → 设置主题
+#   mb_set_body(msg, text, html)   → 设置正文
+#   mb_add_attachment(msg, filename, content, mime_type) → 添加附件
+#   mb_build(msg)                  → 生成 MIME 文本
+#   mb_parse(text)                 → 解析 MIME 文本
+#   mb_encode_qp(text)             → Quoted-Printable 编码
+#   mb_decode_qp(text)             → Quoted-Printable 解码
+#   mb_encode_b64(text)            → Base64 编码
+#   mb_decode_b64(text)            → Base64 解码
+#   mb_gen_boundary()              → 生成边界分隔符
+#   mb_format_addr(addr, name)     → 格式化邮件地址
+# ============================================================
+
+# ---- 创建空邮件 ----
+def mb_new():
+    return {"from": "", "to": [], "cc": [], "subject": "", "text": "", "html": "", "attachments": []}
+
+# ---- 设置发件人 ----
+def mb_set_from(msg, addr, name = ""):
+    msg["from"] = mb_format_addr(addr, name)
+    return msg
+
+# ---- 添加收件人 ----
+def mb_set_to(msg, addr, name = ""):
+    msg["to"].append(mb_format_addr(addr, name))
+    return msg
+
+# ---- 添加抄送 ----
+def mb_set_cc(msg, addr, name = ""):
+    msg["cc"].append(mb_format_addr(addr, name))
+    return msg
+
+# ---- 设置主题 ----
+def mb_set_subject(msg, subject):
+    msg["subject"] = subject
+    return msg
+
+# ---- 设置正文 ----
+def mb_set_body(msg, text, html = ""):
+    msg["text"] = text
+    msg["html"] = html
+    return msg
+
+# ---- 添加附件 ----
+def mb_add_attachment(msg, filename, content, mime_type = "application/octet-stream"):
+    msg["attachments"].append({"filename": filename, "content": content, "mime_type": mime_type})
+    return msg
+
+# ---- 格式化邮件地址 ----
+def mb_format_addr(addr, name):
+    if name == "":
+        return addr
+    return name + " <" + addr + ">"
+
+# ---- 生成边界分隔符 ----
+def mb_gen_boundary():
+    return "----=_Part_" + str(random_int(1000000000)) + "_" + str(random_int(1000000000))
+
+# ---- Quoted-Printable 编码 ----
+def mb_encode_qp(text):
+    var result = ""
+    var line_len = 0
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        var code = ord(c)
+        var encoded = ""
+        if code == 10:
+            encoded = "\n"
+            line_len = 0
+        elif code == 13:
+            encoded = "\r"
+        elif code == 32:
+            encoded = " "
+            line_len += 1
+        elif code >= 33 and code <= 126 and code != 61:
+            encoded = c
+            line_len += 1
+        else:
+            # 编码非 ASCII 或特殊字符
+            if code < 256:
+                encoded = "=" + mb_hex_upper(code)
+                line_len += 3
+            else:
+                # UTF-8 多字节：用 Unicode 码点
+                encoded = c
+                line_len += 1
+        # 行长度限制 76
+        if line_len > 75 and code != 10:
+            result = result + "=\n"
+            line_len = len(encoded)
+        result = result + encoded
+        i += 1
+    return result
+
+# ---- 辅助：十六进制大写 ----
+def mb_hex_upper(n):
+    var hex = "0123456789ABCDEF"
+    return hex[int(n / 16)] + hex[n % 16]
+
+# ---- Quoted-Printable 解码 ----
+def mb_decode_qp(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if text[i] == "=" and i + 2 < len(text):
+            if text[i + 1] == "\n":
+                i += 2
+                continue
+            if text[i + 1] == "\r" and i + 3 < len(text) and text[i + 2] == "\n":
+                i += 3
+                continue
+            var hex_val = mb_hex_to_int(text[i + 1]) * 16 + mb_hex_to_int(text[i + 2])
+            if hex_val >= 0:
+                result = result + chr(hex_val)
+                i += 3
+                continue
+        result = result + text[i]
+        i += 1
+    return result
+
+# ---- 辅助：十六进制字符转数字 ----
+def mb_hex_to_int(c):
+    if c >= "0" and c <= "9":
+        return ord(c) - ord("0")
+    if c >= "A" and c <= "F":
+        return ord(c) - ord("A") + 10
+    if c >= "a" and c <= "f":
+        return ord(c) - ord("a") + 10
+    return -1
+
+# ---- Base64 编码 ----
+def mb_encode_b64(text):
+    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var b1 = ord(text[i])
+        var b2 = 0
+        var b3 = 0
+        var padding = 0
+        if i + 1 < len(text):
+            b2 = ord(text[i + 1])
+        else:
+            padding = 2
+        if i + 2 < len(text):
+            b3 = ord(text[i + 2])
+        elif padding == 0:
+            padding = 1
+        var triple = b1 * 65536 + b2 * 256 + b3
+        result = result + chars[(triple >> 18) & 63]
+        result = result + chars[(triple >> 12) & 63]
+        if padding < 2:
+            result = result + chars[(triple >> 6) & 63]
+        else:
+            result = result + "="
+        if padding < 1:
+            result = result + chars[triple & 63]
+        else:
+            result = result + "="
+        i += 3
+    return result
+
+# ---- Base64 解码 ----
+def mb_decode_b64(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c1 = mb_b64_char_val(text[i])
+        var c2 = 0
+        var c3 = 0
+        var c4 = 0
+        if i + 1 < len(text):
+            c2 = mb_b64_char_val(text[i + 1])
+        if i + 2 < len(text):
+            c3 = mb_b64_char_val(text[i + 2])
+        if i + 3 < len(text):
+            c4 = mb_b64_char_val(text[i + 3])
+        if c1 >= 0 and c2 >= 0:
+            var pad3 = c3
+            var pad4 = c4
+            if pad3 < 0:
+                pad3 = 0
+            if pad4 < 0:
+                pad4 = 0
+            var triple = c1 * 262144 + c2 * 4096 + pad3 * 64 + pad4
+            result = result + chr((triple >> 16) & 255)
+            if c3 >= 0:
+                result = result + chr((triple >> 8) & 255)
+            if c4 >= 0:
+                result = result + chr(triple & 255)
+        i += 4
+    return result
+
+# ---- 辅助：Base64 字符值 ----
+def mb_b64_char_val(c):
+    if c >= "A" and c <= "Z":
+        return ord(c) - ord("A")
+    if c >= "a" and c <= "z":
+        return ord(c) - ord("a") + 26
+    if c >= "0" and c <= "9":
+        return ord(c) - ord("0") + 52
+    if c == "+":
+        return 62
+    if c == "/":
+        return 63
+    return -1
+
+# ---- 辅助：join ----
+def mb_join(arr, sep):
+    if len(arr) == 0:
+        return ""
+    var result = arr[0]
+    var i = 1
+    while i < len(arr):
+        result = result + sep + arr[i]
+        i += 1
+    return result
+
+# ---- 构建 MIME 文本 ----
+def mb_build(msg):
+    var headers = ""
+    # From
+    headers = headers + "From: " + msg["from"] + "\r\n"
+    # To
+    if len(msg["to"]) > 0:
+        headers = headers + "To: " + mb_join(msg["to"], ", ") + "\r\n"
+    # Cc
+    if len(msg["cc"]) > 0:
+        headers = headers + "Cc: " + mb_join(msg["cc"], ", ") + "\r\n"
+    # Subject
+    headers = headers + "Subject: " + msg["subject"] + "\r\n"
+    # MIME-Version
+    headers = headers + "MIME-Version: 1.0\r\n"
+    # 判断是否多部分
+    var has_html = msg["html"] != ""
+    var has_attach = len(msg["attachments"]) > 0
+    if has_attach:
+        var boundary = mb_gen_boundary()
+        headers = headers + "Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n"
+        var body = "--" + boundary + "\r\n"
+        # 正文部分
+        if has_html:
+            body = body + "Content-Type: multipart/alternative; boundary=\"" + boundary + "_alt\"\r\n\r\n"
+            body = body + "--" + boundary + "_alt\r\n"
+            body = body + "Content-Type: text/plain; charset=UTF-8\r\n"
+            body = body + "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+            body = body + mb_encode_qp(msg["text"]) + "\r\n"
+            body = body + "--" + boundary + "_alt\r\n"
+            body = body + "Content-Type: text/html; charset=UTF-8\r\n"
+            body = body + "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+            body = body + mb_encode_qp(msg["html"]) + "\r\n"
+            body = body + "--" + boundary + "_alt--\r\n"
+        else:
+            body = body + "Content-Type: text/plain; charset=UTF-8\r\n"
+            body = body + "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+            body = body + mb_encode_qp(msg["text"]) + "\r\n"
+        # 附件
+        var i = 0
+        while i < len(msg["attachments"]):
+            var att = msg["attachments"][i]
+            body = body + "--" + boundary + "\r\n"
+            body = body + "Content-Type: " + att["mime_type"] + "\r\n"
+            body = body + "Content-Transfer-Encoding: base64\r\n"
+            body = body + "Content-Disposition: attachment; filename=\"" + att["filename"] + "\"\r\n\r\n"
+            body = body + mb_encode_b64(att["content"]) + "\r\n"
+            i += 1
+        body = body + "--" + boundary + "--\r\n"
+        return headers + body
+    elif has_html:
+        var boundary = mb_gen_boundary()
+        headers = headers + "Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n\r\n"
+        var body = "--" + boundary + "\r\n"
+        body = body + "Content-Type: text/plain; charset=UTF-8\r\n"
+        body = body + "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+        body = body + mb_encode_qp(msg["text"]) + "\r\n"
+        body = body + "--" + boundary + "\r\n"
+        body = body + "Content-Type: text/html; charset=UTF-8\r\n"
+        body = body + "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+        body = body + mb_encode_qp(msg["html"]) + "\r\n"
+        body = body + "--" + boundary + "--\r\n"
+        return headers + body
+    else:
+        headers = headers + "Content-Type: text/plain; charset=UTF-8\r\n"
+        headers = headers + "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+        return headers + mb_encode_qp(msg["text"])
+
+# ---- 解析 MIME 文本（简化版） ----
+def mb_parse(text):
+    var result = {"headers": {}, "body": ""}
+    var header_end = -1
+    var i = 0
+    while i < len(text):
+        if i + 1 < len(text) and text[i] == "\r" and text[i + 1] == "\n":
+            if i + 3 < len(text) and text[i + 2] == "\r" and text[i + 3] == "\n":
+                header_end = i
+                break
+            i += 2
+            continue
+        i += 1
+    if header_end == -1:
+        return result
+    var header_text = text[0 : header_end]
+    result["body"] = text[header_end + 4 : len(text)]
+    var lines = header_text.split("\r\n")
+    i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if line.contains(": "):
+            var colon = -1
+            var j = 0
+            while j < len(line):
+                if line[j] == ":":
+                    colon = j
+                    break
+                j += 1
+            if colon != -1:
+                var key = line[0 : colon]
+                var val = line[colon + 2 : len(line)]
+                result["headers"][key] = val
+        i += 1
+    return result

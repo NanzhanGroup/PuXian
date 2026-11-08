@@ -1,0 +1,34 @@
+# dateperiod 0.1.0 测试
+import "../registry/dateperiod/0.1.0/dateperiod.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var dp = dp_new(0, 10, 2)
+    var lst = dp_to_list(dp)
+    expect(lst == [0, 2, 4, 6, 8, 10], "to_list: " + str(lst))
+    expect(dp_count(dp) == 6, "count 6")
+    expect(dp_contains(dp, 4) == true, "contains 4")
+    expect(dp_contains(dp, 5) == false, "not contains 5")
+    expect(dp_contains(dp, 0) == true, "contains 0")
+    expect(dp_contains(dp, 10) == true, "contains 10")
+    # dp_at
+    expect(dp_at(dp, 5) == true, "at 5 in range")
+    expect(dp_at(dp, 11) == false, "at 11 out of range")
+    # dp_next
+    expect(dp_next(dp, 4) == 6, "next of 4: " + str(dp_next(dp, 4)))
+    expect(dp_next(dp, 10) == null, "next of 10 is null")
+    # dp_days
+    var dpd = dp_days(0, 86400)
+    expect(dp_count(dpd) == 2, "2 days: " + str(dp_count(dpd)))
+    # dp_hours
+    var dph = dp_hours(0, 7200)
+    expect(dp_count(dph) == 3, "3 hours: " + str(dp_count(dph)))
+    # dp_weeks
+    var dpw = dp_weeks(0, 604800)
+    expect(dp_count(dpw) == 2, "2 weeks: " + str(dp_count(dpw)))
+    # dp_months
+    var dpm = dp_months(0, 2592000)
+    expect(dp_count(dpm) == 2, "2 months: " + str(dp_count(dpm)))
+    print("dateperiod: PASS")

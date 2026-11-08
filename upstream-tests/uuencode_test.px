@@ -1,0 +1,27 @@
+# uuencode 0.1.0 测试
+import "../registry/uuencode/0.1.0/uuencode.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var data = [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+    var encoded = uu_encode(data)
+    expect(encoded[:5] == "begin", "encode starts with begin: " + encoded[:10])
+    expect(encoded.contains("`"), "encode contains backtick")
+    expect(encoded.contains("end"), "encode contains end")
+    var decoded = uu_decode(encoded)
+    expect(len(decoded) == len(data), "decode len: " + str(len(decoded)) + " vs " + str(len(data)))
+    var ok = true
+    var i = 0
+    while i < len(data):
+        if decoded[i] != data[i]:
+            ok = false
+        i += 1
+    expect(ok, "decode roundtrip")
+    # empty
+    var enc2 = uu_encode([])
+    expect(enc2.contains("end"), "encode empty has end")
+    var dec2 = uu_decode(enc2)
+    expect(len(dec2) == 0, "decode empty: " + str(len(dec2)))
+    print("uuencode: PASS")

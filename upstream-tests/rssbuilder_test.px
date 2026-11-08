@@ -1,0 +1,55 @@
+# rssbuilder 0.1.0 测试
+import "../registry/rssbuilder/0.1.0/rssbuilder.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # XML 转义
+    expect(rss_escape_xml("<a&b>") == "&lt;a&amp;b&gt;", "escape xml: " + rss_escape_xml("<a&b>"))
+    expect(rss_unescape_xml("&lt;a&amp;b&gt;") == "<a&b>", "unescape xml: " + rss_unescape_xml("&lt;a&amp;b&gt;"))
+    # RSS 构建
+    var feed = rss_new("My Blog", "https://example.com", "My blog feed")
+    rss_add_item(feed, "Post 1", "https://example.com/1", "First post", "Mon, 01 Jan 2024 00:00:00 GMT", "guid1")
+    rss_add_item(feed, "Post 2", "https://example.com/2", "Second post", "Tue, 02 Jan 2024 00:00:00 GMT", "guid2")
+    var xml = rss_build(feed)
+    expect(xml.contains("<rss version=\"2.0\">"), "rss build version: " + xml)
+    expect(xml.contains("<title>My Blog</title>"), "rss build title: " + xml)
+    expect(xml.contains("Post 1"), "rss build item1: " + xml)
+    expect(xml.contains("Post 2"), "rss build item2: " + xml)
+    expect(xml.contains("<guid>guid1</guid>"), "rss build guid: " + xml)
+    # RSS 解析
+    var parsed = rss_parse(xml)
+    expect(parsed["title"] == "My Blog", "rss parse title: " + parsed["title"])
+    expect(parsed["link"] == "https://example.com", "rss parse link: " + parsed["link"])
+    expect(len(parsed["items"]) == 2, "rss parse items count: " + str(len(parsed["items"])))
+    expect(parsed["items"][0]["title"] == "Post 1", "rss parse item0 title: " + parsed["items"][0]["title"])
+    expect(parsed["items"][1]["title"] == "Post 2", "rss parse item1 title: " + parsed["items"][1]["title"])
+    # RSS 往返
+    var rebuilt = rss_build(parsed)
+    var reparsed = rss_parse(rebuilt)
+    expect(reparsed["title"] == "My Blog", "rss roundtrip title: " + reparsed["title"])
+    expect(len(reparsed["items"]) == 2, "rss roundtrip items: " + str(len(reparsed["items"])))
+    # Atom 构建
+    var afeed = atom_new("Atom Blog", "https://atom.example.com", "2024-01-01T00:00:00Z")
+    atom_add_entry(afeed, "Entry 1", "https://atom.example.com/1", "tag:example.com,2024:1", "2024-01-01T00:00:00Z", "Summary 1")
+    var axml = atom_build(afeed)
+    expect(axml.contains("<feed"), "atom build feed: " + axml)
+    expect(axml.contains("Atom Blog"), "atom build title: " + axml)
+    expect(axml.contains("Entry 1"), "atom build entry: " + axml)
+    expect(axml.contains("Summary 1"), "atom build summary: " + axml)
+    # Atom 解析
+    var aparsed = atom_parse(axml)
+    expect(aparsed["title"] == "Atom Blog", "atom parse title: " + aparsed["title"])
+    expect(len(aparsed["entries"]) == 1, "atom parse entries: " + str(len(aparsed["entries"])))
+    expect(aparsed["entries"][0]["title"] == "Entry 1", "atom parse entry title: " + aparsed["entries"][0]["title"])
+    # 特殊字符转义
+    var feed2 = rss_new("A&B", "https://x.com", "Test <b>bold</b>")
+    var xml2 = rss_build(feed2)
+    expect(xml2.contains("A&amp;B"), "rss escape in title: " + xml2)
+    expect(xml2.contains("&lt;b&gt;bold&lt;/b&gt;"), "rss escape in desc: " + xml2)
+    var parsed2 = rss_parse(xml2)
+    expect(parsed2["title"] == "A&B", "rss unescape title: " + parsed2["title"])
+    print("rssbuilder: PASS")

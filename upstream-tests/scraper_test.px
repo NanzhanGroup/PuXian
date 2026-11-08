@@ -1,0 +1,45 @@
+# scraper 0.1.0 测试
+import "../registry/scraper/0.1.0/scraper.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var html = "<html><head><title>Test Page</title>"
+    html = html + "<meta name=\"description\" content=\"A test page\">"
+    html = html + "<meta name=\"author\" content=\"Bob\">"
+    html = html + "</head><body>"
+    html = html + "<a href=\"http://a.com\">A</a>"
+    html = html + "<a href='http://b.com'>B</a>"
+    html = html + "<img src=\"img1.png\"/>"
+    html = html + "<img src=\"img2.png\"/>"
+    html = html + "</body></html>"
+    # extract links
+    var links = sc_extract_links(html)
+    expect(len(links) == 2, "2 links: " + str(links))
+    expect(links[0] == "http://a.com", "first link")
+    expect(links[1] == "http://b.com", "second link: " + links[1])
+    # extract src
+    var srcs = sc_extract_src(html)
+    expect(len(srcs) == 2, "2 srcs: " + str(srcs))
+    expect(srcs[0] == "img1.png", "first src")
+    expect(srcs[1] == "img2.png", "second src")
+    # extract images
+    var imgs = sc_extract_images(html)
+    expect(len(imgs) == 2, "2 images")
+    expect(imgs[0]["src"] == "img1.png", "img1 src")
+    # extract title
+    var title = sc_extract_title(html)
+    expect(title == "Test Page", "title: " + title)
+    # extract text
+    var text = sc_extract_text(html)
+    expect(text.find("Test Page") >= 0, "text has title")
+    expect(text.find("<") == -1, "text no tags")
+    # strip tags
+    var stripped = sc_strip_tags("<p>Hello <b>World</b></p>")
+    expect(stripped == "Hello World", "stripped: " + stripped)
+    # extract meta all
+    var all_meta = sc_extract_meta_all(html)
+    expect(all_meta["description"] == "A test page", "all meta desc: " + str(all_meta["description"]))
+    expect(all_meta["author"] == "Bob", "all meta author: " + str(all_meta["author"]))
+    print("scraper: PASS")

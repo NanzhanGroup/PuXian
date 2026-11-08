@@ -1,0 +1,144 @@
+# vardump.px — 结构化变量转储与导出（PHP var_dump / var_export / print_r）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   vd_dump(val, indent=0)     → string  # var_dump 风格（含类型+长度+值）
+#   vd_export(val, indent=0)   → string  # var_export 风格（可 eval 的代码）
+#   vd_print_r(val, indent=0)  → string  # print_r 风格（人类可读）
+#   vd_type(val)               → string  # 类型名
+#   vd_repr(val)               → string  # 简洁表示
+
+# 类型名
+def vd_type(val):
+    return type(val)
+
+# 简洁表示
+def vd_repr(val):
+    var t = type(val)
+    if t == "string":
+        return '"' + val + '"'
+    if t == "null":
+        return "null"
+    if t == "bool":
+        if val:
+            return "true"
+        return "false"
+    return str(val)
+
+# var_dump 风格
+def vd_dump(val, indent=0):
+    var pad = ""
+    var i = 0
+    while i < indent:
+        pad = pad + "  "
+        i += 1
+    var t = type(val)
+    if t == "string":
+        return pad + 'string(' + str(len(val)) + ') "' + val + '"'
+    if t == "int":
+        return pad + 'int(' + str(val) + ')'
+    if t == "float":
+        return pad + 'float(' + str(val) + ')'
+    if t == "bool":
+        if val:
+            return pad + 'bool(true)'
+        return pad + 'bool(false)'
+    if t == "null":
+        return pad + 'NULL'
+    if t == "list":
+        var s = pad + 'array(' + str(len(val)) + ') {\n'
+        var j = 0
+        while j < len(val):
+            s = s + pad + '  [' + str(j) + ']=>\n'
+            s = s + vd_dump(val[j], indent + 2) + '\n'
+            j += 1
+        s = s + pad + '}'
+        return s
+    if t == "dict":
+        var ks = val.keys()
+        var s = pad + 'array(' + str(len(ks)) + ') {\n'
+        var j = 0
+        while j < len(ks):
+            s = s + pad + '  ["' + ks[j] + '"]=>\n'
+            s = s + vd_dump(val[ks[j]], indent + 2) + '\n'
+            j += 1
+        s = s + pad + '}'
+        return s
+    return pad + str(val)
+
+# var_export 风格（可 eval）
+def vd_export(val, indent=0):
+    var pad = ""
+    var i = 0
+    while i < indent:
+        pad = pad + "  "
+        i += 1
+    var t = type(val)
+    if t == "string":
+        return "'" + val + "'"
+    if t == "null":
+        return "null"
+    if t == "bool":
+        if val:
+            return "true"
+        return "false"
+    if t == "int" or t == "float":
+        return str(val)
+    if t == "list":
+        if len(val) == 0:
+            return "[]"
+        var s = "[\n"
+        var j = 0
+        while j < len(val):
+            s = s + pad + "  " + vd_export(val[j], indent + 1) + ",\n"
+            j += 1
+        s = s + pad + "]"
+        return s
+    if t == "dict":
+        var ks = val.keys()
+        if len(ks) == 0:
+            return "{}"
+        var s = "{\n"
+        var j = 0
+        while j < len(ks):
+            s = s + pad + '  "' + ks[j] + '": ' + vd_export(val[ks[j]], indent + 1) + ",\n"
+            j += 1
+        s = s + pad + "}"
+        return s
+    return str(val)
+
+# print_r 风格（人类可读）
+def vd_print_r(val, indent=0):
+    var pad = ""
+    var i = 0
+    while i < indent:
+        pad = pad + "    "
+        i += 1
+    var t = type(val)
+    if t == "string":
+        return val
+    if t == "null":
+        return ""
+    if t == "bool":
+        if val:
+            return "1"
+        return ""
+    if t == "list":
+        var s = "Array\n" + pad + "(\n"
+        var j = 0
+        while j < len(val):
+            s = s + pad + "    [" + str(j) + "] => " + vd_print_r(val[j], indent + 2) + "\n"
+            j += 1
+        s = s + pad + ")"
+        return s
+    if t == "dict":
+        var ks = val.keys()
+        var s = "Array\n" + pad + "(\n"
+        var j = 0
+        while j < len(ks):
+            s = s + pad + "    [" + ks[j] + "] => " + vd_print_r(val[ks[j]], indent + 2) + "\n"
+            j += 1
+        s = s + pad + ")"
+        return s
+    return str(val)

@@ -1,0 +1,33 @@
+# orm 0.1.0 测试
+import "../registry/orm/0.1.0/orm.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var User = orm_new("users", "id")
+    orm_field(User, "id", "int")
+    orm_field(User, "name", "string")
+    orm_field(User, "email", "string")
+    orm_field(User, "password", "string")
+    orm_hidden(User, ["password"])
+    expect(orm_table(User) == "users", "table")
+    expect(orm_pk(User) == "id", "pk")
+    # to row
+    var obj = {"id": 1, "name": "Alice", "email": "a@b.com", "password": "secret"}
+    var row = orm_to_row(User, obj)
+    expect(row["id"] == 1, "row id")
+    expect(row["name"] == "Alice", "row name")
+    # from row
+    var obj2 = orm_from_row(User, {"id": 2, "name": "Bob", "email": "c@d.com"})
+    expect(obj2["id"] == 2, "from row id")
+    # to json (hidden fields excluded)
+    var json_data = orm_to_json(User, obj)
+    expect(json_data["name"] == "Alice", "json name")
+    expect(not json_data.has("password"), "json no password")
+    # validate
+    var errors = orm_validate(User, {"id": 1, "name": "x", "email": "y", "password": "z"})
+    expect(len(errors) == 0, "valid: " + str(errors))
+    var errors2 = orm_validate(User, {"id": "x", "name": 1, "email": "y", "password": "z"})
+    expect(len(errors2) >= 2, "invalid: " + str(errors2))
+    print("orm: PASS")

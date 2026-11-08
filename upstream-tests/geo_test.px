@@ -1,0 +1,47 @@
+# geo 0.1.0 测试
+import "../registry/geo/0.1.0/geo.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # Haversine — 北京到上海约 1067 km
+    var d = geo_haversine(39.9042, 116.4074, 31.2304, 121.4737)
+    expect(d > 1000 and d < 1200, "haversine Beijing-Shanghai: " + str(d))
+    # 同点距离 0
+    expect(geo_haversine(39.9, 116.4, 39.9, 116.4) < 0.001, "haversine same point: " + str(geo_haversine(39.9, 116.4, 39.9, 116.4)))
+    # 距离米
+    var dm = geo_haversine_m(39.9042, 116.4074, 31.2304, 121.4737)
+    expect(dm > 1000000 and dm < 1200000, "haversine_m: " + str(dm))
+    # 方位角
+    var b = geo_bearing(39.9042, 116.4074, 31.2304, 121.4737)
+    expect(b >= 0 and b < 360, "bearing: " + str(b))
+    # 目的地
+    var dest = geo_destination(39.9042, 116.4074, 0, 100)
+    expect(abs(dest[0] - 39.9042) < 1.0, "destination lat: " + str(dest))
+    # WGS84→GCJ02
+    var gcj = geo_wgs84_to_gcj02(39.9042, 116.4074)
+    expect(abs(gcj[0] - 39.905) < 0.01, "wgs84→gcj02 lat: " + str(gcj))
+    expect(abs(gcj[1] - 116.413) < 0.01, "wgs84→gcj02 lon: " + str(gcj))
+    # GCJ02→WGS84 往返
+    var wgs = geo_gcj02_to_wgs84(gcj[0], gcj[1])
+    expect(abs(wgs[0] - 39.9042) < 0.001, "gcj02→wgs84 rt lat: " + str(wgs))
+    expect(abs(wgs[1] - 116.4074) < 0.001, "gcj02→wgs84 rt lon: " + str(wgs))
+    # GCJ02→BD09→GCJ02 往返
+    var bd = geo_gcj02_to_bd09(gcj[0], gcj[1])
+    var gcj2 = geo_bd09_to_gcj02(bd[0], bd[1])
+    expect(abs(gcj2[0] - gcj[0]) < 0.01, "gcj02→bd09→gcj02 rt lat: " + str(gcj2))
+    # GeoHash
+    var hash = geo_geohash_encode(39.9042, 116.4074, 6)
+    expect(len(hash) == 6, "geohash len: " + hash)
+    var decoded = geo_geohash_decode(hash)
+    expect(abs(decoded[0] - 39.9042) < 0.1, "geohash decode lat: " + str(decoded))
+    expect(abs(decoded[1] - 116.4074) < 0.1, "geohash decode lon: " + str(decoded))
+    # bbox
+    expect(geo_bbox_contains([30.0, 110.0, 40.0, 120.0], 35.0, 115.0) == true, "bbox contains")
+    expect(geo_bbox_contains([30.0, 110.0, 40.0, 120.0], 25.0, 115.0) == false, "bbox not contains")
+    expect(geo_bbox_intersects([30.0, 110.0, 40.0, 120.0], [35.0, 115.0, 45.0, 125.0]) == true, "bbox intersects")
+    expect(geo_bbox_intersects([30.0, 110.0, 40.0, 120.0], [50.0, 130.0, 60.0, 140.0]) == false, "bbox not intersects")
+    print("geo: PASS")

@@ -1,0 +1,28 @@
+# whois 0.1.0 测试
+import "../registry/whois/0.1.0/whois.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # build query
+    var q = whois_build_query("example.com")
+    expect(q == "example.com\r\n", "query: " + q)
+    # parse response
+    var resp = "Domain Name: EXAMPLE.COM\r\nRegistry Domain ID: 12345\r\nRegistrar: IANA\r\n"
+    var parsed = whois_parse_response(resp)
+    expect(parsed.has("Domain Name"), "has Domain Name")
+    expect(parsed["Domain Name"] == "EXAMPLE.COM", "domain value: " + parsed["Domain Name"])
+    expect(parsed["Registrar"] == "IANA", "registrar: " + parsed["Registrar"])
+    # extract field
+    var val = whois_extract_field(resp, "Registry Domain ID")
+    expect(val == "12345", "extract: " + val)
+    var missing = whois_extract_field(resp, "Nonexistent")
+    expect(missing == "", "missing field: " + missing)
+    # get server
+    expect(whois_get_server("example.com") == "whois.verisign-grs.com", "com server")
+    expect(whois_get_server("example.org") == "whois.publicinterestregistry.org", "org server")
+    expect(whois_get_server("example.cn") == "whois.cnnic.cn", "cn server")
+    expect(whois_get_server("example.io") == "whois.nic.io", "io server")
+    expect(whois_get_server("example.xyz") == "whois.iana.org", "unknown tld: " + whois_get_server("example.xyz"))
+    print("whois: PASS")

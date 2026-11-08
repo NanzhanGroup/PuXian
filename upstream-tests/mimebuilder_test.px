@@ -1,0 +1,67 @@
+# mimebuilder 0.1.0 测试
+import "../registry/mimebuilder/0.1.0/mimebuilder.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # 格式化地址
+    expect(mb_format_addr("a@b.com", "Alice") == "Alice <a@b.com>", "format addr: " + mb_format_addr("a@b.com", "Alice"))
+    expect(mb_format_addr("a@b.com", "") == "a@b.com", "format addr no name: " + mb_format_addr("a@b.com", ""))
+    # QP 编码/解码
+    expect(mb_encode_qp("Hello") == "Hello", "qp encode simple: " + mb_encode_qp("Hello"))
+    var qp = mb_encode_qp("H=llo")
+    expect(qp.contains("=3D"), "qp encode =: " + qp)
+    expect(mb_decode_qp("Hello") == "Hello", "qp decode simple: " + mb_decode_qp("Hello"))
+    expect(mb_decode_qp("H=3Dllo") == "H=llo", "qp decode =: " + mb_decode_qp("H=3Dllo"))
+    # QP 往返
+    var orig = "Hello World = Test"
+    expect(mb_decode_qp(mb_encode_qp(orig)) == orig, "qp roundtrip: " + mb_decode_qp(mb_encode_qp(orig)))
+    # Base64 编码/解码
+    expect(mb_encode_b64("Hello") == "SGVsbG8=", "b64 encode Hello: " + mb_encode_b64("Hello"))
+    expect(mb_decode_b64("SGVsbG8=") == "Hello", "b64 decode Hello: " + mb_decode_b64("SGVsbG8="))
+    expect(mb_encode_b64("Hi") == "SGk=", "b64 encode Hi: " + mb_encode_b64("Hi"))
+    expect(mb_decode_b64("SGk=") == "Hi", "b64 decode Hi: " + mb_decode_b64("SGk="))
+    expect(mb_encode_b64("abc") == "YWJj", "b64 encode abc: " + mb_encode_b64("abc"))
+    expect(mb_decode_b64("YWJj") == "abc", "b64 decode abc: " + mb_decode_b64("YWJj"))
+    # 构建纯文本邮件
+    var msg = mb_new()
+    mb_set_from(msg, "sender@example.com", "Sender")
+    mb_set_to(msg, "recipient@example.com", "Recipient")
+    mb_set_subject(msg, "Test Subject")
+    mb_set_body(msg, "Hello World")
+    var mime = mb_build(msg)
+    expect(mime.contains("From: Sender <sender@example.com>"), "build from: " + mime)
+    expect(mime.contains("To: Recipient <recipient@example.com>"), "build to: " + mime)
+    expect(mime.contains("Subject: Test Subject"), "build subject: " + mime)
+    expect(mime.contains("Content-Type: text/plain"), "build content-type: " + mime)
+    expect(mime.contains("Hello World"), "build body: " + mime)
+    # 构建 HTML 邮件
+    var msg2 = mb_new()
+    mb_set_from(msg2, "a@b.com")
+    mb_set_to(msg2, "c@d.com")
+    mb_set_subject(msg2, "HTML Test")
+    mb_set_body(msg2, "Plain text", "<p>HTML text</p>")
+    var mime2 = mb_build(msg2)
+    expect(mime2.contains("multipart/alternative"), "html multipart: " + mime2)
+    expect(mime2.contains("text/html"), "html content-type: " + mime2)
+    expect(mime2.contains("<p>HTML text</p>"), "html body: " + mime2)
+    # 构建带附件邮件
+    var msg3 = mb_new()
+    mb_set_from(msg3, "a@b.com")
+    mb_set_to(msg3, "c@d.com")
+    mb_set_subject(msg3, "Attachment Test")
+    mb_set_body(msg3, "See attachment")
+    mb_add_attachment(msg3, "test.txt", "File content", "text/plain")
+    var mime3 = mb_build(msg3)
+    expect(mime3.contains("multipart/mixed"), "attach multipart: " + mime3)
+    expect(mime3.contains("attachment"), "attach disposition: " + mime3)
+    expect(mime3.contains("test.txt"), "attach filename: " + mime3)
+    # 解析
+    var parsed = mb_parse(mime)
+    expect(parsed["headers"].contains("From"), "parse from header: " + str(parsed["headers"]))
+    expect(parsed["headers"]["From"] == "Sender <sender@example.com>", "parse from value: " + parsed["headers"]["From"])
+    expect(parsed["headers"]["Subject"] == "Test Subject", "parse subject: " + parsed["headers"]["Subject"])
+    print("mimebuilder: PASS")

@@ -1,0 +1,76 @@
+# strpad.px — 字符串填充与重复（PHP str_pad / str_repeat / str_truncate）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   sp_pad(s, width, pad=" ", side="right")  → string  # 填充到指定宽度
+#   sp_pad_left(s, width, pad=" ")            → string
+#   sp_pad_right(s, width, pad=" ")           → string
+#   sp_pad_both(s, width, pad=" ")            → string
+#   sp_repeat(s, n)                           → string  # 重复 n 次
+#   sp_truncate(s, width, suffix="...")       → string  # 截断到宽度+后缀
+#   sp_limit(s, width)                        → string  # 硬截断
+#   sp_zeropad(n, width)                      → string  # 数字零填充
+
+# 填充字符串到指定宽度
+# side: "left" | "right" | "both"
+def sp_pad(s, width, pad=" ", side="right"):
+    var slen = len(s)
+    if slen >= width:
+        return s
+    var diff = width - slen
+    if len(pad) == 0:
+        pad = " "
+    if side == "left":
+        var fill = sp_repeat(pad, (diff + len(pad) - 1) // len(pad))
+        return fill[len(fill) - diff:] + s
+    elif side == "both":
+        var left = diff // 2
+        var right = diff - left
+        var lfill = sp_repeat(pad, (left + len(pad) - 1) // len(pad))
+        var rfill = sp_repeat(pad, (right + len(pad) - 1) // len(pad))
+        return lfill[len(lfill) - left:] + s + rfill[:right]
+    else:
+        var fill = sp_repeat(pad, (diff + len(pad) - 1) // len(pad))
+        return s + fill[:diff]
+
+def sp_pad_left(s, width, pad=" "):
+    return sp_pad(s, width, pad, "left")
+
+def sp_pad_right(s, width, pad=" "):
+    return sp_pad(s, width, pad, "right")
+
+def sp_pad_both(s, width, pad=" "):
+    return sp_pad(s, width, pad, "both")
+
+# 重复字符串 n 次
+def sp_repeat(s, n):
+    if n <= 0:
+        return ""
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + s
+        i += 1
+    return out
+
+# 截断到 width，超出部分用 suffix 替代
+def sp_truncate(s, width, suffix="..."):
+    if len(s) <= width:
+        return s
+    if width <= len(suffix):
+        return suffix[:width]
+    return s[:width - len(suffix)] + suffix
+
+# 硬截断到 width
+def sp_limit(s, width):
+    if len(s) <= width:
+        return s
+    return s[:width]
+
+# 数字零填充到指定宽度
+def sp_zeropad(n, width):
+    var s = str(n)
+    if len(s) >= width:
+        return s
+    return sp_pad_left(s, width, "0")

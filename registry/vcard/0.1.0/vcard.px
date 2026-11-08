@@ -1,0 +1,264 @@
+# ============================================================
+# 普贤生态库：registry/vcard — vCard/iCalendar 文本格式解析
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP vCard / icalendar / Python vobject：
+#   vc_parse(text)               → 解析 vCard/iCalendar 文本 → [{name, params, value}]
+#   vc_encode(cards)             → 编码为 vCard 文本
+#   vc_get_prop(card, name)      → 获取属性值
+#   vc_get_all_props(card, name) → 获取所有同名属性
+#   vc_add_prop(card, name, value, params) → 添加属性
+#   vc_new()                     → 创建空 vCard
+#   vc_fold(line)                → 行折叠（75 字符）
+#   vc_unfold(text)              → 行展开（合并续行）
+#   vc_escape(text)              → 转义特殊字符
+#   vc_unescape(text)            → 反转义
+#   vc_parse_vcard(text)         → 解析为联系人 dict
+#   vc_build_vcard(contact)      → 从 dict 构建 vCard
+# ============================================================
+
+# ---- 行展开（合并续行） ----
+def vc_unfold(text):
+    var lines = text.split("\n")
+    var result = []
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        # 去除 \r
+        if len(line) > 0 and line[len(line) - 1] == "\r":
+            line = line[0 : len(line) - 1]
+        if len(line) > 0 and (line[0] == " " or line[0] == "\t"):
+            if len(result) > 0:
+                result[len(result) - 1] = result[len(result) - 1] + line[1 : len(line)]
+            else:
+                result.append(line[1 : len(line)])
+        else:
+            result.append(line)
+        i += 1
+    return result
+
+# ---- 行折叠（75 字符） ----
+def vc_fold(line):
+    if len(line) <= 75:
+        return line
+    var result = line[0 : 75]
+    var remaining = line[75 : len(line)]
+    while len(remaining) > 0:
+        var chunk = remaining
+        if len(chunk) > 74:
+            chunk = remaining[0 : 74]
+            remaining = remaining[74 : len(remaining)]
+        else:
+            remaining = ""
+        result = result + "\r\n " + chunk
+    return result
+
+# ---- 转义 ----
+def vc_escape(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        if c == "\\":
+            result = result + "\\\\"
+        elif c == "\n":
+            result = result + "\\n"
+        elif c == "\r":
+            result = result + "\\r"
+        elif c == ",":
+            result = result + "\\,"
+        elif c == ";":
+            result = result + "\\;"
+        else:
+            result = result + c
+        i += 1
+    return result
+
+# ---- 反转义 ----
+def vc_unescape(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
+            var c = text[i + 1]
+            if c == "n":
+                result = result + "\n"
+            elif c == "r":
+                result = result + "\r"
+            elif c == "\\":
+                result = result + "\\"
+            elif c == ",":
+                result = result + ","
+            elif c == ";":
+                result = result + ";"
+            else:
+                result = result + c
+            i += 2
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+# ---- 解析属性行 ----
+# 格式: NAME;PARAM1=VAL1;PARAM2=VAL2:VALUE
+def vc_parse_line(line):
+    var colon = -1
+    var i = 0
+    while i < len(line):
+        if line[i] == ":":
+            colon = i
+            break
+        i += 1
+    if colon == -1:
+        return {"name": line, "params": {}, "value": ""}
+    var name_params = line[0 : colon]
+    var value = line[colon + 1 : len(line)]
+    # 分割 name 和 params
+    var parts = vc_split_unescaped(name_params, ";")
+    var name = parts[0]
+    var params = {}
+    i = 1
+    while i < len(parts):
+        var eq = -1
+        var j = 0
+        while j < len(parts[i]):
+            if parts[i][j] == "=":
+                eq = j
+                break
+            j += 1
+        if eq != -1:
+            var pname = parts[i][0 : eq]
+            var pval = parts[i][eq + 1 : len(parts[i])]
+            params[pname] = pval
+        i += 1
+    return {"name": name, "params": params, "value": vc_unescape(value)}
+
+# ---- 辅助：按分隔符分割（不分割转义的） ----
+def vc_split_unescaped(text, sep):
+    var result = []
+    var current = ""
+    var i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
+            current = current + text[i] + text[i + 1]
+            i += 2
+        elif text[i] == sep:
+            result.append(current)
+            current = ""
+            i += 1
+        else:
+            current = current + text[i]
+            i += 1
+    result.append(current)
+    return result
+
+# ---- 解析 vCard/iCalendar 文本 ----
+def vc_parse(text):
+    var lines = vc_unfold(text)
+    var cards = []
+    var current = null
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if len(line) == 0:
+            i += 1
+            continue
+        var prop = vc_parse_line(line)
+        if prop["name"] == "BEGIN":
+            current = {"type": prop["value"], "props": []}
+        elif prop["name"] == "END":
+            if current != null:
+                cards.append(current)
+                current = null
+        else:
+            if current != null:
+                current["props"].append(prop)
+        i += 1
+    return cards
+
+# ---- 获取属性值 ----
+def vc_get_prop(card, name):
+    var i = 0
+    while i < len(card["props"]):
+        if card["props"][i]["name"] == name:
+            return card["props"][i]["value"]
+        i += 1
+    return ""
+
+# ---- 获取所有同名属性 ----
+def vc_get_all_props(card, name):
+    var result = []
+    var i = 0
+    while i < len(card["props"]):
+        if card["props"][i]["name"] == name:
+            result.append(card["props"][i]["value"])
+        i += 1
+    return result
+
+# ---- 添加属性 ----
+def vc_add_prop(card, name, value, params = {}):
+    card["props"].append({"name": name, "params": params, "value": value})
+    return card
+
+# ---- 创建空 vCard ----
+def vc_new():
+    return {"type": "VCARD", "props": []}
+
+# ---- 编码属性行 ----
+def vc_encode_prop(prop):
+    var line = prop["name"]
+    var keys = prop["params"].keys()
+    var i = 0
+    while i < len(keys):
+        line = line + ";" + keys[i] + "=" + prop["params"][keys[i]]
+        i += 1
+    line = line + ":" + vc_escape(prop["value"])
+    return vc_fold(line)
+
+# ---- 编码 vCard ----
+def vc_encode(cards):
+    var result = ""
+    var i = 0
+    while i < len(cards):
+        var card = cards[i]
+        result = result + "BEGIN:" + card["type"] + "\r\n"
+        var j = 0
+        while j < len(card["props"]):
+            result = result + vc_encode_prop(card["props"][j]) + "\r\n"
+            j += 1
+        result = result + "END:" + card["type"] + "\r\n"
+        i += 1
+    return result
+
+# ---- 解析为联系人 dict ----
+def vc_parse_vcard(text):
+    var cards = vc_parse(text)
+    if len(cards) == 0:
+        return {}
+    var card = cards[0]
+    var contact = {}
+    contact["fn"] = vc_get_prop(card, "FN")
+    contact["email"] = vc_get_prop(card, "EMAIL")
+    contact["tel"] = vc_get_prop(card, "TEL")
+    contact["org"] = vc_get_prop(card, "ORG")
+    contact["title"] = vc_get_prop(card, "TITLE")
+    contact["note"] = vc_get_prop(card, "NOTE")
+    return contact
+
+# ---- 从 dict 构建 vCard ----
+def vc_build_vcard(contact):
+    var card = vc_new()
+    vc_add_prop(card, "VERSION", "3.0")
+    if contact.contains("fn"):
+        vc_add_prop(card, "FN", contact["fn"])
+    if contact.contains("email"):
+        vc_add_prop(card, "EMAIL", contact["email"])
+    if contact.contains("tel"):
+        vc_add_prop(card, "TEL", contact["tel"])
+    if contact.contains("org"):
+        vc_add_prop(card, "ORG", contact["org"])
+    if contact.contains("title"):
+        vc_add_prop(card, "TITLE", contact["title"])
+    if contact.contains("note"):
+        vc_add_prop(card, "NOTE", contact["note"])
+    return vc_encode([card])

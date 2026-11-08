@@ -1,0 +1,30 @@
+# cldr 0.1.0 测试
+import "../registry/cldr/0.1.0/cldr.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var en = cldr_locale_new("en", "US")
+    var zh = cldr_locale_new("zh", "CN")
+    # locale code
+    expect(cldr_locale_code(en) == "en-US", "en locale code: " + cldr_locale_code(en))
+    expect(cldr_locale_code(zh) == "zh-CN", "zh locale code")
+    # locale lang/region
+    expect(cldr_locale_lang(en) == "en", "en lang")
+    expect(cldr_locale_region(en) == "US", "en region")
+    # format number
+    var num_str = cldr_format_number(en, 1234.5)
+    expect(num_str.find("1234") >= 0, "en number has 1234: " + num_str)
+    # plural
+    expect(cldr_plural("en", 0) == "other", "plural 0: " + cldr_plural("en", 0))
+    expect(cldr_plural("en", 1) == "one", "plural 1: " + cldr_plural("en", 1))
+    expect(cldr_plural("en", 2) == "other", "plural 2: " + cldr_plural("en", 2))
+    # currency format
+    var cf = cldr_format_currency(en, 99.99, "USD")
+    expect(cf.find("99.99") >= 0, "en currency has amount: " + cf)
+    expect(cf.find("USD") >= 0, "en currency has code: " + cf)
+    # list separator
+    expect(cldr_list_separator(en) == ", ", "en list sep")
+    expect(cldr_list_separator(zh) == "、", "zh list sep: " + cldr_list_separator(zh))
+    print("cldr: PASS")

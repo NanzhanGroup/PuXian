@@ -1,0 +1,46 @@
+# phpser 0.1.0 测试
+import "../registry/phpser/0.1.0/phpser.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # null
+    expect(ps_serialize(null) == "N;", "ser null: " + ps_serialize(null))
+    expect(ps_unserialize("N;") == null, "unser null")
+    # bool
+    expect(ps_serialize(true) == "b:1;", "ser true: " + ps_serialize(true))
+    expect(ps_serialize(false) == "b:0;", "ser false: " + ps_serialize(false))
+    expect(ps_unserialize("b:1;") == true, "unser true")
+    expect(ps_unserialize("b:0;") == false, "unser false")
+    # int
+    expect(ps_serialize(42) == "i:42;", "ser int: " + ps_serialize(42))
+    expect(ps_unserialize("i:42;") == 42, "unser int: " + str(ps_unserialize("i:42;")))
+    expect(ps_unserialize("i:-5;") == -5, "unser neg int: " + str(ps_unserialize("i:-5;")))
+    # float
+    expect(ps_serialize(3.14) == "d:3.14;", "ser float: " + ps_serialize(3.14))
+    expect(ps_unserialize("d:3.14;") == 3.14, "unser float: " + str(ps_unserialize("d:3.14;")))
+    # string
+    expect(ps_serialize("Hello") == "s:5:\"Hello\";", "ser str: " + ps_serialize("Hello"))
+    expect(ps_unserialize("s:5:\"Hello\";") == "Hello", "unser str: " + str(ps_unserialize("s:5:\"Hello\";")))
+    # list
+    var ser_list = ps_serialize([1, 2, 3])
+    expect(ser_list == "a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}", "ser list: " + ser_list)
+    var unser_list = ps_unserialize(ser_list)
+    expect(unser_list["0"] == 1, "unser list 0: " + str(unser_list))
+    expect(unser_list["1"] == 2, "unser list 1: " + str(unser_list))
+    expect(unser_list["2"] == 3, "unser list 2: " + str(unser_list))
+    # dict
+    var ser_dict = ps_serialize({"name": "Alice", "age": 30})
+    var unser_dict = ps_unserialize(ser_dict)
+    expect(unser_dict["name"] == "Alice", "unser dict name: " + str(unser_dict))
+    expect(unser_dict["age"] == 30, "unser dict age: " + str(unser_dict))
+    # roundtrip
+    var orig = {"x": 1, "y": "hello", "z": true}
+    var rt = ps_unserialize(ps_serialize(orig))
+    expect(rt["x"] == 1, "rt x: " + str(rt))
+    expect(rt["y"] == "hello", "rt y: " + str(rt))
+    expect(rt["z"] == true, "rt z: " + str(rt))
+    print("phpser: PASS")

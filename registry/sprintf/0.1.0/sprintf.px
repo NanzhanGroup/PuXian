@@ -1,0 +1,332 @@
+# ============================================================
+# 普贤生态库：registry/sprintf —— C 风格格式化字符串
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP sprintf / printf / vsprintf、C99 sprintf、Python % 格式化心智：
+#   sf_format(fmt, args)  → "Hello %s, you are %d" + ["World", 25] → "Hello World, you are 25"
+#   sf_sprintf(fmt, ...)  → 可变参数形式（内部转 list）
+#
+# 支持的转换说明符：
+#   %d / %i  → 有符号整数
+#   %u       → 无符号整数
+#   %f       → 浮点数（默认 6 位小数）
+#   %s       → 字符串
+#   %x       → 十六进制小写
+#   %X       → 十六进制大写
+#   %o       → 八进制
+#   %b       → 二进制
+#   %e       → 科学计数法小写
+#   %E       → 科学计数法大写
+#   %c       → 字符（整数→ASCII）
+#   %%       → 字面量 %
+#
+# 支持的标志和宽度：
+#   %[flags][width][.precision]specifier
+#   flags:  - (左对齐), 0 (零填充), + (正数显式+), 空格 (正数前导空格)
+#   width:  最小字段宽度
+#   precision: .n → 浮点小数位 / 字符串最大宽度
+#
+# 限制：
+#   - 不支持 %g / %G（自动选择 %e 或 %f）
+#   - 不支持 * 动态宽度/精度
+#   - 不支持参数位置交换 %1$d
+# ============================================================
+
+# ---- 辅助：整数转指定进制 ----
+def sf_int_to_base(n, base, upper):
+    if n == 0:
+        return "0"
+    var neg = false
+    if n < 0:
+        neg = true
+        n = 0 - n
+    var digits = "0123456789abcdef"
+    if upper:
+        digits = "0123456789ABCDEF"
+    var out = ""
+    while n > 0:
+        out = digits[n % base] + out
+        n = n // base
+    if neg:
+        out = "-" + out
+    return out
+
+# ---- 辅助：浮点数格式化为指定小数位 ----
+def sf_format_float(f, precision):
+    if precision < 0:
+        precision = 6
+    var neg = false
+    if f < 0:
+        neg = true
+        f = 0 - f
+    var int_part = int(f)
+    var frac = f - int_part
+    # 四舍五入
+    var i = 0
+    var pow10 = 1
+    while i < precision:
+        pow10 = pow10 * 10
+        i += 1
+    var frac_rounded = int(frac * pow10 + 0.5)
+    # 处理进位
+    if frac_rounded >= pow10:
+        int_part += 1
+        frac_rounded = frac_rounded - pow10
+    var int_str = str(int_part)
+    var frac_str = str(frac_rounded)
+    # 前导零补齐小数部分
+    while len(frac_str) < precision:
+        frac_str = "0" + frac_str
+    var result = int_str
+    if precision > 0:
+        result = result + "." + frac_str
+    if neg:
+        result = "-" + result
+    return result
+
+# ---- 辅助：科学计数法 ----
+def sf_format_scientific(f, precision, upper):
+    if precision < 0:
+        precision = 6
+    var neg = false
+    if f < 0:
+        neg = true
+        f = 0 - f
+    if f == 0:
+        var z = "0"
+        if precision > 0:
+            z = z + "."
+            var i = 0
+            while i < precision:
+                z = z + "0"
+                i += 1
+        var e_char = "e"
+        if upper:
+            e_char = "E"
+        z = z + e_char + "+00"
+        if neg:
+            z = "-" + z
+        return z
+    var exp = 0
+    while f >= 10:
+        f = f / 10
+        exp += 1
+    while f < 1:
+        f = f * 10
+        exp = exp - 1
+    var mantissa = sf_format_float(f, precision)
+    var e_char = "e"
+    if upper:
+        e_char = "E"
+    var exp_str = ""
+    var exp_neg = false
+    if exp < 0:
+        exp_neg = true
+        exp = 0 - exp
+    if exp < 10:
+        exp_str = "0" + str(exp)
+    else:
+        exp_str = str(exp)
+    if exp_neg:
+        exp_str = "-" + exp_str
+    else:
+        exp_str = "+" + exp_str
+    var result = mantissa + e_char + exp_str
+    if neg:
+        result = "-" + result
+    return result
+
+# ---- 辅助：字符串填充到指定宽度 ----
+def sf_pad(s, width, left_align, zero_pad):
+    if len(s) >= width:
+        return s
+    var pad_char = " "
+    if zero_pad:
+        pad_char = "0"
+    var pad = ""
+    var i = 0
+    while i < width - len(s):
+        pad = pad + pad_char
+        i += 1
+    if left_align:
+        return s + pad
+    return pad + s
+
+# ---- 辅助：解析格式说明符 ----
+# 返回 [specifier, width, precision, flags, consumed_chars]
+# flags: dict with left_align, zero_pad, plus_sign, space_sign
+def sf_parse_spec(fmt, pos):
+    var flags = {"left_align": false, "zero_pad": false, "plus_sign": false, "space_sign": false}
+    var width = 0
+    var has_width = false
+    var precision = -1
+    var has_precision = false
+    var i = pos
+    # 解析 flags
+    while i < len(fmt):
+        var c = fmt[i]
+        if c == "-":
+            flags["left_align"] = true
+        elif c == "0":
+            flags["zero_pad"] = true
+        elif c == "+":
+            flags["plus_sign"] = true
+        elif c == " ":
+            flags["space_sign"] = true
+        else:
+            break
+        i += 1
+    # 解析 width
+    while i < len(fmt):
+        var c = fmt[i]
+        if c >= "0" and c <= "9":
+            width = width * 10 + (bytes_get(bytes(c), 0) - 48)
+            has_width = true
+            i += 1
+        else:
+            break
+    # 解析 precision
+    if i < len(fmt) and fmt[i] == ".":
+        i += 1
+        precision = 0
+        has_precision = true
+        while i < len(fmt):
+            var c = fmt[i]
+            if c >= "0" and c <= "9":
+                precision = precision * 10 + (bytes_get(bytes(c), 0) - 48)
+                i += 1
+            else:
+                break
+    # 解析 specifier
+    if i >= len(fmt):
+        return ["", 0, -1, flags, i - pos]
+    var spec = fmt[i]
+    return [spec, width, precision, flags, i - pos + 1]
+
+# ---- 辅助：格式化单个值 ----
+def sf_format_one(spec, width, precision, flags, val):
+    var s = ""
+    if spec == "d" or spec == "i":
+        var n = int(val)
+        s = str(n)
+        if n >= 0:
+            if flags["plus_sign"]:
+                s = "+" + s
+            elif flags["space_sign"]:
+                s = " " + s
+        if has_key(flags, "zero_pad") and flags["zero_pad"] and not flags["left_align"]:
+            var neg = len(s) > 0 and s[0] == "-"
+            if neg:
+                s = s[1:len(s)]
+            s = sf_pad(s, width, false, true)
+            if neg:
+                s = "-" + s
+            return s
+        return sf_pad(s, width, flags["left_align"], false)
+    elif spec == "u":
+        var n = int(val)
+        if n < 0:
+            n = 0 - n
+        s = str(n)
+        return sf_pad(s, width, flags["left_align"], flags["zero_pad"])
+    elif spec == "f" or spec == "F":
+        var p = precision
+        if p < 0:
+            p = 6
+        s = sf_format_float(float(val), p)
+        if float(val) >= 0:
+            if flags["plus_sign"]:
+                s = "+" + s
+            elif flags["space_sign"]:
+                s = " " + s
+        return sf_pad(s, width, flags["left_align"], false)
+    elif spec == "s":
+        s = str(val)
+        if precision >= 0 and len(s) > precision:
+            s = s[0:precision]
+        return sf_pad(s, width, flags["left_align"], false)
+    elif spec == "x":
+        s = sf_int_to_base(int(val), 16, false)
+        return sf_pad(s, width, flags["left_align"], flags["zero_pad"])
+    elif spec == "X":
+        s = sf_int_to_base(int(val), 16, true)
+        return sf_pad(s, width, flags["left_align"], flags["zero_pad"])
+    elif spec == "o":
+        s = sf_int_to_base(int(val), 8, false)
+        return sf_pad(s, width, flags["left_align"], flags["zero_pad"])
+    elif spec == "b":
+        s = sf_int_to_base(int(val), 2, false)
+        return sf_pad(s, width, flags["left_align"], flags["zero_pad"])
+    elif spec == "e":
+        var p = precision
+        if p < 0:
+            p = 6
+        s = sf_format_scientific(float(val), p, false)
+        return sf_pad(s, width, flags["left_align"], false)
+    elif spec == "E":
+        var p = precision
+        if p < 0:
+            p = 6
+        s = sf_format_scientific(float(val), p, true)
+        return sf_pad(s, width, flags["left_align"], false)
+    elif spec == "c":
+        var n = int(val)
+        s = chr(n)
+        return s
+    else:
+        return "%" + spec
+    return s
+
+# ---- 辅助：检查 dict 是否有 key ----
+def has_key(d, k):
+    return d.contains(k)
+
+# ---- 主函数：格式化 ----
+# sf_format(fmt, args) — args 是 list
+def sf_format(fmt, args):
+    var out = ""
+    var i = 0
+    var arg_idx = 0
+    while i < len(fmt):
+        var c = fmt[i]
+        if c != "%":
+            out = out + c
+            i += 1
+            continue
+        # 遇到 %
+        if i + 1 < len(fmt) and fmt[i + 1] == "%":
+            out = out + "%"
+            i += 2
+            continue
+        var parsed = sf_parse_spec(fmt, i + 1)
+        var spec = parsed[0]
+        var width = parsed[1]
+        var precision = parsed[2]
+        var flags = parsed[3]
+        var consumed = parsed[4]
+        if spec == "":
+            out = out + "%"
+            i += 1
+            continue
+        if arg_idx < len(args):
+            var val = args[arg_idx]
+            arg_idx += 1
+            out = out + sf_format_one(spec, width, precision, flags, val)
+        else:
+            out = out + "%" + spec
+        i = i + 1 + consumed
+    return out
+
+# ---- 便捷函数：可变参数 ----
+# sf_sprintf(fmt, a, b, c, ...) — 把额外参数收集为 list
+# 由于 PuXian 不支持可变参数，用 sf_format(fmt, [a, b, c]) 调用
+def sf_sprintf2(fmt, a):
+    return sf_format(fmt, [a])
+def sf_sprintf3(fmt, a, b):
+    return sf_format(fmt, [a, b])
+def sf_sprintf4(fmt, a, b, c):
+    return sf_format(fmt, [a, b, c])
+def sf_sprintf5(fmt, a, b, c, d):
+    return sf_format(fmt, [a, b, c, d])
+def sf_sprintf6(fmt, a, b, c, d, e):
+    return sf_format(fmt, [a, b, c, d, e])

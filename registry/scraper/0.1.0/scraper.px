@@ -1,0 +1,144 @@
+# scraper.px — 网页爬虫（HTML 解析/链接提取，纯函数）
+# 版本: 0.1.0
+def sc_extract_links(html):
+    var links = []
+    var pos = 0
+    while pos < len(html):
+        var start = _sc_find_from(html, "href=", pos)
+        if start < 0:
+            break
+        start += 5
+        if start >= len(html):
+            break
+        var quote = html[start]
+        if quote != "\"" and quote != "'":
+            pos = start
+            continue
+        start += 1
+        var end = _sc_find_from(html, quote, start)
+        if end < 0:
+            break
+        links.append(html[start:end])
+        pos = end + 1
+    return links
+def sc_extract_src(html):
+    var srcs = []
+    var pos = 0
+    while pos < len(html):
+        var start = _sc_find_from(html, "src=", pos)
+        if start < 0:
+            break
+        start += 4
+        if start >= len(html):
+            break
+        var quote = html[start]
+        if quote != "\"" and quote != "'":
+            pos = start
+            continue
+        start += 1
+        var end = _sc_find_from(html, quote, start)
+        if end < 0:
+            break
+        srcs.append(html[start:end])
+        pos = end + 1
+    return srcs
+def sc_extract_images(html):
+    var result = []
+    var srcs = sc_extract_src(html)
+    var i = 0
+    while i < len(srcs):
+        result.append({"src": srcs[i]})
+        i += 1
+    return result
+def sc_extract_text(html):
+    var result = ""
+    var in_tag = false
+    var i = 0
+    while i < len(html):
+        var c = html[i]
+        if c == "<":
+            in_tag = true
+        elif c == ">":
+            in_tag = false
+        elif not in_tag:
+            result = result + c
+        i += 1
+    return result
+def sc_extract_title(html):
+    var start = html.find("<title>")
+    if start < 0:
+        return ""
+    start += 7
+    var end = html.find("</title>")
+    if end < 0:
+        return ""
+    return html[start:end]
+def sc_extract_meta(html, name):
+    var needle = "name=\"" + name + "\""
+    var pos = 0
+    while pos < len(html):
+        var start = _sc_find_from(html, needle, pos)
+        if start < 0:
+            return ""
+        var tag_start = _sc_rfind_char(html, "<", start)
+        if tag_start < 0:
+            tag_start = 0
+        var tag_end = _sc_find_from(html, ">", start)
+        if tag_end < 0:
+            return ""
+        var tag = html[tag_start:tag_end]
+        var ci = tag.find("content=\"")
+        if ci >= 0:
+            ci += 9
+            var cend = _sc_find_from(tag, "\"", ci)
+            if cend >= 0:
+                return tag[ci:cend]
+        pos = tag_end + 1
+    return ""
+def sc_extract_meta_all(html):
+    var result = {}
+    var pos = 0
+    while pos < len(html):
+        var start = _sc_find_from(html, "<meta", pos)
+        if start < 0:
+            break
+        var tag_end = _sc_find_from(html, ">", start)
+        if tag_end < 0:
+            break
+        var tag = html[start:tag_end]
+        var ni = tag.find("name=\"")
+        if ni >= 0:
+            ni += 6
+            var nend = _sc_find_from(tag, "\"", ni)
+            if nend >= 0:
+                var meta_name = tag[ni:nend]
+                var ci = tag.find("content=\"")
+                if ci >= 0:
+                    ci += 9
+                    var cend = _sc_find_from(tag, "\"", ci)
+                    if cend >= 0:
+                        result.set(meta_name, tag[ci:cend])
+        pos = tag_end + 1
+    return result
+def sc_strip_tags(html):
+    return sc_extract_text(html)
+def _sc_find_from(s, sub, start):
+    var i = start
+    while i <= len(s) - len(sub):
+        var is_match = true
+        var j = 0
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                is_match = false
+            j += 1
+        if is_match:
+            return i
+        i += 1
+    return -1
+def _sc_rfind_char(s, ch, end):
+    var i = end
+    while i >= 0:
+        if s[i] == ch:
+            return i
+        i -= 1
+    return -1

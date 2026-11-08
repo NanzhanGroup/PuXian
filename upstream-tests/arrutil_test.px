@@ -1,0 +1,61 @@
+# arrutil 0.1.0 测试
+import "../registry/arrutil/0.1.0/arrutil.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # arr_flip
+    var flipped = arr_flip({"a": 1, "b": 2})
+    expect(flipped["1"] == "a", "flip 1: " + str(flipped))
+    expect(flipped["2"] == "b", "flip 2: " + str(flipped))
+    # arr_column
+    var rows = [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]
+    var names = arr_column(rows, "name")
+    expect(names == ["Alice", "Bob"], "column: " + str(names))
+    # arr_combine
+    var combined = arr_combine(["a", "b"], [1, 2])
+    expect(combined["a"] == 1 and combined["b"] == 2, "combine: " + str(combined))
+    # arr_fill
+    var filled = arr_fill(0, 3, "x")
+    expect(filled == ["x", "x", "x"], "fill: " + str(filled))
+    # arr_product
+    expect(arr_product([2, 3, 4]) == 24, "product: " + str(arr_product([2, 3, 4])))
+    expect(arr_product([]) == 1, "product empty: " + str(arr_product([])))
+    # arr_range
+    expect(arr_range(1, 5) == [1, 2, 3, 4, 5], "range default: " + str(arr_range(1, 5)))
+    expect(arr_range(0, 10, 2) == [0, 2, 4, 6, 8, 10], "range step 2: " + str(arr_range(0, 10, 2)))
+    expect(arr_range(5, 1, -1) == [5, 4, 3, 2, 1], "range neg: " + str(arr_range(5, 1, -1)))
+    # arr_shuffle_copy — 验证元素一致（无序）
+    var orig = [1, 2, 3, 4, 5]
+    var shuffled = arr_shuffle_copy(orig)
+    expect(len(shuffled) == 5, "shuffle len: " + str(len(shuffled)))
+    expect(orig == [1, 2, 3, 4, 5], "shuffle orig unchanged: " + str(orig))
+    # arr_rand
+    var picked = arr_rand([1, 2, 3, 4, 5], 2)
+    expect(len(picked) == 2, "rand len: " + str(len(picked)))
+    # arr_unique_stable
+    expect(arr_unique_stable([1, 2, 2, 3, 1, 4]) == [1, 2, 3, 4], "unique: " + str(arr_unique_stable([1, 2, 2, 3, 1, 4])))
+    # arr_intersect_n
+    expect(arr_intersect_n([[1, 2, 3], [2, 3, 4], [3, 2, 5]]) == [2, 3], "intersect: " + str(arr_intersect_n([[1, 2, 3], [2, 3, 4], [3, 2, 5]])))
+    # arr_diff_n
+    expect(arr_diff_n([[1, 2, 3, 4], [2, 4], [3]]) == [1], "diff: " + str(arr_diff_n([[1, 2, 3, 4], [2, 4], [3]])))
+    # arr_chunk_fixed
+    expect(arr_chunk_fixed([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]], "chunk: " + str(arr_chunk_fixed([1, 2, 3, 4, 5], 2)))
+    # arr_flat
+    expect(arr_flat([[1, 2], [3, 4], [5]]) == [1, 2, 3, 4, 5], "flat: " + str(arr_flat([[1, 2], [3, 4], [5]])))
+    # arr_zip
+    expect(arr_zip([[1, 2, 3], ["a", "b", "c"]]) == [[1, "a"], [2, "b"], [3, "c"]], "zip: " + str(arr_zip([[1, 2, 3], ["a", "b", "c"]])))
+    # arr_rotate
+    expect(arr_rotate([1, 2, 3, 4, 5], 2) == [3, 4, 5, 1, 2], "rotate 2: " + str(arr_rotate([1, 2, 3, 4, 5], 2)))
+    expect(arr_rotate([1, 2, 3], -1) == [3, 1, 2], "rotate -1: " + str(arr_rotate([1, 2, 3], -1)))
+    # arr_partition
+    var is_even = fn(x): x % 2 == 0
+    var parted = arr_partition([1, 2, 3, 4, 5, 6], is_even)
+    expect(parted[0] == [2, 4, 6], "partition yes: " + str(parted[0]))
+    expect(parted[1] == [1, 3, 5], "partition no: " + str(parted[1]))
+    # arr_sliding
+    expect(arr_sliding([1, 2, 3, 4, 5], 3, 1) == [[1, 2, 3], [2, 3, 4], [3, 4, 5]], "sliding: " + str(arr_sliding([1, 2, 3, 4, 5], 3, 1)))
+    print("arrutil: PASS")

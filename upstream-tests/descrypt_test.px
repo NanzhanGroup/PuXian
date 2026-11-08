@@ -1,0 +1,43 @@
+# descrypt 0.1.0 测试
+import "../registry/descrypt/0.1.0/descrypt.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # RC4 encrypt/decrypt roundtrip
+    var key = [1, 2, 3, 4, 5]
+    var data = [72, 101, 108, 108, 111]
+    var enc = rc4_crypt(key, data)
+    expect(len(enc) == 5, "encrypted len 5")
+    var dec = rc4_crypt(key, enc)
+    expect(dec == data, "RC4 roundtrip: " + str(dec))
+    # RC4 string encrypt/decrypt
+    var hex_enc = rc4_encrypt_str("secret", "Hello World")
+    expect(len(hex_enc) > 0, "hex enc non-empty")
+    var plaintext = rc4_decrypt_str("secret", hex_enc)
+    expect(plaintext == "Hello World", "RC4 str roundtrip: " + plaintext)
+    # RC4 empty
+    var enc_empty = rc4_crypt(key, [])
+    expect(len(enc_empty) == 0, "empty RC4")
+    # RC4 same key roundtrip
+    var key2 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    var data2 = [65, 66, 67]
+    var enc2 = rc4_crypt(key2, data2)
+    var dec2 = rc4_crypt(key2, enc2)
+    expect(dec2 == data2, "RC4 identity roundtrip")
+    # 3DES (simulated with RC4)
+    var k1 = [1, 2, 3]
+    var k2 = [4, 5, 6]
+    var k3 = [7, 8, 9]
+    var d = [10, 20, 30, 40]
+    var e3 = des3_crypt(k1, k2, k3, d)
+    expect(len(e3) == 4, "3DES len 4")
+    # 3DES with all same keys: E_K(E_K(E_K(x))) — not identity but should be deterministic
+    var e3a = des3_crypt(k1, k1, k1, d)
+    var e3b = des3_crypt(k1, k1, k1, d)
+    expect(e3a == e3b, "3DES deterministic")
+    # hex encrypt/decrypt
+    var hex_e = rc4_encrypt_hex("010203", "48656c6c6f")
+    expect(len(hex_e) > 0, "hex encrypt non-empty")
+    print("descrypt: PASS")

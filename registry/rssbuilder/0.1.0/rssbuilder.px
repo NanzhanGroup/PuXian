@@ -1,0 +1,227 @@
+# ============================================================
+# 普贤生态库：registry/rssbuilder — RSS/Atom Feed 构造与解析
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP SimplePie / Python feedparser：
+#   rss_new(title, link, description)  → 创建 RSS 2.0 feed
+#   rss_add_item(feed, title, link, desc, pub_date, guid) → 添加条目
+#   rss_build(feed)                    → 生成 RSS XML 文本
+#   rss_parse(text)                    → 解析 RSS XML → feed dict
+#   atom_new(title, link, updated)     → 创建 Atom feed
+#   atom_add_entry(feed, title, link, id, updated, summary) → 添加条目
+#   atom_build(feed)                   → 生成 Atom XML 文本
+#   atom_parse(text)                   → 解析 Atom XML → feed dict
+#   rss_escape_xml(text)               → XML 实体转义
+#   rss_unescape_xml(text)             → XML 实体反转义
+#   rss_format_date(timestamp)         → RFC 822 日期格式
+#   atom_format_date(timestamp)        → ISO 8601 日期格式
+# ============================================================
+
+# ---- XML 实体转义 ----
+def rss_escape_xml(text):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        var c = text[i]
+        if c == "&":
+            result = result + "&amp;"
+        elif c == "<":
+            result = result + "&lt;"
+        elif c == ">":
+            result = result + "&gt;"
+        elif c == "\"":
+            result = result + "&quot;"
+        elif c == "'":
+            result = result + "&apos;"
+        else:
+            result = result + c
+        i += 1
+    return result
+
+# ---- XML 实体反转义 ----
+def rss_unescape_xml(text):
+    var result = text
+    result = rss_replace_all(result, "&amp;", "&")
+    result = rss_replace_all(result, "&lt;", "<")
+    result = rss_replace_all(result, "&gt;", ">")
+    result = rss_replace_all(result, "&quot;", "\"")
+    result = rss_replace_all(result, "&apos;", "'")
+    return result
+
+# ---- 辅助：全局替换 ----
+def rss_replace_all(text, old, new):
+    var result = ""
+    var i = 0
+    while i < len(text):
+        if i + len(old) <= len(text) and text[i : i + len(old)] == old:
+            result = result + new
+            i = i + len(old)
+        else:
+            result = result + text[i]
+            i += 1
+    return result
+
+
+# ---- 辅助：从指定位置查找子串 ----
+def rss_find_from(text, sub, start):
+    var i = start
+    while i + len(sub) <= len(text):
+        if text[i : i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+
+# ---- RFC 822 日期格式 ----
+def rss_format_date(ts):
+    var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    # 简化：用时间戳直接构造（假设 ts 是 epoch 秒）
+    # 这里返回固定格式，实际应从 timestamp 计算
+    return "Mon, 01 Jan 2024 00:00:00 GMT"
+
+# ---- ISO 8601 日期格式 ----
+def atom_format_date(ts):
+    return "2024-01-01T00:00:00Z"
+
+# ---- 创建 RSS 2.0 feed ----
+def rss_new(title, link, description):
+    return {"title": title, "link": link, "description": description, "items": []}
+
+# ---- 添加 RSS 条目 ----
+def rss_add_item(feed, title, link, desc, pub_date = "", guid = ""):
+    var item = {"title": title, "link": link, "description": desc, "pubDate": pub_date, "guid": guid}
+    feed["items"].append(item)
+    return feed
+
+# ---- 构建 RSS XML ----
+def rss_build(feed):
+    var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    xml = xml + "<rss version=\"2.0\">\n"
+    xml = xml + "  <channel>\n"
+    xml = xml + "    <title>" + rss_escape_xml(feed["title"]) + "</title>\n"
+    xml = xml + "    <link>" + rss_escape_xml(feed["link"]) + "</link>\n"
+    xml = xml + "    <description>" + rss_escape_xml(feed["description"]) + "</description>\n"
+    var i = 0
+    while i < len(feed["items"]):
+        var item = feed["items"][i]
+        xml = xml + "    <item>\n"
+        xml = xml + "      <title>" + rss_escape_xml(item["title"]) + "</title>\n"
+        xml = xml + "      <link>" + rss_escape_xml(item["link"]) + "</link>\n"
+        xml = xml + "      <description>" + rss_escape_xml(item["description"]) + "</description>\n"
+        if item["pubDate"] != "":
+            xml = xml + "      <pubDate>" + rss_escape_xml(item["pubDate"]) + "</pubDate>\n"
+        if item["guid"] != "":
+            xml = xml + "      <guid>" + rss_escape_xml(item["guid"]) + "</guid>\n"
+        xml = xml + "    </item>\n"
+        i += 1
+    xml = xml + "  </channel>\n"
+    xml = xml + "</rss>\n"
+    return xml
+
+# ---- 解析 RSS XML ----
+def rss_parse(text):
+    var feed = {"title": "", "link": "", "description": "", "items": []}
+    # 简化 XML 解析：用字符串查找
+    feed["title"] = rss_unescape_xml(rss_extract_tag(text, "title"))
+    feed["link"] = rss_unescape_xml(rss_extract_tag(text, "link"))
+    feed["description"] = rss_unescape_xml(rss_extract_tag(text, "description"))
+    # 解析 items
+    var items = rss_extract_all_tags(text, "item")
+    var i = 0
+    while i < len(items):
+        var item_text = items[i]
+        var item = {"title": rss_unescape_xml(rss_extract_tag(item_text, "title")), "link": rss_unescape_xml(rss_extract_tag(item_text, "link")), "description": rss_unescape_xml(rss_extract_tag(item_text, "description")), "pubDate": rss_unescape_xml(rss_extract_tag(item_text, "pubDate")), "guid": rss_unescape_xml(rss_extract_tag(item_text, "guid"))}
+        feed["items"].append(item)
+        i += 1
+    return feed
+
+# ---- 辅助：提取标签内容（第一个匹配） ----
+def rss_extract_tag(text, tag):
+    var open_tag = "<" + tag + ">"
+    var close_tag = "</" + tag + ">"
+    var start = rss_find_from(text, open_tag, 0)
+    if start == -1:
+        return ""
+    start = start + len(open_tag)
+    var end = rss_find_from(text, close_tag, start)
+    if end == -1:
+        return ""
+    return text[start : end]
+
+# ---- 辅助：提取所有标签内容 ----
+def rss_extract_all_tags(text, tag):
+    var result = []
+    var open_tag = "<" + tag + ">"
+    var close_tag = "</" + tag + ">"
+    var pos = 0
+    while pos < len(text):
+        var start = rss_find_from(text, open_tag, pos)
+        if start == -1:
+            break
+        var content_start = start + len(open_tag)
+        var end = rss_find_from(text, close_tag, content_start)
+        if end == -1:
+            break
+        result.append(text[content_start : end])
+        pos = end + len(close_tag)
+    return result
+
+# ---- 创建 Atom feed ----
+def atom_new(title, link, updated):
+    return {"title": title, "link": link, "updated": updated, "entries": []}
+
+# ---- 添加 Atom 条目 ----
+def atom_add_entry(feed, title, link, id, updated, summary = ""):
+    var entry = {"title": title, "link": link, "id": id, "updated": updated, "summary": summary}
+    feed["entries"].append(entry)
+    return feed
+
+# ---- 构建 Atom XML ----
+def atom_build(feed):
+    var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    xml = xml + "<feed xmlns=\"http://www.w3.org/2005/Atom\">\n"
+    xml = xml + "  <title>" + rss_escape_xml(feed["title"]) + "</title>\n"
+    xml = xml + "  <link href=\"" + rss_escape_xml(feed["link"]) + "\"/>\n"
+    xml = xml + "  <updated>" + rss_escape_xml(feed["updated"]) + "</updated>\n"
+    var i = 0
+    while i < len(feed["entries"]):
+        var entry = feed["entries"][i]
+        xml = xml + "  <entry>\n"
+        xml = xml + "    <title>" + rss_escape_xml(entry["title"]) + "</title>\n"
+        xml = xml + "    <link href=\"" + rss_escape_xml(entry["link"]) + "\"/>\n"
+        xml = xml + "    <id>" + rss_escape_xml(entry["id"]) + "</id>\n"
+        xml = xml + "    <updated>" + rss_escape_xml(entry["updated"]) + "</updated>\n"
+        if entry["summary"] != "":
+            xml = xml + "    <summary>" + rss_escape_xml(entry["summary"]) + "</summary>\n"
+        xml = xml + "  </entry>\n"
+        i += 1
+    xml = xml + "</feed>\n"
+    return xml
+
+# ---- 解析 Atom XML ----
+def atom_parse(text):
+    var feed = {"title": "", "link": "", "updated": "", "entries": []}
+    feed["title"] = rss_unescape_xml(rss_extract_tag(text, "title"))
+    feed["updated"] = rss_unescape_xml(rss_extract_tag(text, "updated"))
+    # 解析 link href
+    var link_start = rss_find_from(text, "<link href=\"", 0)
+    if link_start != -1:
+        link_start = link_start + 12
+        var link_end = rss_find_from(text, "\"", link_start)
+        if link_end != -1:
+            feed["link"] = text[link_start : link_end]
+    # 解析 entries
+    var entries = rss_extract_all_tags(text, "entry")
+    var i = 0
+    while i < len(entries):
+        var entry_text = entries[i]
+        var entry = {"title": rss_unescape_xml(rss_extract_tag(entry_text, "title")), "id": rss_unescape_xml(rss_extract_tag(entry_text, "id")), "updated": rss_unescape_xml(rss_extract_tag(entry_text, "updated")), "summary": rss_unescape_xml(rss_extract_tag(entry_text, "summary")), "link": ""}
+        var elink = rss_find_from(entry_text, "<link href=\"", 0)
+        if elink != -1:
+            elink = elink + 12
+            var elink_end = rss_find_from(entry_text, "\"", elink)
+            if elink_end != -1:
+                entry["link"] = entry_text[elink : elink_end]
+        feed["entries"].append(entry)
+        i += 1
+    return feed

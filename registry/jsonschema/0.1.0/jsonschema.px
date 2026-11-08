@@ -1,0 +1,150 @@
+# ============================================================
+# 普贤生态库：registry/jsonschema — JSON Schema 验证
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP json-schema / Python jsonschema / ajv：
+#   js_validate(data, schema)      → 验证数据是否符合 schema → {valid, errors}
+#   js_validate_type(value, type)  → 验证类型
+#   js_validate_string(value, schema) → 验证字符串约束
+#   js_validate_number(value, schema) → 验证数字约束
+#   js_validate_array(value, schema)  → 验证数组约束
+#   js_validate_object(value, schema) → 验证对象约束
+#   js_check_required(data, schema)   → 检查必填字段
+#   js_check_enum(value, schema)      → 检查枚举
+# ============================================================
+
+# ---- 类型验证 ----
+def js_validate_type(value, typ):
+    if typ == "string":
+        return type(value) == "string"
+    elif typ == "integer":
+        return type(value) == "int"
+    elif typ == "number":
+        return type(value) == "int" or type(value) == "float"
+    elif typ == "boolean":
+        return type(value) == "bool"
+    elif typ == "array":
+        return type(value) == "list"
+    elif typ == "object":
+        return type(value) == "dict"
+    elif typ == "null":
+        return value == null
+    return true
+
+# ---- 字符串约束 ----
+def js_validate_string(value, schema):
+    var errors = []
+    if schema.contains("minLength"):
+        if len(value) < schema["minLength"]:
+            errors.append("string too short: " + str(len(value)) + " < " + str(schema["minLength"]))
+    if schema.contains("maxLength"):
+        if len(value) > schema["maxLength"]:
+            errors.append("string too long: " + str(len(value)) + " > " + str(schema["maxLength"]))
+    if schema.contains("pattern"):
+        # 简单 pattern 检查：只支持直接子串匹配
+        if not value.contains(schema["pattern"]):
+            errors.append("string does not match pattern: " + schema["pattern"])
+    return errors
+
+# ---- 数字约束 ----
+def js_validate_number(value, schema):
+    var errors = []
+    if schema.contains("minimum"):
+        if value < schema["minimum"]:
+            errors.append("number below minimum: " + str(value) + " < " + str(schema["minimum"]))
+    if schema.contains("maximum"):
+        if value > schema["maximum"]:
+            errors.append("number above maximum: " + str(value) + " > " + str(schema["maximum"]))
+    if schema.contains("exclusiveMinimum"):
+        if value <= schema["exclusiveMinimum"]:
+            errors.append("number at or below exclusiveMinimum")
+    if schema.contains("exclusiveMaximum"):
+        if value >= schema["exclusiveMaximum"]:
+            errors.append("number at or above exclusiveMaximum")
+    if schema.contains("multipleOf"):
+        if schema["multipleOf"] != 0:
+            if value % schema["multipleOf"] != 0:
+                errors.append("number not multiple of: " + str(schema["multipleOf"]))
+    return errors
+
+# ---- 数组约束 ----
+def js_validate_array(value, schema):
+    var errors = []
+    if schema.contains("minItems"):
+        if len(value) < schema["minItems"]:
+            errors.append("array too few items: " + str(len(value)) + " < " + str(schema["minItems"]))
+    if schema.contains("maxItems"):
+        if len(value) > schema["maxItems"]:
+            errors.append("array too many items: " + str(len(value)) + " > " + str(schema["maxItems"]))
+    if schema.contains("items"):
+        var i = 0
+        while i < len(value):
+            var result = js_validate(value[i], schema["items"])
+            if not result["valid"]:
+                errors.append("array item " + str(i) + ": " + result["errors"][0])
+            i += 1
+    return errors
+
+# ---- 对象约束 ----
+def js_validate_object(value, schema):
+    var errors = []
+    if schema.contains("minProperties"):
+        if len(value.keys()) < schema["minProperties"]:
+            errors.append("object too few properties")
+    if schema.contains("maxProperties"):
+        if len(value.keys()) > schema["maxProperties"]:
+            errors.append("object too many properties")
+    if schema.contains("required"):
+        var req = schema["required"]
+        var i = 0
+        while i < len(req):
+            if not value.contains(req[i]):
+                errors.append("missing required property: " + req[i])
+            i += 1
+    if schema.contains("properties"):
+        var props = schema["properties"]
+        var keys = props.keys()
+        var j = 0
+        while j < len(keys):
+            if value.contains(keys[j]):
+                var result = js_validate(value[keys[j]], props[keys[j]])
+                if not result["valid"]:
+                    errors.append("property '" + keys[j] + "': " + result["errors"][0])
+            j += 1
+    return errors
+
+# ---- 枚举检查 ----
+def js_check_enum(value, schema):
+    if schema.contains("enum"):
+        var enum_vals = schema["enum"]
+        var i = 0
+        while i < len(enum_vals):
+            if value == enum_vals[i]:
+                return []
+            i += 1
+        return ["value not in enum"]
+    return []
+
+# ---- 主验证函数 ----
+def js_validate(data, schema):
+    var errors = []
+    # type 检查
+    if schema.contains("type"):
+        var typ = schema["type"]
+        if not js_validate_type(data, typ):
+            errors.append("type mismatch: expected " + typ + ", got " + type(data))
+            return {"valid": false, "errors": errors}
+    # enum 检查
+    errors = errors + js_check_enum(data, schema)
+    # 类型特定检查
+    if schema.contains("type"):
+        var typ = schema["type"]
+        if typ == "string" and type(data) == "string":
+            errors = errors + js_validate_string(data, schema)
+        elif (typ == "number" or typ == "integer") and (type(data) == "int" or type(data) == "float"):
+            errors = errors + js_validate_number(data, schema)
+        elif typ == "array" and type(data) == "list":
+            errors = errors + js_validate_array(data, schema)
+        elif typ == "object" and type(data) == "dict":
+            errors = errors + js_validate_object(data, schema)
+    return {"valid": len(errors) == 0, "errors": errors}

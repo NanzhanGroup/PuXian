@@ -1,0 +1,30 @@
+# fileinfo 0.1.0 测试
+import "../registry/fileinfo/0.1.0/fileinfo.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var fi = fi_new("/home/user/test.txt")
+    expect(fi_get_path(fi) == "/home/user/test.txt", "path")
+    expect(fi_get_filename(fi) == "test.txt", "filename: " + fi_get_filename(fi))
+    expect(fi_get_extension(fi) == "txt", "extension: " + fi_get_extension(fi))
+    expect(fi_get_basename(fi) == "test", "basename: " + fi_get_basename(fi))
+    expect(fi_get_dirname(fi) == "/home/user", "dirname: " + fi_get_dirname(fi))
+    expect(fi_to_string(fi) == "/home/user/test.txt", "to_string")
+    expect(fi_is_absolute(fi) == true, "is absolute")
+    # relative path
+    var fi2 = fi_new("relative/path.txt")
+    expect(fi_is_absolute(fi2) == false, "not absolute")
+    expect(fi_get_dirname(fi2) == "relative", "relative dirname: " + fi_get_dirname(fi2))
+    # join
+    expect(fi_join("/home", "user") == "/home/user", "join: " + fi_join("/home", "user"))
+    expect(fi_join("/home/", "user") == "/home/user", "join trailing slash: " + fi_join("/home/", "user"))
+    # normalize
+    expect(fi_normalize("/home/user/../other") == "/home/other", "normalize: " + fi_normalize("/home/user/../other"))
+    expect(fi_normalize("/home/./user") == "/home/user", "normalize dot: " + fi_normalize("/home/./user"))
+    # no extension
+    var fi3 = fi_new("/home/noext")
+    expect(fi_get_extension(fi3) == "", "no extension: " + fi_get_extension(fi3))
+    expect(fi_get_basename(fi3) == "noext", "noext basename: " + fi_get_basename(fi3))
+    print("fileinfo: PASS")

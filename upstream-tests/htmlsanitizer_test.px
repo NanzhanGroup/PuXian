@@ -1,0 +1,49 @@
+# htmlsanitizer 0.1.0 测试
+import "../registry/htmlsanitizer/0.1.0/htmlsanitizer.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # 转义
+    expect(hs_escape("<script>alert('xss')</script>") == "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;", "escape: " + hs_escape("<script>alert('xss')</script>"))
+    expect(hs_escape("a & b") == "a &amp; b", "escape amp: " + hs_escape("a & b"))
+    expect(hs_escape("\"quoted\"") == "&quot;quoted&quot;", "escape quote: " + hs_escape("\"quoted\""))
+    # 反转义
+    expect(hs_unescape("&lt;tag&gt;") == "<tag>", "unescape: " + hs_unescape("&lt;tag&gt;"))
+    expect(hs_unescape("&amp;") == "&", "unescape amp: " + hs_unescape("&amp;"))
+    # 往返
+    var orig = "Hello <world> & \"friends\""
+    expect(hs_unescape(hs_escape(orig)) == orig, "roundtrip: " + hs_unescape(hs_escape(orig)))
+    # 去注释
+    expect(hs_remove_comments("a<!-- comment -->b") == "ab", "remove comments: " + hs_remove_comments("a<!-- comment -->b"))
+    # 去 script
+    expect(hs_remove_scripts("a<script>alert(1)</script>b") == "ab", "remove scripts: " + hs_remove_scripts("a<script>alert(1)</script>b"))
+    expect(hs_remove_scripts("a<SCRIPT>x</SCRIPT>b") == "ab", "remove scripts upper: " + hs_remove_scripts("a<SCRIPT>x</SCRIPT>b"))
+    # 去 style
+    expect(hs_remove_styles("a<style>.x{}</style>b") == "ab", "remove styles: " + hs_remove_styles("a<style>.x{}</style>b"))
+    # strip_tags
+    expect(hs_strip_tags("<b>bold</b><i>italic</i>", ["b"]) == "<b>bold</b>italic", "strip tags: " + hs_strip_tags("<b>bold</b><i>italic</i>", ["b"]))
+    expect(hs_strip_tags("<p>text</p>", []) == "text", "strip all tags: " + hs_strip_tags("<p>text</p>", []))
+    # strip_attrs
+    expect(hs_strip_attrs("<img onload=alert(1) src=x>") == "<img =alert(1) src=x>", "strip attrs: " + hs_strip_attrs("<img onload=alert(1) src=x>"))
+    # URL 安全
+    expect(hs_is_safe_url("javascript:alert(1)") == false, "unsafe js url")
+    expect(hs_is_safe_url("data:text/html,<script>") == false, "unsafe data url")
+    expect(hs_is_safe_url("https://example.com") == true, "safe https url")
+    expect(hs_is_safe_url("http://example.com/path?q=1") == true, "safe http url")
+    # clean url
+    expect(hs_clean_url("javascript:alert(1)") == "", "clean js url: " + hs_clean_url("javascript:alert(1)"))
+    expect(hs_clean_url("https://safe.com") == "https://safe.com", "clean safe url: " + hs_clean_url("https://safe.com"))
+    # encode attr
+    expect(hs_encode_attr("a\"b<c>d") == "a&quot;b&lt;c&gt;d", "encode attr: " + hs_encode_attr("a\"b<c>d"))
+    # sanitize
+    var dirty = "<p onclick=alert(1)>Hello</p><script>alert(1)</script><!-- comment --><b>bold</b>"
+    var clean = hs_sanitize(dirty, {"allowed": ["p", "b"]})
+    expect(not clean.contains("onclick"), "sanitize no onclick: " + clean)
+    expect(not clean.contains("script"), "sanitize no script: " + clean)
+    expect(not clean.contains("<!--"), "sanitize no comment: " + clean)
+    expect(clean.contains("<b>bold</b>"), "sanitize keeps b: " + clean)
+    print("htmlsanitizer: PASS")

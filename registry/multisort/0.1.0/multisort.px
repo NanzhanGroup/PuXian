@@ -1,0 +1,91 @@
+# multisort.px — 多数组联动排序（对应 PHP array_multisort）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   ms_sort(arrays, orders)       → list   # 多数组联动排序
+#   ms_sort_by(rows, keys, orders) → list  # dict 列表按多键排序
+#   ms_cmp(a, b, order)           → int    # 单值比较
+
+def ms_cmp(a, b, order):
+    var cmp = 0
+    if a < b:
+        cmp = -1
+    elif a > b:
+        cmp = 1
+    if order == "desc":
+        cmp = -cmp
+    return cmp
+
+def ms_sort(arrays, orders):
+    if len(arrays) == 0:
+        return arrays
+    var n = len(arrays[0])
+    var indices = []
+    var i = 0
+    while i < n:
+        indices.append(i)
+        i += 1
+    # bubble sort with multi-key comparison
+    var swapped = true
+    while swapped:
+        swapped = false
+        var j = 0
+        while j < n - 1:
+            var cmp = 0
+            var k = 0
+            while k < len(arrays) and cmp == 0:
+                cmp = ms_cmp(arrays[k][indices[j]], arrays[k][indices[j + 1]], orders[k])
+                k += 1
+            if cmp > 0:
+                var tmp = indices[j]
+                indices[j] = indices[j + 1]
+                indices[j + 1] = tmp
+                swapped = true
+            j += 1
+    # apply indices to all arrays
+    var result = []
+    var a = 0
+    while a < len(arrays):
+        var sorted_arr = []
+        var b = 0
+        while b < n:
+            sorted_arr.append(arrays[a][indices[b]])
+            b += 1
+        result.append(sorted_arr)
+        a += 1
+    return result
+
+def ms_sort_by(rows, keys, orders):
+    if len(rows) == 0:
+        return rows
+    var n = len(rows)
+    var indices = []
+    var i = 0
+    while i < n:
+        indices.append(i)
+        i += 1
+    var swapped = true
+    while swapped:
+        swapped = false
+        var j = 0
+        while j < n - 1:
+            var cmp = 0
+            var k = 0
+            while k < len(keys) and cmp == 0:
+                var va = rows[indices[j]][keys[k]]
+                var vb = rows[indices[j + 1]][keys[k]]
+                cmp = ms_cmp(va, vb, orders[k])
+                k += 1
+            if cmp > 0:
+                var tmp = indices[j]
+                indices[j] = indices[j + 1]
+                indices[j + 1] = tmp
+                swapped = true
+            j += 1
+    var result = []
+    var b = 0
+    while b < n:
+        result.append(rows[indices[b]])
+        b += 1
+    return result

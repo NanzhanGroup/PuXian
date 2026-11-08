@@ -1,0 +1,238 @@
+# ============================================================
+# 普贤生态库：registry/querybuilder — 链式 SQL 构造
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP query-builder / Laravel Query Builder / Knex.js：
+#   qb_select(table)              → 创建 SELECT 查询
+#   qb_insert(table, data)        → 创建 INSERT 查询
+#   qb_update(table, data)        → 创建 UPDATE 查询
+#   qb_delete(table)              → 创建 DELETE 查询
+#   qb_where(q, column, op, value) → 添加 WHERE 条件
+#   qb_where_in(q, column, values) → WHERE column IN (...)
+#   qb_where_like(q, column, pattern) → WHERE column LIKE pattern
+#   qb_order_by(q, column, dir)   → ORDER BY
+#   qb_group_by(q, column)        → GROUP BY
+#   qb_having(q, column, op, value) → HAVING
+#   qb_limit(q, n)                → LIMIT
+#   qb_offset(q, n)               → OFFSET
+#   qb_join(q, table, left, right, type) → JOIN
+#   qb_distinct(q)                → SELECT DISTINCT
+#   qb_count(q)                   → SELECT COUNT(*)
+#   qb_build(q)                   → 生成 SQL 字符串 + 参数列表
+#   qb_quote_ident(name)          → 标识符引号
+#   qb_escape(value)              → 值转义（防 SQL 注入）
+# ============================================================
+
+# ---- 标识符引号 ----
+def qb_quote_ident(name):
+    return "`" + name + "`"
+
+# ---- 值转义 ----
+def qb_escape(value):
+    if value == null:
+        return "NULL"
+    if type(value) == "int" or type(value) == "float":
+        return str(value)
+    var s = str(value)
+    var result = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "'":
+            result = result + "''"
+        elif c == "\\":
+            result = result + "\\\\"
+        elif c == "\n":
+            result = result + "\\n"
+        elif c == "\r":
+            result = result + "\\r"
+        elif c == "\t":
+            result = result + "\\t"
+        else:
+            result = result + c
+        i += 1
+    return "'" + result + "'"
+
+# ---- 创建 SELECT 查询 ----
+def qb_select(table):
+    return {"type": "select", "table": table, "columns": [], "wheres": [], "orders": [], "groups": [], "havings": [], "joins": [], "limit": -1, "offset": -1, "distinct": false}
+
+# ---- 创建 INSERT 查询 ----
+def qb_insert(table, data):
+    return {"type": "insert", "table": table, "data": data}
+
+# ---- 创建 UPDATE 查询 ----
+def qb_update(table, data):
+    return {"type": "update", "table": table, "data": data, "wheres": []}
+
+# ---- 创建 DELETE 查询 ----
+def qb_delete(table):
+    return {"type": "delete", "table": table, "wheres": []}
+
+# ---- 添加 WHERE 条件 ----
+def qb_where(q, column, op, value):
+    q["wheres"].append({"column": column, "op": op, "value": value, "type": "basic"})
+    return q
+
+# ---- WHERE IN ----
+def qb_where_in(q, column, values):
+    q["wheres"].append({"column": column, "op": "IN", "value": values, "type": "in"})
+    return q
+
+# ---- WHERE LIKE ----
+def qb_where_like(q, column, pattern):
+    q["wheres"].append({"column": column, "op": "LIKE", "value": pattern, "type": "basic"})
+    return q
+
+# ---- WHERE NULL ----
+def qb_where_null(q, column):
+    q["wheres"].append({"column": column, "op": "IS NULL", "value": null, "type": "null"})
+    return q
+
+# ---- WHERE NOT NULL ----
+def qb_where_not_null(q, column):
+    q["wheres"].append({"column": column, "op": "IS NOT NULL", "value": null, "type": "notnull"})
+    return q
+
+# ---- ORDER BY ----
+def qb_order_by(q, column, dir = "ASC"):
+    q["orders"].append({"column": column, "dir": dir})
+    return q
+
+# ---- GROUP BY ----
+def qb_group_by(q, column):
+    q["groups"].append(column)
+    return q
+
+# ---- HAVING ----
+def qb_having(q, column, op, value):
+    q["havings"].append({"column": column, "op": op, "value": value})
+    return q
+
+# ---- LIMIT ----
+def qb_limit(q, n):
+    q["limit"] = n
+    return q
+
+# ---- OFFSET ----
+def qb_offset(q, n):
+    q["offset"] = n
+    return q
+
+# ---- JOIN ----
+def qb_join(q, table, left, right, type = "INNER"):
+    q["joins"].append({"table": table, "left": left, "right": right, "type": type})
+    return q
+
+# ---- DISTINCT ----
+def qb_distinct(q):
+    q["distinct"] = true
+    return q
+
+# ---- 构建 WHERE 子句 ----
+def qb_build_wheres(wheres):
+    if len(wheres) == 0:
+        return ""
+    var parts = []
+    var i = 0
+    while i < len(wheres):
+        var w = wheres[i]
+        if w["type"] == "basic":
+            parts.append(qb_quote_ident(w["column"]) + " " + w["op"] + " " + qb_escape(w["value"]))
+        elif w["type"] == "in":
+            var vals = w["value"]
+            var vparts = []
+            var j = 0
+            while j < len(vals):
+                vparts.append(qb_escape(vals[j]))
+                j += 1
+            parts.append(qb_quote_ident(w["column"]) + " IN (" + join(vparts, ", ") + ")")
+        elif w["type"] == "null":
+            parts.append(qb_quote_ident(w["column"]) + " IS NULL")
+        elif w["type"] == "notnull":
+            parts.append(qb_quote_ident(w["column"]) + " IS NOT NULL")
+        i += 1
+    return " WHERE " + join(parts, " AND ")
+
+# ---- 辅助：join ----
+def join(arr, sep):
+    if len(arr) == 0:
+        return ""
+    var result = arr[0]
+    var i = 1
+    while i < len(arr):
+        result = result + sep + arr[i]
+        i += 1
+    return result
+
+# ---- 构建 SQL ----
+def qb_build(q):
+    if q["type"] == "select":
+        var cols = "*"
+        if len(q["columns"]) > 0:
+            cols = join(q["columns"], ", ")
+        var sql = "SELECT "
+        if q["distinct"] == true:
+            sql = sql + "DISTINCT "
+        sql = sql + cols + " FROM " + qb_quote_ident(q["table"])
+        # JOIN
+        var i = 0
+        while i < len(q["joins"]):
+            var j = q["joins"][i]
+            sql = sql + " " + j["type"] + " JOIN " + qb_quote_ident(j["table"]) + " ON " + qb_quote_ident(j["left"]) + " = " + qb_quote_ident(j["right"])
+            i += 1
+        # WHERE
+        sql = sql + qb_build_wheres(q["wheres"])
+        # GROUP BY
+        if len(q["groups"]) > 0:
+            sql = sql + " GROUP BY " + join(q["groups"], ", ")
+        # HAVING
+        if len(q["havings"]) > 0:
+            var hparts = []
+            i = 0
+            while i < len(q["havings"]):
+                var h = q["havings"][i]
+                hparts.append(h["column"] + " " + h["op"] + " " + qb_escape(h["value"]))
+                i += 1
+            sql = sql + " HAVING " + join(hparts, " AND ")
+        # ORDER BY
+        if len(q["orders"]) > 0:
+            var oparts = []
+            i = 0
+            while i < len(q["orders"]):
+                var o = q["orders"][i]
+                oparts.append(qb_quote_ident(o["column"]) + " " + o["dir"])
+                i += 1
+            sql = sql + " ORDER BY " + join(oparts, ", ")
+        # LIMIT
+        if q["limit"] >= 0:
+            sql = sql + " LIMIT " + str(q["limit"])
+        # OFFSET
+        if q["offset"] >= 0:
+            sql = sql + " OFFSET " + str(q["offset"])
+        return sql
+    elif q["type"] == "insert":
+        var keys = q["data"].keys()
+        var placeholders = []
+        var col_names = []
+        var i = 0
+        while i < len(keys):
+            col_names.append(qb_quote_ident(keys[i]))
+            placeholders.append(qb_escape(q["data"][keys[i]]))
+            i += 1
+        return "INSERT INTO " + qb_quote_ident(q["table"]) + " (" + join(col_names, ", ") + ") VALUES (" + join(placeholders, ", ") + ")"
+    elif q["type"] == "update":
+        var keys = q["data"].keys()
+        var sets = []
+        var i = 0
+        while i < len(keys):
+            sets.append(qb_quote_ident(keys[i]) + " = " + qb_escape(q["data"][keys[i]]))
+            i += 1
+        var sql = "UPDATE " + qb_quote_ident(q["table"]) + " SET " + join(sets, ", ")
+        sql = sql + qb_build_wheres(q["wheres"])
+        return sql
+    elif q["type"] == "delete":
+        var sql = "DELETE FROM " + qb_quote_ident(q["table"])
+        sql = sql + qb_build_wheres(q["wheres"])
+        return sql
+    return ""

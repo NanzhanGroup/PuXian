@@ -1,0 +1,46 @@
+# promise 0.1.0 测试
+import "../registry/promise/0.1.0/promise.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def double(x):
+    return x * 2
+def negate(x):
+    return "recovered"
+def ignore(x):
+    return 0
+def main():
+    var p = pr_resolve(42)
+    expect(pr_is_fulfilled(p), "resolve fulfilled")
+    expect(pr_value(p) == 42, "resolve value")
+    var p2 = pr_reject("err")
+    expect(pr_is_rejected(p2), "reject rejected")
+    expect(pr_error(p2) == "err", "reject error")
+    # then
+    var p3 = pr_then(pr_resolve(21), double)
+    expect(pr_value(p3) == 42, "then double: " + str(pr_value(p3)))
+    # catch
+    var p4 = pr_catch(pr_reject("fail"), negate)
+    expect(pr_value(p4) == "recovered", "catch negate: " + str(pr_value(p4)))
+    # finally
+    var hit = 0
+    def inc():
+        hit = hit + 1
+        return 0
+    var p5 = pr_finally(pr_resolve(1), inc)
+    expect(hit == 1, "finally called")
+    # all
+    var pa = pr_all([pr_resolve(1), pr_resolve(2), pr_resolve(3)])
+    expect(pr_is_fulfilled(pa), "all fulfilled")
+    expect(pr_value(pa) == [1, 2, 3], "all values: " + str(pr_value(pa)))
+    # all with reject
+    var pr = pr_all([pr_resolve(1), pr_reject("bad")])
+    expect(pr_is_rejected(pr), "all rejected")
+    # race
+    var race = pr_race([pr_resolve("first"), pr_resolve("second")])
+    expect(pr_value(race) == "first", "race first: " + str(pr_value(race)))
+    # pending
+    var pp = pr_new(null)
+    expect(pr_is_pending(pp), "pending")
+    print("promise: PASS")

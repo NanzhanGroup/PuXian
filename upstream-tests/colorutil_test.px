@@ -1,0 +1,72 @@
+# colorutil 0.1.0 测试
+import "../registry/colorutil/0.1.0/colorutil.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # HEX → RGB
+    var rgb = co_hex_to_rgb("#FF8800")
+    expect(rgb[0] == 255, "hex→rgb r: " + str(rgb[0]))
+    expect(rgb[1] == 136, "hex→rgb g: " + str(rgb[1]))
+    expect(rgb[2] == 0, "hex→rgb b: " + str(rgb[2]))
+    # RGB → HEX
+    expect(co_rgb_to_hex(255, 136, 0) == "#FF8800", "rgb→hex: " + co_rgb_to_hex(255, 136, 0))
+    expect(co_rgb_to_hex(0, 0, 0) == "#000000", "rgb→hex black: " + co_rgb_to_hex(0, 0, 0))
+    expect(co_rgb_to_hex(255, 255, 255) == "#FFFFFF", "rgb→hex white: " + co_rgb_to_hex(255, 255, 255))
+    # 往返
+    var orig = "#AABBCC"
+    var rt = co_rgb_to_hex(co_hex_to_rgb(orig)[0], co_hex_to_rgb(orig)[1], co_hex_to_rgb(orig)[2])
+    expect(rt == orig, "hex roundtrip: " + rt)
+    # RGB → HSL → RGB
+    var hsl = co_rgb_to_hsl(255, 0, 0)
+    expect(hsl[0] == 0, "hsl red h: " + str(hsl[0]))
+    expect(hsl[1] == 1.0, "hsl red s: " + str(hsl[1]))
+    var rgb2 = co_hsl_to_rgb(0, 1.0, 0.5)
+    expect(rgb2[0] == 255, "hsl→rgb red r: " + str(rgb2[0]))
+    # RGB → HSV → RGB
+    var hsv = co_rgb_to_hsv(0, 255, 0)
+    expect(hsv[0] == 120, "hsv green h: " + str(hsv[0]))
+    expect(hsv[1] == 1.0, "hsv green s: " + str(hsv[1]))
+    var rgb3 = co_hsv_to_rgb(120, 1.0, 1.0)
+    expect(rgb3[1] == 255, "hsv→rgb green g: " + str(rgb3[1]))
+    # 变亮
+    var lighter = co_lighten("#333333", 0.2)
+    expect(lighter != "#333333", "lighten changed: " + lighter)
+    # 变暗
+    var darker = co_darken("#CCCCCC", 0.2)
+    expect(darker != "#CCCCCC", "darken changed: " + darker)
+    # 灰度化
+    var gray = co_grayscale("#FF0000")
+    expect(gray[1] == gray[3] and gray[3] == gray[5], "grayscale equal: " + gray)
+    # 反色
+    expect(co_invert("#000000") == "#FFFFFF", "invert black: " + co_invert("#000000"))
+    expect(co_invert("#FFFFFF") == "#000000", "invert white: " + co_invert("#FFFFFF"))
+    # 互补色
+    var comp = co_complement("#FF0000")
+    expect(comp != "#FF0000", "complement different: " + comp)
+    # 混合
+    var mixed = co_mix("#000000", "#FFFFFF", 0.5)
+    expect(mixed.contains("7F") or mixed.contains("80"), "mix mid: " + mixed)
+    # 亮度
+    var lum = co_luminance(255, 255, 255)
+    expect(lum > 0.9, "lum white: " + str(lum))
+    var lum2 = co_luminance(0, 0, 0)
+    expect(lum2 < 0.1, "lum black: " + str(lum2))
+    # 对比度
+    var cr = co_contrast_ratio("#000000", "#FFFFFF")
+    expect(cr > 20, "contrast b/w: " + str(cr))
+    # 浅色/深色
+    expect(co_is_light("#FFFFFF") == true, "is light white")
+    expect(co_is_dark("#000000") == true, "is dark black")
+    expect(co_is_light("#000000") == false, "not light black")
+    # 命名颜色
+    expect(co_named("red") == "#FF0000", "named red: " + co_named("red"))
+    expect(co_named("blue") == "#0000FF", "named blue: " + co_named("blue"))
+    expect(co_named("nonexistent") == "#000000", "named unknown: " + co_named("nonexistent"))
+    # 随机
+    var rnd = co_random()
+    expect(len(rnd) == 7, "random len: " + rnd)
+    print("colorutil: PASS")

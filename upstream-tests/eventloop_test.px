@@ -1,0 +1,48 @@
+# eventloop 0.1.0 测试
+import "../registry/eventloop/0.1.0/eventloop.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+var counter = 0
+def increment(arg):
+    counter = counter + 1
+    return 0
+def noop(arg):
+    return 0
+def main():
+    var loop = el_new()
+    var pc0 = el_pending_count(loop)
+    expect(pc0 == 0, "empty loop")
+    var id1 = el_add_task(loop, increment, null)
+    var id2 = el_add_task(loop, increment, null)
+    var pc2 = el_pending_count(loop)
+    expect(pc2 == 2, "2 pending")
+    var c1 = el_cancel(loop, id2)
+    expect(c1 == true, "cancel id2")
+    var pc1 = el_pending_count(loop)
+    expect(pc1 == 1, "1 pending after cancel")
+    var processed = el_tick(loop)
+    expect(processed == 1, "tick processed 1: " + str(processed))
+    expect(counter == 1, "counter 1: " + str(counter))
+    var pc0 = el_pending_count(loop)
+    expect(pc0 == 0, "0 pending after tick")
+    var id3 = el_add_timer(loop, increment, 2)
+    var pc3 = el_pending_count(loop)
+    expect(pc3 == 1, "timer pending")
+    el_tick(loop)
+    var pc4 = el_pending_count(loop)
+    expect(pc4 == 1, "timer still pending (delay 1)")
+    el_tick(loop)
+    var pc4b = el_pending_count(loop)
+    expect(pc4b == 1, "timer still pending (delay 0)")
+    el_tick(loop)
+    expect(counter == 2, "counter 2 after timer: " + str(counter))
+    var pc5 = el_pending_count(loop)
+    expect(pc5 == 0, "timer done")
+    el_add_task(loop, increment, null)
+    el_add_task(loop, increment, null)
+    var total = el_run(loop)
+    expect(total == 2, "run 2: " + str(total))
+    expect(counter == 4, "counter 4: " + str(counter))
+    print("eventloop: PASS")

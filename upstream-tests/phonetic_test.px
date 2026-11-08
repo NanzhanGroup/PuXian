@@ -1,0 +1,41 @@
+# phonetic 0.1.0 测试
+import "../registry/phonetic/0.1.0/phonetic.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # Soundex 经典用例（ANSI Z39.2 标准）
+    expect(ph_soundex("Robert") == "R163", "soundex Robert: " + ph_soundex("Robert"))
+    expect(ph_soundex("Rupert") == "R163", "soundex Rupert: " + ph_soundex("Rupert"))
+    expect(ph_soundex("Ashcraft") == "A261", "soundex Ashcraft: " + ph_soundex("Ashcraft"))
+    expect(ph_soundex("Tymczak") == "T522", "soundex Tymczak: " + ph_soundex("Tymczak"))
+    expect(ph_soundex("Pfister") == "P236", "soundex Pfister: " + ph_soundex("Pfister"))
+    expect(ph_soundex("Honeyman") == "H555", "soundex Honeyman: " + ph_soundex("Honeyman"))
+    expect(ph_soundex("") == "0000", "soundex empty: " + ph_soundex(""))
+    # Soundex 同音
+    expect(ph_soundex("Smith") == ph_soundex("Smythe"), "soundex Smith/Smythe: " + ph_soundex("Smith") + " vs " + ph_soundex("Smythe"))
+    expect(ph_soundex("Jackson") == ph_soundex("Jaxen"), "soundex Jackson/Jaxen: " + ph_soundex("Jackson") + " vs " + ph_soundex("Jaxen"))
+    # Metaphone — 验证非空 + 首字母正确
+    var m1 = ph_metaphone("Smith")
+    expect(len(m1) > 0 and m1[0] == "S", "metaphone Smith: " + m1)
+    var m2 = ph_metaphone("education")
+    expect(len(m2) > 0, "metaphone education: " + m2)
+    expect(ph_metaphone("") == "", "metaphone empty: " + ph_metaphone(""))
+    var m3 = ph_metaphone("Schmidt")
+    expect(len(m3) > 0 and m3[0] == "S", "metaphone Schmidt: " + m3)
+    # NYSIIS
+    var n1 = ph_nysiis("Webster")
+    expect(len(n1) > 0, "nysiis Webster non-empty: " + n1)
+    var n2 = ph_nysiis("Smith")
+    expect(len(n2) > 0, "nysiis Smith non-empty: " + n2)
+    # ph_match
+    expect(ph_match("Robert", "Rupert") == true, "match Robert/Rupert")
+    expect(ph_match("Smith", "Smythe") == true, "match Smith/Smythe")
+    expect(ph_match("Alice", "Bob") == false, "no match Alice/Bob")
+    # ph_distance
+    expect(ph_distance("Robert", "Rupert") == 0, "distance Robert/Rupert: " + str(ph_distance("Robert", "Rupert")))
+    expect(ph_distance("Alice", "Bob") > 0, "distance Alice/Bob > 0: " + str(ph_distance("Alice", "Bob")))
+    print("phonetic: PASS")

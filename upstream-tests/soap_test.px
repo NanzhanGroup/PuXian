@@ -1,0 +1,33 @@
+# soap 0.1.0 测试
+import "../registry/soap/0.1.0/soap.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # build envelope
+    var env = soap_build_envelope("<test>hello</test>", "")
+    expect(env.find("<soap:Envelope") >= 0, "has envelope")
+    expect(env.find("<soap:Body>") >= 0, "has body")
+    expect(env.find("<test>hello</test>") >= 0, "has test content")
+    # build request
+    var req = soap_build_request("GetUser", {"id": 123}, "http://example.com/ns")
+    expect(req.find("<ns:GetUser") >= 0, "has GetUser")
+    expect(req.find("<ns:id>123</ns:id>") >= 0, "has id param")
+    # extract body
+    var body = soap_extract_body(env)
+    expect(body.find("<test>hello</test>") >= 0, "extracted body: " + body)
+    # extract body with different namespace
+    var env2 = "<?xml version=\"1.0\"?><soapenv:Envelope xmlns:soapenv=\"http://x\"><soapenv:Body><result>ok</result></soapenv:Body></soapenv:Envelope>"
+    var body2 = soap_extract_body(env2)
+    expect(body2.find("<result>ok</result>") >= 0, "extracted soapenv body: " + body2)
+    # extract fault
+    var fault_env = soap_build_envelope("<Fault><faultcode>Server</faultcode><faultstring>Bad request</faultstring></Fault>", "")
+    var fault = soap_extract_fault(fault_env)
+    expect(fault != null, "fault not null")
+    expect(fault["code"] == "Server", "fault code: " + str(fault["code"]))
+    expect(fault["string"] == "Bad request", "fault string: " + str(fault["string"]))
+    # no fault
+    var no_fault = soap_extract_fault(env)
+    expect(no_fault == null, "no fault in normal env")
+    print("soap: PASS")

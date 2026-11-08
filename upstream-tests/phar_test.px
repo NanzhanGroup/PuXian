@@ -1,0 +1,37 @@
+# phar 0.1.0 测试
+import "../registry/phar/0.1.0/phar.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var phar = phar_new("test.phar")
+    # add files
+    phar_add_file(phar, "index.php", "<?php echo 'hello';")
+    phar_add_file(phar, "config.php", "<?php return [];")
+    expect(phar_file_count(phar) == 2, "2 files")
+    expect(phar_has_file(phar, "index.php") == true, "has index.php")
+    expect(phar_has_file(phar, "missing.php") == false, "no missing.php")
+    # get file
+    var content = phar_get_file(phar, "index.php")
+    expect(content == "<?php echo 'hello';", "file content: " + content)
+    # list files
+    var files = phar_list_files(phar)
+    expect(len(files) == 2, "list 2 files")
+    # total size
+    var total = phar_total_size(phar)
+    expect(total == 35, "total size: " + str(total))
+    # remove file
+    var removed = phar_remove_file(phar, "config.php")
+    expect(removed == true, "removed config.php")
+    expect(phar_file_count(phar) == 1, "1 file after remove")
+    # remove non-existent
+    var removed2 = phar_remove_file(phar, "nonexist.php")
+    expect(removed2 == false, "remove nonexist false")
+    # stub
+    phar_set_stub(phar, "<?php __HALT_COMPILER();")
+    expect(phar_get_stub(phar) == "<?php __HALT_COMPILER();", "stub set/get")
+    # build
+    var built = phar_build_manifest(phar)
+    expect(len(built) > 0, "built non-empty")
+    print("phar: PASS")

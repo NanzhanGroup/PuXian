@@ -1,0 +1,300 @@
+# ============================================================
+# 普贤生态库：registry/simtext — 文本相似度
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+# 对齐 PHP similar_text、Python difflib、Go levenshtein：
+#   st_similar(a, b)        → 递归 LCS 相似度百分比（0-100，PHP 风格）
+#   st_similar_chars(a, b)  → 递归 LCS 匹配字符数
+#   st_lcs(a, b)            → 最长公共子序列长度
+#   st_lcs_str(a, b)        → 最长公共子序列字符串
+#   st_lcs_substr(a, b)     → 最长公共子串（连续）
+#   st_jaro(a, b)           → Jaro 相似度（0-1）
+#   st_jaro_winkler(a, b)   → Jaro-Winkler 相似度（0-1）
+#   st_hamming(a, b)        → Hamming 距离（等长字符串）
+#   st_rabin_karp(s, pat)   → Rabin-Karp 子串搜索
+# ============================================================
+
+# ---- 递归 LCS 匹配字符数（PHP similar_text 算法） ----
+def st_similar_chars(a, b):
+    if len(a) == 0 or len(b) == 0:
+        return 0
+    # 找最长公共子串
+    var max_len = 0
+    var pos_a = 0
+    var pos_b = 0
+    var i = 0
+    while i < len(a):
+        var j = 0
+        while j < len(b):
+            var k = 0
+            while i + k < len(a) and j + k < len(b) and a[i + k] == b[j + k]:
+                k += 1
+            if k > max_len:
+                max_len = k
+                pos_a = i
+                pos_b = j
+            j += 1
+        i += 1
+    if max_len == 0:
+        return 0
+    # 递归处理左右剩余部分
+    var left_a = ""
+    if pos_a > 0:
+        left_a = a[0:pos_a]
+    var left_b = ""
+    if pos_b > 0:
+        left_b = b[0:pos_b]
+    var right_a = ""
+    if pos_a + max_len < len(a):
+        right_a = a[pos_a + max_len:len(a)]
+    var right_b = ""
+    if pos_b + max_len < len(b):
+        right_b = b[pos_b + max_len:len(b)]
+    return max_len + st_similar_chars(left_a, left_b) + st_similar_chars(right_a, right_b)
+
+# ---- 相似度百分比（PHP similar_text 风格） ----
+def st_similar(a, b):
+    if len(a) == 0 and len(b) == 0:
+        return 100.0
+    if len(a) == 0 or len(b) == 0:
+        return 0.0
+    var chars = st_similar_chars(a, b)
+    return float(chars) * 200.0 / float(len(a) + len(b))
+
+# ---- LCS 长度（动态规划） ----
+def st_lcs(a, b):
+    var m = len(a)
+    var n = len(b)
+    if m == 0 or n == 0:
+        return 0
+    # DP 表（滚动数组优化为一行）
+    var prev = []
+    var j = 0
+    while j <= n:
+        prev.append(0)
+        j += 1
+    var i = 1
+    while i <= m:
+        var curr = []
+        curr.append(0)
+        var j = 1
+        while j <= n:
+            if a[i - 1] == b[j - 1]:
+                curr.append(prev[j - 1] + 1)
+            else:
+                if prev[j] >= curr[j - 1]:
+                    curr.append(prev[j])
+                else:
+                    curr.append(curr[j - 1])
+            j += 1
+        prev = curr
+        i += 1
+    return prev[n]
+
+# ---- LCS 字符串 ----
+def st_lcs_str(a, b):
+    var m = len(a)
+    var n = len(b)
+    if m == 0 or n == 0:
+        return ""
+    # 完整 DP 表
+    var dp = []
+    var i = 0
+    while i <= m:
+        var row = []
+        var j = 0
+        while j <= n:
+            row.append(0)
+            j += 1
+        dp.append(row)
+        i += 1
+    i = 1
+    while i <= m:
+        var j = 1
+        while j <= n:
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                if dp[i - 1][j] >= dp[i][j - 1]:
+                    dp[i][j] = dp[i - 1][j]
+                else:
+                    dp[i][j] = dp[i][j - 1]
+            j += 1
+        i += 1
+    # 回溯
+    var result = ""
+    i = m
+    var j = n
+    while i > 0 and j > 0:
+        if a[i - 1] == b[j - 1]:
+            result = a[i - 1] + result
+            i = i - 1
+            j = j - 1
+        elif dp[i - 1][j] >= dp[i][j - 1]:
+            i = i - 1
+        else:
+            j = j - 1
+    return result
+
+# ---- 最长公共子串（连续） ----
+def st_lcs_substr(a, b):
+    var m = len(a)
+    var n = len(b)
+    if m == 0 or n == 0:
+        return ""
+    var max_len = 0
+    var max_end = 0
+    var prev = []
+    var j = 0
+    while j <= n:
+        prev.append(0)
+        j += 1
+    var i = 1
+    while i <= m:
+        var curr = []
+        curr.append(0)
+        var j = 1
+        while j <= n:
+            if a[i - 1] == b[j - 1]:
+                curr.append(prev[j - 1] + 1)
+                if curr[j] > max_len:
+                    max_len = curr[j]
+                    max_end = i
+            else:
+                curr.append(0)
+            j += 1
+        prev = curr
+        i += 1
+    if max_len == 0:
+        return ""
+    return a[max_end - max_len:max_end]
+
+# ---- Jaro 相似度 ----
+def st_jaro(a, b):
+    if len(a) == 0 and len(b) == 0:
+        return 1.0
+    if len(a) == 0 or len(b) == 0:
+        return 0.0
+    var match_dist = (max(len(a), len(b)) // 2) - 1
+    if match_dist < 0:
+        match_dist = 0
+    var a_matches = []
+    var b_matches = []
+    var i = 0
+    while i < len(a):
+        a_matches.append(false)
+        i += 1
+    i = 0
+    while i < len(b):
+        b_matches.append(false)
+        i += 1
+    var matches = 0
+    i = 0
+    while i < len(a):
+        var start = i - match_dist
+        if start < 0:
+            start = 0
+        var end = i + match_dist + 1
+        if end > len(b):
+            end = len(b)
+        var j = start
+        while j < end:
+            if not b_matches[j] and a[i] == b[j]:
+                a_matches[i] = true
+                b_matches[j] = true
+                matches += 1
+                break
+            j += 1
+        i += 1
+    if matches == 0:
+        return 0.0
+    # 计算转置
+    var transpositions = 0
+    var k = 0
+    i = 0
+    while i < len(a):
+        if a_matches[i]:
+            while not b_matches[k]:
+                k += 1
+            if a[i] != b[k]:
+                transpositions += 1
+            k += 1
+        i += 1
+    transpositions = transpositions // 2
+    var m1 = float(matches)
+    return (m1 / float(len(a)) + m1 / float(len(b)) + (m1 - float(transpositions)) / m1) / 3.0
+
+# ---- Jaro-Winkler 相似度 ----
+def st_jaro_winkler(a, b):
+    var jaro = st_jaro(a, b)
+    # 公共前缀
+    var prefix = 0
+    var i = 0
+    while i < min(len(a), len(b)) and i < 4:
+        if a[i] == b[i]:
+            prefix += 1
+        else:
+            break
+        i += 1
+    return jaro + float(prefix) * 0.1 * (1.0 - jaro)
+
+# ---- Hamming 距离 ----
+def st_hamming(a, b):
+    if len(a) != len(b):
+        return -1
+    var d = 0
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            d += 1
+        i += 1
+    return d
+
+# ---- Rabin-Karp 子串搜索 ----
+# 返回首次出现位置，未找到返回 -1
+def st_rabin_karp(s, pat):
+    var n = len(s)
+    var m = len(pat)
+    if m == 0:
+        return 0
+    if n < m:
+        return -1
+    var base = 256
+    var mod = 1000000007
+    # 计算 pat 的 hash
+    var pat_hash = 0
+    var i = 0
+    while i < m:
+        pat_hash = (pat_hash * base + bytes_get(bytes(pat[i]), 0)) % mod
+        i += 1
+    # 计算首个窗口的 hash
+    var win_hash = 0
+    i = 0
+    while i < m:
+        win_hash = (win_hash * base + bytes_get(bytes(s[i]), 0)) % mod
+        i += 1
+    # 预计算 base^(m-1) % mod
+    var h = 1
+    i = 0
+    while i < m - 1:
+        h = (h * base) % mod
+        i += 1
+    # 滑动窗口
+    i = 0
+    while i <= n - m:
+        if win_hash == pat_hash:
+            var is_match = true
+            var j = 0
+            while j < m:
+                if s[i + j] != pat[j]:
+                    is_match = false
+                    break
+                j += 1
+            if is_match:
+                return i
+        if i < n - m:
+            win_hash = ((win_hash - bytes_get(bytes(s[i]), 0) * h) * base + bytes_get(bytes(s[i + m]), 0)) % mod
+            if win_hash < 0:
+                win_hash = win_hash + mod
+        i += 1
+    return -1

@@ -1,0 +1,50 @@
+# errorhandler.px — 自定义错误捕获（对应 PHP set_error_handler/error_reporting）
+# 版本: 0.1.0
+# 依赖: 无
+#
+# 函数列表:
+#   eh_new()                      → dict   # 创建错误处理器
+#   eh_set_handler(eh, fn)        → void   # 设置错误处理函数
+#   eh_set_level(eh, level)       → void   # 设置错误级别
+#   eh_trigger(eh, level, msg)    → any    # 触发错误
+#   eh_last_error(eh)             → dict   # 获取最后错误
+#   eh_clear(eh)                  → void   # 清除错误记录
+#   eh_restore(eh)                → void   # 恢复默认处理器
+
+# 错误级别常量
+var EH_ERROR = 1
+var EH_WARNING = 2
+var EH_NOTICE = 4
+var EH_STRICT = 8
+var EH_ALL = 15
+
+def eh_new():
+    return {"_handler": null, "_level": EH_ALL, "_last": null, "_errors": []}
+
+def eh_set_handler(eh, handler_fn):
+    eh["_handler"] = handler_fn
+
+def eh_set_level(eh, level):
+    eh["_level"] = level
+
+def eh_trigger(eh, level, msg):
+    var err = {"level": level, "message": msg, "ts": now_sec()}
+    eh["_last"] = err
+    eh["_errors"].append(err)
+    if eh["_handler"] != null and (level & eh["_level"]) != 0:
+        return eh["_handler"](level, msg)
+    return null
+
+def eh_last_error(eh):
+    return eh["_last"]
+
+def eh_clear(eh):
+    eh["_last"] = null
+    eh["_errors"] = []
+
+def eh_restore(eh):
+    eh["_handler"] = null
+    eh["_level"] = EH_ALL
+
+def eh_get_errors(eh):
+    return eh["_errors"]

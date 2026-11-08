@@ -1,0 +1,111 @@
+# snmp.px — SNMP 协议构造/解析（纯函数）
+# 版本: 0.1.0
+def snmp_ber_encode_length(len_val):
+    if len_val < 0x80:
+        return [len_val]
+    if len_val < 0x100:
+        return [0x81, len_val]
+    return [0x82, (len_val >> 8) & 0xFF, len_val & 0xFF]
+def snmp_ber_encode_int(val):
+    var result = [0x02]
+    if val >= 0 and val < 0x80:
+        result.append(1)
+        result.append(val)
+    elif val < 0x8000:
+        result.append(2)
+        result.append((val >> 8) & 0xFF)
+        result.append(val & 0xFF)
+    else:
+        result.append(4)
+        result.append((val >> 24) & 0xFF)
+        result.append((val >> 16) & 0xFF)
+        result.append((val >> 8) & 0xFF)
+        result.append(val & 0xFF)
+    return result
+def snmp_ber_encode_string(s):
+    var result = [0x04]
+    var lb = snmp_ber_encode_length(s.len())
+    var i = 0
+    while i < len(lb):
+        result.append(lb[i])
+        i += 1
+    i = 0
+    while i < s.len():
+        result.append(ord(s[i]))
+        i += 1
+    return result
+# BER 编码 OID 单个分量（处理 > 127 的多字节编码）
+def _snmp_encode_oid_component(val):
+    if val < 0x80:
+        return [val]
+    var bytes = []
+    bytes.append(val & 0x7F)
+    val = val >> 7
+    while val > 0:
+        bytes.append((val & 0x7F) | 0x80)
+        val = val >> 7
+    # 反转
+    var result = []
+    var i = len(bytes) - 1
+    while i >= 0:
+        result.append(bytes[i])
+        i -= 1
+    return result
+def snmp_ber_encode_oid(oid_str):
+    var parts = oid_str.split(".")
+    var result = [0x06]
+    var encoded = []
+    if len(parts) >= 2:
+        encoded.append(int(parts[0]) * 40 + int(parts[1]))
+    var i = 2
+    while i < len(parts):
+        var comp = _snmp_encode_oid_component(int(parts[i]))
+        var j = 0
+        while j < len(comp):
+            encoded.append(comp[j])
+            j += 1
+        i += 1
+    var lb = snmp_ber_encode_length(len(encoded))
+    var j = 0
+    while j < len(lb):
+        result.append(lb[j])
+        j += 1
+    j = 0
+    while j < len(encoded):
+        result.append(encoded[j])
+        j += 1
+    return result
+def snmp_build_get_request(community, oid_str, request_id):
+    var msg = []
+    msg = msg + snmp_ber_encode_int(0)
+    msg = msg + snmp_ber_encode_string(community)
+    var pdu = []
+    pdu = pdu + snmp_ber_encode_int(request_id)
+    pdu = pdu + snmp_ber_encode_int(0)
+    pdu = pdu + snmp_ber_encode_int(0)
+    pdu = pdu + snmp_ber_encode_oid(oid_str)
+    msg = msg + [0xA0]
+    msg = msg + snmp_ber_encode_length(len(pdu))
+    msg = msg + pdu
+    return msg
+def snmp_build_getnext_request(community, oid_str, request_id):
+    var msg = []
+    msg = msg + snmp_ber_encode_int(0)
+    msg = msg + snmp_ber_encode_string(community)
+    var pdu = []
+    pdu = pdu + snmp_ber_encode_int(request_id)
+    pdu = pdu + snmp_ber_encode_int(0)
+    pdu = pdu + snmp_ber_encode_int(0)
+    pdu = pdu + snmp_ber_encode_oid(oid_str)
+    msg = msg + [0xA1]
+    msg = msg + snmp_ber_encode_length(len(pdu))
+    msg = msg + pdu
+    return msg
+def snmp_version_name(version):
+    if version == 0:
+        return "v1"
+    if version == 1:
+        return "v2c"
+    if version == 3:
+        return "v3"
+    return "unknown"

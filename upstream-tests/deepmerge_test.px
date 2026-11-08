@@ -1,0 +1,33 @@
+# deepmerge 0.1.0 测试
+import "../registry/deepmerge/0.1.0/deepmerge.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var base = {"a": 1, "b": {"c": 2, "d": 3}}
+    var over = {"b": {"d": 99, "e": 4}, "f": 5}
+    var merged = dm_merge(base, over)
+    expect(merged["a"] == 1, "a preserved")
+    expect(merged["b"]["c"] == 2, "b.c preserved")
+    expect(merged["b"]["d"] == 99, "b.d overridden: " + str(merged["b"]["d"]))
+    expect(merged["b"]["e"] == 4, "b.e added")
+    expect(merged["f"] == 5, "f added")
+    # deep copy
+    var orig = {"x": [1, 2, {"y": 3}]}
+    var copy = dm_deep_copy(orig)
+    copy["x"][0] = 999
+    expect(orig["x"][0] == 1, "deep copy independent")
+    # path get/set
+    var d = {"a": {"b": {"c": 42}}}
+    expect(dm_path_get(d, "a.b.c") == 42, "path get")
+    expect(dm_path_get(d, "a.b.x") == null, "path get missing")
+    dm_path_set(d, "a.b.c", 100)
+    expect(d["a"]["b"]["c"] == 100, "path set")
+    dm_path_set(d, "x.y.z", "new")
+    expect(d["x"]["y"]["z"] == "new", "path set new")
+    # merge many
+    var m = dm_merge_many([{"a": 1}, {"b": 2}, {"a": 3}])
+    expect(m["a"] == 3, "merge many last wins")
+    expect(m["b"] == 2, "merge many b")
+    print("deepmerge: PASS")

@@ -1,0 +1,59 @@
+# finance 0.1.0 测试
+import "../registry/finance/0.1.0/finance.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # PMT — 贷款 100 万，年利 4.9%，30 年（360 月），月利率 4.9%/12
+    var pmt = fin_pmt(0.049 / 12, 360, 1000000)
+    # 每月还款约 5307
+    expect(pmt > -5400 and pmt < -5200, "pmt: " + str(pmt))
+    # 零利率
+    expect(fin_pmt(0, 12, 1200) == -100, "pmt zero rate: " + str(fin_pmt(0, 12, 1200)))
+    # PV
+    var pv = fin_pv(0.05, 10, -1000)
+    expect(pv > 7700 and pv < 7800, "pv: " + str(pv))
+    # FV
+    var fv = fin_fv(0.05, 10, -1000, 0)
+    expect(fv > 12000 and fv < 13000, "fv: " + str(fv))
+    # 单利
+    expect(fin_simple_interest(1000, 0.05, 2) == 100, "simple interest: " + str(fin_simple_interest(1000, 0.05, 2)))
+    # 复利
+    var ci = fin_compound_interest(1000, 0.05, 2)
+    expect(ci > 102 and ci < 103, "compound interest: " + str(ci))
+    # 实际年利率
+    var eff = fin_effective_rate(0.12, 12)
+    expect(eff > 0.12 and eff < 0.13, "effective rate: " + str(eff))
+    # 名义年利率
+    var nom = fin_nominal_rate(0.1268, 12)
+    expect(nom > 0.11 and nom < 0.13, "nominal rate: " + str(nom))
+    # NPV
+    var npv = fin_npv(0.1, [-1000, 300, 400, 500])
+    expect(npv > -50 and npv < 50, "npv: " + str(npv))
+    # IRR
+    var irr = fin_irr([-1000, 300, 400, 500])
+    expect(irr > 0.05 and irr < 0.15, "irr: " + str(irr))
+    # 回收期
+    var pb = fin_payback([-1000, 300, 400, 500])
+    expect(pb > 2 and pb < 3, "payback: " + str(pb))
+    # ROI
+    expect(fin_roi(1000, 1500) == 0.5, "roi: " + str(fin_roi(1000, 1500)))
+    # 税额
+    expect(fin_tax(1000, 0.1) == 100, "tax: " + str(fin_tax(1000, 0.1)))
+    # 阶梯税率
+    var brackets = [{"threshold": 0, "rate": 0.1}, {"threshold": 10000, "rate": 0.2}, {"threshold": 50000, "rate": 0.3}]
+    var tax = fin_tax_bracket(30000, brackets)
+    # 0-10000: 10% = 1000, 10000-30000: 20% = 4000, total = 5000
+    expect(tax > 4990 and tax < 5010, "tax bracket: " + str(tax))
+    # 折扣
+    expect(fin_discount(100, 20) == 80, "discount: " + str(fin_discount(100, 20)))
+    # 加成
+    expect(fin_markup(100, 50) == 150, "markup: " + str(fin_markup(100, 50)))
+    # 摊销表
+    var sched = fin_amortize(100000, 0.05 / 12, 12)
+    expect(len(sched) == 12, "amortize len: " + str(len(sched)))
+    expect(sched[11]["balance"] < 1, "amortize final balance: " + str(sched[11]["balance"]))
+    print("finance: PASS")

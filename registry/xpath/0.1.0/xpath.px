@@ -1,0 +1,41 @@
+# xpath.px — XPath 简化查询（基于 domlite）
+# 版本: 0.1.0
+import "../../domlite/0.1.0/domlite.px"
+def xp_select_all(node, tag):
+    return dom_find_by_tag(node, tag)
+def xp_select_first(node, tag):
+    var results = dom_find_by_tag(node, tag)
+    if len(results) == 0:
+        return null
+    return results[0]
+def xp_select_by_attr(node, tag, attr_name, attr_val):
+    var all = dom_find_by_tag(node, tag)
+    var result = []
+    var i = 0
+    while i < len(all):
+        if dom_get_attr(all[i], attr_name) == attr_val:
+            result.append(all[i])
+        i += 1
+    return result
+def xp_count(node, tag):
+    return len(dom_find_by_tag(node, tag))
+def xp_text(node, tag):
+    var first = xp_select_first(node, tag)
+    if first == null:
+        return ""
+    return dom_inner_text(first)
+def xp_attr(node, tag, attr_name):
+    var first = xp_select_first(node, tag)
+    if first == null:
+        return null
+    return dom_get_attr(first, attr_name)
+def xp_exists(node, tag):
+    return len(dom_find_by_tag(node, tag)) > 0
+def xp_select_children(node, tag):
+    var result = []
+    var i = 0
+    while i < len(node["children"]):
+        if node["children"][i]["tag"] == tag:
+            result.append(node["children"][i])
+        i += 1
+    return result

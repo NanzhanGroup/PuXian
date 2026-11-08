@@ -1,0 +1,73 @@
+# phar.px — Phar 归档格式（构造/解析，纯函数）
+# 版本: 0.1.0
+def phar_new(name):
+    return {"_name": name, "_files": {}, "_stub": ""}
+def phar_add_file(phar, path, content):
+    phar["_files"].set(path, content)
+    return phar
+def phar_get_file(phar, path):
+    if phar["_files"].has(path):
+        return phar["_files"][path]
+    return null
+def phar_list_files(phar):
+    return phar["_files"].keys()
+def phar_set_stub(phar, stub):
+    phar["_stub"] = stub
+    return phar
+def phar_get_stub(phar):
+    return phar["_stub"]
+def phar_file_count(phar):
+    return len(phar["_files"].keys())
+def phar_build_manifest(phar):
+    var manifest = ""
+    var ks = phar["_files"].keys()
+    var i = 0
+    while i < len(ks):
+        var path = ks[i]
+        var content = phar["_files"][path]
+        manifest = manifest + str(len(path)) + ":" + path + ":" + str(len(content)) + ";"
+        i += 1
+    return manifest
+def _phar_find_from(text, ch, start):
+    var i = start
+    while i < len(text):
+        if text[i] == ch:
+            return i
+        i += 1
+    return -1
+def phar_parse_manifest(text):
+    var result = {}
+    var pos = 0
+    while pos < len(text):
+        var colon1 = _phar_find_from(text, ":", pos)
+        if colon1 < 0:
+            break
+        var path_len = int(text[pos:colon1])
+        var path_start = colon1 + 1
+        var path = text[path_start:path_start + path_len]
+        var colon2 = _phar_find_from(text, ":", path_start + path_len)
+        if colon2 < 0:
+            break
+        var semi = _phar_find_from(text, ";", colon2)
+        if semi < 0:
+            break
+        var content_len = int(text[colon2 + 1:semi])
+        result.set(path, content_len)
+        pos = semi + 1
+    return result
+
+def phar_total_size(phar):
+    var total = 0
+    var ks = phar["_files"].keys()
+    var i = 0
+    while i < len(ks):
+        total += len(phar["_files"][ks[i]])
+        i += 1
+    return total
+def phar_remove_file(phar, path):
+    if phar["_files"].has(path):
+        phar["_files"].remove(path)
+        return true
+    return false
+def phar_has_file(phar, path):
+    return phar["_files"].has(path)
