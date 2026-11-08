@@ -1,0 +1,61 @@
+# aescbc 0.2.0 测试：与 openssl 已知向量逐字节对齐
+import "../registry/aescbc/0.2.0/aescbc.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var key = hex_to_bytes("000102030405060708090a0b0c0d0e0f")
+    var iv = hex_to_bytes("101112131415161718191a1b1c1d1e1f")
+    var pt = bytes("hello puxian")
+
+    # ---- CBC 加密：openssl enc -aes-128-cbc 同样的 key/iv ----
+    var ct = aes_cbc_encrypt(key, iv, pt)
+    expect(type(ct) == "bytes", "cbc 返回 bytes: " + type(ct))
+    expect(aes_hex(ct) == "2fade11e57401798d6a521bea402f7b8", "cbc ciphertext: " + aes_hex(ct))
+
+    # ---- CBC 解密回原文 ----
+    var back = aes_cbc_decrypt(key, iv, ct)
+    expect(back != null, "cbc 解密非 null")
+    expect(bytes_to_str(back) == "hello puxian", "cbc roundtrip: " + bytes_to_str(back))
+
+    # ---- 错 key 解密：padding 非法应返 null，而不是崩 ----
+    var badkey = hex_to_bytes("000102030405060708090a0b0c0d0eaa")
+    var bad = aes_cbc_decrypt(badkey, iv, ct)
+    if bad != null:
+        expect(bytes_to_str(bad) != "hello puxian", "错 key 不应解出原文")
+    var res = aes_cbc_decrypt_ok(badkey, iv, ct)
+    expect(res.is_err() or bytes_to_str(res.ok()) != "hello puxian", "decrypt_ok 口径")
+
+    # ---- 二进制安全：含 \0 与非法 UTF-8 字节 ----
+    var bin = aes_to_bytes([0, 255, 128, 65, 0, 66])
+    var bct = aes_cbc_encrypt(key, iv, bin)
+    expect(bytes_len(bct) == 16, "二进制 pkcs7 补齐到 16: " + str(bytes_len(bct)))
+    var bback = aes_cbc_decrypt(key, iv, bct)
+    expect(aes_hex(bback) == "00ff80410042", "二进制 roundtrip: " + aes_hex(bback))
+
+    # ---- 满块明文 → 多一个填充块 ----
+    var full = aes_to_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+    expect(bytes_len(aes_cbc_encrypt(key, iv, full)) == 32, "满块 + 整块填充 = 32")
+
+    # ---- CTR：与 openssl enc -aes-128-ctr 同样 nonce ----
+    var nonce = hex_to_bytes("000102030405060708090a0b")
+    var ctr_ct = aes_ctr_crypt(key, nonce, pt)
+    expect(aes_hex(ctr_ct) == "9e0210fb9da0b574c7165abe", "ctr ciphertext: " + aes_hex(ctr_ct))
+    var ctr_back = aes_ctr_crypt(key, nonce, ctr_ct)
+    expect(bytes_to_str(ctr_back) == "hello puxian", "ctr roundtrip: " + bytes_to_str(ctr_back))
+
+    # ---- CTR 跨块（>16 字节）也要对 ----
+    var long_pt = bytes("0123456789abcdef0123456789abcdef")
+    var lct = aes_ctr_crypt(key, nonce, long_pt)
+    expect(bytes_len(lct) == 32, "ctr 输出与明文等长: " + str(bytes_len(lct)))
+    expect(bytes_to_str(aes_ctr_crypt(key, nonce, lct)) == bytes_to_str(long_pt), "ctr 跨块 roundtrip")
+
+    # ---- 0.1.0 私有名仍在（老代码迁移用）----
+    var x = _aes_xor_bytes([1, 2, 3, 4], [10, 20, 30, 40])
+    expect(x == [11, 22, 29, 44], "xor 兼容: " + str(x))
+    var padded = _aes_pkcs7_pad([0x41, 0x42, 0x43], 16)
+    expect(len(padded) == 16, "pad 兼容: " + str(len(padded)))
+    expect(_aes_pkcs7_unpad(padded) == [0x41, 0x42, 0x43], "unpad 兼容")
+
+    print("PASS: aescbc 0.2.0")

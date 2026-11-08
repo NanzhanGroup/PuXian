@@ -1,0 +1,160 @@
+# ============================================================
+# 普贤生态库：registry/dateperiod — 日期范围迭代（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：
+#   1) `import "../../datetime/0.2.0/datetime.px"` 是 registry 树内相对路径，装到
+#      .px_modules/<pkg>/ 后就断了（严格模块模式 E3005）。0.2.0 去掉跨包依赖：
+#      只用到 dt_format()，而它本身就是 time_format() 的薄包装 ⇒ 直接调内建。
+#   2) dp_format(dp, fmt) 名字像「格式化这一段时间」，实际返回区间内**所有**时间点的
+#      格式化结果（list）。要单值得自己取 [0]，很容易写出 bug。0.2.0 保留 dp_format
+#      的 list 语义（并在名字上说明），另加 dp_format_at() / dp_format_one()。
+#   3) interval <= 0 时 dp_to_list() / dp_count() 会死循环。0.2.0 统一前置校验：
+#      interval <= 0 或 end < start 时返空 list / 0 / null，并可用 dp_valid() 自查。
+#   4) dp_months() 用固定 30 天（2592000 秒）当一个月，跟日历月不一致。
+#      0.2.0 保留 dp_months（等距迭代），另加 dp_month_starts() 按日历月推进。
+#
+# 函数：
+#   dp_new(start, end, interval) / dp_days / dp_hours / dp_weeks / dp_months
+#   dp_valid(dp)                  → bool
+#   dp_to_list(dp)                → [int] 秒
+#   dp_count(dp)                  → int
+#   dp_contains(dp, ts)           → bool
+#   dp_format(dp, fmt)            → [string] 每个时间点
+#   dp_format_one(dp, fmt)        → string | null（第一个时间点）
+#   dp_format_at(dp, fmt, i)      → string | null（第 i 个，0 起）
+#   dp_month_starts(start_sec, n) → [int]（日历月推进，n 个）
+#   dp_next(dp, current) / dp_at(dp, ts)
+# ============================================================
+
+def dp_new(start_sec, end_sec, interval_sec):
+    return {"_start": start_sec, "_end": end_sec, "_interval": interval_sec}
+
+def dp_valid(dp):
+    if dp["_interval"] <= 0:
+        return false
+    if dp["_end"] < dp["_start"]:
+        return false
+    return true
+
+def dp_to_list(dp):
+    var result = []
+    if not dp_valid(dp):
+        return result
+    var cur = dp["_start"]
+    while cur <= dp["_end"]:
+        result.append(cur)
+        cur = cur + dp["_interval"]
+    return result
+
+def dp_count(dp):
+    var list = dp_to_list(dp)
+    return len(list)
+
+def dp_contains(dp, ts):
+    if not dp_valid(dp):
+        return false
+    if ts < dp["_start"] or ts > dp["_end"]:
+        return false
+    var diff = ts - dp["_start"]
+    return diff % dp["_interval"] == 0
+
+# 返回区间内所有时间点的格式化结果（list）
+def dp_format(dp, fmt):
+    var result = []
+    if not dp_valid(dp):
+        return result
+    var cur = dp["_start"]
+    while cur <= dp["_end"]:
+        result.append(time_format(int(cur), fmt))
+        cur = cur + dp["_interval"]
+    return result
+
+# 只格式化第一个时间点（0.2.0 新增：就是 0.1.0 里大家以为 dp_format 做的事）
+def dp_format_one(dp, fmt):
+    if not dp_valid(dp):
+        return null
+    return time_format(int(dp["_start"]), fmt)
+
+def dp_format_at(dp, fmt, index):
+    var list = dp_to_list(dp)
+    if index < 0 or index >= len(list):
+        return null
+    return time_format(int(list[index]), fmt)
+
+def dp_days(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 86400)
+
+def dp_hours(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 3600)
+
+def dp_weeks(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 604800)
+
+# 等距 30 天迭代（保持 0.1.0 语义）；要日历月用 dp_month_starts()
+def dp_months(start_sec, end_sec):
+    return dp_new(start_sec, end_sec, 2592000)
+
+def dp_next(dp, current):
+    if not dp_valid(dp):
+        return null
+    var next_ts = current + dp["_interval"]
+    if next_ts > dp["_end"]:
+        return null
+    return next_ts
+
+def dp_at(dp, ts):
+    if not dp_valid(dp):
+        return false
+    return ts >= dp["_start"] and ts <= dp["_end"]
+
+# ---- 日历月推进（0.2.0 新增）----
+# 从 start_sec 起连续 n 个月的同一天同一时刻；31 号遇到短月自动落到月末。
+def dp_month_starts(start_sec, n):
+    var out = []
+    var parts = time_format(int(start_sec), "%Y-%m-%d %H:%M:%S").split(" ")
+    var date_parts = parts[0].split("-")
+    var hour = int(parts[1][0:2])
+    var minute = int(parts[1][3:5])
+    var second = int(parts[1][6:8])
+    var y = int(date_parts[0])
+    var m = int(date_parts[1])
+    var d = int(date_parts[2])
+    var i = 0
+    while i < n:
+        var yy = y
+        var mm = m + i
+        while mm > 12:
+            mm = mm - 12
+            yy = yy + 1
+        var dd = d
+        var dim = dp_days_in_month(yy, mm)
+        if dd > dim:
+            dd = dim
+        var date_s = dp_pad4(yy) + "-" + dp_pad2(mm) + "-" + dp_pad2(dd)
+        var time_s = dp_pad2(hour) + ":" + dp_pad2(minute) + ":" + dp_pad2(second)
+        var s = date_s + " " + time_s
+        out.append(int(time_parse(s, "%Y-%m-%d %H:%M:%S")))
+        i += 1
+    return out
+
+def dp_days_in_month(y, m):
+    if m == 2:
+        if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0:
+            return 29
+        return 28
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        return 30
+    return 31
+
+def dp_pad2(n):
+    if n < 10:
+        return "0" + str(n)
+    return str(n)
+
+def dp_pad4(n):
+    var s = str(n)
+    while len(s) < 4:
+        s = "0" + s
+    return s

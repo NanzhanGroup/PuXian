@@ -1,0 +1,137 @@
+# ============================================================
+# 普贤生态库：registry/dbal — 数据库抽象层（0.2.0：全部改名 db_*）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：这个包和 querybuilder 包都导出 qb_select / qb_where /
+# qb_order_by / qb_limit / qb_offset，签名还不一样（dbal 是 (qb, columns)，
+# querybuilder 是 (table)）。同一个文件里同时 import 两个包，后 import 的覆盖先
+# import 的，调用立刻报
+#   R1005: 调用 qb_select 参数过多（2 个实参，1 个形参）
+# 而且报错位置指向调用处，很难看出是同名覆盖。
+#
+# 0.2.0 的改法：dbal 的全部公开函数改名为 db_ 前缀，与 querybuilder 的 qb_ 前缀
+# 彻底分开，两个包可以在同一文件里共存。
+#
+#   0.1.0              →  0.2.0
+#   qb_new(table)      →  db_new(table)
+#   qb_select(q, cols) →  db_select(q, cols)
+#   qb_where(q,c,o,v)  →  db_where(q, c, op, value)      # 生成 "col op ?"，值进参数表
+#   qb_order_by(q,c,d) →  db_order_by(q, col, dir)
+#   qb_limit(q, n)     →  db_limit(q, n)
+#   qb_offset(q, n)    →  db_offset(q, n)
+#   qb_to_sql(q)       →  db_to_sql(q)
+#   qb_params(q)       →  db_params(q)
+#   qb_insert_sql(...) →  db_insert_sql(table, data)
+#   qb_update_sql(...) →  db_update_sql(table, data, where_clause)
+#   qb_delete_sql(...) →  db_delete_sql(table, where_clause)
+#
+# 新增：db_where_in / db_where_null / db_build（→ [sql, params] 一起取）。
+# ============================================================
+
+def db_new(table):
+    return {"_table": table, "_select": [], "_where": [], "_order": [],
+            "_limit": -1, "_offset": -1, "_params": []}
+
+def db_select(qb, columns):
+    qb["_select"] = columns
+    return qb
+
+def db_where(qb, col, op, val):
+    qb["_where"].append(col + " " + op + " ?")
+    qb["_params"].append(val)
+    return qb
+
+def db_where_in(qb, col, values):
+    var marks = []
+    var i = 0
+    while i < len(values):
+        marks.append("?")
+        qb["_params"].append(values[i])
+        i += 1
+    if len(marks) == 0:
+        qb["_where"].append(col + " IN (NULL)")
+    else:
+        qb["_where"].append(col + " IN (" + db_join(marks, ", ") + ")")
+    return qb
+
+def db_where_null(qb, col):
+    qb["_where"].append(col + " IS NULL")
+    return qb
+
+def db_order_by(qb, col, direction = "ASC"):
+    qb["_order"].append(col + " " + direction)
+    return qb
+
+def db_limit(qb, n):
+    qb["_limit"] = n
+    return qb
+
+def db_offset(qb, n):
+    qb["_offset"] = n
+    return qb
+
+def db_join(arr, sep):
+    if len(arr) == 0:
+        return ""
+    var out = arr[0]
+    var i = 1
+    while i < len(arr):
+        out = out + sep + arr[i]
+        i += 1
+    return out
+
+def db_to_sql(qb):
+    var sql = "SELECT "
+    if len(qb["_select"]) == 0:
+        sql = sql + "*"
+    else:
+        sql = sql + db_join(qb["_select"], ", ")
+    sql = sql + " FROM " + qb["_table"]
+    if len(qb["_where"]) > 0:
+        sql = sql + " WHERE " + db_join(qb["_where"], " AND ")
+    if len(qb["_order"]) > 0:
+        sql = sql + " ORDER BY " + db_join(qb["_order"], ", ")
+    if qb["_limit"] >= 0:
+        sql = sql + " LIMIT " + str(qb["_limit"])
+    if qb["_offset"] >= 0:
+        sql = sql + " OFFSET " + str(qb["_offset"])
+    return sql
+
+def db_params(qb):
+    return qb["_params"]
+
+# 一次取 [sql, params]
+def db_build(qb):
+    return [db_to_sql(qb), db_params(qb)]
+
+def db_insert_sql(table, data):
+    var cols = data.keys()
+    var col_names = []
+    var marks = []
+    var i = 0
+    while i < len(cols):
+        col_names.append(cols[i])
+        marks.append("?")
+        i += 1
+    var cols_s = db_join(col_names, ", ")
+    var marks_s = db_join(marks, ", ")
+    return "INSERT INTO " + table + " (" + cols_s + ") VALUES (" + marks_s + ")"
+
+def db_update_sql(table, data, where_clause):
+    var cols = data.keys()
+    var sets = []
+    var i = 0
+    while i < len(cols):
+        sets.append(cols[i] + " = ?")
+        i += 1
+    var sql = "UPDATE " + table + " SET " + db_join(sets, ", ")
+    if where_clause != "":
+        sql = sql + " WHERE " + where_clause
+    return sql
+
+def db_delete_sql(table, where_clause):
+    var sql = "DELETE FROM " + table
+    if where_clause != "":
+        sql = sql + " WHERE " + where_clause
+    return sql

@@ -1,0 +1,95 @@
+# xmlstream 0.2.0 测试
+import "../registry/xmlstream/0.2.0/xmlstream.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：xr_is_done 永不真 → 死循环 ----
+    var xml = "<?xml version=\"1.0\"?><root id=\"1\"><a>hi</a><b/></root>"
+    var r = xr_new(xml)
+    var n = 0
+    var guard = 0
+    while not xr_is_done(r):
+        var ev = xr_read_next(r)
+        n += 1
+        guard += 1
+        if guard > 100:
+            print("FAIL: xr_is_done 永不真，循环不结束")
+            exit(1)
+    expect(xr_is_done(r), "读完 is_done 为真")
+    expect(n > 0, "读到事件: " + str(n))
+
+    # ---- 用 is_done 写法能完整取到所有事件 ----
+    var r2 = xr_new(xml)
+    var events = []
+    while not xr_is_done(r2):
+        var e = xr_read_next(r2)
+        if e != null:
+            events.append(e)
+    var kinds = ""
+    var i = 0
+    while i < len(events):
+        kinds = kinds + events[i]["type"] + ","
+        i += 1
+    expect(kinds.find("start") >= 0 and kinds.find("end") >= 0, "事件类型齐全: " + kinds)
+    expect(events[1]["name"] == "root", "第一个 start 是 root: " + str(events[1]))
+
+    # ---- 自闭合属性 ----
+    var found_b = false
+    i = 0
+    while i < len(events):
+        if events[i]["type"] == "start" and events[i]["name"] == "b":
+            found_b = events[i]["self_closing"]
+        i += 1
+    expect(found_b, "b 标签识别为自闭合")
+
+    # ---- CDATA 里的 '>' 不再切断 ----
+    var r3 = xr_new("<r><![CDATA[a > b && c < d]]></r>")
+    var ev3 = xr_read_all(r3)
+    var cdata = ""
+    i = 0
+    while i < len(ev3):
+        if ev3[i]["type"] == "cdata":
+            cdata = ev3[i]["text"]
+        i += 1
+    expect(cdata == "a > b && c < d", "CDATA 完整: " + cdata)
+
+    # ---- 文本事件 ----
+    var r4 = xr_new("<r>hello</r>")
+    var ev4 = xr_read_all(r4)
+    var txt = ""
+    i = 0
+    while i < len(ev4):
+        if ev4[i]["type"] == "text":
+            txt = ev4[i]["text"]
+        i += 1
+    expect(txt == "hello", "文本事件: [" + txt + "]")
+
+    # ---- 空标签 / 残缺标签不崩 ----
+    var r5 = xr_new("<>")
+    var ev5 = xr_read_all(r5)
+    expect(len(ev5) >= 1, "空标签不崩")
+
+    # ---- 读完之后再读仍是 null，且 is_done 保持真 ----
+    var r6 = xr_new("<a/>")
+    xr_read_all(r6)
+    expect(xr_read_next(r6) == null, "末尾返回 null")
+    expect(xr_is_done(r6), "末尾 is_done 真")
+
+    # ---- 重置 ----
+    xr_reset(r6)
+    expect(not xr_is_done(r6), "reset 后可重读")
+    expect(xr_read_next(r6)["name"] == "a", "reset 后首事件正确")
+
+    # ---- 写侧：内容转义 ----
+    var w = xw_new()
+    w = xw_start_document(w)
+    w = xw_start_element(w, "r", {"id": "1"})
+    w = xw_write_element(w, "a", "a < b & c")
+    w = xw_end_element(w, "r")
+    w = xw_end_document(w)
+    var out = xw_get_output(w)
+    expect(out.find("a &lt; b &amp; c") >= 0, "写入自动转义: " + out)
+
+    print("PASS: xmlstream 0.2.0")

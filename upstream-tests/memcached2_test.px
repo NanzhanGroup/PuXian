@@ -1,0 +1,73 @@
+# memcached 0.2.0 测试
+import "../registry/memcached/0.2.0/memcached.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：非 ASCII 值声明的字节数错 ----
+    var cmd = mc_build_set("user:1", "甲", 0, 60)
+    expect(cmd == "set user:1 0 60 3\r\n甲\r\n", "非 ASCII 字节数: " + json_stringify(cmd))
+    expect(mc_byte_len("甲") == 3, "mc_byte_len 中文 = 3")
+    expect(mc_byte_len("abc") == 3, "mc_byte_len ascii = 3")
+
+    # ---- ASCII 值口径不变 ----
+    expect(mc_build_set("k", "hello", 0, 60) == "set k 0 60 5\r\nhello\r\n", "ASCII 值")
+
+    # ---- 二进制安全：含 \0 的值 ----
+    var bin = aes_to_bytes_helper()
+    var bcmd = mc_build_set_bytes("k", bin, 0, 0)
+    expect(bcmd.find("set k 0 0 5\r\n") == 0, "二进制值声明 5 字节: " + json_stringify(bcmd))
+
+    # ---- 其它命令 ----
+    expect(mc_build_get("k") == "get k\r\n", "get")
+    expect(mc_build_get_multi(["a", "b"]) == "get a b\r\n", "get_multi")
+    expect(mc_build_delete("k") == "delete k\r\n", "delete")
+    expect(mc_build_increment("c", 1) == "incr c 1\r\n", "incr")
+    expect(mc_build_flush() == "flush_all\r\n", "flush")
+
+    # ---- 值提取：0.1.0 只取第二行，多 key / 含 \r\n 会错 ----
+    var single = "VALUE k 0 5\r\nhello\r\nEND\r\n"
+    expect(mc_extract_value(single) == "hello", "单值: [" + mc_extract_value(single) + "]")
+
+    var two = "VALUE a 0 1\r\nx\r\nVALUE b 0 3\r\nbye\r\nEND\r\n"
+    var full = mc_parse_full(two)
+    expect(full["values"]["a"] == "x", "多值 a: " + str(full["values"]["a"]))
+    expect(full["values"]["b"] == "bye", "多值 b: " + str(full["values"]["b"]))
+    expect(mc_extract_value(two) == "x", "多值取首个")
+
+    # ---- 值里含 \r\n：按声明长度切片才对 ----
+    var weird = "VALUE k 0 4\r\na\r\nb\r\nEND\r\n"
+    expect(mc_extract_value(weird) == "a\r\nb", "含 CRLF 的值: " + json_stringify(mc_extract_value(weird)))
+
+    # ---- 中文值往返 ----
+    var cn = "VALUE k 0 3\r\n甲\r\nEND\r\n"
+    expect(mc_extract_value(cn) == "甲", "中文值: " + mc_extract_value(cn))
+    expect(bytes_len(mc_value_bytes(cn)) == 3, "中文值字节数")
+
+    # ---- 状态行 ----
+    var st = mc_parse_full("STORED\r\n")
+    expect(st["status"] == "STORED", "状态行: " + st["status"])
+    var miss = mc_parse_full("END\r\n")
+    expect(len(miss["values"].keys()) == 0, "未命中无值")
+
+    # ---- 结构概览仍可用 ----
+    var overview = mc_parse_response(single)
+    expect(len(overview) == 1, "概览条数: " + str(len(overview)))
+    expect(overview[0]["length"] == 5, "概览 length")
+
+    # ---- 非法长度不崩 ----
+    var trunc = "VALUE k 0 99\r\nshort\r\n"
+    var t2 = mc_parse_full(trunc)
+    expect(t2["values"]["k"] == "short\r\n", "长度越界按剩余取: " + json_stringify(t2["values"]["k"]))
+
+    print("PASS: memcached 0.2.0")
+
+def aes_to_bytes_helper():
+    var out = bytes_zeros(5)
+    out = bytes_set(out, 0, 0)
+    out = bytes_set(out, 1, 65)
+    out = bytes_set(out, 2, 0)
+    out = bytes_set(out, 3, 66)
+    out = bytes_set(out, 4, 67)
+    return out

@@ -1,0 +1,265 @@
+# ============================================================
+# 普贤生态库：registry/strtotime — 英文相对时间解析（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的两个问题：
+#   1) 依赖 `import "../../datetime/0.2.0/datetime.px"`（registry 树内相对路径），
+#      装到 .px_modules/<pkg>/ 后就断了 ⇒ 严格模块模式 E3005；且它调的
+#      dt_weekday_from_sec() 在 datetime 包里根本不存在（R1001）。0.2.0 去掉跨包
+#      依赖：星期用本地 st_weekday_from_sec()，当前时间用内建 now_sec()。
+#   2) 切词是按空格 split 后找**独立**的 "+" / "-" 词元，而 "+1 day" 切出来是 "+1"，
+#      于是「符号 + 数字」粘连的写法一个分支都不命中 —— 不报错、不警告、原样返回 base，
+#      属于静默失效。0.2.0 先把表达式归一化成词元序列（符号与数字、数字与单位都拆开），
+#      再按符号/数字/单位/ago 组合解析。
+#
+# 公开函数：
+#   st_parse_relative(expr, base)        → int 秒（无法识别的词忽略）
+#   st_parse_relative_ok(expr, base)     → Ok(秒) | Err(无法识别的词)  ← 不再静默
+#   st_parse(expr)                       → int 秒（base = now_sec()）
+#   st_parse_ok(expr)                    → Ok / Err
+#   st_weekday_from_sec(sec)             → 0..6（周日=0，1970-01-01 为周四=4）
+#   st_day_of_week(name)                 → 0..6 / -1
+#   st_next_weekday(base, target)        → int 秒
+#   st_unit_sec(unit)                    → 单位秒数 / -1（单位不认识）
+#   st_tokens(expr)                      → 归一化后的词元 list（调试用）
+#
+# 支持写法（不区分大小写、符号与数字可粘连、单位可单复数）：
+#   now / today / tomorrow / yesterday
+#   +1 day / -2 hours / 3 weeks / +1day / "2 days ago" / "in 2 hours"
+#   next monday / last friday（周日=0 口径）
+#   单位：sec/second/minute/min/hour/day/week/month(30 天)/year(365 天)
+# ============================================================
+
+# ---- 星期口径：周日=0（与 st_day_of_week 一致；1970-01-01 是周四）----
+def st_weekday_from_sec(sec):
+    var days = int(sec) // 86400
+    var wd = (days + 4) % 7
+    if wd < 0:
+        wd = wd + 7
+    return wd
+
+def st_day_of_week(name):
+    var n = name.lower()
+    if n == "sun" or n == "sunday":
+        return 0
+    if n == "mon" or n == "monday":
+        return 1
+    if n == "tue" or n == "tuesday":
+        return 2
+    if n == "wed" or n == "wednesday":
+        return 3
+    if n == "thu" or n == "thursday":
+        return 4
+    if n == "fri" or n == "friday":
+        return 5
+    if n == "sat" or n == "saturday":
+        return 6
+    return -1
+
+def st_next_weekday(base, target):
+    var base_day = st_weekday_from_sec(base)
+    var diff = target - base_day
+    if diff <= 0:
+        diff = diff + 7
+    return base + diff * 86400
+
+def st_last_weekday(base, target):
+    var base_day = st_weekday_from_sec(base)
+    var diff = base_day - target
+    if diff <= 0:
+        diff = diff + 7
+    return base - diff * 86400
+
+# ---- 单位 → 秒 ----
+def st_unit_sec(unit):
+    var u = unit.lower()
+    if u == "s" or u == "sec" or u == "secs" or u == "second" or u == "seconds":
+        return 1
+    if u == "min" or u == "mins" or u == "minute" or u == "minutes":
+        return 60
+    if u == "h" or u == "hr" or u == "hrs" or u == "hour" or u == "hours":
+        return 3600
+    if u == "d" or u == "day" or u == "days":
+        return 86400
+    if u == "w" or u == "week" or u == "weeks":
+        return 604800
+    if u == "month" or u == "months":
+        return 2592000
+    if u == "y" or u == "year" or u == "years":
+        return 31536000
+    return -1
+
+# ---- 内部：字符判定 ----
+def _st_is_digit(c):
+    return c >= "0" and c <= "9"
+
+def _st_is_alpha(c):
+    var l = c.lower()
+    return l >= "a" and l <= "z"
+
+def _st_is_int_str(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not _st_is_digit(s[i]):
+            return false
+        i += 1
+    return true
+
+# ---- 归一化：拆成词元（符号、数字、字母各成一段，空格只作分隔）----
+def st_tokens(expr):
+    var e = expr.lower()
+    var toks = []
+    var i = 0
+    while i < len(e):
+        var c = e[i]
+        if c == " " or c == "\t" or c == "\n" or c == "\r":
+            i += 1
+        elif c == "+" or c == "-":
+            toks.append(c)
+            i += 1
+        elif _st_is_digit(c):
+            var j = i
+            while j < len(e) and _st_is_digit(e[j]):
+                j += 1
+            # 小数：1.5 hours
+            if j < len(e) and e[j] == "." and j + 1 < len(e) and _st_is_digit(e[j + 1]):
+                j += 1
+                while j < len(e) and _st_is_digit(e[j]):
+                    j += 1
+            toks.append(e[i:j])
+            i = j
+        elif _st_is_alpha(c):
+            var k = i
+            while k < len(e) and _st_is_alpha(e[k]):
+                k += 1
+            toks.append(e[i:k])
+            i = k
+        else:
+            # 其他符号（逗号、冒号等）当分隔符
+            i += 1
+    return toks
+
+# ---- 主解析：返回 [秒数, 无法识别的词表] ----
+def _st_parse_core(expr, base):
+    var toks = st_tokens(expr)
+    var result = base
+    var unknown = []
+    var sign = 1
+    var i = 0
+    while i < len(toks):
+        var t = toks[i]
+        if t == "+":
+            sign = 1
+            i += 1
+        elif t == "-":
+            sign = -1
+            i += 1
+        elif t == "now" or t == "today":
+            i += 1
+        elif t == "tomorrow":
+            result = result + 86400
+            i += 1
+        elif t == "yesterday":
+            result = result - 86400
+            i += 1
+        elif t == "in":
+            sign = 1
+            i += 1
+        elif (t == "next" or t == "last") and i + 1 < len(toks):
+            var wd = st_day_of_week(toks[i + 1])
+            if wd >= 0:
+                if t == "next":
+                    result = st_next_weekday(result, wd)
+                else:
+                    result = st_last_weekday(result, wd)
+                i += 2
+            else:
+                unknown.append(toks[i + 1])
+                i += 2
+        elif _st_is_int_str(t) or _st_looks_number(t):
+            var num = st_to_number(t)
+            var consumed = 1
+            var unit = ""
+            if i + 1 < len(toks):
+                if st_unit_sec(toks[i + 1]) > 0:
+                    unit = toks[i + 1]
+                    consumed = 2
+                elif i + 2 < len(toks) and st_unit_sec(toks[i + 2]) > 0:
+                    # "2 days ago" 里 "days" 已在下一轮；这里兼容 "1.5 hours"
+                    unit = toks[i + 2]
+                    consumed = 3
+            if unit == "":
+                unknown.append(t)
+                i += 1
+            else:
+                var us = st_unit_sec(unit)
+                var delta = sign * num * us
+                sign = 1
+                i += consumed
+                if i < len(toks) and toks[i] == "ago":
+                    delta = 0 - delta
+                    i += 1
+                result = result + delta
+        elif st_unit_sec(t) > 0:
+            # 裸单位（"an hour" 里的 hour 之类）→ 按 1 个单位处理
+            var delta2 = sign * st_unit_sec(t)
+            sign = 1
+            i += 1
+            if i < len(toks) and toks[i] == "ago":
+                delta2 = 0 - delta2
+                i += 1
+            result = result + delta2
+        else:
+            unknown.append(t)
+            i += 1
+    return [result, unknown]
+
+def _st_looks_number(s):
+    if len(s) == 0:
+        return false
+    var dot = 0
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == ".":
+            dot += 1
+        elif not _st_is_digit(c):
+            return false
+        i += 1
+    return dot <= 1
+
+def st_to_number(s):
+    if _st_looks_number(s) and s.find(".") >= 0:
+        return float(s)
+    return int(s)
+
+# ---- 公开 API ----
+def st_parse_relative(expr, base):
+    var r = _st_parse_core(expr, base)
+    return int(r[0])
+
+def st_parse_relative_ok(expr, base):
+    var r = _st_parse_core(expr, base)
+    var unknown = r[1]
+    if len(unknown) > 0:
+        return Err("无法识别的写法: " + join_words(unknown))
+    return Ok(int(r[0]))
+
+def st_parse(expr):
+    return st_parse_relative(expr, int(now_sec()))
+
+def st_parse_ok(expr):
+    return st_parse_relative_ok(expr, int(now_sec()))
+
+def join_words(arr):
+    if len(arr) == 0:
+        return ""
+    var out = arr[0]
+    var i = 1
+    while i < len(arr):
+        out = out + " " + arr[i]
+        i += 1
+    return out

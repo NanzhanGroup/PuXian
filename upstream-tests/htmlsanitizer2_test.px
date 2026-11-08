@@ -1,0 +1,68 @@
+# htmlsanitizer 0.2.0 测试
+import "../registry/htmlsanitizer/0.2.0/htmlsanitizer.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：属性清洗留残渣 ----
+    var s1 = hs_sanitize("<p onclick=\"x()\">hi</p><script>alert(1)</script>", {})
+    expect(s1 == "<p>hi</p>", "onclick 整条属性去掉: " + s1)
+    expect(s1.find("=\"") < 0, "不再有 =\" 残渣: " + s1)
+
+    # ---- 正常属性保留 ----
+    var s2 = hs_sanitize("<p class=\"a\" id='b'>x</p>", {})
+    expect(s2.find("class=\"a\"") >= 0, "普通属性保留: " + s2)
+    expect(s2.find("id=\"b\"") >= 0, "单引号属性重建成双引号: " + s2)
+
+    # ---- 事件属性通配（on*）----
+    var s3 = hs_strip_attrs("<img src=\"a.png\" onerror=\"evil()\" onload=bad()>", [])
+    expect(s3.find("onerror") < 0, "onerror 去掉: " + s3)
+    expect(s3.find("onload") < 0, "无引号的 onload 也去掉: " + s3)
+    expect(s3.find("src=\"a.png\"") >= 0, "src 保留: " + s3)
+    expect(s3.find("evil()") < 0 and s3.find("bad()") < 0, "属性值不再残留: " + s3)
+
+    # ---- javascript: 值 ----
+    var s4 = hs_strip_attrs("<a href=\"javascript:alert(1)\">x</a>", [])
+    expect(s4.find("javascript") < 0, "javascript: 值去掉: " + s4)
+
+    # ---- 变形绕过的 URL 判定 ----
+    expect(hs_is_safe_url("https://a.com/x") == true, "https 安全")
+    expect(hs_is_safe_url("/rel/path") == true, "相对路径安全")
+    expect(hs_is_safe_url("javascript:alert(1)") == false, "javascript 不安全")
+    expect(hs_is_safe_url("Java\tScript:alert(1)") == false, "tab 变形不安全")
+    expect(hs_is_safe_url("java script:alert(1)") == false, "空格变形不安全")
+    expect(hs_is_safe_url("&#106;avascript:alert(1)") == false, "数字实体变形不安全")
+    expect(hs_is_safe_url("&#x6a;avascript:alert(1)") == false, "十六进制实体变形不安全")
+    expect(hs_is_safe_url("data:text/html;base64,xxx") == false, "data:text/html 不安全")
+    expect(hs_is_safe_url("vbscript:msgbox") == false, "vbscript 不安全")
+    expect(hs_clean_url("javascript:x") == "", "clean_url 清空")
+    expect(hs_clean_url("https://a.com") == "https://a.com", "clean_url 保留安全 URL")
+
+    # ---- 未闭合 script 不再吞掉整段文档 ----
+    var s5 = hs_remove_scripts("<p>a</p><script>bad<p>b</p>")
+    expect(s5.find("<p>b</p>") >= 0, "未闭合 script 后面的内容保留: " + s5)
+
+    # ---- 注释 ----
+    expect(hs_remove_comments("a<!-- x -->b") == "ab", "去注释")
+    expect(hs_remove_comments("a<!-- unclosed b") == "a unclosed b", "未闭合注释只丢标记")
+
+    # ---- 白名单 ----
+    var s6 = hs_strip_tags("<b>x</b><script>y</script>", ["b"])
+    expect(s6 == "<b>x</b>y", "白名单保留 b: " + s6)
+
+    # ---- 选项：自定义 allowed ----
+    var s7 = hs_sanitize("<div onclick=\"x()\">a<span>b</span></div>", {"allowed": ["span"]})
+    expect(s7 == "a<span>b</span>", "自定义白名单里 span 保留: " + s7)
+    var s8 = hs_sanitize("<div class=\"k\">a</div>", {"allowed": ["div"]})
+    expect(s8 == "<div class=\"k\">a</div>", "自定义白名单: " + s8)
+
+    # ---- 自闭合标签重建 ----
+    var s9 = hs_sanitize("<br/><img src=\"a.png\"/>", {"allowed": ["br", "img"]})
+    expect(s9 == "<br /><img src=\"a.png\" />", "自闭合重建: " + s9)
+
+    # ---- 转义 ----
+    expect(hs_escape("<a href=\"x\">&") == "&lt;a href=&quot;x&quot;&gt;&amp;", "escape")
+    expect(hs_unescape("&lt;a&gt;") == "<a>", "unescape")
+
+    print("PASS: htmlsanitizer 0.2.0")

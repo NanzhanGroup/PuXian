@@ -1,0 +1,282 @@
+# ============================================================
+# 普贤生态库：registry/orm — 简化 ORM（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：
+#   1) orm_from_row() 原样搬运，不按声明的类型转换 —— 声明 integer 的字段拿到
+#      "20"（字符串）照样放进去，后面参与运算就炸或算错。
+#   2) orm_validate() 只查字段在不在，{"name": ""} 判为通过；而且 type 只能写
+#      "int"/"string" 两个名字，"integer"/"varchar" 这类写法等于不校验。
+#
+# 0.2.0 的改法：
+#   - orm_from_row() 按声明类型转换（int/integer/bigint… → int，float/decimal → float，
+#     bool/boolean → bool，json → 解析后的值，string/varchar/text → string）。
+#     转换不了的值留 null，并在 orm_validate() 里报出来，不静默塞进去。
+#   - orm_to_row() 反向转换（bool → 1/0，json → 字符串），写库口径统一。
+#   - orm_validate() 增加「空字符串算未填」与转换失败检查；orm_optional() 可放宽必填。
+#   - orm_validate_ok() → Ok() | Err(错误列表)。
+#
+# 类型别名：int / integer / bigint / smallint / tinyint → int
+#          float / double / decimal / numeric / real → float
+#          bool / boolean → bool
+#          json / jsonb → 解析后的值
+#          string / varchar / char / text → string
+# ============================================================
+
+def orm_new(table, pk):
+    return {"_table": table, "_pk": pk, "_fields": [], "_hidden": []}
+
+def orm_field(orm_def, name, type_name):
+    orm_def["_fields"].append({"name": name, "type": type_name, "optional": false})
+    return orm_def
+
+def orm_field_optional(orm_def, name, type_name):
+    orm_def["_fields"].append({"name": name, "type": type_name, "optional": true})
+    return orm_def
+
+def orm_optional(orm_def, name):
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        if orm_def["_fields"][i]["name"] == name:
+            orm_def["_fields"][i]["optional"] = true
+        i += 1
+    return orm_def
+
+def orm_hidden(orm_def, fields):
+    orm_def["_hidden"] = fields
+    return orm_def
+
+def orm_field_type(orm_def, name):
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        if orm_def["_fields"][i]["name"] == name:
+            return orm_def["_fields"][i]["type"]
+        i += 1
+    return ""
+
+# ---- 类型归类 ----
+def _orm_kind(tp):
+    var t = tp.lower()
+    if t == "int" or t == "integer" or t == "bigint" or t == "smallint" or t == "tinyint":
+        return "int"
+    if t == "float" or t == "double" or t == "decimal" or t == "numeric" or t == "real":
+        return "float"
+    if t == "bool" or t == "boolean":
+        return "bool"
+    if t == "json" or t == "jsonb":
+        return "json"
+    if t == "string" or t == "varchar" or t == "char" or t == "text":
+        return "string"
+    return t
+
+def _orm_is_int_str(s):
+    var t = s.strip()
+    if len(t) == 0:
+        return false
+    var i = 0
+    if t[0] == "-" or t[0] == "+":
+        i = 1
+    if i >= len(t):
+        return false
+    while i < len(t):
+        if t[i] < "0" or t[i] > "9":
+            return false
+        i += 1
+    return true
+
+def _orm_is_num_str(s):
+    var t = s.strip()
+    if len(t) == 0:
+        return false
+    var dot = 0
+    var i = 0
+    if t[0] == "-" or t[0] == "+":
+        i = 1
+    if i >= len(t):
+        return false
+    while i < len(t):
+        var c = t[i]
+        if c == ".":
+            dot += 1
+            if dot > 1:
+                return false
+        elif c < "0" or c > "9":
+            return false
+        i += 1
+    return true
+
+# ---- 单值转换：失败返回 null ----
+def orm_cast(value, type_name):
+    if value == null:
+        return null
+    var kind = _orm_kind(type_name)
+    var vt = type(value)
+    if kind == "int":
+        if vt == "int":
+            return value
+        if vt == "bool":
+            if value:
+                return 1
+            return 0
+        if vt == "float":
+            return int(value)
+        if _orm_is_int_str(str(value)):
+            return int(str(value).strip())
+        if _orm_is_num_str(str(value)):
+            return int(float(str(value).strip()))
+        return null
+    if kind == "float":
+        if vt == "float":
+            return value
+        if vt == "int":
+            return float(value)
+        if _orm_is_num_str(str(value)):
+            return float(str(value).strip())
+        return null
+    if kind == "bool":
+        if vt == "bool":
+            return value
+        if vt == "int":
+            return value != 0
+        if vt == "float":
+            return value != 0.0
+        var s = str(value).strip().lower()
+        if s == "1" or s == "true" or s == "t" or s == "yes" or s == "on":
+            return true
+        if s == "0" or s == "false" or s == "f" or s == "no" or s == "off" or s == "":
+            return false
+        return null
+    if kind == "json":
+        if vt == "string":
+            var r = json_parse_opt(value)
+            if r.is_ok():
+                return r.ok()
+            return null
+        return value
+    if kind == "string":
+        if vt == "string":
+            return value
+        return str(value)
+    return value
+
+# ---- 反向：写库口径 ----
+def orm_to_db(value, type_name):
+    if value == null:
+        return null
+    var kind = _orm_kind(type_name)
+    if kind == "bool":
+        if value:
+            return 1
+        return 0
+    if kind == "json":
+        if type(value) == "string":
+            return value
+        return json_stringify(value)
+    return value
+
+def _orm_find_field(orm_def, name):
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        if orm_def["_fields"][i]["name"] == name:
+            return orm_def["_fields"][i]
+        i += 1
+    return null
+
+# ---- 行 → 对象（0.2.0：按声明类型转换）----
+def orm_from_row(orm_def, row):
+    var obj = {}
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var f = orm_def["_fields"][i]
+        var name = f["name"]
+        if row.has(name):
+            obj.set(name, orm_cast(row[name], f["type"]))
+        i += 1
+    return obj
+
+# ---- 对象 → 行（0.2.0：bool/json 反向转换）----
+def orm_to_row(orm_def, obj):
+    var row = {}
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var f = orm_def["_fields"][i]
+        var name = f["name"]
+        if obj.has(name):
+            row.set(name, orm_to_db(obj[name], f["type"]))
+        i += 1
+    return row
+
+def orm_to_json(orm_def, obj):
+    var result = {}
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var name = orm_def["_fields"][i]["name"]
+        var skip = false
+        var j = 0
+        while j < len(orm_def["_hidden"]):
+            if orm_def["_hidden"][j] == name:
+                skip = true
+            j += 1
+        if not skip and obj.has(name):
+            result.set(name, obj[name])
+        i += 1
+    return result
+
+# ---- 校验（0.2.0：必填 / 空值 / 类型）----
+def orm_validate(orm_def, obj):
+    var errors = []
+    var i = 0
+    while i < len(orm_def["_fields"]):
+        var f = orm_def["_fields"][i]
+        var name = f["name"]
+        var tp = f["type"]
+        var kind = _orm_kind(tp)
+        var optional = false
+        if f.has("optional"):
+            optional = f["optional"]
+        if not obj.has(name):
+            if not optional:
+                errors.append(name + " is missing")
+        else:
+            var v = obj[name]
+            if v == null:
+                if not optional:
+                    errors.append(name + " is null")
+            elif kind == "string" and str(v) == "":
+                if not optional:
+                    errors.append(name + " is empty")
+            else:
+                var casted = orm_cast(v, tp)
+                if casted == null and kind != "string":
+                    errors.append(name + " must be " + kind + " (实际 " + str(v) + ")")
+        i += 1
+    return errors
+
+def orm_validate_ok(orm_def, obj):
+    var errs = orm_validate(orm_def, obj)
+    if len(errs) > 0:
+        return Err(orm_join(errs, "; "))
+    return Ok(obj)
+
+def orm_join(arr, sep):
+    if len(arr) == 0:
+        return ""
+    var out = arr[0]
+    var i = 1
+    while i < len(arr):
+        out = out + sep + arr[i]
+        i += 1
+    return out
+
+def orm_table(orm_def):
+    return orm_def["_table"]
+
+def orm_pk(orm_def):
+    return orm_def["_pk"]
+
+def orm_pk_value(orm_def, obj):
+    var pk = orm_def["_pk"]
+    if obj.has(pk):
+        return obj[pk]
+    return null

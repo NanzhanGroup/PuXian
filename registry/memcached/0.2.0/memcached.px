@@ -1,0 +1,161 @@
+# ============================================================
+# 普贤生态库：registry/memcached — Memcached 文本协议构造/解析（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：
+#   1) mc_build_set() 用 len(value) 声明字节数。PuXian 的 len(string) 是**字符数**，
+#      所以非 ASCII 值声明的字节数偏小 —— "甲" 声明 1、实际写 3 字节。服务器只读 1 字节，
+#      剩下 2 字节留在缓冲区，后续命令全部错位（协议错位，比报错难查得多）。
+#   2) mc_extract_value() 只是「取第二行」，值里含 \r\n（或一次 get 多 key）时取不对。
+#   3) 没有把 VALUE 声明的 length 当回事。
+#
+# 0.2.0 的改法：
+#   - 声明长度一律用 bytes_len(bytes(value))（真字节数）；另加 mc_build_set_bytes()
+#     直接吃 bytes，二进制值也安全。
+#   - mc_extract_value() / mc_parse_full() 按 VALUE 行声明的 length 精确切片，不再按行猜。
+#   - 新增 mc_value_bytes() 返回 bytes（二进制值不经 UTF-8 转换）。
+#
+# 函数：
+#   mc_build_set(key, value, flags, exptime)        → string（值按 UTF-8 计字节）
+#   mc_build_set_bytes(key, data, flags, exptime)   → string（二进制安全）
+#   mc_build_get / mc_build_get_multi / mc_build_delete
+#   mc_build_increment / mc_build_decrement / mc_build_flush / mc_build_stats
+#   mc_byte_len(value)                              → int（真字节数）
+#   mc_parse_response(text)                         → [{type, ...}]（结构概览）
+#   mc_parse_full(text)                             → {status, values}（含值载荷）
+#   mc_extract_value(text)                          → string（首个值）
+#   mc_value_bytes(text)                            → bytes（首个值，二进制安全）
+# ============================================================
+
+# ---- 字节长度（关键修复）----
+def mc_byte_len(value):
+    return bytes_len(bytes(value))
+
+def mc_build_set(key, value, flags, exptime):
+    var n = mc_byte_len(value)
+    return "set " + key + " " + str(flags) + " " + str(exptime) + " " + str(n) + "\r\n" + value + "\r\n"
+
+# data 必须是 bytes（二进制安全：含 \0 / 非 UTF-8 也能发）
+def mc_build_set_bytes(key, data, flags, exptime):
+    var buf = data
+    if type(buf) != "bytes":
+        buf = bytes(str(buf))
+    var n = bytes_len(buf)
+    return bytes_to_str(bytes_concat(bytes("set " + key + " " + str(flags) + " " + str(exptime) + " " + str(n) + "\r\n"), bytes_concat(buf, bytes("\r\n"))))
+
+def mc_build_get(key):
+    return "get " + key + "\r\n"
+
+def mc_build_get_multi(keys):
+    var cmd = "get"
+    var i = 0
+    while i < len(keys):
+        cmd = cmd + " " + keys[i]
+        i += 1
+    cmd = cmd + "\r\n"
+    return cmd
+
+def mc_build_delete(key):
+    return "delete " + key + "\r\n"
+
+def mc_build_increment(key, value):
+    return "incr " + key + " " + str(value) + "\r\n"
+
+def mc_build_decrement(key, value):
+    return "decr " + key + " " + str(value) + "\r\n"
+
+def mc_build_flush():
+    return "flush_all\r\n"
+
+def mc_build_stats():
+    return "stats\r\n"
+
+# ---- 内部：字节流里找 \r\n ----
+def _mc_find_crlf(b, from_pos):
+    var n = bytes_len(b)
+    var i = from_pos
+    while i + 1 < n:
+        if bytes_get(b, i) == 13 and bytes_get(b, i + 1) == 10:
+            return i
+        i += 1
+    return -1
+
+def _mc_line_at(b, pos):
+    var e = _mc_find_crlf(b, pos)
+    var n = bytes_len(b)
+    if e < 0:
+        return ["", n]
+    return [bytes_to_str(bytes_slice(b, pos, e)), e + 2]
+
+# ---- 结构概览（保留 0.1.0 形态）----
+def mc_parse_response(text):
+    var lines = text.split("\n")
+    var result = []
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if line.len() > 0 and line[line.len() - 1] == "\r":
+            line = line[:line.len() - 1]
+        if line == "END":
+            break
+        if line == "STORED" or line == "NOT_STORED" or line == "DELETED" or line == "NOT_FOUND" or line == "EXISTS" or line == "TOUCHED":
+            result.append({"type": "status", "value": line})
+        elif line.len() > 5 and line[:6] == "VALUE ":
+            var parts = line[6:].split(" ")
+            if len(parts) >= 3:
+                result.append({"type": "value", "key": parts[0], "flags": int(parts[1]), "length": int(parts[2])})
+        elif line.len() > 5 and line[:6] == "STATS ":
+            result.append({"type": "stats", "data": line[6:]})
+        elif line == "ERROR" or line.len() > 6 and line[:7] == "CLIENT_":
+            result.append({"type": "status", "value": line})
+        i += 1
+    return result
+
+# ---- 完整解析：含值载荷（按 VALUE 声明的 length 精确切片）----
+def mc_parse_full(text):
+    var b = bytes(text)
+    var n = bytes_len(b)
+    var values = {}
+    var status = ""
+    var pos = 0
+    while pos < n:
+        var pair = _mc_line_at(b, pos)
+        var line = pair[0]
+        var next_pos = pair[1]
+        if line == "":
+            break
+        if line == "END":
+            pos = next_pos
+            continue
+        if line.len() > 6 and line[:6] == "VALUE ":
+            var parts = line[6:].split(" ")
+            var key = parts[0]
+            var len_val = int(parts[2])
+            var data_start = next_pos
+            if data_start + len_val > n:
+                len_val = n - data_start
+            values.set(key, bytes_to_str(bytes_slice(b, data_start, data_start + len_val)))
+            # 跳过数据 + \r\n
+            pos = data_start + len_val
+            var crlf = _mc_find_crlf(b, pos)
+            if crlf >= 0:
+                pos = crlf + 2
+            else:
+                pos = n
+        else:
+            status = line
+            pos = next_pos
+    return {"status": status, "values": values}
+
+def mc_extract_value(response_text):
+    var full = mc_parse_full(response_text)
+    var vals = full["values"]
+    var ks = vals.keys()
+    if len(ks) == 0:
+        return ""
+    return vals[ks[0]]
+
+def mc_value_bytes(response_text):
+    var s = mc_extract_value(response_text)
+    return bytes(s)

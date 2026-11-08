@@ -1,0 +1,72 @@
+# uuencode 0.2.0 测试（与 Python binascii 的 uu 编码对拍口径）
+import "../registry/uuencode/0.2.0/uuencode.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var s = "hello"
+
+    # ---- 0.1.0 的坑：uu_decode 返 list，bytes_to_str 直接报 R1002 ----
+    var raw = uu_encode_raw(s)
+    var dec = uu_decode(raw)
+    expect(type(dec) == "bytes", "uu_decode 返回 bytes: " + type(dec))
+    expect(bytes_to_str(dec) == "hello", "raw 往返: " + bytes_to_str(dec))
+
+    # 完整格式（begin/end）也能解
+    var full = uu_encode(s)
+    expect(full.find("begin 644") == 0, "带 begin 头")
+    expect(bytes_to_str(uu_decode(full)) == "hello", "完整格式往返: " + bytes_to_str(uu_decode(full)))
+
+    # 旧形态仍可取
+    var lst = uu_decode_list(raw)
+    expect(type(lst) == "list" and len(lst) == 5, "uu_decode_list 仍是 list: " + str(len(lst)))
+    expect(lst[0] == 104, "首字节 h: " + str(lst[0]))
+
+    # ---- 已知向量：uuencode("hello") 的编码行 ----
+    # 0x68 0x65 0x6c 0x6c 0x6f → "%:&5L;&\" + 补齐用的空格
+    var line = raw[:raw.find("\n")]
+    expect(line == "%:&5L;&\\ ", "已知向量: " + json_stringify(line))
+
+    # ---- 边界长度：45 字节整行为一段 ----
+    var long_s = ""
+    var i = 0
+    while i < 45:
+        long_s = long_s + "a"
+        i += 1
+    var lraw = uu_encode_raw(long_s)
+    var lines = lraw.split("\n")
+    expect(lines[0][0] == chr(45 + 32), "整行长度前缀: " + str(ord(lines[0][0])))
+    expect(bytes_to_str(uu_decode(lraw)) == long_s, "45 字节往返")
+
+    # 46 字节 → 两段
+    var long2 = long_s + "b"
+    var l2raw = uu_encode_raw(long2)
+    expect(bytes_to_str(uu_decode(l2raw)) == long2, "46 字节往返: " + bytes_to_str(uu_decode(l2raw)))
+
+    # ---- 二进制安全：含 \0 与 0xFF ----
+    var bin = bytes_zeros(4)
+    bin = bytes_set(bin, 0, 0)
+    bin = bytes_set(bin, 1, 255)
+    bin = bytes_set(bin, 2, 128)
+    bin = bytes_set(bin, 3, 65)
+    var braw = uu_encode_raw(bin)
+    var bback = uu_decode(braw)
+    expect(bytes_to_hex(bback) == "00ff8041", "二进制往返: " + bytes_to_hex(bback))
+
+    # ---- 空输入 ----
+    var eraw = uu_encode_raw("")
+    expect(bytes_len(uu_decode(eraw)) == 0, "空输入往返")
+
+    # ---- list[int] 入参也行 ----
+    var from_list = uu_encode_raw([104, 105])
+    expect(bytes_to_str(uu_decode(from_list)) == "hi", "list 入参")
+
+    # ---- 中文（UTF-8 多字节）----
+    var cn = "汉字"
+    expect(bytes_to_str(uu_decode(uu_encode_raw(cn))) == cn, "中文往返: " + bytes_to_str(uu_decode(uu_encode_raw(cn))))
+
+    # ---- 无 begin 头的裸编码也照解 ----
+    expect(bytes_to_str(uu_decode(uu_encode_raw("abc"))) == "abc", "无头裸编码")
+
+    print("PASS: uuencode 0.2.0")

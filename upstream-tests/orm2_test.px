@@ -1,0 +1,70 @@
+# orm 0.2.0 测试
+import "../registry/orm/0.2.0/orm.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：声明 integer，from_row 原样给字符串 ----
+    var m = orm_new("users", "id")
+    m = orm_field(m, "id", "integer")
+    m = orm_field(m, "age", "integer")
+    m = orm_field(m, "name", "varchar")
+    m = orm_field(m, "score", "decimal")
+    m = orm_field(m, "active", "boolean")
+    m = orm_field(m, "meta", "json")
+    var obj = orm_from_row(m, {"id": "1", "age": "20", "name": "bob", "score": "9.5", "active": "1", "meta": "{\"a\":1}"})
+    expect(type(obj["id"]) == "int" and obj["id"] == 1, "id 转 int: " + type(obj["id"]) + " " + str(obj["id"]))
+    expect(type(obj["age"]) == "int" and obj["age"] == 20, "age 转 int: " + str(obj["age"]))
+    expect(obj["name"] == "bob", "varchar 保持")
+    expect(type(obj["score"]) == "float" and obj["score"] == 9.5, "decimal 转 float: " + str(obj["score"]))
+    expect(obj["active"] == true, "boolean 转 bool: " + str(obj["active"]))
+    expect(obj["meta"]["a"] == 1, "json 解析: " + json_stringify(obj["meta"]))
+
+    # ---- 转换不了的值 → null，且校验报出来 ----
+    var bad = orm_from_row(m, {"id": "abc", "age": "20", "name": "x", "score": "9.5", "active": "1", "meta": "{}"})
+    expect(bad["id"] == null, "非法 int → null: " + str(bad["id"]))
+    var errs = orm_validate(m, bad)
+    expect(len(errs) > 0, "校验报错: " + json_stringify(errs))
+    expect(orm_validate_ok(m, bad).is_err(), "validate_ok Err")
+
+    # ---- 0.1.0 的坑：{"name": ""} 判通过 ----
+    var empty = {"id": 1, "age": 20, "name": "", "score": 1.0, "active": true, "meta": {}}
+    var e2 = orm_validate(m, empty)
+    expect(len(e2) == 1 and e2[0].find("name is empty") >= 0, "空字符串被抓出: " + json_stringify(e2))
+
+    # ---- 全填对 → 通过 ----
+    var good = {"id": 1, "age": 20, "name": "bob", "score": 1.0, "active": true, "meta": {}}
+    expect(len(orm_validate(m, good)) == 0, "合法对象无错误")
+
+    # ---- 可选字段放宽 ----
+    var m2 = orm_new("t", "id")
+    m2 = orm_field(m2, "id", "int")
+    m2 = orm_field_optional(m2, "note", "text")
+    var o2 = orm_from_row(m2, {"id": "5"})
+    expect(len(orm_validate(m2, o2)) == 0, "可选字段缺失不报错: " + json_stringify(orm_validate(m2, o2)))
+    var o3 = orm_from_row(m2, {"id": "5", "note": ""})
+    expect(len(orm_validate(m2, o3)) == 0, "可选字段空串不报错")
+
+    # ---- to_row 反向转换 ----
+    var row = orm_to_row(m, good)
+    expect(row["active"] == 1, "bool → 1: " + str(row["active"]))
+    expect(type(row["meta"]) == "string", "json → 字符串: " + row["meta"])
+    expect(row["id"] == 1, "int 不变")
+
+    # ---- 类型别名 ----
+    var m3 = orm_new("t", "id")
+    m3 = orm_field(m3, "id", "bigint")
+    m3 = orm_field(m3, "v", "varchar")
+    var o4 = orm_from_row(m3, {"id": "123456789", "v": 42})
+    expect(o4["id"] == 123456789, "bigint 别名: " + str(o4["id"]))
+    expect(o4["v"] == "42", "varchar 收到数字转字符串: " + o4["v"])
+
+    # ---- 老接口仍在 ----
+    expect(orm_table(m) == "users", "orm_table")
+    expect(orm_pk(m) == "id", "orm_pk")
+    expect(orm_pk_value(m, good) == 1, "orm_pk_value")
+    m = orm_hidden(m, ["meta"])
+    expect(not orm_to_json(m, good).has("meta"), "hidden 字段不进 json")
+
+    print("PASS: orm 0.2.0")

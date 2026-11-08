@@ -1,0 +1,179 @@
+# ============================================================
+# 普贤生态库：registry/aescbc — AES-CBC / AES-CTR（0.2.0 重写）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致（px run / px build 结果相同）。
+#
+# 0.1.0 的写法是「自己按 16 字节分块 + XOR 链 + 调 ECB 内建」，但把内建
+#   aes_encrypt(key, block) 当 ECB 用了 —— 从 M19 起内建 aes_encrypt 的签名就是
+#   (data, key, iv) 的 CBC-PKCS7，于是 0.1.0 一调用就 R1002（参数个数不符），
+#   整个包不可用。
+#
+# 0.2.0 改用内建 bytes 版（任意二进制、不做 UTF-8 校验）：
+#   aes_encrypt_bytes(data, key, iv) → bytes   # CBC-PKCS7 加密
+#   aes_decrypt_bytes(ct, key, iv)   → bytes | null  # padding 非法 → null
+#   aes_encrypt_ecb_bytes(data, key) → bytes   # ECB-PKCS7（CTR 取 keystream 用）
+#
+# 公开函数（0.2.0）：
+#   aes_cbc_encrypt(key, iv, data)      → bytes           # CBC-PKCS7
+#   aes_cbc_decrypt(key, iv, ct)        → bytes | null    # null = padding 非法
+#   aes_cbc_decrypt_ok(key, iv, ct)     → Ok(bytes) | Err(msg)
+#   aes_ctr_crypt(key, nonce, data)     → bytes           # CTR 加解密同一函数
+#   aes_xor(a, b)                       → bytes           # 等长 XOR
+#   aes_pkcs7_pad(data, block)          → bytes           # 16 字节块 PKCS#7 填充
+#   aes_pkcs7_unpad(data)               → bytes | null
+#   aes_to_bytes(v) / aes_to_list(b)    → 类型互转（bytes / list[int] / string）
+#   aes_hex(data) / aes_unhex(hex)      → 十六进制互转
+#
+# 参数口径：key / iv / data 都可用 bytes、list[int] 或 string（内部统一转 bytes）。
+#   key 16/24/32 字节 → AES-128/192/256；iv 固定 16 字节；nonce 12 字节（补 4 字节
+#   大端计数器）或 16 字节（当作初始计数器块，自增末 4 字节）。
+#
+# 返回值口径变化（0.1.0 → 0.2.0）：加密/解密返 bytes，不再是 list[int]。
+#   需要旧的 list 形态时用 aes_to_list(结果)。
+# ============================================================
+
+# ---- 类型互转 ----
+def aes_to_bytes(v):
+    var t = type(v)
+    if t == "bytes":
+        return v
+    if t == "list":
+        var n = len(v)
+        var out = bytes_zeros(n)
+        var i = 0
+        while i < n:
+            out = bytes_set(out, i, int(v[i]))
+            i += 1
+        return out
+    return bytes(str(v))
+
+def aes_to_list(b):
+    var buf = aes_to_bytes(b)
+    var n = bytes_len(buf)
+    var out = []
+    var i = 0
+    while i < n:
+        out.append(bytes_get(buf, i))
+        i += 1
+    return out
+
+def aes_hex(data):
+    return bytes_to_hex(aes_to_bytes(data))
+
+def aes_unhex(h):
+    return hex_to_bytes(h)
+
+# ---- 等长 XOR（bytes / list 均可）----
+def aes_xor(a, b):
+    var x = aes_to_bytes(a)
+    var y = aes_to_bytes(b)
+    var n = bytes_len(x)
+    var m = bytes_len(y)
+    if m < n:
+        n = m
+    var out = bytes_zeros(n)
+    var i = 0
+    while i < n:
+        out = bytes_set(out, i, bytes_get(x, i) ^ bytes_get(y, i))
+        i += 1
+    return out
+
+# ---- PKCS#7 填充 / 去填充（纯函数，不依赖内建）----
+def aes_pkcs7_pad(data, block):
+    var buf = aes_to_bytes(data)
+    var n = bytes_len(buf)
+    if block <= 0:
+        return buf
+    var pad_len = block - (n % block)
+    var out = buf
+    var j = 0
+    while j < pad_len:
+        out = bytes_concat(out, bytes_zeros(1))
+        out = bytes_set(out, n + j, pad_len)
+        j += 1
+    return out
+
+def aes_pkcs7_unpad(data):
+    var buf = aes_to_bytes(data)
+    var n = bytes_len(buf)
+    if n == 0:
+        return buf
+    var pad_len = bytes_get(buf, n - 1)
+    if pad_len == 0 or pad_len > n or pad_len > 16:
+        return null
+    return bytes_slice(buf, 0, n - pad_len)
+
+# ---- AES-CBC ----
+def aes_cbc_encrypt(key, iv, data):
+    return aes_encrypt_bytes(aes_to_bytes(data), aes_to_bytes(key), aes_to_bytes(iv))
+
+def aes_cbc_decrypt(key, iv, ct):
+    return aes_decrypt_bytes(aes_to_bytes(ct), aes_to_bytes(key), aes_to_bytes(iv))
+
+def aes_cbc_decrypt_ok(key, iv, ct):
+    var r = aes_cbc_decrypt(key, iv, ct)
+    if r == null:
+        return Err("AES-CBC 解密失败：密文长度不是 16 的倍数，或 PKCS#7 填充非法")
+    return Ok(r)
+
+# ---- AES-CTR ----
+# nonce 12 字节 → 后接 4 字节大端计数器；nonce 16 字节 → 当作计数器块整体自增末 4 字节。
+def _aes_ctr_block(nonce, counter):
+    var nb = aes_to_bytes(nonce)
+    var nlen = bytes_len(nb)
+    if nlen == 16:
+        var blk = nb
+        var c = counter
+        var k = 3
+        while k >= 0:
+            var add = c & 0xFF
+            var old = bytes_get(blk, 12 + k)
+            var sum = old + add
+            blk = bytes_set(blk, 12 + k, sum & 0xFF)
+            c = c >> 8
+            k -= 1
+        return blk
+    var blk2 = bytes_zeros(16)
+    var i = 0
+    while i < nlen and i < 12:
+        blk2 = bytes_set(blk2, i, bytes_get(nb, i))
+        i += 1
+    blk2 = bytes_set(blk2, 12, (counter >> 24) & 0xFF)
+    blk2 = bytes_set(blk2, 13, (counter >> 16) & 0xFF)
+    blk2 = bytes_set(blk2, 14, (counter >> 8) & 0xFF)
+    blk2 = bytes_set(blk2, 15, counter & 0xFF)
+    return blk2
+
+# ECB 内建带 PKCS#7：16 字节输入 → 32 字节输出，前 16 字节就是原始 ECB 块
+def _aes_ctr_keystream(key, nonce, counter):
+    var full = aes_encrypt_ecb_bytes(_aes_ctr_block(nonce, counter), aes_to_bytes(key))
+    return bytes_slice(full, 0, 16)
+
+def aes_ctr_crypt(key, nonce, data):
+    var buf = aes_to_bytes(data)
+    var n = bytes_len(buf)
+    var out = bytes_zeros(n)
+    var counter = 0
+    var off = 0
+    while off < n:
+        var ks = _aes_ctr_keystream(key, nonce, counter)
+        var j = 0
+        while j < 16 and off + j < n:
+            out = bytes_set(out, off + j, bytes_get(buf, off + j) ^ bytes_get(ks, j))
+            j += 1
+        counter += 1
+        off += 16
+    return out
+
+# ---- 0.1.0 私有名兼容（老代码直接调用过这些内部函数）----
+def _aes_xor_bytes(a, b):
+    return aes_to_list(aes_xor(a, b))
+
+def _aes_pkcs7_pad(data, block_size):
+    return aes_to_list(aes_pkcs7_pad(data, block_size))
+
+def _aes_pkcs7_unpad(data):
+    var r = aes_pkcs7_unpad(data)
+    if r == null:
+        return aes_to_list(data)
+    return aes_to_list(r)

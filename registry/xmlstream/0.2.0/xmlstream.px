@@ -1,0 +1,234 @@
+# ============================================================
+# 普贤生态库：registry/xmlstream — 流式 XML 读写（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：
+#   1) xr_read_next() 读到末尾返回 null，但内部 _pos 不推进 ⇒ xr_is_done() 永远
+#      返回 false。按直觉写 `while not xr_is_done(r)` 会死循环。
+#   2) <![CDATA[...]]> 里的 ">" 会被当成标签结束，CDATA 内容被切断。
+#   3) "<>" 这种空标签名会取 tag_text[0] 越界报错。
+#
+# 0.2.0 的改法：
+#   - 读到末尾先把 _pos 推到 len(xml) 再返回 null ⇒ xr_is_done() 与返回值口径一致。
+#   - CDATA 单独成事件：{type: "cdata", text: ...}，内部 ">" 不再误判。
+#   - 空标签名 / 残缺标签返回 {type: "text"} 或 null，不崩。
+#   - 新增 xr_read_all(r) → 一次性取完所有事件、xr_reset(r)、xr_pos(r)、xr_peek(r)。
+#
+# 读事件形态：
+#   {type: "start",  name, attrs, self_closing}
+#   {type: "end",    name}
+#   {type: "pi",     text}
+#   {type: "comment", text}
+#   {type: "cdata",  text}
+#   {type: "text",   text}     # 0.2.0 新增：标签之间的文本
+# 读到文件末尾返回 null。
+# ============================================================
+
+# ---- 写 ----
+def xw_new():
+    return {"_buf": "", "_depth": 0}
+
+def xw_start_document(w):
+    w["_buf"] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    return w
+
+def xw_start_element(w, name, attrs):
+    w["_buf"] = w["_buf"] + "<" + name
+    var ks = attrs.keys()
+    var i = 0
+    while i < len(ks):
+        w["_buf"] = w["_buf"] + " " + ks[i] + "=\"" + xw_escape_attr(str(attrs[ks[i]])) + "\""
+        i += 1
+    w["_buf"] = w["_buf"] + ">"
+    w["_depth"] = w["_depth"] + 1
+    return w
+
+def xw_end_element(w, name):
+    w["_buf"] = w["_buf"] + "</" + name + ">"
+    w["_depth"] = w["_depth"] - 1
+    return w
+
+def xw_write_element(w, name, content):
+    w["_buf"] = w["_buf"] + "<" + name + ">" + xw_escape_text(str(content)) + "</" + name + ">"
+    return w
+
+def xw_text(w, text):
+    w["_buf"] = w["_buf"] + xw_escape_text(text)
+    return w
+
+def xw_comment(w, text):
+    w["_buf"] = w["_buf"] + "<!-- " + text + " -->"
+    return w
+
+def xw_write_cdata(w, text):
+    w["_buf"] = w["_buf"] + "<![CDATA[" + text + "]]>"
+    return w
+
+def xw_write_raw(w, raw_xml):
+    w["_buf"] = w["_buf"] + raw_xml
+    return w
+
+def xw_end_document(w):
+    w["_buf"] = w["_buf"] + "\n"
+    return w
+
+def xw_get_output(w):
+    return w["_buf"]
+
+# ---- 转义（0.2.0 新增：写元素时自动转义，避免内容里的 < & 破坏文档）----
+def xw_escape_text(s):
+    return xw_escape_attr(s)
+
+def xw_escape_attr(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "&":
+            out = out + "&amp;"
+        elif c == "<":
+            out = out + "&lt;"
+        elif c == ">":
+            out = out + "&gt;"
+        elif c == "\"":
+            out = out + "&quot;"
+        elif c == "'":
+            out = out + "&#39;"
+        else:
+            out = out + c
+        i += 1
+    return out
+
+# ---- 读 ----
+def _xs_find_from(s, ch, start):
+    var i = start
+    while i < len(s):
+        if s[i] == ch:
+            return i
+        i += 1
+    return -1
+
+def _xs_find_str(s, sub, start):
+    var i = start
+    while i <= len(s) - len(sub):
+        var ok = true
+        var j = 0
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                ok = false
+            j += 1
+        if ok:
+            return i
+        i += 1
+    return -1
+
+def _xs_parse_attrs(attr_str):
+    var attrs = {}
+    var pos = 0
+    while pos < len(attr_str):
+        while pos < len(attr_str) and (attr_str[pos] == " " or attr_str[pos] == "\t" or attr_str[pos] == "\n"):
+            pos += 1
+        if pos >= len(attr_str):
+            break
+        var eq = _xs_find_from(attr_str, "=", pos)
+        if eq < 0:
+            break
+        var key = attr_str[pos:eq].strip()
+        var q1 = eq + 1
+        while q1 < len(attr_str) and attr_str[q1] == " ":
+            q1 += 1
+        if q1 >= len(attr_str):
+            break
+        var quote = attr_str[q1]
+        if quote != "\"" and quote != "'":
+            pos = eq + 1
+            continue
+        var q2 = _xs_find_from(attr_str, quote, q1 + 1)
+        if q2 < 0:
+            break
+        attrs.set(key, attr_str[q1 + 1:q2])
+        pos = q2 + 1
+    return attrs
+
+def xr_new(xml):
+    return {"_xml": xml, "_pos": 0}
+
+def xr_reset(r):
+    r["_pos"] = 0
+    return r
+
+def xr_pos(r):
+    return r["_pos"]
+
+def xr_is_done(r):
+    return r["_pos"] >= len(r["_xml"])
+
+def xr_read_next(r):
+    var xml = r["_xml"]
+    var start = _xs_find_from(xml, "<", r["_pos"])
+    if start < 0:
+        # 0.1.0 的坑：这里不推进 _pos，xr_is_done 永远 false
+        if r["_pos"] < len(xml):
+            var tail = xml[r["_pos"]:]
+            r["_pos"] = len(xml)
+            if tail.strip() != "":
+                return {"type": "text", "text": tail}
+        else:
+            r["_pos"] = len(xml)
+        return null
+    # 标签之前的文本
+    if start > r["_pos"]:
+        var leading = xml[r["_pos"]:start]
+        r["_pos"] = start
+        return {"type": "text", "text": leading}
+    # CDATA 优先（内部可能含 ">"）
+    if start + 9 <= len(xml) and xml[start:start + 9] == "<![CDATA[":
+        var ce = _xs_find_str(xml, "]]>", start + 9)
+        if ce < 0:
+            r["_pos"] = len(xml)
+            return {"type": "text", "text": xml[start:len(xml)]}
+        var cdata = xml[start + 9:ce]
+        r["_pos"] = ce + 3
+        return {"type": "cdata", "text": cdata}
+    var end = _xs_find_from(xml, ">", start)
+    if end < 0:
+        r["_pos"] = len(xml)
+        return {"type": "text", "text": xml[start:len(xml)]}
+    var tag_text = xml[start + 1:end]
+    r["_pos"] = end + 1
+    if len(tag_text) == 0:
+        return {"type": "text", "text": "<>"}
+    var head = tag_text[0]
+    if head == "/":
+        return {"type": "end", "name": tag_text[1:].strip()}
+    if head == "?":
+        return {"type": "pi", "text": tag_text}
+    if head == "!":
+        return {"type": "comment", "text": tag_text}
+    var self_closing = false
+    if tag_text[len(tag_text) - 1] == "/":
+        tag_text = tag_text[:len(tag_text) - 1]
+        self_closing = true
+    var space = tag_text.find(" ")
+    var name = tag_text.strip()
+    var attrs = {}
+    if space > 0:
+        name = tag_text[:space]
+        attrs = _xs_parse_attrs(tag_text[space + 1:])
+    return {"type": "start", "name": name, "attrs": attrs, "self_closing": self_closing}
+
+# ---- 0.2.0 便利函数 ----
+def xr_read_all(r):
+    var out = []
+    var ev = xr_read_next(r)
+    while ev != null:
+        out.append(ev)
+        ev = xr_read_next(r)
+    return out
+
+def xr_peek(r):
+    var save = r["_pos"]
+    var ev = xr_read_next(r)
+    r["_pos"] = save
+    return ev

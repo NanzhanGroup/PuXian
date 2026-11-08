@@ -1,0 +1,63 @@
+# currency 0.2.0 测试
+import "../registry/currency/0.2.0/currency.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：键写成 {"USD": 7.1} 时静默返回 null ----
+    var bad = cur_new({"USD": 7.1})
+    expect(cur_convert(bad, "USD", "CNY", 100) == null, "错格式仍无汇率（不假装成功）")
+    var m = cur_missing(bad, "USD", "CNY")
+    expect(len(m) == 1 and m[0] == "USD->CNY", "cur_missing 指出缺哪对: " + json_stringify(m))
+    var e = cur_convert_ok(bad, "USD", "CNY", 100)
+    expect(e.is_err(), "convert_ok 返回 Err")
+    expect(e.err().find("USD->CNY") >= 0, "错误里带币种对: " + e.err())
+
+    # ---- 三种写法都能识别 ----
+    var c1 = cur_new({"USD->CNY": 7.1})
+    expect(cur_convert(c1, "USD", "CNY", 100) == 710.0, "箭头写法")
+    var c2 = cur_new({"USD/CNY": 7.1})
+    expect(cur_convert(c2, "USD", "CNY", 100) == 710.0, "斜杠写法")
+    var c3 = cur_new({"usd cny": 7.1})
+    expect(cur_convert(c3, "USD", "CNY", 100) == 710.0, "空格写法 + 小写")
+    var c4 = cur_new({"USD": {"CNY": 7.1}})
+    expect(cur_convert(c4, "USD", "CNY", 100) == 710.0, "嵌套写法")
+
+    # ---- 反向与经 USD 套算 ----
+    var c5 = cur_new({"USD->CNY": 7.1})
+    expect(cur_convert(c5, "CNY", "USD", 710) == 100.0, "反向往返: " + str(cur_convert(c5, "CNY", "USD", 710)))
+    var c6 = cur_new({"USD->CNY": 7.1, "USD->JPY": 150.0})
+    var jpy = cur_convert(c6, "CNY", "JPY", 100)
+    expect(abs(jpy - 100 / 7.1 * 150.0) < 0.0001, "经 USD 套算: " + str(jpy))
+    expect(cur_has_rate(c6, "CNY", "JPY"), "cur_has_rate 套算路径")
+    expect(cur_has_rate(c6, "CNY", "EUR") == false, "无路径时 false")
+
+    # ---- 同币种 ----
+    expect(cur_convert(c6, "USD", "USD", 123.45) == 123.45, "同币种原值")
+
+    # ---- cur_add_rate ----
+    var c7 = cur_new({})
+    c7 = cur_add_rate(c7, "EUR", "USD", 1.08)
+    expect(cur_convert(c7, "EUR", "USD", 10) == 10.8, "add_rate: " + str(cur_convert(c7, "EUR", "USD", 10)))
+
+    # ---- 格式化：固定两位、四舍五入 ----
+    expect(cur_format(710, "cny") == "710.00 CNY", "格式化: " + cur_format(710, "cny"))
+    expect(cur_format(1.005, "USD") == "1.01 USD", "1.005 进位: " + cur_format(1.005, "USD"))
+    expect(cur_format(-0.5, "USD") == "-0.50 USD", "负数: " + cur_format(-0.5, "USD"))
+    expect(cur_format(0, "USD") == "0.00 USD", "零")
+    expect(cur_format_thousands(1234567.891, "USD") == "1,234,567.89 USD", "千分位: " + cur_format_thousands(1234567.891, "USD"))
+    expect(cur_format_thousands(-1234.5, "USD") == "-1,234.50 USD", "负千分位: " + cur_format_thousands(-1234.5, "USD"))
+
+    # ---- 取整 ----
+    expect(cur_round(1.005) == 1.01, "cur_round: " + str(cur_round(1.005)))
+    expect(cur_round(-1.005) == -1.01, "cur_round 负: " + str(cur_round(-1.005)))
+
+    # ---- 带符号 ----
+    expect(cur_format_signed(5, "USD") == "+5.00 USD", "signed 正: " + cur_format_signed(5, "USD"))
+
+    # ---- 键清单 ----
+    var ks = cur_rates(c1)
+    expect(len(ks) == 1 and ks[0] == "USD->CNY", "cur_rates: " + json_stringify(ks))
+
+    print("PASS: currency 0.2.0")

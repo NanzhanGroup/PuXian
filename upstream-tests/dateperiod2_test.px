@@ -1,0 +1,61 @@
+# dateperiod 0.2.0 测试
+import "../registry/dateperiod/0.2.0/dateperiod.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 2023-11-14 00:00:00 UTC
+    var start = 1699920000
+    var dp = dp_days(start, start + 2 * 86400)
+
+    # ---- 基础迭代 ----
+    var list = dp_to_list(dp)
+    expect(len(list) == 3, "3 天 3 个点: " + str(len(list)))
+    expect(list[0] == start and list[2] == start + 2 * 86400, "首尾点")
+    expect(dp_count(dp) == 3, "dp_count")
+    expect(dp_contains(dp, start + 86400), "dp_contains 命中")
+    expect(not dp_contains(dp, start + 1), "dp_contains 未命中")
+
+    # ---- 0.1.0 的坑：dp_format 返 list 不是单值 ----
+    var fmt = dp_format(dp, "%Y-%m-%d")
+    expect(type(fmt) == "list", "dp_format 仍是 list（语义已在名字上写清）")
+    expect(len(fmt) == 3 and fmt[0] == "2023-11-14", "dp_format 首项: " + json_stringify(fmt))
+    # 0.2.0 新增单值入口
+    expect(dp_format_one(dp, "%Y-%m-%d") == "2023-11-14", "dp_format_one 单值: " + dp_format_one(dp, "%Y-%m-%d"))
+    expect(dp_format_at(dp, "%Y-%m-%d", 1) == "2023-11-15", "dp_format_at: " + dp_format_at(dp, "%Y-%m-%d", 1))
+    expect(dp_format_at(dp, "%Y-%m-%d", 9) == null, "越界返回 null")
+
+    # ---- 0.1.0 的坑：interval <= 0 死循环 ----
+    var bad = dp_new(start, start + 86400, 0)
+    expect(dp_valid(bad) == false, "interval=0 判无效")
+    expect(len(dp_to_list(bad)) == 0, "无效区间返空 list（不死循环）")
+    expect(dp_count(bad) == 0, "无效区间 count 0")
+    expect(dp_format(bad, "%Y") == [], "无效区间 format 空")
+    var rev = dp_new(start, start - 86400, 86400)
+    expect(len(dp_to_list(rev)) == 0, "end < start 返空")
+
+    # ---- dp_next / dp_at ----
+    expect(dp_next(dp, start) == start + 86400, "dp_next")
+    expect(dp_next(dp, start + 2 * 86400) == null, "末尾 dp_next 为 null")
+    expect(dp_at(dp, start + 86400), "dp_at 命中")
+
+    # ---- 日历月推进（0.2.0 新增）----
+    var jan31 = int(time_parse("2024-01-31 10:00:00", "%Y-%m-%d %H:%M:%S"))
+    var ms = dp_month_starts(jan31, 3)
+    expect(len(ms) == 3, "3 个月")
+    expect(time_format(ms[0], "%Y-%m-%d") == "2024-01-31", "首月: " + time_format(ms[0], "%Y-%m-%d"))
+    expect(time_format(ms[1], "%Y-%m-%d") == "2024-02-29", "闰年 2 月落月末: " + time_format(ms[1], "%Y-%m-%d"))
+    expect(time_format(ms[2], "%Y-%m-%d") == "2024-03-31", "第三月: " + time_format(ms[2], "%Y-%m-%d"))
+    expect(time_format(ms[1], "%H:%M:%S") == "10:00:00", "时刻保留")
+
+    # ---- 跨年 ----
+    var dec = int(time_parse("2023-12-15 00:00:00", "%Y-%m-%d %H:%M:%S"))
+    var ms2 = dp_month_starts(dec, 2)
+    expect(time_format(ms2[1], "%Y-%m-%d") == "2024-01-15", "跨年: " + time_format(ms2[1], "%Y-%m-%d"))
+
+    # ---- 自足：没有跨包 import ----
+    var e = dp_hours(start, start + 3600)
+    expect(dp_count(e) == 2, "小时区间")
+
+    print("PASS: dateperiod 0.2.0")

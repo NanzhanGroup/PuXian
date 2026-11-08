@@ -1,0 +1,138 @@
+# ============================================================
+# 普贤生态库：registry/uuencode — uuencode / uudecode（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：
+#   1) uu_decode() 返回 list[int] 而不是 bytes。要当字符串用还得再包一层
+#      bytes_to_str(bytes(...))，直接 bytes_to_str(uu_decode(enc)) 会报
+#      R1002: bytes_to_str 需要 bytes，实际是 list —— 名字上看不出来。
+#   2) uu_encode() 的输出带 "begin 644 <data>" / "end" 头尾，和 PHP 的
+#      convert_uuencode()（只输出编码行本体）不一致，照着 PHP 心智用会对不上。
+#
+# 0.2.0 的改法：
+#   - uu_decode(s)      → bytes（名字与返回类型对齐）。旧形态用 uu_decode_list()。
+#   - uu_encode(data)   → 带 begin/end 的完整 uu 文件格式（原行为不变，bytes/list 都收）。
+#   - uu_encode_raw(data) → 只有编码行本体（对齐 PHP convert_uuencode）。
+#   - uu_decode(s) 同时兼容两种：有 "begin " 行就跳过头、遇到 "`" / "end" 收尾；
+#     没有也照常解码。
+#
+# 函数：
+#   uu_encode(data) / uu_encode_raw(data)
+#   uu_decode(s) → bytes / uu_decode_list(s) → list[int]
+#   uu_decode_char(c) / uu_encode_str(s)（便捷：字符串进、字符串出）
+# ============================================================
+
+def uu_to_bytes(data):
+    var t = type(data)
+    if t == "bytes":
+        return data
+    if t == "list":
+        var n = len(data)
+        var out = bytes_zeros(n)
+        var i = 0
+        while i < n:
+            out = bytes_set(out, i, int(data[i]))
+            i += 1
+        return out
+    return bytes(str(data))
+
+def uu_to_list(b):
+    var buf = uu_to_bytes(b)
+    var n = bytes_len(buf)
+    var out = []
+    var i = 0
+    while i < n:
+        out.append(bytes_get(buf, i))
+        i += 1
+    return out
+
+def uu_get_byte(data, i, n):
+    if i < n:
+        return data[i]
+    return 0
+
+# ---- 编码：只产出编码行本体（无 begin/end），对齐 PHP convert_uuencode ----
+def uu_encode_raw(data):
+    var buf = uu_to_bytes(data)
+    var n = bytes_len(buf)
+    var out = ""
+    var i = 0
+    while i < n:
+        var cnt = n - i
+        if cnt > 45:
+            cnt = 45
+        out = out + chr(cnt + 32)
+        var j = i
+        var end = i + cnt
+        while j < end:
+            var b0 = uu_get_byte(buf, j, n)
+            var b1 = uu_get_byte(buf, j + 1, n)
+            var b2 = uu_get_byte(buf, j + 2, n)
+            out = out + chr(((b0 >> 2) & 0x3F) + 32)
+            out = out + chr((((b0 << 4) | (b1 >> 4)) & 0x3F) + 32)
+            out = out + chr((((b1 << 2) | (b2 >> 6)) & 0x3F) + 32)
+            out = out + chr((b2 & 0x3F) + 32)
+            j += 3
+        out = out + "\n"
+        i += cnt
+    if n == 0:
+        out = out + chr(32) + "\n"
+    return out
+
+# ---- 编码：完整 uu 文件格式（begin/end）----
+def uu_encode(data):
+    return "begin 644 <data>\n" + uu_encode_raw(data) + "`\nend\n"
+
+# ---- 便捷：字符串进、字符串出 ----
+def uu_encode_str(s):
+    return uu_encode_raw(s)
+
+def uu_decode_char(c):
+    var n = ord(c)
+    if n >= 32:
+        return n - 32
+    return 0
+
+# ---- 解码：返回 bytes（0.2.0）----
+def uu_decode_list(s):
+    var lines = s.split("\n")
+    var out = []
+    # 有 "begin " 行就跳过它；没有就从第一行开始（0.1.0 这里会一路走到末尾）
+    var start = 0
+    var k0 = 0
+    while k0 < len(lines):
+        if len(lines[k0]) >= 6 and lines[k0][:6] == "begin ":
+            start = k0 + 1
+            break
+        k0 += 1
+    var i = start
+    while i < len(lines):
+        var line = lines[i]
+        if line == "`" or line == "end" or len(line) == 0:
+            break
+        var cnt = uu_decode_char(line[0])
+        if cnt <= 0:
+            break
+        var j = 1
+        var remaining = cnt
+        while j + 3 < len(line) and remaining > 0:
+            var c0 = uu_decode_char(line[j])
+            var c1 = uu_decode_char(line[j + 1])
+            var c2 = uu_decode_char(line[j + 2])
+            var c3 = uu_decode_char(line[j + 3])
+            if remaining > 0:
+                out.append(((c0 << 2) | (c1 >> 4)) & 0xFF)
+                remaining -= 1
+            if remaining > 0:
+                out.append((((c1 << 4) | (c2 >> 2)) & 0xFF))
+                remaining -= 1
+            if remaining > 0:
+                out.append((((c2 << 6) | c3) & 0xFF))
+                remaining -= 1
+            j += 4
+        i += 1
+    return out
+
+def uu_decode(s):
+    return uu_to_bytes(uu_decode_list(s))

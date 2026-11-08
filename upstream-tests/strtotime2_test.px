@@ -1,0 +1,50 @@
+# strtotime 0.2.0 测试
+import "../registry/strtotime/0.2.0/strtotime.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 2023-11-14 22:13:20 UTC（周二）
+    var base = 1700000000
+    expect(st_weekday_from_sec(base) == 2, "base 是周二: " + str(st_weekday_from_sec(base)))
+
+    # ---- 0.1.0 的 bug：符号与数字粘连 ----
+    expect(st_parse_relative("+1 day", base) == base + 86400, "+1 day: " + str(st_parse_relative("+1 day", base)))
+    expect(st_parse_relative("-2 hours", base) == base - 7200, "-2 hours: " + str(st_parse_relative("-2 hours", base)))
+    expect(st_parse_relative("+ 1 day", base) == base + 86400, "+ 1 day（带空格）")
+    expect(st_parse_relative("+1day", base) == base + 86400, "+1day（无空格）")
+    expect(st_parse_relative("3 weeks", base) == base + 3 * 604800, "3 weeks")
+    expect(st_parse_relative("2 days ago", base) == base - 2 * 86400, "2 days ago")
+    expect(st_parse_relative("in 2 hours", base) == base + 7200, "in 2 hours")
+    expect(st_parse_relative("+1 month", base) == base + 2592000, "+1 month")
+    expect(st_parse_relative("+1 year", base) == base + 31536000, "+1 year")
+
+    # ---- 老写法仍然正确 ----
+    expect(st_parse_relative("tomorrow", base) == base + 86400, "tomorrow")
+    expect(st_parse_relative("yesterday", base) == base - 86400, "yesterday")
+    expect(st_parse_relative("now", base) == base, "now")
+
+    # ---- next / last 星期（周日=0 口径）----
+    var nxt = st_parse_relative("next monday", base)
+    expect(st_weekday_from_sec(nxt) == 1, "next monday 是周一: " + str(st_weekday_from_sec(nxt)))
+    expect(nxt > base and nxt - base <= 7 * 86400, "next monday 在 7 天内")
+    var lst = st_parse_relative("last friday", base)
+    expect(st_weekday_from_sec(lst) == 5, "last friday 是周五: " + str(st_weekday_from_sec(lst)))
+    expect(lst < base and base - lst <= 7 * 86400, "last friday 在 7 天内")
+
+    # ---- 组合式 ----
+    expect(st_parse_relative("1 day 2 hours", base) == base + 86400 + 7200, "组合: 1 day 2 hours")
+
+    # ---- 严格模式：不认识的词不再静默 ----
+    var ok = st_parse_relative_ok("+1 day", base)
+    expect(ok.is_ok(), "严格模式 +1 day 成功")
+    expect(ok.ok() == base + 86400, "严格模式值对")
+    var bad = st_parse_relative_ok("blah 3 fortnights", base)
+    expect(bad.is_err(), "严格模式捕获无法识别的词")
+    expect(bad.err().find("fortnights") >= 0, "错误里带原词: " + bad.err())
+
+    # ---- 宽容模式仍不炸 ----
+    expect(st_parse_relative("blah", base) == base, "宽容模式未知词不改变结果")
+
+    print("PASS: strtotime 0.2.0")

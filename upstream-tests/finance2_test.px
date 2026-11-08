@@ -1,0 +1,77 @@
+# finance 0.2.0 测试
+import "../registry/finance/0.2.0/finance.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：摊销表三处符号互相矛盾 ----
+    var s = fin_amortize(100000, 0.0049, 6)
+    var e1 = s[0]
+    expect(e1["period"] == 1, "period")
+    expect(e1["payment"] > 0, "payment 为正: " + str(e1["payment"]))
+    expect(e1["interest"] > 0, "interest 为正: " + str(e1["interest"]))
+    expect(e1["principal"] > 0, "principal 为正: " + str(e1["principal"]))
+    expect(abs(e1["interest"] - 490.0) < 0.000001, "首期利息 = 100000*0.0049: " + str(e1["interest"]))
+    expect(abs(e1["payment"] - e1["interest"] - e1["principal"]) < 0.000001, "payment = interest + principal")
+    expect(e1["principal"] < e1["payment"], "principal 小于 payment: " + str(e1["principal"]))
+    expect(abs(e1["balance"] - (100000 - e1["principal"])) < 0.000001, "balance = 上期余额 - 本金: " + str(e1["balance"]))
+
+    # ---- 逐行自洽 + 余额单调递减到 0 ----
+    var i = 1
+    var prev = 100000.0
+    while i < len(s):
+        var e = s[i]
+        expect(abs(e["payment"] - e["interest"] - e["principal"]) < 0.000001, "第 " + str(e["period"]) + " 期自洽")
+        expect(e["balance"] < prev, "余额递减: " + str(e["balance"]))
+        expect(e["balance"] >= 0, "余额非负")
+        prev = e["balance"]
+        i += 1
+    var last = s[len(s) - 1]
+    expect(abs(last["balance"]) < 0.000001, "末期余额归零: " + str(last["balance"]))
+
+    # ---- 总还款 = 本金 + 总利息 ----
+    var sum_pay = 0.0
+    var sum_int = 0.0
+    var sum_prin = 0.0
+    i = 0
+    while i < len(s):
+        sum_pay = sum_pay + s[i]["payment"]
+        sum_int = sum_int + s[i]["interest"]
+        sum_prin = sum_prin + s[i]["principal"]
+        i += 1
+    expect(abs(sum_prin - 100000) < 0.0001, "本金合计 = 借款额: " + str(sum_prin))
+    expect(abs(sum_pay - (100000 + sum_int)) < 0.0001, "还款合计 = 本金 + 利息")
+    expect(abs(fin_total_interest(s) - sum_int) < 0.000001, "fin_total_interest")
+
+    # ---- 期数 = nper ----
+    expect(len(s) == 6, "期数: " + str(len(s)))
+
+    # ---- 零利率 ----
+    var z = fin_amortize(1200, 0.0, 12)
+    expect(abs(z[0]["payment"] - 100.0) < 0.000001, "零利率每期 100: " + str(z[0]["payment"]))
+    expect(abs(z[0]["interest"]) < 0.000001, "零利率无利息")
+    expect(abs(z[11]["balance"]) < 0.000001, "零利率末期余额 0")
+
+    # ---- 取整版 ----
+    var r = fin_amortize_round(100000, 0.0049, 6)
+    expect(str(r[0]["interest"]).find("490") >= 0, "取整利息: " + str(r[0]["interest"]))
+    var cents_ok = true
+    i = 0
+    while i < len(r):
+        var v = r[i]["payment"]
+        var scaled = v * 100
+        if abs(scaled - float(int(scaled + 0.5))) > 0.000001:
+            cents_ok = false
+        i += 1
+    expect(cents_ok, "取整到两位")
+
+    # ---- 单点函数不回归 ----
+    expect(abs(fin_pmt(0.0049, 6, 100000) + 16953.7) < 0.5, "fin_pmt 仍是 Excel 口径（负）: " + str(fin_pmt(0.0049, 6, 100000)))
+    expect(abs(fin_npv(0.1, [-100, 60, 60]) - 4.1322314) < 0.001, "fin_npv: " + str(fin_npv(0.1, [-100, 60, 60])))
+    expect(abs(fin_irr([-100, 60, 60]) - 0.13066) < 0.01, "fin_irr: " + str(fin_irr([-100, 60, 60])))
+    expect(abs(fin_fv(0.05, 10, -1000) - 12577.89) < 1, "fin_fv: " + str(fin_fv(0.05, 10, -1000)))
+    expect(abs(fin_compound_interest(1000, 0.05, 2) - 102.5) < 0.0001, "复利")
+    expect(abs(fin_tax_bracket(20000, [{"threshold": 0, "rate": 0.1}, {"threshold": 10000, "rate": 0.2}]) - 3000) < 0.0001, "阶梯税")
+
+    print("PASS: finance 0.2.0")

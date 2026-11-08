@@ -1,0 +1,61 @@
+# sprintf 0.2.0 测试
+import "../registry/sprintf/0.2.0/sprintf.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：浮点零填充 / 正号位置 ----
+    var a = sf_format("%08.3f", [3.5])
+    expect(a == "0003.500", "%08.3f: [" + a + "]")
+    var b = sf_format("%05.2f", [3.14159])
+    expect(b == "03.14", "%05.2f: [" + b + "]")
+    var c = sf_format("%+05d", [42])
+    expect(c == "+0042", "%+05d: [" + c + "]")
+
+    # ---- 原有正确的行为不许退化 ----
+    expect(sf_format("%05d", [42]) == "00042", "%05d")
+    expect(sf_format("%-5d|", [42]) == "42   |", "%-5d")
+    expect(sf_format("%5d|", [42]) == "   42|", "%5d")
+    expect(sf_format("%d", [-7]) == "-7", "负数")
+    expect(sf_format("%05d", [-7]) == "-0007", "负零填充: " + sf_format("%05d", [-7]))
+    expect(sf_format("%.2f", [3.14159]) == "3.14", "%.2f")
+    expect(sf_format("%.0f", [3.6]) == "4", "%.0f 四舍五入")
+    expect(sf_format("%s", ["x"]) == "x", "%s")
+    expect(sf_format("%x", [255]) == "ff", "%x")
+    expect(sf_format("%X", [255]) == "FF", "%X")
+    expect(sf_format("%o", [8]) == "10", "%o")
+    expect(sf_format("%b", [5]) == "101", "%b")
+    expect(sf_format("%c", [65]) == "A", "%c")
+    expect(sf_format("%%", []) == "%", "%%")
+    expect(sf_format("a%db%sc", [1, "x"]) == "a1bxc", "混合")
+
+    # ---- 正号 / 空格标志 ----
+    expect(sf_format("%+d", [42]) == "+42", "%+d")
+    expect(sf_format("% d", [42]) == " 42", "% d")
+    expect(sf_format("%+08.2f", [3.5]) == "+0003.50", "%+08.2f: [" + sf_format("%+08.2f", [3.5]) + "]")
+
+    # ---- 宽度不足时原样输出 ----
+    expect(sf_format("%2d", [12345]) == "12345", "宽度不足")
+    expect(sf_format("%03.1f", [123.45]) == "123.5", "宽度不足浮点")
+
+    # ---- 左对齐 + 零填充：C 里 0 被忽略，用空格 ----
+    expect(sf_format("%-05d|", [42]) == "42   |", "%-05d: [" + sf_format("%-05d|", [42]) + "]")
+
+    # ---- 字符串零填充按空格（C 未定义，取空格）----
+    expect(sf_format("%5s|", ["ab"]) == "   ab|", "%5s")
+    expect(sf_format("%-5s|", ["ab"]) == "ab   |", "%-5s")
+
+    # ---- 精度截断字符串 ----
+    expect(sf_format("%.2s", ["abcdef"]) == "ab", "%.2s")
+
+    # ---- 科学计数法 ----
+    var e1 = sf_format("%.2e", [1234.5])
+    expect(e1 == "1.23e+03", "%.2e: " + e1)
+    var e2 = sf_format("%.2E", [0.000123])
+    expect(e2 == "1.23E-04", "%.2E: " + e2)
+
+    # ---- 参数不足：回显占位符，不崩 ----
+    expect(sf_format("%d %d", [1]) == "1 %d", "参数不足")
+
+    print("PASS: sprintf 0.2.0")

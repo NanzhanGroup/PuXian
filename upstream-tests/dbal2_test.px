@@ -1,0 +1,52 @@
+# dbal 0.2.0 测试：与 querybuilder 0.2.0 同文件共存（0.1.0 会 R1005）
+import "../registry/dbal/0.2.0/dbal.px"
+import "../registry/querybuilder/0.2.0/querybuilder.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 的坑：两个包同名 qb_select 互相覆盖 ----
+    var q = db_new("users")
+    q = db_select(q, ["id", "name"])
+    q = db_where(q, "status", "=", 1)
+    q = db_order_by(q, "id", "DESC")
+    q = db_limit(q, 10)
+    var sql = db_to_sql(q)
+    expect(sql == "SELECT id, name FROM users WHERE status = ? ORDER BY id DESC LIMIT 10", "dbal SQL: " + sql)
+    expect(json_stringify(db_params(q)) == "[1]", "dbal 参数: " + json_stringify(db_params(q)))
+
+    # ---- 同文件里 querybuilder 的 qb_* 仍然可用、签名不再冲突 ----
+    var qb = qb_select("users")
+    qb = qb_where(qb, "id", "=", 2)
+    expect(qb_build(qb) == "SELECT * FROM `users` WHERE `id` = 2", "querybuilder 同文件可用: " + qb_build(qb))
+
+    # ---- db_build 一次取 [sql, params] ----
+    var pair = db_build(q)
+    expect(pair[0] == sql and json_stringify(pair[1]) == "[1]", "db_build")
+
+    # ---- WHERE IN / NULL ----
+    var q2 = db_new("t")
+    q2 = db_where_in(q2, "id", [1, 2])
+    q2 = db_where_null(q2, "deleted_at")
+    var s2 = db_to_sql(q2)
+    expect(s2.find("id IN (?, ?)") >= 0, "IN: " + s2)
+    expect(s2.find("deleted_at IS NULL") >= 0, "IS NULL: " + s2)
+    expect(json_stringify(db_params(q2)) == "[1,2]", "IN 参数: " + json_stringify(db_params(q2)))
+
+    # ---- INSERT / UPDATE / DELETE ----
+    expect(db_insert_sql("t", {"a": 1, "b": 2}) == "INSERT INTO t (a, b) VALUES (?, ?)", "insert_sql")
+    expect(db_update_sql("t", {"a": 1}, "id = ?") == "UPDATE t SET a = ? WHERE id = ?", "update_sql")
+    expect(db_delete_sql("t", "id = ?") == "DELETE FROM t WHERE id = ?", "delete_sql")
+    expect(db_delete_sql("t", "") == "DELETE FROM t", "delete 全表")
+
+    # ---- 默认参数 ----
+    var q3 = db_new("t")
+    q3 = db_order_by(q3, "id")
+    expect(db_to_sql(q3).find("ORDER BY id ASC") >= 0, "默认 ASC: " + db_to_sql(q3))
+
+    # ---- 空查询 ----
+    var q4 = db_new("t")
+    expect(db_to_sql(q4) == "SELECT * FROM t", "空查询: " + db_to_sql(q4))
+
+    print("PASS: dbal 0.2.0")

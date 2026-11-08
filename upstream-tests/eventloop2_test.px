@@ -1,0 +1,101 @@
+# eventloop 0.2.0 测试
+import "../registry/eventloop/0.2.0/eventloop.px"
+
+var log = []
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def on_task(arg):
+    log.append("task:" + str(arg))
+
+def on_timer(arg):
+    log.append("timer:" + str(arg))
+
+def on_repeat(arg):
+    log.append("repeat:" + str(arg))
+
+def spawner(arg):
+    # 回调里新加任务：0.1.0 会丢
+    log.append("spawn")
+    el_add_task(arg, on_task, "child")
+
+def main():
+    # ---- 0.1.0 的坑：定时器回调收到 null ----
+    var loop = el_new()
+    var t = el_add_timer(loop, on_timer, 1, "tick-arg")
+    expect(t == 1, "返回 task id: " + str(t))
+    log = []
+    el_run(loop)
+    expect(json_stringify(log) == "[\"timer:tick-arg\"]", "定时器收到 arg: " + json_stringify(log))
+
+    # ---- 旧的三参调用：arg 为 null（行为不变）----
+    var loop2 = el_new()
+    el_add_timer(loop2, on_timer, 0)
+    log = []
+    el_run(loop2)
+    expect(json_stringify(log) == "[\"timer:null\"]", "三参调用 arg=null: " + json_stringify(log))
+
+    # ---- 普通任务仍带 arg ----
+    var loop3 = el_new()
+    el_add_task(loop3, on_task, "x")
+    log = []
+    el_run(loop3)
+    expect(json_stringify(log) == "[\"task:x\"]", "任务 arg: " + json_stringify(log))
+
+    # ---- 0.1.0 的坑：tick 期间新加的任务丢失 ----
+    var loop4 = el_new()
+    el_add_task(loop4, spawner, loop4)
+    log = []
+    var n = el_tick(loop4)
+    expect(n == 1, "第一轮处理 1 个: " + str(n))
+    expect(json_stringify(log) == "[\"spawn\"]", "spawn 执行")
+    expect(el_pending_count(loop4) == 1, "回调里新加的任务还在: " + str(el_pending_count(loop4)))
+    el_tick(loop4)
+    expect(json_stringify(log) == "[\"spawn\",\"task:child\"]", "新加任务被执行: " + json_stringify(log))
+
+    # ---- 延迟：delay=2 要等两轮 ----
+    var loop5 = el_new()
+    el_add_timer(loop5, on_timer, 2, "d")
+    log = []
+    expect(el_tick(loop5) == 0, "第一轮不触发")
+    expect(el_tick(loop5) == 0, "第二轮不触发")
+    expect(el_tick(loop5) == 1, "第三轮触发")
+    expect(json_stringify(log) == "[\"timer:d\"]", "延迟两次后执行: " + json_stringify(log))
+
+    # ---- 周期任务 ----
+    var loop6 = el_new()
+    var rid = el_add_repeat(loop6, on_repeat, 1, "r")
+    log = []
+    el_tick(loop6)
+    el_tick(loop6)
+    el_tick(loop6)
+    el_tick(loop6)
+    expect(len(log) == 2, "周期任务（interval=1，先等一轮再触发）跑 2 次: " + str(len(log)))
+    el_cancel(loop6, rid)
+    el_tick(loop6)
+    expect(len(log) == 2, "取消后不再跑: " + str(len(log)))
+
+    # ---- 取消普通任务 ----
+    var loop7 = el_new()
+    var id7 = el_add_task(loop7, on_task, "z")
+    expect(el_cancel(loop7, id7), "cancel 返回 true")
+    log = []
+    el_run(loop7)
+    expect(len(log) == 0, "取消的任务不执行")
+    expect(el_cancel(loop7, 999) == false, "取消不存在的 id 返回 false")
+
+    # ---- 空循环不卡住 ----
+    var loop8 = el_new()
+    expect(el_run(loop8) == 0, "空循环 0")
+    expect(el_tick_count(loop8) == 0, "空循环 tick 0")
+
+    # ---- el_clear ----
+    var loop9 = el_new()
+    el_add_task(loop9, on_task, "a")
+    loop9 = el_clear(loop9)
+    expect(el_pending_count(loop9) == 0, "clear 后为空")
+
+    print("PASS: eventloop 0.2.0")

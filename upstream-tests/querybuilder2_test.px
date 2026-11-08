@@ -1,0 +1,73 @@
+# querybuilder 0.2.0 测试
+import "../registry/querybuilder/0.2.0/querybuilder.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 0.1.0 行为保持：qb_build 内联转义 ----
+    var q = qb_select("users")
+    q = qb_where(q, "id", "=", 1)
+    var sql = qb_build(q)
+    expect(sql == "SELECT * FROM `users` WHERE `id` = 1", "内联 SQL: " + sql)
+
+    # ---- 0.2.0 新增：qb_build_params 返 [sql, params] ----
+    var r = qb_build_params(q)
+    expect(type(r) == "list" and len(r) == 2, "返回 [sql, params]")
+    expect(r[0] == "SELECT * FROM `users` WHERE `id` = ?", "参数化 SQL: " + r[0])
+    expect(len(r[1]) == 1 and r[1][0] == 1, "参数收集: " + json_stringify(r[1]))
+
+    # ---- WHERE IN ----
+    var q2 = qb_select("users")
+    q2 = qb_where_in(q2, "id", [1, 2, 3])
+    var r2 = qb_build_params(q2)
+    expect(r2[0].find("IN (?, ?, ?)") >= 0, "IN 占位符: " + r2[0])
+    expect(json_stringify(r2[1]) == "[1,2,3]", "IN 参数: " + json_stringify(r2[1]))
+
+    # ---- 多条 WHERE + ORDER + LIMIT 的顺序 ----
+    var q3 = qb_select("t")
+    q3 = qb_where(q3, "a", ">", 10)
+    q3 = qb_where(q3, "b", "<", 20)
+    q3 = qb_order_by(q3, "id", "DESC")
+    q3 = qb_limit(q3, 5)
+    var r3 = qb_build_params(q3)
+    expect(r3[0] == "SELECT * FROM `t` WHERE `a` > ? AND `b` < ? ORDER BY `id` DESC LIMIT 5", "组合 SQL: " + r3[0])
+    expect(json_stringify(r3[1]) == "[10,20]", "参数顺序: " + json_stringify(r3[1]))
+
+    # ---- INSERT / UPDATE / DELETE ----
+    var qi = qb_insert("t", {"a": 1, "b": "x"})
+    var ri = qb_build_params(qi)
+    expect(ri[0] == "INSERT INTO `t` (`a`, `b`) VALUES (?, ?)", "INSERT SQL: " + ri[0])
+    expect(json_stringify(ri[1]) == "[1,\"x\"]", "INSERT 参数: " + json_stringify(ri[1]))
+
+    var qu = qb_update("t", {"a": 2})
+    qu = qb_where(qu, "id", "=", 7)
+    var ru = qb_build_params(qu)
+    expect(ru[0] == "UPDATE `t` SET `a` = ? WHERE `id` = ?", "UPDATE SQL: " + ru[0])
+    expect(json_stringify(ru[1]) == "[2,7]", "UPDATE 参数: " + json_stringify(ru[1]))
+
+    var qd = qb_delete("t")
+    qd = qb_where(qd, "id", "=", 9)
+    var rd = qb_build_params(qd)
+    expect(rd[0] == "DELETE FROM `t` WHERE `id` = ?", "DELETE SQL: " + rd[0])
+    expect(json_stringify(rd[1]) == "[9]", "DELETE 参数")
+
+    # ---- 内联转义（引号/反斜杠）----
+    var qe = qb_select("t")
+    qe = qb_where(qe, "name", "=", "O'Reilly")
+    expect(qb_build(qe).find("'O''Reilly'") >= 0, "内联转义单引号: " + qb_build(qe))
+
+    # ---- 前置校验 ----
+    var bad = qb_select("")
+    expect(qb_build_ok(bad).is_err(), "空表名 Err")
+    var empty_ins = qb_insert("t", {})
+    expect(qb_build_ok(empty_ins).is_err(), "空 INSERT Err")
+    expect(qb_build_ok(qe).is_ok(), "正常对象 Ok")
+
+    # ---- NULL 条件 ----
+    var qn = qb_select("t")
+    qn = qb_where_null(qn, "x")
+    var rn = qb_build_params(qn)
+    expect(rn[0].find("IS NULL") >= 0 and len(rn[1]) == 0, "IS NULL 无参数: " + rn[0])
+
+    print("PASS: querybuilder 0.2.0")

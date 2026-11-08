@@ -308,3 +308,17 @@ whois_test	PASS	PASS	M380 上游 0.1.0 用例首跑登记（上游用例自断�
 xmlrpc_test	PASS	PASS	M380 上游 0.1.0 用例首跑登记（上游用例自断言；红项另定性）
 xmlstream_test	PASS	PASS	M380 上游 0.1.0 用例首跑登记（上游用例自断言；红项另定性）
 xpath_test	PASS	PASS	M380 上游 0.1.0 用例首跑登记（上游用例自断言；红项另定性）
+aescbc2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+strtotime2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+xmlstream2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+htmlsanitizer2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+sprintf2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+memcached2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+querybuilder2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+orm2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+currency2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+finance2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+dbal2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+dateperiod2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+uuencode2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）
+eventloop2_test	PASS	PASS	M382 晨曦本地修 0.2.0（非上游照搬）

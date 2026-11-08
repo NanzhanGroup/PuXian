@@ -1,0 +1,200 @@
+# ============================================================
+# 普贤生态库：registry/currency — 货币转换（0.2.0）
+# ------------------------------------------------------------
+# 纯函数库，双模式一致。
+#
+# 0.1.0 的问题：
+#   1) 汇率字典的键格式没有文档，也没做归一化 —— 写 {"USD": 7.1} 这种「按币种而不是
+#      按币种对」的键，cur_convert() 直接返回 null，不报错、不提示，看起来像「汇率是 0」。
+#   2) cur_format() 靠 str(float) 拼小数位，1.005 这种会输出 "1.00" 或长尾小数，不保证两位。
+#
+# 0.2.0 的改法：
+#   - 键归一化：cur_new() / cur_add_rate() 接受
+#       "USD->CNY" / "USD/CNY" / "USD CNY" 三种写法（大小写不敏感），
+#       嵌套写法 {"USD": {"CNY": 7.1}} 自动展开成 "USD->CNY"。
+#   - 新增 cur_convert_ok() → Ok(金额) | Err("缺少汇率: USD->JPY")，
+#     以及 cur_has_rate() / cur_rates() / cur_missing() 便于自查。
+#   - cur_format() 改为按分计算、四舍五入、固定两位小数；
+#     新增 cur_format_thousands() 带千分位。
+#
+# 函数：
+#   cur_new(rates) / cur_add_rate(c, from, to, rate) / cur_rates(c)
+#   cur_pair(from, to)            → "USD->CNY"
+#   cur_has_rate(c, from, to)     → bool（含反向与经 USD 套算）
+#   cur_convert(c, from, to, amt) → float | null
+#   cur_convert_ok(c, from, to, amt) → Ok(float) | Err(msg)
+#   cur_format(amount, code) / cur_format_thousands(amount, code, sep)
+#   cur_round(amount) / cur_format_signed(amount, code) / cur_list(c)
+# ============================================================
+
+def cur_pair(from_code, to_code):
+    return to_upper(from_code) + "->" + to_upper(to_code)
+
+# "USD/CNY" / "USD CNY" / "USD->CNY" → "USD->CNY"
+def cur_norm_key(k):
+    var s = to_upper(k)
+    s = s.replace("/", "->")
+    s = s.replace(" ", "->")
+    s = s.replace("=>", "->")
+    s = s.replace("_", "->")
+    s = s.replace(">>>", "->")
+    while s.find("-->") >= 0:
+        s = s.replace("-->", "->")
+    return s
+
+def _cur_is_pair_key(k):
+    var s = cur_norm_key(k)
+    var sep = s.find("->")
+    return sep > 0 and sep + 2 < len(s)
+
+# ---- 构造：接受扁平/嵌套两种写法 ----
+def cur_new(rates):
+    var store = {}
+    var ks = rates.keys()
+    var i = 0
+    while i < len(ks):
+        var k = ks[i]
+        var v = rates[k]
+        if type(v) == "dict":
+            var inner = v.keys()
+            var j = 0
+            while j < len(inner):
+                store.set(cur_pair(k, inner[j]), float(v[inner[j]]))
+                j += 1
+        elif _cur_is_pair_key(k):
+            store.set(cur_norm_key(k), float(v))
+        else:
+            # 单币种键无法判方向：忽略并留痕（用 cur_missing 能看到）
+            store.set("?->" + to_upper(k), float(v))
+        i += 1
+    return {"_rates": store}
+
+def cur_add_rate(c, from_code, to_code, rate):
+    c["_rates"].set(cur_pair(from_code, to_code), float(rate))
+    return c
+
+def cur_rates(c):
+    return c["_rates"].keys()
+
+def cur_list(c):
+    return c["_rates"].keys()
+
+def cur_has_rate(c, from_code, to_code):
+    if to_upper(from_code) == to_upper(to_code):
+        return true
+    if _cur_rate(c, to_upper(from_code), to_upper(to_code)) != null:
+        return true
+    if _cur_rate(c, to_upper(from_code), "USD") != null and _cur_rate(c, "USD", to_upper(to_code)) != null:
+        return true
+    return false
+
+# 单步汇率（直接 / 反向），找不到返回 null
+def _cur_rate(c, f, t):
+    var rates = c["_rates"]
+    var key = cur_pair(f, t)
+    if rates.has(key):
+        return float(rates[key])
+    var rev = cur_pair(t, f)
+    if rates.has(rev):
+        var rv = float(rates[rev])
+        if rv == 0.0:
+            return null
+        return 1.0 / rv
+    return null
+
+# ---- 转换 ----
+def cur_convert(c, from_code, to_code, amount):
+    var a = float(amount)
+    var f = to_upper(from_code)
+    var t = to_upper(to_code)
+    if f == t:
+        return a
+    var direct = _cur_rate(c, f, t)
+    if direct != null:
+        return a * direct
+    # 经 USD 套算（两个方向都算，CNY→JPY 这种要靠 USD→CNY 的反向）
+    var f2u = _cur_rate(c, f, "USD")
+    var u2t = _cur_rate(c, "USD", t)
+    if f2u != null and u2t != null:
+        return a * f2u * u2t
+    return null
+
+def cur_convert_ok(c, from_code, to_code, amount):
+    var r = cur_convert(c, from_code, to_code, amount)
+    if r == null:
+        return Err("缺少汇率: " + cur_pair(from_code, to_code) + "（也没有反向或经 USD 的路径）")
+    return Ok(r)
+
+def cur_missing(c, from_code, to_code):
+    if cur_has_rate(c, from_code, to_code):
+        return []
+    return [cur_pair(from_code, to_code)]
+
+# ---- 格式化：按分四舍五入、固定两位 ----
+def _cur_pad2(n):
+    if n < 10:
+        return "0" + str(n)
+    return str(n)
+
+def cur_format(amount, code):
+    var val = float(amount)
+    var neg = false
+    if val < 0:
+        neg = true
+        val = 0.0 - val
+    var cents = int(val * 100.0 + 0.5 + 0.000000001)
+    var whole = cents // 100
+    var frac = cents % 100
+    var s = str(whole) + "." + _cur_pad2(frac)
+    if neg:
+        s = "-" + s
+    return s + " " + to_upper(code)
+
+def cur_format_thousands(amount, code, sep = ","):
+    var plain = cur_format(amount, code)
+    var space = plain.find(" ")
+    var num = plain
+    if space >= 0:
+        num = plain[:space]
+    var neg = false
+    if len(num) > 0 and num[0] == "-":
+        neg = true
+        num = num[1:]
+    var dot = num.find(".")
+    var int_part = num
+    var frac_part = ""
+    if dot >= 0:
+        int_part = num[:dot]
+        frac_part = num[dot:]
+    var grouped = ""
+    var n = len(int_part)
+    var i = 0
+    while i < n:
+        if i > 0 and (n - i) % 3 == 0:
+            grouped = grouped + sep
+        grouped = grouped + int_part[i]
+        i += 1
+    var out = grouped + frac_part
+    if neg:
+        out = "-" + out
+    if space >= 0:
+        return out + " " + plain[space + 1:]
+    return out
+
+def cur_round(amount):
+    var val = float(amount)
+    var neg = false
+    if val < 0:
+        neg = true
+        val = 0.0 - val
+    var cents = int(val * 100.0 + 0.5 + 0.000000001)
+    var r = float(cents) / 100.0
+    if neg:
+        return 0.0 - r
+    return r
+
+def cur_format_signed(amount, code):
+    var s = cur_format(amount, code)
+    if float(amount) >= 0:
+        return "+" + s
+    return s

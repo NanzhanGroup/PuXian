@@ -1,3 +1,44 @@
+## M382：并入晨曦 14 个实用函数包 0.2.0（registry + 用例 + 三张登记表）
+
+> **来源**：晨曦 2026-11-09 00:11 总线送包（tar.gz 42420B · sha256 `817f127337f628e2…fcc50f2a`，与来信逐字节一致）。
+> **性质**：**本地修**，不是上游照搬 —— 14 包都是 0.1.0 的缺陷重写，逐包理由写在各包头部「0.1.0 的问题」。
+
+### 一 并入清单（14 包 0.2.0 + 14 用例 `<name>2_test`）
+
+`aescbc` `strtotime` `xmlstream` `htmlsanitizer` `sprintf` `memcached` `querybuilder` `orm`
+`currency` `finance` `dbal` `dateperiod` `uuencode` `eventloop`
+
+- 每包 1 文件、**零 `import`**（包自足 ⇒ 装进 `.px_modules` 不触发 E3005）。
+- 用例的相对 import 是 `../registry/<pkg>/0.2.0/<pkg>.px`，与 `upstream-tests/` 目录契约一致；
+  14 个 `*2_test` 与既有 `<name>_test`（指向 0.1.0）并存，命名不冲突。
+- 双轨实跑（**仓内** `tools/px` 0.2.381）：`selfhost/run_upstream_tests.sh --only …2_test` ⇒ **28 PASS**
+  （14 用例 × 解释轨/编译轨），失败 0 · XFAIL 0 · 抖动 0。
+  ⚠ 系统 `/usr/bin/px`（0.2.367 旧装）跑 `--fast` 会对这 14 条全报 R1001「未定义变量」（既有 `dbal_test` 同复现）
+  ⇒ 那是旧装工具链的编译轨相对 import 缺陷，验收一律用仓内 `tools/px`。
+
+### 二 登记表（四处同步）
+
+- `upstream-tests/EXPECTED.tsv`：14 行（build PASS / interp PASS，理由写「晨曦本地修 0.2.0，非上游照搬」）。
+- `upstream-tests/MANIFEST.sha256`：14 行用例 sha256（`sha256sum -c` 全 OK）。
+- `registry/THIRD_PARTY.md`：14 行 0.2.0（补丁列留空，备注写「本地修（晨曦 2026-11-09 送包，**非上游照搬**，M382）」）。
+- 本节。
+
+### 三 值得单独记的三件事
+
+1. **htmlsanitizer 0.2.0 —— XSS 防线原来漏三处**：
+   - `hs_strip_attrs()` 拿「删子串」当解析 ⇒ `<p onclick="x()">` 变成 `<p ="x()">`（属性名没了、值残留），
+     产出畸形 HTML，根本不能当防线；0.2.0 改为按标签结构解析属性，命中黑名单整条丢、其余原样重建。
+   - `hs_is_safe_url()` 只做子串匹配 ⇒ `java\tscript:`、`&#106;avascript:` 这类变形**绕得过**；
+     0.2.0 先归一化（去空白/控制字符、解 `&#NN;`/`&#xNN;`/`&colon;` 实体）再判协议。
+   - `hs_remove_tag_content()` 遇**未闭合** `<script>` 会把后面整段文档都丢掉；0.2.0 只丢开标签。
+2. **dbal 0.2.0 是 breaking**：公开函数 `qb_*` → `db_*`（0.1.0 的 dbal 与 querybuilder 都导出同名 `qb_*`
+   而签名不同，同一文件同时 import 必报 `R1005 参数过多`）。本仓既有 `dbal_test.px` 显式 import 0.1.0，
+   不受影响；但**用户 `px.toml` 若写 `dbal >= 0.1.0` 或 `*` 会静默升到 0.2.0 而调用名失效** ——
+   升级前请把 `qb_new/qb_select/qb_where/…` 改成 `db_*`（新增 `db_where_in` / `db_where_null` / `db_build`）。
+3. **`THIRD_PARTY.md` 的「逐字节照搬」纪律多了一类例外**：本地修包。为不让它变成假声明，14 行备注与本节
+   都写明「非上游照搬」；但生成器 `tools/import_registry_px.sh` **尚不认识**本地修包通道
+   ⇒ 下次跑 `--apply` 会被上游表整份覆盖（**已知待办**，下一轮候选：生成器加本地包通道 + 门加反向守卫）。
+
 ## M381b：M381 全量门三红收口（缺陷 673–675）
 
 > **令源**：东月自驱（运维台账 `dy-ops-m381-gate-no-go` · M381 chain `7b68be9` 判 NO-GO：绿 255 · 红 3）。
