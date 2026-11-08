@@ -80,9 +80,9 @@ def lx_resolve_include(node, base_dir, seen, decrypt):
     seen.append(path)
     var text = read_file(path)
     var r = pxml_parse(text)
-    if not r["ok"]:
-        panic("include 解析失败 " + path + ": " + r["error"])
-    var v = lx_resolve(r["value"], base_dir, seen, decrypt)
+    if r.is_err():
+        panic("include 解析失败 " + path + ": " + r.err())
+    var v = lx_resolve(r.unwrap(), base_dir, seen, decrypt)
     seen.pop()
     return v
 # ---- 递归展开配置树 ----
@@ -130,8 +130,8 @@ def lx_resolve(node, base_dir, seen, decrypt):
 def pxml_load(path, opts):
     var text = read_file(path)
     var r = pxml_parse(text)
-    if not r["ok"]:
-        panic("pxml 解析失败 " + path + ": " + r["error"])
+    if r.is_err():
+        panic("pxml 解析失败 " + path + ": " + r.err())
     var base_dir = "."
     var parts = split(path, "/")
     if len(parts) > 1:
@@ -146,7 +146,7 @@ def pxml_load(path, opts):
     var decrypt = false
     if opts != null and opts.has("decrypt") and opts["decrypt"] == true:
         decrypt = true
-    return lx_resolve(r["value"], base_dir, seen, decrypt)
+    return lx_resolve(r.unwrap(), base_dir, seen, decrypt)
 # ---- 简易 JSON 化（演示/调试用）----
 def lx_json(node):
     var t = type(node)

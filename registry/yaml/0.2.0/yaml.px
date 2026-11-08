@@ -1,0 +1,362 @@
+# ============================================================
+# 普贤标准库：std.yaml —— YAML 子集解析器 + 序列化（配置场景）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译/解释双模式一致。
+# 面向"配置文件"的 YAML 子集，不追求完整 YAML 1.2：
+#   yaml_parse(text) -> {"ok":true,"value":node} | {"ok":false,"error":"line N: ..."}
+#   node = dict / array / string / number / true / false / null
+#    yaml_stringify(value) -> 文本（尾随换行）
+#
+# 分层：行/块标量层（缩进、注释剥离、块标量 `|` 折叠）在 `stdlib/yaml_lines.px`；
+#   词法/标量层（类型推断、引号解包、流式集合 `[]`/`{}`）在 `stdlib/yaml_lex.px`；
+#   本文件是块式递归下降解析 + 序列化。
+#
+# 支持：整行/行尾注释（引号内 # 不剥离）；嵌套 map（空格缩进，tab 报错）；
+#   键值/空值/`key:`；块序列 `- item` 与 `- key: val`（后续键按 `- ` 对齐列）；
+#   裸键/引号键/引号值；类型推断（null/~、true/false 系、整数/小数、
+#   双引号转义含 \uXXXX、单引号 '' 转义、其余裸字符串保留）；
+#   单行流式集合 [] / {} / [a, b] / {a: 1, b: 2}（含嵌套与引号）。
+# 不支持（显式报错）：锚点&/别名*、多行块|>、多文档---、标签!!、
+#   制表符缩进、内联嵌套序列 `- - a`。
+#
+# ⚠️ 与 Go `gopkg.in/yaml.v3` 的关系：本模块的 `yaml_stringify` 输出是
+#   **本生态自洽**格式（缩进 2、引号策略宽松），与 Go `yaml.Marshal` **逐字节不同**。
+#   需要与 Go 写盘产物逐字节一致时，用 `stdlib/yamlx.px` 的 `yaml_stringify_go`
+#   （qg-issue 87 缺陷 22）。
+# ============================================================
+import std.strings
+import std.yaml_lines
+import std.yaml_lex
+# ============================================================
+# 解析一个块：map（键值行）或 seq（- 行）
+def yl_parse_block(lines, idx):
+    if idx >= len(lines):
+        return {"node": yl_nd(), "idx": idx, "err": ""}
+    let ln = lines[idx]
+    if yl_is_seq_item(ln["text"]):
+        return yl_parse_seq(lines, idx, ln["indent"])
+    return yl_parse_map(lines, idx, ln["indent"])
+# 解析 map：直到缩进 < indent 或文件尾
+def yl_parse_map(lines, idx, indent):
+    var node = yl_nd()
+    var i = idx
+    while i < len(lines):
+        let ln = lines[i]
+        if ln["indent"] < indent:
+            break
+        if ln["indent"] > indent:
+            return {"node": node, "idx": i, "err": "line " + str(ln["line"]) + ": 非法缩进（期望 " + str(indent) + "）"}  # noqa
+        let kv = yl_split_kv(ln["text"])
+        if not kv["found"]:
+            return {"node": node, "idx": i, "err": "line " + str(ln["line"]) + ": 期望 key: value (near: '" + ln["text"] + "')"}  # noqa
+        let key = yl_unquote(kv["key"])
+        if kv["has_val"]:
+            node.set(key, yl_parse_scalar(kv["val"]))
+            i += 1
+            continue
+        # 空值：下一行更深 → 子块；否则 null
+        if i + 1 < len(lines) and lines[i + 1]["indent"] > indent:
+            let sub = yl_parse_block(lines, i + 1)
+            if len(sub["err"]) > 0:
+                return {"node": node, "idx": i, "err": sub["err"]}
+            node.set(key, sub["node"])
+            i = sub["idx"]
+        else:
+            node.set(key, null)
+            i += 1
+    return {"node": node, "idx": i, "err": ""}
+# 解析 seq：直到缩进 < indent；序列项 map 的后续键对齐列 child_col
+def yl_parse_seq(lines, idx, indent):
+    var node = []
+    var i = idx
+    let child_col = indent + 2
+    while i < len(lines):
+        let ln = lines[i]
+        if ln["indent"] < indent:
+            break
+        if ln["indent"] > indent:
+            return {"node": node, "idx": i, "err": "line " + str(ln["line"]) + ": 非法缩进"}
+        let text = ln["text"]
+        if not yl_is_seq_item(text):
+            return {"node": node, "idx": i, "err": "line " + str(ln["line"]) + ": 键不能与序列混排 (near: '" + text + "')"}  # noqa
+        var item = ""
+        if len(text) > 1:
+            item = text[2:len(text)]
+        var t = 0
+        while t < len(item) and item[t] == " ":
+            t += 1
+        item = item[t:len(item)]
+        # 空项：子块或 null
+        if len(item) == 0:
+            if i + 1 < len(lines) and lines[i + 1]["indent"] > indent:
+                let sub = yl_parse_block(lines, i + 1)
+                if len(sub["err"]) > 0:
+                    return {"node": node, "idx": i, "err": sub["err"]}
+                node.append(sub["node"])
+                i = sub["idx"]
+            else:
+                node.append(null)
+                i += 1
+            continue
+        if yl_is_seq_item(item):
+            return {"node": node, "idx": i, "err": "line " + str(ln["line"]) + ": 内联嵌套序列不支持，请换行缩进写"}
+        let kv = yl_split_kv(item)
+        if kv["found"]:
+            # 序列项为 map
+            var im = yl_nd()
+            let k0 = yl_unquote(kv["key"])
+            if kv["has_val"]:
+                im.set(k0, yl_parse_scalar(kv["val"]))
+                i += 1
+            else:
+                if i + 1 < len(lines) and lines[i + 1]["indent"] > indent:
+                    let sub0 = yl_parse_block(lines, i + 1)
+                    if len(sub0["err"]) > 0:
+                        return {"node": node, "idx": i, "err": sub0["err"]}
+                    im.set(k0, sub0["node"])
+                    i = sub0["idx"]
+                else:
+                    im.set(k0, null)
+                    i += 1
+            # 吸收对齐列后续键（缩进 >= child_col 且 > indent）
+            while i < len(lines):
+                let nx = lines[i]
+                if nx["indent"] <= indent:
+                    break
+                if nx["indent"] < child_col:
+                    return {"node": node, "idx": i, "err": "line " + str(nx["line"]) + ": 序列项子键缩进错误"}  # noqa
+                let nkv = yl_split_kv(nx["text"])
+                if not nkv["found"]:
+                    return {"node": node, "idx": i, "err": "line " + str(nx["line"]) + ": 期望 key: value"}  # noqa
+                let nk = yl_unquote(nkv["key"])
+                if nkv["has_val"]:
+                    im.set(nk, yl_parse_scalar(nkv["val"]))
+                    i += 1
+                else:
+                    if i + 1 < len(lines) and lines[i + 1]["indent"] > nx["indent"]:
+                        let subn = yl_parse_block(lines, i + 1)
+                        if len(subn["err"]) > 0:
+                            return {"node": node, "idx": i, "err": subn["err"]}
+                        im.set(nk, subn["node"])
+                        i = subn["idx"]
+                    else:
+                        im.set(nk, null)
+                        i += 1
+            node.append(im)
+            continue
+        # 普通标量项
+        node.append(yl_parse_scalar(item))
+        i += 1
+    return {"node": node, "idx": i, "err": ""}
+# ============================================================
+# 公共入口
+# ============================================================
+def yaml_parse(text):
+    let bl = yl_build_lines(text)
+    if not bl["ok"]:
+        return {"ok": false, "error": bl["err"]}
+    let ls = bl["lines"]
+    if len(ls) == 0:
+        return {"ok": true, "value": yl_nd()}
+    # 顶层缩进必须为 0
+    if ls[0]["indent"] != 0:
+        return {"ok": false, "error": "line " + str(ls[0]["line"]) + ": 顶层缩进必须为 0"}
+    # 顶层单行流式集合（`[]` / `{}` / `[a, b]`）：Go yaml.Unmarshal 可读，
+    # 本解析器原先直接报「期望 key: value」，补齐后与 Go 语义一致（缺陷 23 续）。
+    if len(ls) == 1 and len(ls[0]["text"]) >= 2:
+        if ylf_flow_kind(ls[0]["text"]) != "":
+            return {"ok": true, "value": ylf_parse_flow(ls[0]["text"])}
+    let r = yl_parse_block(ls, 0)
+    if len(r["err"]) > 0:
+        return {"ok": false, "error": r["err"]}
+    if r["idx"] < len(ls):
+        return {"ok": false, "error": "line " + str(ls[r["idx"]]["line"]) + ": 解析未消费完整输入"}
+    return {"ok": true, "value": r["node"]}
+# ============================================================
+# YAML 序列化（M103-S2c，Issue 30 GAP-YAML-SER）：yaml_stringify(value)
+# ------------------------------------------------------------
+# 与 yaml_parse 对称的写回能力——api-server models.go/config.go 写回
+# token-cache-llm.yaml / references_*.yaml 需「反序列化→改字段→序列化→落盘」闭环
+# （对标 Go yaml.Marshal）。纯 .px，无 IO 无状态。
+#   yaml_stringify(value) → string（尾随 \n，对齐 Go yaml.Marshal 产出）
+# 输出子集：dict（键序=插入序）/ list / string / int / float / bool / null；
+#   裸标量除非有歧义/结构破坏风险（空、数字、null/bool 字面量、含 : # " ' 引号 换行
+#   制表 反斜杠、首字符为 YAML 特殊符）→ 双引号转义；嵌套缩进 2；空容器 {} / []。
+# 可读回性：本 parse 读回 roundtrip 语义等价（顶层空容器 {} / [] 除外——流式集合
+#   parse 不支持，Go/标准 YAML 可读）；Go yaml.Unmarshal 读回互认。
+# 边界（不做）：键序/注释保留（Issue 30 明确不要求）；bytes 值按 bytes_to_str 转义。
+# ============================================================
+def yl_sp(n):
+    var s = ""
+    var i = 0
+    while i < n:
+        s += " "
+        i += 1
+    return s
+# 字符串裸输出是否会与 parse 子集歧义/破坏结构 → 需双引号
+def yl_needs_quote(s):
+    if len(s) == 0:
+        return true
+    let t = trim(s)
+    if t != s:
+        return true
+    if s == "~" or s == "null" or s == "Null" or s == "NULL":
+        return true
+    if s == "true" or s == "True" or s == "TRUE":
+        return true
+    if s == "false" or s == "False" or s == "FALSE":
+        return true
+    if regex_match("^[+-]?[0-9]+$", s):
+        return true
+    if regex_match("^[+-]?([0-9]+\\.[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?$", s):
+        return true
+    if regex_match("^[+-]?[0-9]+[eE][+-]?[0-9]+$", s):
+        return true
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "\n" or c == "\t" or c == "\r" or c == ":" or c == "#" or c == "\"" or c == "'" or c == "\\":
+            return true
+        if i == 0:
+            if c == "-" or c == "{" or c == "}" or c == "[" or c == "]" or c == "," or c == "&" or c == "*" or c == "!" or c == "|" or c == ">" or c == "%" or c == "@" or c == "`" or c == "?":
+                return true
+        i += 1
+    return false
+# 双引号转义（与 parse yl_unescape_dq 支持集对齐：\" \\ \n \t \r）
+def yl_esc_dq(s):
+    var out = "\""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "\"":
+            out += "\\\""
+        elif c == "\\":
+            out += "\\\\"
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\t":
+            out += "\\t"
+        elif c == "\r":
+            out += "\\r"
+        else:
+            out += c
+        i += 1
+    return out + "\""
+def yl_key_str(k):
+    if type(k) == "string":
+        return k
+    return str(k)
+# 标量 → 单行文本（引号/转义在此决策）
+def yl_scalar_str(v):
+    let t = type(v)
+    if t == "null":
+        return "null"
+    if t == "bool":
+        if v:
+            return "true"
+        return "false"
+    if t == "int":
+        return str(v)
+    if t == "float":
+        return str(v)
+    if t == "string":
+        if yl_needs_quote(v):
+            return yl_esc_dq(v)
+        return v
+    if t == "bytes":
+        return yl_esc_dq(bytes_to_str(v))
+    return yl_esc_dq(str(v))
+# 键渲染：引号判定同值（含 ':'+空白的键裸写会被 kv 切分提前切断）
+def yl_render_key(k):
+    let ks = yl_key_str(k)
+    if yl_needs_quote(ks):
+        return yl_esc_dq(ks)
+    return ks
+# dict 键值行（容器值 → 键行 + 换行缩进块；空容器 → 行内 {} / []）
+def yl_kv_line(k, v, ind):
+    let p = yl_sp(ind) + yl_render_key(k) + ":"
+    let t = type(v)
+    if t == "dict":
+        if len(v) == 0:
+            return p + " {}"
+        return p + "\n" + yl_render(v, ind + 2)
+    if t == "list":
+        if len(v) == 0:
+            return p + " []"
+        return p + "\n" + yl_render(v, ind + 2)
+    return p + " " + yl_scalar_str(v)
+# list 中的 dict 项（- key: val 首键行内，后续键缩进 ind+2 对齐 child_col；
+#   容器值块缩进 ind+4 与 parse yl_parse_seq 吸收规则对齐）
+def yl_seq_map(m, ind):
+    var out = ""
+    var first = true
+    for k in m:
+        let key = yl_render_key(k)
+        let v = m[k]
+        let t = type(v)
+        var p = ""
+        if first:
+            p = yl_sp(ind) + "- " + key + ":"
+        else:
+            p = yl_sp(ind + 2) + key + ":"
+        if not first:
+            out += "\n"
+        first = false
+        if t == "dict":
+            if len(v) == 0:
+                out += p + " {}"
+            else:
+                out += p + "\n" + yl_render(v, ind + 4)
+        elif t == "list":
+            if len(v) == 0:
+                out += p + " []"
+            else:
+                out += p + "\n" + yl_render(v, ind + 4)
+        else:
+            out += p + " " + yl_scalar_str(v)
+    return out
+# list 项（标量 - v；dict → seq map；list → 空行缩进块；空容器行内）
+def yl_item_line(v, ind):
+    let p = yl_sp(ind) + "-"
+    let t = type(v)
+    if t == "dict":
+        if len(v) == 0:
+            return p + " {}"
+        return yl_seq_map(v, ind)
+    if t == "list":
+        if len(v) == 0:
+            return p + " []"
+        return p + "\n" + yl_render(v, ind + 2)
+    return p + " " + yl_scalar_str(v)
+# 块渲染（node 为 dict/list/标量；标量仅顶层调用可达）
+def yl_render(node, ind):
+    let t = type(node)
+    if t == "dict":
+        if len(node) == 0:
+            return yl_sp(ind) + "{}"
+        var out = ""
+        var first = true
+        for k in node:
+            if not first:
+                out += "\n"
+            first = false
+            out += yl_kv_line(k, node[k], ind)
+        return out
+    if t == "list":
+        if len(node) == 0:
+            return yl_sp(ind) + "[]"
+        var out = ""
+        var first = true
+        for item in node:
+            if not first:
+                out += "\n"
+            first = false
+            out += yl_item_line(item, ind)
+        return out
+    return yl_sp(ind) + yl_scalar_str(node)
+# 公共入口：value → YAML 文本（尾随 \n 对齐 Go yaml.Marshal）
+def yaml_stringify(value):
+    let s = yl_render(value, 0)
+    if s == "":
+        return ""
+    return s + "\n"

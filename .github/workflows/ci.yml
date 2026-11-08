@@ -276,6 +276,15 @@ jobs:
             bash packaging/annotate_failure.sh registry "$RUNNER_TEMP/registry.log"
             exit 1
           fi
+      - name: stdlib ⇄ registry 内容对拍（M381 · 缺陷 671）
+        #   来历：`stdlib/pxml.px` 与 `registry/pxml/0.1.0/pxml.px` 只差 1 行注释，**没有任何门在比**；
+        #   M381 实测更严重：collections / cookiejar / yaml 的 registry 副本停在「修复前」
+        #   （chunk 死循环、cj_is_int 守卫、yaml 三文件拆分都没进 registry）⇒ pxpkg 装出来的包行为不同。
+        #   判据：最高版本目录逐字节 == stdlib（反向幽灵文件也红）· 规模锚点 ≥10 对 ·
+        #         豁免表「过期 / 悬空 / 缺理由」各自判红；自带 5 条自证（1 前提 + 1 正控 + 3 负控）。
+        run: |
+          bash selfhost/check_stdlib_registry_parity.sh --self-test
+          bash selfhost/check_stdlib_registry_parity.sh
       - name: 负控残留守卫（工作树卫生 · M254 / 缺陷 448）
         #   原 selfhost/rebake_bin.sh 的 check_neg_residue() 扫描面写死 --include='*.px' --include='*.c'
         #   ⇒ 漏掉 .h/.py/.sh/.go；而门内并行执行器 selfhost/gate_par.py（**.py**）正是

@@ -1,3 +1,133 @@
+## M381：pxml 契约统一 Result（破约件）+ stdlib ⇄ registry 内容对拍门
+
+> **令源**：用户 2026-11-08 21:12「开始 M381 吧」；欠账来自 M377 CHANGELOG §四「pxml（第 4 条契约缺陷）拆到 M378」。
+> **上游**：无 —— `pxml` 是本仓自研包（上游 registry-px 从未收录），所以这条缺陷同步修不到，只能自己定契约。
+
+### 零 为什么必须单独一轮
+
+契约破坏性变更（`pxml_parse` 返回类型）若与机械修混在一轮，红门时无法干净 revert
+（COMMIT_ORDER 第 4 条）。本轮只做一件事 + 两件顺手的守卫，可整体 `git revert` 单提交。
+
+### 一 契约变更（破约，缺陷 671 的正面）
+
+```
+0.1.0（冻结）  pxml_parse(text) → {"ok":bool,"value":...} | {"ok":false,"error":str}
+0.2.0（本轮） pxml_parse(text) → Ok(dict) | Err(str)        # 语言级 Result（spec §3.5）
+```
+
+- 消费面：`r.is_ok()` / `r.is_err()` / `r.ok()` / `r.err()` / `r.unwrap()` / `r.unwrap_err()`，
+  或在返回 Result 的函数里 `let v = pxml_parse(text)?`。
+- 与 17 个上游修复包修完后的形态一致（`Err(...)` / `Ok(...)` / `?`）⇒ 生态里只有一条错误通道。
+- **JSON 序列化形态不变**（Result → `{"ok":bool,"value":...}`）⇒ 网络/配置边界不受影响。
+- **`Result` 不支持 `r["ok"]` 索引**（`R1002` 响亮报错，实测）⇒ 旧调用点漏改**当场红**，不会静默错值。
+  这是本轮最关键的取舍：破约若变成「静默给 null」，比不破更糟。
+- 版本化纪律：`registry/pxml/0.1.0/` **原样冻结**（老用户 lock 不受影响），
+  新增 `registry/pxml/0.2.0/pxml.px` 与 `stdlib/pxml.px` **逐字节一致**。
+
+### 二 调用点改造（逐个点名，不是「应该都改了」）
+
+| 文件 | 处数 | 改法 |
+|---|---|---|
+| `examples/m66_pxml/pxml_test.px` | 46 处 / 26 行 | `r["ok"]`→`r.is_ok()` · `r["value"]`→`r.unwrap()` · `r["error"]`→`r.err()` · `not r.is_ok()`→`r.is_err()` |
+| `examples/m66_pxml/config_loader.px` | 6 处 | 两处 `if not r["ok"]: panic(... r["error"])` → `if r.is_err(): panic(... r.err())` |
+| `examples/m66_pxml/demo_enc.px` | 3 处 | 同上 |
+| `docs/PXML.md` | §5.6 + §7 | 新增「v0.7 契约变更」段与变更记录 |
+| `docs/ECOSYSTEM.md` | 2 处 | 入口列 `→ Ok(dict)/Err(str)`；一行式示例 `.is_ok()` |
+| `docs/PUXIAN_CHEATSHEET.md` | 1 处 | pxml 行改 Result 口径 |
+| `docs/ecosystem_index.json` | 重生成 | `tools/pxc run tools/gen_ecosystem.px` |
+
+一处副产品：`t_empty` 里 `r2["value"]` 出现两次，直译成 `r2.unwrap()` 会让行到 101 字符
+（lint L007 警告）⇒ 改为 `let v2 = r2.ok()` 一次取值，语义也更对（失败分支不二次 unwrap 报错）。
+
+### 三 新门：stdlib ⇄ registry 内容对拍（缺陷 671）
+
+**判据**（`selfhost/check_stdlib_registry_parity.sh`）：
+
+1. 每个「`stdlib/<n>.px` 与 `registry/<n>/` 都存在」的包，取 registry **最高版本目录**，
+   其中每个 `.px` 必须与 stdlib 同名文件**逐字节一致**（`cmp`）；registry 有、stdlib 无 ⇒ 幽灵文件红。
+2. **规模锚点**：配对数量 ≥ 10（实测 13）；扫描器坏了 ⇒ 空集 ⊆ 空集 ⇒ 判红。
+3. 豁免表 `selfhost/registry_parity.allow`：**过期即红**（已一致却仍豁免）· 悬空即红 · 缺理由即红。
+4. 只比最高版本：registry 的版本目录是发布历史，旧版本与新版本不同是常态。
+
+**自测 5/5**（`--self-test`，隔离临时树）：1 前提自证（扰动确实改了 sha）+ 1 正控（一致 ⇒ rc=0）
++ 3 负控（内容漂移 ⇒ rc=1 且点名 · 豁免过期 ⇒ rc=1 · 配对为 0 ⇒ rc=1）。
+
+**建门当下就抓到三处存量漂移**（这是本轮真正的价值，比我改 pxml 更值钱）：
+
+| 包 | registry 副本停在哪 | 后果（对装包用户） |
+|---|---|---|
+| `collections` | M279 缺陷 484 之前 | `chunk(items, 0)` ⇒ **死循环 + 内存无界增长** |
+| `cookiejar` | M184 严格 `int()` 之前 | 无 `cj_is_int` 守卫 ⇒ `Max-Age=abc` 可把服务端打成运行时错误 |
+| `yaml` | 单文件旧版 | 缺 `yaml_stringify`；`yaml_lex`/`yaml_lines` 分层不存在 |
+| `pxml` | 只差 1 行注释（M377 登记） | 无行为差异，但正是「没有门在比」的证据 |
+
+处置：三者各发 `0.2.0`（内容 = 当前 stdlib，逐字节），旧版本目录**一个字节都不动**。
+最终 **零豁免**跑绿（13 对全一致）—— 不靠白名单过关。
+
+### 四 顺手修的生成器缺陷（缺陷 670）
+
+`tools/import_registry_px.sh` 生成 `THIRD_PARTY.md` 时，文件数取**上游文件清单**计数。
+M380b 的「包自足化」把依赖文件复制进包目录（`registry/xpath/0.1.0/domlite.px`，上游没有），
+于是下一次重生成会把该行从 `2` 抹成 `1`，而 m187 门的判据是
+`ls $dst/*.px | wc -l == 表值` ⇒ **白红**。本轮首次重生成当场撞到（xpath 2→1）。
+
+修法：目录已存在时文件数取**磁盘现实**；入口 sha256 仍取「上游+补丁」的应该值
+（上游漂移继续由 sha 列守住，检测力不降）。
+
+### 五 分片档回归 8 片（用户 2026-11-08 18:44 质问的落地）
+
+- **默认没降**：`shard_run.sh` 自 M351 起默认 `N = nproc/SHARD_JOBS = 16/2 = 8`。
+- **是调用点写死了**：`m376`–`m380` 五个 wrap 全是 `SHARD_N=4 SHARD_JOBS=4`（M376-r3 为治冷缓存 900s 超时顺手砍了一半并行度，之后被复制沿用）。
+- **代价实测**：同一门清单（253–257）墙钟下界 8 片 49.8 min ⇄ 4 片 99.5 min；
+  实测 8 片 1h47m ⇄ 4 片 2h13m（+26 min）；M376 至今 5 轮 ≈ 2 小时。
+- **本轮做法**：wrap **不写死**分片数（用默认推导），并在跑门前用 `shard_run.sh --dry`
+  做 **plan 校验**：断言 `N == nproc/SHARD_JOBS` 且每片核数 == `SHARD_JOBS`，不等即 fail-fast（1 秒）。
+- **10 片仍否**：16 核 / 10 片 ⇒ 每片 1 核 ⇒ `SHARD_JOBS` 退到 1，门内并行的门（m244/m302 一族）退化串行；
+  且 M330 的余数均摊在 10 片下只剩 1 核基线 ⇒ 不是均衡。16 核的正解是 8 片 × 2 核。
+
+### 六 成本与回滚
+
+```
+改动面  stdlib/pxml.px（3 行 return + 头注）· registry 新增 4 个 0.2.0 目录（纯新增）
+        examples/m66_pxml 3 文件 · docs 4 处 · 生成器 1 处 · 新门 1 个 + allow 表 · 版本位
+不动    runtime/ selfhost/*.px 语义（只新增 .sh 门与注册行）
+重烘    改版本串 ⇒ 必须 --rebake-all（14 件含版本字面量的会变）；改 stdlib 本身**不进内嵌件**
+回滚    git revert 单提交（registry 为纯新增，删目录即回退；调用点与契约在同一提交内，不会半破）
+```
+
+### 七 门与实测
+
+```
+自测（跑门之前）
+m381_stdlib_registry_parity --self-test   5/5（1 前提自证 + 1 正控 + 3 负控）
+m381_stdlib_registry_parity（真仓）       13 对全一致 · 零豁免 · STDLIB-REGISTRY-PARITY-OK
+examples/m66_pxml/verify.sh               [1] pxml_test 双模式 68 PASS ×2 · [2] demo 16 PASS ×2
+                                          [3] demo_enc 4 PASS · [4] fmt/lint 0 错 0 警
+check_gate_registry                      通过 13 / 失败 0 · GATE-REGISTRY-OK（含脚本门双向）
+check_defect_refs                        737 条判定 · 违例 0（M381 声明 670/671）
+check_version_golden                      VERSION-GOLDEN-OK（pxc/pxi 均 0.2.381）
+check_version_drift                       VERSION-DRIFT=OK（源码 0.2.381 ⇄ tag 0.2.380 差 1）
+rebake --check-all                        14/14 件与当前源码一致（烘期间源码未变快照自证）
+release_preflight                         VERSION-POSITION=OK 源码=0.2.381 里程碑=M381
+m187_registry_import --neg-skip           PASS=17 FAIL=0（321 行 / 195 去重包名 / 334 文件 全装齐）
+全量门（8 片 × 2 核）                     待回填
+```
+
+**发射冻结门（`emitc_freeze`）—— 4 件差异，已自证后重定基（缺陷 672 登记）**
+
+```
+类别 A（源码与产物同时变）3 件 —— 预期：
+  examples/m66_pxml/pxml_test.px · config_loader.px · demo_enc.px（本轮契约改造）
+类别 B（源码未变而产物变）1 件 —— 自证为**依赖传播**，不是发射回归：
+  examples/m66_pxml/demo.px 自身未改（git status 空），但它 import "./config_loader.px"
+  ⇒ 被依赖文件改了 ⇒ emit-c 内联的代码变了 ⇒ 产物变
+```
+
+⇒ 本轮处置：先自证、再 `--freeze`（4 行同交）；**不把它归成"发射回归"**。
+登记**缺陷 672**：`emitc_freeze` 的类别 B 判据只看**文件自身**源码 sha，不随 import 依赖传播 ——
+在「改被依赖模块」的轮次会把**预期变化**报成「发射回归」（判据贴表象，CRITERIA 同族），
+每轮都得人工重推一遍。修法（依赖闭包入判据）排下轮，不在本轮塞。
+
 ## M380：60 个上游新包扩库 + 60 个上游用例回推（M377 的 exclude 清单一次性结清）
 
 > **令源**：M377 CHANGELOG 第 154 行「60 个上游新包扩库（M377 的 exclude 清单）」；用户 11-06 23:45 自主推进令。

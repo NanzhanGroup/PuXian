@@ -555,6 +555,14 @@ run m186_native_passthrough bash examples/m186_native_passthrough/verify.sh
 #   `--locked` 能查出**辅助文件**被篡改（修前只查入口）；
 #   负控 A/B/C（篡改包入口 / 篡改登记表 / 删多文件包辅助文件）各自独立判红 + 源逐字节还原。
 run m187_registry_import bash examples/m187_registry_import/verify.sh
+# ── M381 门：stdlib ⇄ registry **内容对拍**（缺陷 671 的守卫）──
+#   判据：stdlib/<n>.px 与 registry/<n>/<最高版>/ 逐字节一致（双向：幽灵文件也红）·
+#         规模锚点（配对 ≥10）· 豁免表「过期/悬空/缺理由」即红。
+#   为什么要有它：M381 实测 collections / cookiejar / yaml 三个包的 registry 副本
+#   停在「修复前」（chunk 死循环 / cj_is_int 守卫 / yaml 三文件拆分都没进 registry）
+#   ⇒ pxpkg 装出来的包与 stdlib 行为不同，而此前**没有任何判据**看得见（M377 记的债）。
+#   门自带 5 条自证（1 前提自证 + 1 正控 + 3 负控：漂移 / 豁免过期 / 空集假绿）。
+run m381_stdlib_registry_parity bash selfhost/check_stdlib_registry_parity.sh
 step "M188（第 66 轮）：SHA1 族 + 三件安全替代 + 字符串方法面四别名（第三方 PX-DEF-026/016/012/017/025/027）"
 #   判据：① NIST 向量（sha1/sha256_bytes）+ `byte`/`chr` 的 rune/字节双轴对照 + 三个安全替代的长度定点，
 #   三轨输出**逐字节一致**；② 方法面四别名 —— rune 轴定点（`"中文abc".find("abc")`=2，字节轴给 6）+

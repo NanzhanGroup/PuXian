@@ -19,7 +19,7 @@
 | **semver** | `std.semver` | 语义化版本 2.0.0（子集，M45） | `sv_parse` / `sv_cmp` / `sv_range_parse` / `sv_satisfies` / `sv_best` | 版本解析/比较/范围匹配（^ ~ * x），pxpkg registry 依赖解析 |
 | **webroute** | `std.webroute` | 文件即路由命名规则（M43） | `wr_methods` / `wr_is_special` / `wr_seg_to_pattern` / `wr_parse_file` | `get_healthz.px → {method:GET, pattern:/healthz}`，routegen 路由生成 |
 | **yaml** | `std.yaml` | YAML 子集解析器（M66 收编） | `yaml_parse` | 配置文件（注释/嵌套 map/序列/标量），返回 `{ok,value}` 或 `{ok,error}` |
-| **pxml** | `std.pxml` | PXML 配置语言解析器（M66 收编，规范 `docs/PXML.md`） | `pxml_parse`（+ 内部 tokenize/parse 系列） | 类 ini 增强配置（类型化标量/单位 720h/数组/嵌套块），dogfood 闭环 |
+| **pxml** | `std.pxml` | PXML 配置语言解析器（M66 收编，规范 `docs/PXML.md`） | `pxml_parse` → `Ok(dict)` / `Err(str)`（M381 起统一 Result；+ 内部 tokenize/parse 系列） | 类 ini 增强配置（类型化标量/单位 720h/数组/嵌套块），dogfood 闭环 |
 | **lunar** | `std.lunar` | 农历 1900-2100 公历互转（M66 收编，天文推算 0 误差） | `lr_solar_to_lunar` / `lr_lunar_to_solar` / `lr_info` / `lr_leap_month` / `lr_month_days` / `lr_md_in_year` 等 | 农历生日/节气/节日、公农历互转（含闰月） |
 | **gfx** | `std.gfx` | 纯语言 2D 画布与图形（M61） | `canvas_create` / `canvas_w` / `canvas_h` / `canvas_pixels` / `set_px` / `get_px` / `line` / `rect` / `fill_rect` / `circle` / `fill_circle` / `blit` / `text` / `text_size` | 无屏 2D 合成（Mandelbrot/贪吃蛇），画布 `list[int]` 0xRRGGBB |
 | **png** | `std.png` | 纯语言 PNG 编码器（stored，M61） | `png_encode(w, h, pixels) -> bytes` | 把 gfx 画布编码为 PNG 文件字节（CRC32+ADLER+zlib stored 自实现） |
@@ -51,7 +51,7 @@ var ya = yaml_parse("name: PuXian\nver: 1\nlist:\n  - a\n  - b\n")
 print(ya["ok"])                                         # true（ya["value"] 为解析节点）
 ```
 
-其余库一行式：`wr_parse_file("get_healthz.px")` → 路由规则 dict；`lr_solar_to_lunar(2026, 9, 5)` → 农历（实测 `{"ok":true,"year":2026,"month":7,"day":24,"leap":false}`）；`pxml_parse("a = 1\nb = \"hi\"\n")["ok"]` → true；`set_px(canvas_create(4,4), 1, 1, 0xFF0000)` 后 `get_px` → 16711680；`png_encode(2, 2, [...])` → 82 字节 PNG；`html_text(html_parse("<p>hi<b>x</b></p>"))` → "hix"；`mp_encode({...}, {...})` → 带随机 boundary 的 bytes body；`smtp_send(...)` 连本地/内网 SMTP 发信。完整 API 文档：`tools/pxc doc stdlib/<name>.px`。
+其余库一行式：`wr_parse_file("get_healthz.px")` → 路由规则 dict；`lr_solar_to_lunar(2026, 9, 5)` → 农历（实测 `{"ok":true,"year":2026,"month":7,"day":24,"leap":false}`）；`pxml_parse("a = 1\nb = \"hi\"\n").is_ok()` → true；`set_px(canvas_create(4,4), 1, 1, 0xFF0000)` 后 `get_px` → 16711680；`png_encode(2, 2, [...])` → 82 字节 PNG；`html_text(html_parse("<p>hi<b>x</b></p>"))` → "hix"；`mp_encode({...}, {...})` → 带随机 boundary 的 bytes body；`smtp_send(...)` 连本地/内网 SMTP 发信。完整 API 文档：`tools/pxc doc stdlib/<name>.px`。
 
 ## 3. Dogfood 资产图（examples/ · **229 个示例目录 / 120 个单文件 `.px`**）
 

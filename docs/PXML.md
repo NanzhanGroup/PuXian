@@ -230,6 +230,13 @@ ENC[]  → 落盘但字段级加密（可提交 git）  ← 兜底，结构可�
 ### 5.6 实现记录（v0.4 落地，v0.5/0.6 更新）
 代码见 `pxml.px`（<500 行约束内）；测试 `test/pxml_test.px`（68 断言，`pxc run` 解释 + `pxc build` 编译双模式一致，产物静态 ELF）。v0.5 起文件/API 由 paml.px / paml_parse 更名，duration 单位收敛。
 
+**v0.7（M381）契约变更：`pxml_parse` 统一返 Result**
+- `Ok(dict)` = 解析成功（载荷为配置树）；`Err(str)` = 失败（载荷为 `line N: ...` 诊断文案）。
+- 消费：`r.is_ok()` / `r.err()` / `r.unwrap()` / `.ok()`，或在返回 Result 的函数内 `let v = pxml_parse(text)?`（spec §3.5）。
+- **破约**：`pxml/0.1.0` 的 `{ok,value}/{ok,error}` 字典契约冻结在 registry（不再改动）；`pxml/0.2.0` 与 `stdlib/pxml.px` 逐字节一致。
+- JSON 序列化形态不变（Result → `{"ok":bool,"value":...}`），但 **Result 不支持 `r["ok"]` 索引**（`R1002` 响亮报错）⇒ 旧调用点漏改会当场红，不会静默错值。
+- 与 17 个上游包修完后的形态一致（`Err(...)` / `Ok(...)` / `?`），生态里只有一个错误通道。
+
 **实现级决策（v0.4 收敛，v0.5 更新）**
 - `duration` 字面量（`720h`/`1.5s`）换算为**纳秒 int**（`1d = 86400e9` ns）——与 Go `time.Duration` 语义对齐；解析器纯换算、不校验正负。v0.5 起仅支持 ms/s/m/h/d。
 - `env("X")` / `include("p")` 解析为 **call 节点** `{"__call":"env","args":["X"]}`（双下划线保留键，避免与业务键碰撞）；parser 不执行、不做 IO。
@@ -291,6 +298,7 @@ PXML_MASTER_KEY=0123456789abcdef0123456789abcdef ./dogfood/build/demo_enc   # 4 
 ---
 
 ## 7. 变更记录
+- v0.7（M381）：`pxml_parse` 契约由 `{ok,value}/{ok,error}` 字典统一到语言级 **Result**（`Ok(dict)` / `Err(str)`），与 17 个上游修复包同形；`pxml/0.1.0` 冻结、新增 `pxml/0.2.0`（与 stdlib 逐字节一致）；调用点 `examples/m66_pxml` 全部改造（68 断言双模式仍 PASS）；JSON 序列化形态不变。
 - v0.6：**Dogfood 闭环完成**——新增 `dogfood/`（app.pxml + upstream.pxml + config_loader.px + demo.px + demo_enc.px），仓库自身配置用 PXML 描述并真实加载：demo.px 16 断言双模式 PASS、demo_enc.px 4 断言（ENC 生成→写入→解密还原，build 产物）；新增 §5.7；语言缺口扩至 6 条（pxi 解释器缺 aes/base64/hex native 且慢、string 无 find / join 参数序）；§5.5 路线与 §6 现状更新；README 全面转 PXML + Dogfood。
 - v0.5：7 项开放问题全部拍板定稿；格式更名 **PAML → PXML**（PuXian Markup Language，弃 Annotative 暂称），扩展名 `.pxml`、文件/API 更名 pxml.px/pxml_parse、主密钥 env 更名 `PXML_MASTER_KEY`；duration 单位收敛 ms/s/m/h/d（ns/us 报错）；§5.4 转为定稿决策表；路线加 yaml2pxml 迁移器（排后）。
 - v0.4：pxml.px 解析器实现（当时名 paml.px，466 行，68 断言双模式 PASS）；新增 §5.6 实现记录（duration 纳秒、call 节点、重复键报错、无 \u 转义、无缩进语义验证 + PuXian 语言缺口）；§5.5 路线更新。

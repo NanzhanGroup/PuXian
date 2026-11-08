@@ -1,7 +1,13 @@
 # ============================================================
 # 普贤标准库：std.pxml —— PXML 配置语言解析器（qg-issue 04 收编）
 # ------------------------------------------------------------
-# 纯函数风格（无 IO/无状态），入口 pxml_parse(text) -> {ok,value}/{ok,error}。
+# 纯函数风格（无 IO/无状态），入口 pxml_parse(text) -> Result（M381 起）：
+#   Ok(dict)  解析成功，载荷 = 配置树
+#   Err(str)  失败，载荷 = "line N: ..." 诊断文案
+# M381 破约：pxml/0.1.0 返 {ok,value}/{ok,error} 字典；pxml/0.2.0 起统一到语言级 Result（spec §3.5）
+#   消费：r.is_ok() / r.err() / r.unwrap()，或函数内 `let v = pxml_parse(t)?`
+#   JSON 序列化形态不变（Result → {"ok":bool,"value":...}），但 Result **不支持** r["ok"] 索引
+#   （索引 Result 会 R1002 响亮报错，不静默给 null）⇒ 旧调用点漏改会当场红，不会静默错值。
 # 随发布包分发：import std.pxml。
 # 加密能力说明：ENC 字段级加密"识别不解密"（分层铁律，解析器永不碰密钥）；
 # 消费方运行时解密依赖 aes_gcm/base64 native —— 按 std.gfx 先例，
@@ -437,8 +443,8 @@ def px_parse_document(toks):
 def pxml_parse(text):
     let tk = px_tokenize(text)
     if not tk["ok"]:
-        return {"ok": false, "error": tk["error"]}
+        return Err(tk["error"])
     let pr = px_parse_document(tk["tokens"])
     if len(pr["err"]) > 0:
-        return {"ok": false, "error": pr["err"]}
-    return {"ok": true, "value": pr["v"]}
+        return Err(pr["err"])
+    return Ok(pr["v"])

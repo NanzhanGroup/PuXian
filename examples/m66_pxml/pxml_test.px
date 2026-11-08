@@ -12,9 +12,9 @@ def check(name, cond, extra):
 # 标量字面量（显式类型，无隐式转换）
 def t_scalar():
     let r = pxml_parse("a = 1\nb = \"hi\"\nc = true\nd = 3.14\ne = null\nf = -5\ng = 1.5e3\nh = 'sq'\n")  # noqa
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        let v = r["value"]
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        let v = r.unwrap()
         check("int", v["a"] == 1, v["a"])
         check("str", v["b"] == "hi", v["b"])
         check("bool", v["c"] == true, v["c"])
@@ -26,9 +26,9 @@ def t_scalar():
 # 块 / dict 同形 + duration 纳秒换算 + 数组
 def t_block():
     let r = pxml_parse("server {\n    port = 8080\n    host = \"127.0.0.1\"\n    ttl = 720h\n    tags = [\"llm\", \"cache\",]\n    limits = { max = 100, min = 1 }\n}\n")  # noqa
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        let v = r["value"]["server"]
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        let v = r.unwrap()["server"]
         check("port", v["port"] == 8080, v["port"])
         check("host", v["host"] == "127.0.0.1", v["host"])
         check("ttl ns", v["ttl"] == 2592000000000000, v["ttl"])
@@ -52,70 +52,71 @@ def t_duration():
     var i = 0
     while i < len(cases):
         let r = pxml_parse(cases[i] + "\n")
-        check("dur" + str(i), r["ok"] and r["value"]["x"] == want[i], r)
+        check("dur" + str(i), r.is_ok() and r.unwrap()["x"] == want[i], r)
         i += 1
     let rns = pxml_parse("x = 1ns\n")
     let rus = pxml_parse("x = 2us\n")
-    check("dur ns err", not rns["ok"], rns)
-    check("dur us err", not rus["ok"], rus)
+    check("dur ns err", rns.is_err(), rns)
+    check("dur us err", rus.is_err(), rus)
 # env/include call 节点
 def t_call():
     let r = pxml_parse("api_key = env(\"LLM_API_KEY\")\nupstream = include(\"llm.pxml\", \"extra\")\n")  # noqa
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        let k = r["value"]["api_key"]
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        let k = r.unwrap()["api_key"]
         check("call env", k["__call"] == "env", k)
         check("arg0", k["args"][0] == "LLM_API_KEY", k)
         check("arg len", len(k["args"]) == 1, k)
-        let u = r["value"]["upstream"]
+        let u = r.unwrap()["upstream"]
         check("call inc", u["__call"] == "include" and len(u["args"]) == 2, u)
 # ENC 原样保留（带标记字符串，不解密）
 def t_enc():
     let raw = "db_password = ENC[aes256gcm, kid:v1, data:q0X9t2Z==, iv:7a1c4e, tag:9c4ef2]\n"
     let r = pxml_parse(raw)
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        let got = r["value"]["db_password"]
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        let got = r.unwrap()["db_password"]
         check("enc raw", got == "ENC[aes256gcm, kid:v1, data:q0X9t2Z==, iv:7a1c4e, tag:9c4ef2]", got)  # noqa
         check("enc prefix", got[0:4] == "ENC[", got)
 # 注释与字符串内 # 不剥离；URL 需引号
 def t_comment():
     let r = pxml_parse("# 整行\nx = \"a#b\"  # 行尾\nurl = \"https://x.com/#frag\"\n")
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        check("hash in str", r["value"]["x"] == "a#b", r["value"]["x"])
-        check("url", r["value"]["url"] == "https://x.com/#frag", r["value"]["url"])
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        check("hash in str", r.unwrap()["x"] == "a#b", r.unwrap()["x"])
+        check("url", r.unwrap()["url"] == "https://x.com/#frag", r.unwrap()["url"])
     let r2 = pxml_parse("u = https://x.com\n")
-    check("url bare err", not r2["ok"], r2)
+    check("url bare err", r2.is_err(), r2)
 # 三引号多行字符串
 def t_triple():
     let r = pxml_parse("s = \"\"\"line1\nline2\"\"\"\n")
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        check("triple", r["value"]["s"] == "line1\nline2", r["value"]["s"])
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        check("triple", r.unwrap()["s"] == "line1\nline2", r.unwrap()["s"])
 # 引号键 / 转义
 def t_quoted_key_escape():
     let r = pxml_parse("\"my key\" = 1\n'a:b' = 2\nesc = \"a\\nb\\tc\"\n")
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        check("qkey", r["value"]["my key"] == 1, r["value"])
-        check("qkey2", r["value"]["a:b"] == 2, r["value"])
-        check("esc", r["value"]["esc"] == "a\nb\tc", r["value"]["esc"])
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        check("qkey", r.unwrap()["my key"] == 1, r.unwrap())
+        check("qkey2", r.unwrap()["a:b"] == 2, r.unwrap())
+        check("esc", r.unwrap()["esc"] == "a\nb\tc", r.unwrap()["esc"])
 # 数组：空 / 嵌套 / 尾逗号
 def t_array():
     let r = pxml_parse("a = []\nb = [1, 2,]\nc = [ { x = 1 }, [2, 3], \"s\", true ]\n")
-    check("ok", r["ok"], r)
-    if r["ok"]:
-        check("empty", len(r["value"]["a"]) == 0, r["value"]["a"])
-        check("arr2", len(r["value"]["b"]) == 2 and r["value"]["b"][1] == 2, r["value"]["b"])
-        check("deep", r["value"]["c"][0]["x"] == 1 and r["value"]["c"][1][0] == 2, r["value"]["c"])
-        check("deep end", r["value"]["c"][3] == true, r["value"]["c"])
+    check("ok", r.is_ok(), r)
+    if r.is_ok():
+        check("empty", len(r.unwrap()["a"]) == 0, r.unwrap()["a"])
+        check("arr2", len(r.unwrap()["b"]) == 2 and r.unwrap()["b"][1] == 2, r.unwrap()["b"])
+        check("deep", r.unwrap()["c"][0]["x"] == 1 and r.unwrap()["c"][1][0] == 2, r.unwrap()["c"])
+        check("deep end", r.unwrap()["c"][3] == true, r.unwrap()["c"])
 # 空文件 / 空容器
 def t_empty():
     let r = pxml_parse("")
-    check("empty file", r["ok"] and len(r["value"]) == 0, r)
+    check("empty file", r.is_ok() and len(r.unwrap()) == 0, r)
     let r2 = pxml_parse("a = {}\nb {}\n")
-    check("empty cont", r2["ok"] and len(r2["value"]["a"]) == 0 and len(r2["value"]["b"]) == 0, r2)
+    let v2 = r2.ok()  # Ok 侧取值（Err 侧 null）：避免在失败分支里 unwrap 二次报错
+    check("empty cont", r2.is_ok() and len(v2["a"]) == 0 and len(v2["b"]) == 0, r2)
 # 错误用例
 def t_err():
     var bad = []
@@ -135,25 +136,25 @@ def t_err():
     var i = 0
     while i < len(bad):
         let r = pxml_parse(bad[i])
-        check("bad" + str(i), not r["ok"], r)
+        check("bad" + str(i), r.is_err(), r)
         i += 1
 # 无缩进语义：空格/tab/缩进随意，不产生语法含义（与 YAML 相反）
 def t_indent_free():
     let r = pxml_parse("a {\n\tb = 1\n  c = 2\n        }\n")
-    check("tab ok", r["ok"], r)
-    if r["ok"]:
-        check("tab val", r["value"]["a"]["b"] == 1 and r["value"]["a"]["c"] == 2, r["value"])
+    check("tab ok", r.is_ok(), r)
+    if r.is_ok():
+        check("tab val", r.unwrap()["a"]["b"] == 1 and r.unwrap()["a"]["c"] == 2, r.unwrap())
 def t_err_msg():
     let r = pxml_parse("x = \"abc\n")
-    check("line1", not r["ok"] and r["error"] == "line 1: 字符串未闭合（不能跨行；多行请用 \"\"\"）", r)
+    check("line1", r.is_err() and r.err() == "line 1: 字符串未闭合（不能跨行；多行请用 \"\"\"）", r)
     let r2 = pxml_parse("a = 1\na = 2\n")
-    check("dup line2", not r2["ok"] and r2["error"] == "line 2: 重复键 'a'", r2)
+    check("dup line2", r2.is_err() and r2.err() == "line 2: 重复键 'a'", r2)
     let r3 = pxml_parse("server {\n  a = 1\n")
-    check("brace line3", not r3["ok"] and r3["error"] == "line 3: '{' 未闭合", r3)
+    check("brace line3", r3.is_err() and r3.err() == "line 3: '{' 未闭合", r3)
     let r4 = pxml_parse("a = ENC[xx\n")
-    check("enc line1", not r4["ok"], r4)
+    check("enc line1", r4.is_err(), r4)
     let r5 = pxml_parse("x = 1ns\n")
-    check("dur msg", not r5["ok"] and r5["error"] == "line 1: 未知的 duration 单位 'ns'（支持 ms/s/m/h/d；文本请加引号）", r5)  # noqa
+    check("dur msg", r5.is_err() and r5.err() == "line 1: 未知的 duration 单位 'ns'（支持 ms/s/m/h/d；文本请加引号）", r5)  # noqa
 def main():
     t_scalar()
     t_block()

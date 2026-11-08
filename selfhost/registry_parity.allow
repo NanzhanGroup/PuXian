@@ -1,0 +1,8 @@
+# selfhost/registry_parity.allow —— stdlib ⇄ registry 内容对拍豁免表（M381 建立）
+# 格式：包名|理由        （每行一条；理由不可为空）
+# 纪律：
+#   ① 只能「暂时挂账」，修好即删；
+#   ② 实际已一致却还豁免 ⇒ 门判红（豁免过期）；
+#   ③ 包名不在 stdlib/registry 配对里 ⇒ 门判红（悬空豁免）。
+# 现状：零豁免（M381 已把 collections / cookiejar / yaml / pxml 全部发布为 0.2.0，
+#       与 stdlib 逐字节一致）。

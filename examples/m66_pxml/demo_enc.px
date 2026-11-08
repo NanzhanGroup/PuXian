@@ -40,10 +40,10 @@ def main():
     # --- 2) 写入临时 .pxml 并加载（decrypt=true）---
     var pxml_text = "db { password = " + enc_str + "\n}\n"
     var r = pxml_parse(pxml_text)
-    check("临时配置解析 ok", r["ok"], r)
-    if not r["ok"]:
+    check("临时配置解析 ok", r.is_ok(), r)
+    if r.is_err():
         exit(1)
-    var out = lx_resolve(r["value"], ".", [], true)
+    var out = lx_resolve(r.unwrap(), ".", [], true)
     var got = out["db"]["password"]
     check("ENC 解密还原", got == plain, "got=" + str(got) + " want=" + plain)
     # --- 3) 与真实 app.pxml 的 database.password 同源校验 ---

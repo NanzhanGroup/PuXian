@@ -387,10 +387,10 @@ examples/m66_proc/os_fs_test.px src=624c81df98d0296e rc=0 out=7d775226f8afae06ad
 examples/m66_proc/proc_test.px src=599289daac036644 rc=0 out=5092bb5e0cec0ac25a529033e60a1290 err=e3b0c44298fc1c14
 examples/m66_proc/unix_test.px src=dc3b1559c0192194 rc=0 out=a1f4097e2ed9993fb3dad8e815ae4f35 err=e3b0c44298fc1c14
 examples/m66_proc/zip_test.px src=451d1107c6643f2b rc=0 out=32ad70ff79b11e3d33e197603bf29322 err=e3b0c44298fc1c14
-examples/m66_pxml/config_loader.px src=1ee81bef6773c3f3 rc=0 out=53972fcb8a3dcc5078e7b30f4b842709 err=e3b0c44298fc1c14
-examples/m66_pxml/demo.px src=e7fd9fc24816131d rc=0 out=6559c05d10f5c40df0ee6cbba1478565 err=e3b0c44298fc1c14
-examples/m66_pxml/demo_enc.px src=7c108990afdb23b0 rc=0 out=e6ce1578f32f79662be59e058d3aa226 err=e3b0c44298fc1c14
-examples/m66_pxml/pxml_test.px src=81b95cf4f4295bb1 rc=0 out=dce9b16b2a597ea7b036f9fa2ce17206 err=e3b0c44298fc1c14
+examples/m66_pxml/config_loader.px src=f28a95adb3b66f3d rc=0 out=319efcb4c0b11f07bb5b99c8271717da err=e3b0c44298fc1c14
+examples/m66_pxml/demo.px src=e7fd9fc24816131d rc=0 out=34680388d9da82544552aebf01c52573 err=e3b0c44298fc1c14
+examples/m66_pxml/demo_enc.px src=ec5e05b33f77f2f3 rc=0 out=192ca896953a782276f836e2e2b35dc9 err=e3b0c44298fc1c14
+examples/m66_pxml/pxml_test.px src=294c775026abac35 rc=0 out=dfb7817283f11d16e32ba82155a65dc0 err=e3b0c44298fc1c14
 examples/m66_yaml/yaml_test.px src=50dda69cf1800d0c rc=0 out=d9ef251eea5587f8c464d97f0f50351a err=e3b0c44298fc1c14
 examples/m67_aarch64/hello_a64.px src=7ad1565b3b91ac65 rc=0 out=6fc40f39be970ddcdfa8f7774c674d11 err=e3b0c44298fc1c14
 examples/m67_aarch64/http_a64.px src=a5b8e75a1c249eb3 rc=0 out=a3c2e8e81e5c7fc67474168783df103c err=e3b0c44298fc1c14

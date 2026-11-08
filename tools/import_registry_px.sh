@@ -193,10 +193,20 @@ for libdir in "$SRC_REG"/*/; do
             NEW=$((NEW+1)); state="新引入"
         fi
         entry_sha="$(sha256sum "$stage/$name.px" | cut -c1-16)"
+        # M381（缺陷 670）：文件数取**磁盘现实**（目录已存在时），不取上游文件清单计数。
+        #   由来：M380b 的「包自足化」把依赖文件复制进包目录（如 xpath/0.1.0/domlite.px），
+        #   上游并不含该文件 ⇒ 按 ${#files[@]} 记 1 会在下一次重生成时把表抹成 1，
+        #   而 m187 门的判据是 `ls $dst/*.px | wc -l == 表值` ⇒ 白红（M381 首跑就撞到）。
+        #   表是给「表 ⇔ 磁盘」对拍用的 ⇒ 必须描述磁盘现实；
+        #   上游漂移仍由「入口 sha256」列守住（sha 取上游+补丁的应该值，磁盘不符即红）。
+        n_files="${#files[@]}"
+        if [ -d "$dst" ]; then
+            n_files="$(ls "$dst"/*.px 2>/dev/null | wc -l)"
+        fi
         extra=""
         [ -n "$patch_name" ] && extra="补丁：$patch_name"
         printf '| %s | %s | %d | `%s` | %s | %s | %s |\n' \
-            "$name" "$ver" "${#files[@]}" "$entry_sha" "$(prov_note "$name")" "$state" "$extra" >> "$PROV"
+            "$name" "$ver" "$n_files" "$entry_sha" "$(prov_note "$name")" "$state" "$extra" >> "$PROV"
         if [ "$APPLY" = 1 ]; then
             mkdir -p "$dst"
             for f in "${files[@]}"; do cp -f "$stage/$f" "$dst/$f"; done

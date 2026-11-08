@@ -590,7 +590,7 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 | semver | `import std.semver` | `sv_parse("1.2.3-a.1+b5")` → {major,minor,patch,pre,build,raw} · `sv_cmp(a,b)` -1/0/1 · `sv_satisfies(ver, "^1.2.0")` bool · `sv_best(list, rng)` 最高满足版 |
 | webroute | `import std.webroute` | `wr_parse_file("get_healthz.px")` → {method:"GET", pattern:"/healthz", fnname}（main.px → null） |
 | yaml | `import std.yaml` | `yaml_parse(text)` → {ok:true, value:node} / {ok:false, error:"line N: ..."} |
-| pxml | `import std.pxml` | `pxml_parse(text)` → {ok,value}/{ok,error}（PXML 配置语言，规范 docs/PXML.md） |
+| pxml | `import std.pxml` | `pxml_parse(text)` → `Ok(dict)` / `Err(str)`（Result；M381 起；旧 0.1.0 字典契约已冻结在 registry，规范 docs/PXML.md） |
 | lunar | `import std.lunar` | `lr_solar_to_lunar(y,m,d)` → {ok,year,month,day,leap} · `lr_lunar_to_solar(y,m,d,leap)` · `lr_leap_month(y)` 等（1900-2100） |
 | gfx | `import std.gfx` | `canvas_create(w,h)` → [w,h,pixels] · `set_px/get_px/line/rect/fill_rect/circle/fill_circle/blit/text/text_size`（像素 0xRRGGBB） |
 | png | `import std.png` | `png_encode(w, h, pixels)` → bytes（PNG stored，配 gfx 画布） |
