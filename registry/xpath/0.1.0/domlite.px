@@ -1,0 +1,64 @@
+# domlite.px — DOM 树操作（简化版，纯函数）
+# 版本: 0.1.0
+def dom_new(tag, attrs, children):
+    return {"tag": tag, "attrs": attrs, "children": children, "text": ""}
+def dom_text(text):
+    return {"tag": "#text", "attrs": {}, "children": [], "text": text}
+def dom_append(parent, child):
+    parent["children"].append(child)
+    return parent
+def dom_set_attr(node, key, val):
+    node["attrs"].set(key, val)
+    return node
+def dom_get_attr(node, key):
+    if node["attrs"].has(key):
+        return node["attrs"][key]
+    return null
+def dom_get_children(node):
+    return node["children"]
+def dom_find_by_tag(node, tag):
+    var result = []
+    if node["tag"] == tag:
+        result.append(node)
+    var i = 0
+    while i < len(node["children"]):
+        var sub = dom_find_by_tag(node["children"][i], tag)
+        var j = 0
+        while j < len(sub):
+            result.append(sub[j])
+            j += 1
+        i += 1
+    return result
+def dom_to_xml(node, indent):
+    if node["tag"] == "#text":
+        return indent + node["text"]
+    var xml = indent + "<" + node["tag"]
+    var ks = node["attrs"].keys()
+    var i = 0
+    while i < len(ks):
+        xml = xml + " " + ks[i] + "=\"" + str(node["attrs"][ks[i]]) + "\""
+        i += 1
+    if len(node["children"]) == 0:
+        return xml + " />"
+    xml = xml + ">"
+    i = 0
+    while i < len(node["children"]):
+        xml = xml + dom_to_xml(node["children"][i], "")
+        i += 1
+    return xml + "</" + node["tag"] + ">"
+def dom_inner_text(node):
+    if node["tag"] == "#text":
+        return node["text"]
+    var s = ""
+    var i = 0
+    while i < len(node["children"]):
+        s = s + dom_inner_text(node["children"][i])
+        i += 1
+    return s
+def dom_count(node):
+    var n = 1
+    var i = 0
+    while i < len(node["children"]):
+        n = n + dom_count(node["children"][i])
+        i += 1
+    return n

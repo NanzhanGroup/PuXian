@@ -1,7 +1,16 @@
 # strtotime.px — 英文相对时间解析（简化版 strtotime）
 # 版本: 0.1.0
-# 依赖: datetime（dt_now_sec）
-import "../../datetime/0.2.0/datetime.px"
+# 依赖: 无（M380b 补丁）
+#   上游原本 `import "../../datetime/0.2.0/datetime.px"` —— registry 树内相对路径，
+#   安装到 .px_modules/<pkg>/ 后就断了 ⇒ 严格模块模式 E3005（m187 安装冒烟判红）。
+#   且上游调用的 dt_weekday_from_sec() 在 datetime 0.2.0 里**根本不存在**（上游缺件，
+#   本用例没走到该分支所以没暴露；就算存在，datetime 的 dt_weekday 是**周一=0**，
+#   而本包 st_day_of_week 是**周日=0**，两者不同口径 ⇒ next/last 星期本就会算错）。
+#   故：dt_now_sec() → 内建 now_sec()；dt_weekday_from_sec() → 本地 st_weekday_from_sec，
+#   口径以本包 st_day_of_week 为准（周日=0、周一=1 …周六=6；1970-01-01 为周四=4）。
+def st_weekday_from_sec(sec):
+    var days = sec // 86400
+    return (days + 4) % 7
 def st_day_of_week(name):
     var n = name.lower()
     if n == "sun" or n == "sunday":
@@ -20,7 +29,7 @@ def st_day_of_week(name):
         return 6
     return -1
 def st_next_weekday(base, target):
-    var base_day = dt_weekday_from_sec(base)
+    var base_day = st_weekday_from_sec(base)
     var diff = target - base_day
     if diff <= 0:
         diff = diff + 7
@@ -46,7 +55,7 @@ def st_parse_relative(expr, base):
         elif p == "last" and i + 1 < len(parts):
             var wd = st_day_of_week(parts[i + 1])
             if wd >= 0:
-                var base_day = dt_weekday_from_sec(result)
+                var base_day = st_weekday_from_sec(result)
                 var diff = base_day - wd
                 if diff <= 0:
                     diff = diff + 7
@@ -77,4 +86,4 @@ def st_parse_relative(expr, base):
         i += 1
     return result
 def st_parse(expr):
-    return st_parse_relative(expr, dt_now_sec())
+    return st_parse_relative(expr, now_sec())

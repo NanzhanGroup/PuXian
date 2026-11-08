@@ -49,6 +49,61 @@ M380 新跑的 60 个包会被写成 M282 的成果，且这个数字每轮都�
 回滚   git revert 单提交即可（纯新增文件 + 三个台账文件；无 runtime/stdlib 改动，无内嵌件指纹变化）
 ```
 
+### 五 全量门唯一红门：`m187_registry_import`（安装面 E3005）—— 已修（M380b）
+
+首轮全量门（257 门 · 分片 4 · HEAD `7973b53`，`/data/gatevm/chain-m380-20261108-153710-3150625`）
+**绿 256 · 红 1**，唯一红门 = `m187_registry_import`（shard2，663s）：
+
+```
+  FAIL [2] 317 包全部 import 成功（解释轨） dateperiod strtotime xpath
+  M187 门结果：PASS=21 FAIL=1
+```
+
+**根因（三条包，都是「安装面才暴露」的上游缺陷）**：这 60 个新包里有 3 个在包内用
+**registry 树内相对路径**跨包 import —— `import "../../datetime/0.2.0/datetime.px"`、
+`import "../../domlite/0.1.0/domlite.px"`。这种写法只在 `registry/` 检出树里成立；
+pxpkg 装到 `.px_modules/<pkg>/` 后该相对路径指向包外 ⇒ 严格模块模式（门里必开 `PX_STRICT_MODULE=1`）直接：
+
+```
+编译错误 E3005: 找不到模块 '../../datetime/0.2.0/datetime.px'
+```
+
+上游双轨用例是在**树内**跑的（相对路径成立）⇒ 120/120 全绿，掩盖了安装面：**这正是 m187 安装冒烟存在的价值**。
+另有第二处上游缺件：`strtotime` 调的 `dt_weekday_from_sec()` 在 `datetime 0.2.0` 里**根本不存在**
+（用例没走到该分支所以没红），且 datetime 的 `dt_weekday` 是**周一=0** 而 `strtotime.st_day_of_week` 是**周日=0**，口径不一致。
+
+**修（走 M189 本地补丁通道，包自足化；上游两个仓库问题都归一档）**：
+
+| 包 | 补丁 | 改法 |
+|---|---|---|
+| dateperiod | `dateperiod.patch` | 去跨包 import；`dt_format` → 内建 `time_format(int(sec), fmt)`（datetime 里就是它的薄包装） |
+| strtotime | `strtotime.patch` | 去跨包 import；`dt_now_sec` → `now_sec()`；补本地 `st_weekday_from_sec`（**按本包口径** 周日=0；1970-01-01 周四⇒`(sec//86400+4)%7`） |
+| xpath | `xpath.patch` | import 改 **同包相对** `import "domlite.px"` + 随包分发 domlite 副本（**逐字节相同**）；文件数 1 → 2 |
+
+`THIRD_PARTY.md` 三行同步（入口 sha 重算 + 补丁列 + xpath 文件数），补丁列 ⇔ 补丁文件双向一致（登记 7 行 · 文件 6 个 · 未登记 0 · 缺文件 0）。
+
+**自证（禁「应该好了」）**：
+
+```
+① 负控（修前）PX_STRICT_MODULE=1 安装布局：import dateperiod ⇒ E3005 rc=1
+② 修后同环境逐包：dateperiod / strtotime / xpath 三包 strict import 全 ok（rc=0）
+③ 功能面（不只冒烟）：
+   dp_to_list(dp_new(0,10,2)) = [0,2,4,6,8,10] · dp_format(dp_days(0,86400)) = [1970-01-01, 1970-01-02]
+   base=1791262781(2026-10-06 周二) ⇒ wd=2 · next_monday=+518400(2026-10-12 周一) · last_friday=-345600(2026-10-02 周五)
+   xpath: xp_count=2 · xp_text=first · xp_attr=1 · xp_select_by_attr(id=2)=1
+④ 树内回归不复用旧证据：run_upstream_tests.sh --track both --only 3 用例 ⇒ 6/6 PASS 0 失败
+⑤ 补丁可复现：patch -p0 -d <pkg> 应用于上游原文 ⇒ 结果与仓库内文件逐字节相同（diff -q 全 OK）
+⑥ 门级复核：bash examples/m187_registry_import/verify.sh ⇒ PASS=22 FAIL=0
+```
+
+**副作用面**：`registry/{dateperiod,strtotime,xpath}/0.1.0/*.px`（3 改 1 增）、`registry/THIRD_PARTY.md`（3 行）、
+`tools/patches/registry-px/{dateperiod,strtotime,xpath}.patch`（新增）。**不动 `runtime/`、不动 stdlib、不动内嵌件** ⇒ 不触发重烘（`rebake_bin.sh --check-all` 仍 14/14）。
+
+**遗留（已登记，不在本轮改）**：① pxpkg 不支持**跨包依赖**解析（包内只能同包相对 import / std.* / 本机树内路径）——
+彻底解需给安装布局加「包依赖解析」，属运行时/工具链口，需单独里程碑 + 重烘；
+② 该遗留的直接后果：同一程序**既** import xpath **又** import domlite 会撞顶层 `dom_*`（已在 xpath.patch 头注写明）。
+
+**回滚**：`git revert` 单提交即可（纯 registry 数据 + 补丁文件，无编译面改动）。
 
 ## M379（缺陷 669）：hpool 死连接被逐条取走、close、不放回 —— Ma 边缘反代偶发 502 的运行时根因
 

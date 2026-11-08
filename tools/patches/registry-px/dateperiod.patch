@@ -1,0 +1,42 @@
+# ============================================================
+# 本地补丁：registry/dateperiod/0.1.0/dateperiod.px（日期范围迭代器）
+# ------------------------------------------------------------
+# 为什么有这个补丁（M380b · 2026-11-08）：
+#   上游用「registry 树内相对路径」跨包 import：`import "../../datetime/0.2.0/datetime.px"`。
+#   这种写法只在 registry/ 检出树里成立（dateperiod/0.1.0/../../datetime/0.2.0/ ⇒ 命中）。
+#   pxpkg 安装后包被放到 .px_modules/<pkg>/，该相对路径指向 .px_modules/ 之外 ⇒ 不存在。
+#   实证（严格模块模式，安装布局）：
+#     $ PX_STRICT_MODULE=1 pxi run main.px   # main.px: import dateperiod
+#     编译错误 E3005: 找不到模块 '../../datetime/0.2.0/datetime.px'
+#   M380 的双轨用例在**树内**跑（相对路径成立）⇒ 120/120 全绿，掩盖了安装面缺陷；
+#   m187 安装冒烟（全量门）抓到，红 1 门 ⇒ 本次 NO-GO 的唯一红门。
+#
+# 补丁内容（语义不变，去掉跨包依赖）：
+#   本包只用到 dt_format（datetime.px:33-34 = `return time_format(int(sec), fmt)`，内建薄包装）
+#   ⇒ 直接调内建 time_format(int(cur), fmt)。其余函数一字未动。
+#
+# 撤销条件：上游改掉这条跨包 import（或 pxpkg 支持包依赖解析）后，删本文件重跑
+#   `tools/import_registry_px.sh --src <检出> --apply` 即可（补丁列会自动空掉）。
+# ============================================================
+--- dateperiod.px
++++ dateperiod.px
+@@ -1,6 +1,9 @@
+ # dateperiod.px — 日期范围迭代器（对应 PHP DatePeriod）
+ # 版本: 0.1.0
+-import "../../datetime/0.2.0/datetime.px"
++# M380b 补丁：上游原本 `import "../../datetime/0.2.0/datetime.px"`（registry 树内相对路径），
++#   安装到 .px_modules/<pkg>/ 后该路径不存在 ⇒ 严格模块模式 E3005（m187 安装冒烟判红）。
++#   此处去掉跨包 import：用到的只有 dt_format（datetime.px 里就是 time_format 的薄包装，
++#   `return time_format(int(sec), fmt)`）⇒ 直接调内建 time_format，语义等价、包自足。
+ def dp_new(start_sec, end_sec, interval_sec):
+     return {"_start": start_sec, "_end": end_sec, "_interval": interval_sec}
+ def dp_to_list(dp):
+@@ -26,7 +29,7 @@
+     var result = []
+     var cur = dp["_start"]
+     while cur <= dp["_end"]:
+-        result.append(dt_format(cur, fmt))
++        result.append(time_format(int(cur), fmt))
+         cur = cur + dp["_interval"]
+     return result
+ def dp_days(start_sec, end_sec):

@@ -64,7 +64,7 @@
 | currency | 0.1.0 | 1 | `4b52b8f35a20ffb9` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | datastruct | 0.1.0 | 1 | `de025156bdd48b8f` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | datastruct | 0.2.0 | 1 | `5ad33efa19e4e121` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
-| dateperiod | 0.1.0 | 1 | `d3b12b728be1aaea` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
+| dateperiod | 0.1.0 | 1 | `fb58f1a467d7abbd` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） | 补丁：`dateperiod.patch` |
 | datetime | 0.1.0 | 1 | `476b0beb9d487eb5` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | datetime | 0.2.0 | 1 | `d367f3b196deab15` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | dbal | 0.1.0 | 1 | `cc9633b61eb1ac2d` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
@@ -260,7 +260,7 @@
 | strength | 0.1.0 | 1 | `4bfdf4ab98670308` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | strength | 0.2.0 | 1 | `aea5d4d55d8441fb` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | strpad | 0.1.0 | 1 | `693c5023877705f4` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
-| strtotime | 0.1.0 | 1 | `03105e11fb0dc3d6` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
+| strtotime | 0.1.0 | 1 | `f4f0d6c1cd2f90af` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） | 补丁：`strtotime.patch` |
 | table | 0.1.0 | 1 | `00396d3805583157` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | table | 0.2.0 | 1 | `f6c959ccd2ccdca3` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | tar | 0.1.0 | 1 | `e822a49c9b2e7a44` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
@@ -310,7 +310,7 @@
 | xlsx | 0.2.0 | 2 | `87ecc46389910f1f` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | xmlrpc | 0.1.0 | 1 | `84673070311e0c08` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | xmlstream | 0.1.0 | 1 | `6d0fc56ca49a2fd8` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
-| xpath | 0.1.0 | 1 | `9cfc75f357b02cca` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
+| xpath | 0.1.0 | 2 | `80311caa7fcef339` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） | 补丁：`xpath.patch` |
 | zlib | 0.1.0 | 1 | `3150483266a834de` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | zlib | 0.2.0 | 1 | `ab129176bd5304fe` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 

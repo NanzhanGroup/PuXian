@@ -1,6 +1,9 @@
 # xpath.px — XPath 简化查询（基于 domlite）
 # 版本: 0.1.0
-import "../../domlite/0.1.0/domlite.px"
+# M380b 补丁：上游原本 `import "../../domlite/0.1.0/domlite.px"`（registry 树内相对路径）
+#   ⇒ 安装到 .px_modules/<pkg>/ 后不存在 ⇒ 严格模块模式 E3005（m187 安装冒烟判红）。
+#   改为**同包相对 import**（pxpkg 明确支持、安装后不变）：把 domlite 副本随包分发。
+import "domlite.px"
 def xp_select_all(node, tag):
     return dom_find_by_tag(node, tag)
 def xp_select_first(node, tag):

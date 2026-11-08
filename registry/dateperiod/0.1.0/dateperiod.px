@@ -1,6 +1,9 @@
 # dateperiod.px — 日期范围迭代器（对应 PHP DatePeriod）
 # 版本: 0.1.0
-import "../../datetime/0.2.0/datetime.px"
+# M380b 补丁：上游原本 `import "../../datetime/0.2.0/datetime.px"`（registry 树内相对路径），
+#   安装到 .px_modules/<pkg>/ 后该路径不存在 ⇒ 严格模块模式 E3005（m187 安装冒烟判红）。
+#   此处去掉跨包 import：用到的只有 dt_format（datetime.px 里就是 time_format 的薄包装，
+#   `return time_format(int(sec), fmt)`）⇒ 直接调内建 time_format，语义等价、包自足。
 def dp_new(start_sec, end_sec, interval_sec):
     return {"_start": start_sec, "_end": end_sec, "_interval": interval_sec}
 def dp_to_list(dp):
@@ -26,7 +29,7 @@ def dp_format(dp, fmt):
     var result = []
     var cur = dp["_start"]
     while cur <= dp["_end"]:
-        result.append(dt_format(cur, fmt))
+        result.append(time_format(int(cur), fmt))
         cur = cur + dp["_interval"]
     return result
 def dp_days(start_sec, end_sec):
