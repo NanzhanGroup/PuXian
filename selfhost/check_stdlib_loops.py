@@ -129,6 +129,7 @@ def scan_source(text, fname):
                         rows.append(k)
                 if rows:
                     out.append({'file': fname, 'line': i + 1, 'var': v,
+                                'srcline': ln.strip(),
                                 'level': 'MEDIUM',
                                 'kind': '推进只在内层循环体内（内层条件可能恒假）'})
         else:
@@ -137,8 +138,44 @@ def scan_source(text, fname):
             if not has_exit:
                 for v in sorted(bare & assigned_any):
                     out.append({'file': fname, 'line': i + 1, 'var': v,
+                                'srcline': ln.strip(),
                                 'level': 'HIGH', 'kind': '条件变量体内无赋值且无出口'})
     return out
+
+
+# ---- 豁免表：按「文件 + 锚点文本」定位，不用行号 ----
+# 缺陷 673 的病根：旧表键是 `<文件>:<行号>`，M381 给 pxml.px 头注释扩了 6 行 ⇒
+# 违例行从 190 挪到 196 ⇒ 豁免静默落空（旧键变成"过期"），门报假红。
+# 锚点 = 违例所在源码行里**必然出现**的一段文本：挪行不影响，改了形状则自动过期。
+def load_allow(path):
+    """豁免表每行 `<文件>:<锚点> <理由>`；**理由为空即无效**（不计豁免）。"""
+    allow = {}
+    if not path or not os.path.exists(path):
+        return allow
+    for ln in open(path, encoding='utf-8'):
+        if ln.lstrip().startswith('#') or not ln.strip():
+            continue
+        parts = ln.strip().split(None, 1)
+        if len(parts) == 2 and parts[1].strip() and ':' in parts[0]:
+            allow[parts[0]] = parts[1].strip()
+    return allow
+
+
+def allow_hits(allow, v):
+    """返回命中该违例的豁免键列表；>1 条 = 锚点歧义（调用方必须判失败）。
+
+    锚点口径：**循环行去掉全部空白后的文本**（如 `while i < n:` → `whilei<n:`）。
+    为什么去空白：豁免表按空白分列，锚点里不能带空格；去空白是确定性归一，
+    只依赖循环形状本身 —— 文件头加注释、挪行都不会变（缺陷 673 的病根）。
+    """
+    f = v.get('file', '')
+    src = re.sub(r'\s+', '', v.get('srcline', ''))
+    hits = []
+    for key in allow:
+        kf, _, anchor = key.partition(':')
+        if kf == f and anchor and anchor in src:
+            hits.append(key)
+    return hits
 
 
 # ---- 自证 fixture：4 正 + 3 负 ----
@@ -204,6 +241,20 @@ def self_test():
     chk('⑥ 判据自伤：恒不报 ⇒ ①形状漏报', len(scan_source(FIX_BAD_INNER, 'fix')) == 0, True)
     _HARM = False
     chk('⑦ 恢复后 ① 重新报出', len(scan_source(FIX_BAD_INNER, 'fix')) == 1, True)
+    # ⑧⑨⑩ 锚点豁免（缺陷 673：行号漂移不该让豁免落空，锚点不该宽赦）
+    al = {'fix:whilej<n': '锚点测试'}
+    chk('⑧ 锚点命中：行号漂移后仍生效',
+        allow_hits(al, {'file': 'fix', 'line': 999,
+                        'srcline': 'while j < n and i < len(items):'}), ['fix:whilej<n'])
+    chk('⑨ 锚点不命中 ⇒ 不豁免（防宽赦）',
+        allow_hits(al, {'file': 'fix', 'line': 1, 'srcline': 'while i < len(xs):'}), [])
+    import tempfile
+    fd, ap_ = tempfile.mkstemp(); os.close(fd)
+    open(ap_, 'w', encoding='utf-8').write(
+        'stdlib/x.px:foo\nstdlib/y.px:bar 有理由\n# 注释行\n')
+    a2 = load_allow(ap_)
+    os.unlink(ap_)
+    chk('⑩ 空理由不登记', sorted(a2), ['stdlib/y.px:bar'])
     print('\n══ 自证：%d 通过 / %d 失败 ══' % (ok, bad))
     return 1 if bad else 0
 
@@ -213,19 +264,12 @@ def main():
     ap.add_argument('--root', default='.')
     ap.add_argument('--self-test', action='store_true')
     ap.add_argument('--json', default=None)
-    ap.add_argument('--allow', default=None, help='豁免表（每行 <文件>:<行> <理由>，理由为空无效）')
+    ap.add_argument('--allow', default=None, help='豁免表（每行 <文件>:<锚点文本> <理由>，理由为空无效）')
     a = ap.parse_args()
     if a.self_test:
         return self_test()
 
-    allow = {}
-    if a.allow and os.path.exists(a.allow):
-        for ln in open(a.allow, encoding='utf-8'):
-            if ln.startswith('#') or not ln.strip():
-                continue
-            parts = ln.split(None, 1)
-            if len(parts) == 2 and parts[1].strip():
-                allow[parts[0]] = parts[1].strip()
+    allow = load_allow(a.allow)
 
     files = []
     d = os.path.join(a.root, 'stdlib')
@@ -243,14 +287,19 @@ def main():
         allv.extend(scan_source(txt, rel))
 
     kept, waived, stale = [], 0, []
+    used, ambiguous = set(), []
     for v in allv:
-        key = '%s:%d' % (v['file'], v['line'])
-        if key in allow:
+        hits = allow_hits(allow, v)
+        if len(hits) > 1:
+            ambiguous.append('%s:%d 同时命中 %s' % (v['file'], v['line'], ','.join(sorted(hits))))
+        if hits:
+            key = sorted(hits)[0]
+            used.add(key)
             waived += 1; v['waived'] = allow[key]
         else:
             kept.append(v)
     for key in allow:
-        if not any(('%s:%d' % (v['file'], v['line'])) == key for v in allv):
+        if key not in used:
             stale.append(key)
 
     print('══ M279 stdlib 结构性死循环扫描 ══')
@@ -258,15 +307,20 @@ def main():
     for v in kept:
         print('  ❌ %s:%d [%s] 变量 %s —— %s' % (v['file'], v['line'], v['level'], v['var'], v['kind']))
     for k in stale:
-        print('  ⚠️ 豁免过期：%s（源码里已无该违例）' % k)
+        print('  ⚠️ 豁免过期：%s（源码里已无该锚点的违例）' % k)
+    for k in ambiguous:
+        print('  ⚠️ 锚点歧义：%s（请把锚点收窄到唯一）' % k)
     if a.json:
-        json.dump({'violations': kept, 'waived': waived, 'stale': stale},
+        json.dump({'violations': kept, 'waived': waived, 'stale': stale,
+                   'ambiguous': ambiguous},
                   open(a.json, 'w'), ensure_ascii=False, indent=1)
     rc = 0
     if kept:
         print('❌ M279-LOOPSCAN-FAIL（%d 条）' % len(kept)); rc = 1
     elif stale:
         print('❌ M279-LOOPSCAN-FAIL（豁免过期 %d 条）' % len(stale)); rc = 1
+    elif ambiguous:
+        print('❌ M279-LOOPSCAN-FAIL（锚点歧义 %d 条）' % len(ambiguous)); rc = 1
     else:
         print('M279-LOOPSCAN-OK')
     return rc

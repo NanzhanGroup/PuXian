@@ -33,7 +33,7 @@ echo "[1] 结构性死循环静态扫描"
 SC="$ROOT/selfhost/check_stdlib_loops.py"
 if [ ! -f "$SC" ]; then bad "[1] 缺 $SC"; else
   o=$(timeout 120 python3 "$SC" --self-test 2>&1 | tail -1)
-  case "$o" in *"8 通过 / 0 失败"*) ok "[1a] 扫描器自证 8/0";; *) bad "[1a] 扫描器自证：$o";; esac
+  case "$o" in *"11 通过 / 0 失败"*) ok "[1a] 扫描器自证 11/0";; *) bad "[1a] 扫描器自证：$o";; esac
   AL="$ROOT/selfhost/stdlib_loops.allow"
   so=$(timeout 120 python3 "$SC" --root "$ROOT" --allow "$AL" --json "$W/loopscan.json" 2>&1)
   echo "$so" | tail -3 > "$W/loopscan.txt"
