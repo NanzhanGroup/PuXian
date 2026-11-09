@@ -1,0 +1,24 @@
+# M384 · base64 严格解码「合法侧 + 非法侧」最小冒烟（**提交入库** · 两个用途）
+# ------------------------------------------------------------
+# ① 可手工跑：`./bootstrap/pxi examples/m384_px_defects/surface.px`
+# ② ⭐ 让 `selfhost/check_native_coverage.py` 的语料面看见两个新 native
+#    （本门的对拍用例由 verify.sh **运行期生成**到 /tmp，仓库里没有 .px 痕迹；
+#     而台账的消费面只扫 `.px` ⇒ 不提交本文件，两个新 native 会被记成「新增未覆盖」）。
+#    这是「生成式语料」的通用约定（同 examples/m250_onnx_tensor/surface.px）。
+#
+# 真值（对齐 Go base64.StdEncoding 默认 Decode 的宽容度；只收紧长度/填充/字符集）：
+#   "QQ=="   → "A"            "QUJD" → bytes("ABC")
+#   "QQ" "QQ=" "Q===" "QU*D" → null   （宽松版对 "QQ"/"QQ=" 都返回 "A"）
+#   ""       → ""（空串合法，长度 0）
+def surface():
+    var r = []
+    r.append(base64_decode_strict("QQ==") == "A")
+    r.append(bytes_to_str(base64_to_bytes_strict("QUJD")) == "ABC")
+    r.append(base64_decode_strict("QQ") == null)
+    r.append(base64_decode_strict("QQ=") == null)
+    r.append(base64_decode_strict("Q===") == null)
+    r.append(base64_decode_strict("QU*D") == null)
+    r.append(base64_to_bytes_strict("QQ=") == null)
+    r.append(len(base64_decode_strict("")) == 0)
+    print(json_stringify(r))
+surface()

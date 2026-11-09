@@ -327,6 +327,7 @@ examples/m374_data_enum_named/named.px src=75da0d29d0fce409 rc=0 out=e7cc26ded28
 examples/m375_ws_connect_timeout/cli.px src=5f1e13036c309709 rc=0 out=483f2a6043531e65462e94015dcf398a err=e3b0c44298fc1c14
 examples/m376_sigterm_drain/probe.px src=f89036f4d0479957 rc=0 out=fc6a5441b7cf6e39b2bbd745f6a72bce err=e3b0c44298fc1c14
 examples/m376_sigterm_drain/srv.px src=60a29eedda2d6ac7 rc=0 out=a7a10d6f5540ce11da0d8ea906832877 err=e3b0c44298fc1c14
+examples/m384_px_defects/surface.px src=1f5fe5b1fa90354a rc=0 out=3f165c12f1a88dcc80858cf858cf23f9 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

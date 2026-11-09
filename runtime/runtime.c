@@ -15120,6 +15120,9 @@ static char* b64_strict_decode(const char* s, int* olen, int* ok) {
 static LXValue bi_base64_decode_strict(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: base64_decode_strict 需要一个参数");
+    // M384b：补类型守卫（S6 缺口）—— 严格解码按 C 字符串处理，非 str 必须先拒，
+    //   否则 val_cstr 会把 int/list 静默字符串化，与「严格」口径自相矛盾。
+    if (args[0].type != PX_STR) px_error("R1002: base64_decode_strict 的 s 需要字符串，实际是 %s", px_type_name(args[0]));
     const char* s = val_cstr(args[0]);
     int olen = 0, ok = 0;
     char* out = b64_strict_decode(s, &olen, &ok);
@@ -15132,6 +15135,8 @@ static LXValue bi_base64_decode_strict(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_base64_to_bytes_strict(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: base64_to_bytes_strict 需要一个参数");
+    // M384b：同 base64_decode_strict，补类型守卫（S6 缺口）。
+    if (args[0].type != PX_STR) px_error("R1002: base64_to_bytes_strict 的 s 需要字符串，实际是 %s", px_type_name(args[0]));
     const char* s = val_cstr(args[0]);
     int olen = 0, ok = 0;
     char* out = b64_strict_decode(s, &olen, &ok);
@@ -15197,13 +15202,13 @@ static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx) {
     else if (strncmp(p, "/dev/fd/", 8) == 0) {
         const char* q = p + 8;
         long v = 0;
-        int okd = (*q >= '0' && *q <= '9');
-        while (okd && *q >= '0' && *q <= '9') {
-            v = v * 10 + (*q - '0');
+        int okd = (q[0] >= '0' && q[0] <= '9');
+        while (okd && q[0] >= '0' && q[0] <= '9') {
+            v = v * 10 + (q[0] - '0');
             if (v > 4096) { okd = 0; break; }
             q++;
         }
-        if (okd && *q == '\0') fd = (int)v;
+        if (okd && q[0] == '\0') fd = (int)v;
     }
     if (fd >= 0) {
         const char* q = d;
