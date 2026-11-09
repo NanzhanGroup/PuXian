@@ -130,6 +130,35 @@ else
     bad "留存无界（会无限长）"
 fi
 
+# ── [7] 缺陷 681：全量轮也必须写 gates.all.txt（否则戳恒为 probe）──
+#   实测：16:40→18:13 的 261 门全量轮写出的 CHAIN-COMPLETE.txt 是
+#     stamp=probe · gates_registry=0 ⇒「全跑」被标成「探针」（留痕字段与实际不符）。
+#   判据两条：① 全集副本的生成行必须在 --only 分支之前（接线顺序）
+#             ② 用 shard_run 里**原样的**计算段 + 真文件跑两档（全量 ⇒ full-basis，缺文件 ⇒ probe）
+echo "── [7] 全量轮全集戳（缺陷 681：gates.all.txt 必须由全量路径生成）"
+_a_line="$(grep -n 'cp "\$LOG/gates.txt" "\$LOG/gates.all.txt"' "$SHARD" | head -1 | cut -d: -f1)"
+_o_line="$(grep -n 'if \[ -n "\${ONLY_GATES:-}" \]' "$SHARD" | head -1 | cut -d: -f1)"
+if [ -n "${_a_line:-}" ] && [ -n "${_o_line:-}" ] && [ "$_a_line" -lt "$_o_line" ]; then
+    ok "全集副本生成行在 --only 分支之前（行 $_a_line < $_o_line）"
+else
+    bad "全集副本生成行缺失或位置错（a=${_a_line:-无} / only=${_o_line:-无}）⇒ 全量轮戳仍会失实"
+fi
+# 动态：原样抽 shard_run 的计算段（不是重写一份），配真文件跑
+_SNIP="$(sed -n '/^_alln=\$(grep -c \. "\$LOG\/gates.all.txt"/,/^\[ "\$NG" = "\$_alln" \]/p' "$SHARD")"
+if [ -n "$_SNIP" ]; then
+    sd="$TMP/stamp"; mkdir -p "$sd"
+    printf 'g1\ng2\ng3\n' > "$sd/gates.txt"; cp "$sd/gates.txt" "$sd/gates.all.txt"
+    _stamp=""; LOG="$sd" NG=3 QUIET_LIST="" eval "$_SNIP"
+    [ "$_stamp" = "full-basis" ] && ok "全集在场 ⇒ stamp=full-basis（$_stamp）" \
+        || bad "全集在场却 stamp=${_stamp:-空}（全量轮会被误标成探针）"
+    rm -f "$sd/gates.all.txt"; _stamp=""
+    LOG="$sd" NG=3 QUIET_LIST="" eval "$_SNIP"
+    [ "$_stamp" = "probe" ] && ok "负控：缺全集 ⇒ stamp=probe（口径能区分）" \
+        || bad "负控不成立：缺全集却 stamp=${_stamp:-空}"
+else
+    bad "抽不到 shard_run 的 _stamp 计算段（脚本结构变了，判据失效须重写）"
+fi
+
 echo "── 负控：把留存目标指回源目录 ⇒ [1] 必须红"
 # 机制自证：如果在同一目录里 cp，第二轮会覆盖第一轮 ⇒ 判据能红。
 #   （这不是测 keep_gate_logs 的实现，而是测「本门的主判据不是恒真」）

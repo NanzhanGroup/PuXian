@@ -280,6 +280,13 @@ echo "═══ 分片调度：N=$N · 日志 $LOG ═══"
 #    `--list` 读的是 `gates.registry.sh` 的 `run <name>` 行 ⇒ 直接从 HEAD 提取即可。
 git -C "$SRC" show "HEAD:selfhost/gates.registry.sh" | sed -n 's/^run \([A-Za-z0-9_]*\) .*/\1/p' > "$LOG/gates.txt"
 
+# ── 1a) 全集留痕（M383c · 缺陷 681）：**全量轮也必须**写 gates.all.txt ──
+#   实测（2026-11-09 16:40→18:13 第二轮全量 · 261 门绿）：只有 --only 分支写 gates.all.txt
+#   ⇒ 全量轮的 CHAIN-COMPLETE.txt 恒为 `stamp=probe · gates_registry=0`
+#   ——「261 门全跑」被标成「探针」，溯源失实（与 678 同族：留痕字段与实际不符，看着有证据）。
+#   修法：清单生成后立刻留一份全集副本，--only 分支再按需覆盖（语义不变）。
+: > "$LOG/gates.all.txt"; cp "$LOG/gates.txt" "$LOG/gates.all.txt"
+
 # ── 1b) M342：`--only` 子集（诊断用 · 缺陷 598 的处置）──
 #   为什么加：M342 实测 21 个「单发取样 + 驾驭活进程」的门**串行重跑 63 轮全绿**，
 #   而 6 个已定性偶发**全部只在 4 分片并发下出现**（同树单跑必绿）。

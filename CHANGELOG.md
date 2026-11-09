@@ -1,4 +1,4 @@
-## M383：门基础设施三件 + `px run --fast` 热态加速 —— 845 ms → 146 ms（缺陷 676–680）
+## M383：门基础设施三件 + `px run --fast` 热态加速 —— 845 ms → 146 ms（缺陷 673/676–681）
 
 > **口径**：只动**门 / 判据 / 工具链外壳**，不改 runtime / stdlib 语义。
 > 四件：① M381b 缺陷 673 的病根（豁免键行号 → 锚点）② quiet 尾重归档（缺陷 678）
@@ -164,6 +164,24 @@ touch runtime/runtime.c ⇒ find -newer 立即发现、重算，key 因内容未
 - `px` 从 bash 改静态二进制：省每次调用 ~25 ms，但全量门里只值 ~3 s（0.1%）⇒ 单独立项。
 - 常驻解释器（`pxi --serve`）：只对批量脚本场景有意义（pxtest 上千用例时再动）。
 - `rt_key` 内部 30 次 fork sha256sum 合成一次多文件调用：收益只在冷路径（首次编译），优先级低。
+
+### 八 第二轮全量门 261 门全绿 + 缺陷 681：全量轮的链戳失实（M383c）
+
+- **第二轮全量门（16:40:52 → 18:13:44，92.9 min，head `d77db37`）**：`CHAIN-VERDICT=GREEN rc=0`
+  · 分片 8 路 261 门 **红 0**（shard1..8 逐片 rc=0）· quiet 档 16 门红 0
+  · quiet 尾实测：并行车道 204 / 299 / 404 s（墙钟 ≈404 s）· 独占档 8 门 1445 s = 24.1 min（地板）
+  · 门日志按链留存（缺陷 679）端到端生效：`gatelog/{tmp1..tmp8,quiet,quiet1..3}` 共 79 份 quiet 门日志在场
+  · 发布：`make_tag.sh` → tag `v0.2.383` = `d77db37`（annotated tag 剥皮后与 HEAD 逐字节一致）→ push 完成
+- **缺陷 681（本轮新发现，现场即证据）**：`/data/gatevm/shard-20261109-164052/CHAIN-COMPLETE.txt` 写的是
+  `stamp=probe · gates_registry=0`，而这一轮**跑的是 261 门全量** ⇒ 留痕字段与实际不符（678 同族：
+  留痕看着有证据，其实是错的）。**病根**：`gates.all.txt` 只在 `--only` 分支里生成，
+  全量路径从不写 ⇒ `_alln=0` ⇒ `[ "$NG" = "$_alln" ]` 恒假 ⇒ 戳恒 `probe`。
+  校验器只把戳当溯源（不参与选取），所以**没有导致假绿**，但「溯源」本身失真。
+- **修法**：清单生成后立刻 `cp gates.txt gates.all.txt`（语义不变，`--only` 分支照旧覆盖）；
+  `m383_gate_logs` 门扩到 **20 判据**：① 全集副本生成行必须在 `--only` 分支之前（行序接线）
+  ② 用 shard_run 里**原样的** `_stamp` 计算段 + 真文件跑两档（全集在场 ⇒ `full-basis`；缺全集 ⇒ `probe`）。
+- **双控证据**：门自测 20 通过 / 0 失败 · `M383-GATELOG-VERIFY-OK`；`--only gate_lock_guard,m276_gate_lock`
+  实跑 2 门绿、戳 `stamp=probe · gates_registry=261`（子集语义正确）；删掉 `gates.all.txt` 复算 ⇒ 退回 `probe`（证明成因）。
 
 ## M382：并入晨曦 14 个实用函数包 0.2.0（registry + 用例 + 三张登记表）
 
