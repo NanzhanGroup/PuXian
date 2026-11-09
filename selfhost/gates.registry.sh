@@ -1067,6 +1067,17 @@ step "M271 · run 层三形态对齐（晨曦 D1 五点收口）"
 #   编译失败**禁止回落解释轨**（缺陷 469：NOCACHE 分支 `shift` 后漏脚本参数 · 同族 2 处）·
 #   缓存**完整性校验**（prog.sha256）· 慢脚本 **>2s 发现性提示**（stderr · 零 fork）。
 run m271_run_fast bash examples/m271_run_fast/verify.sh
+step "M383 · --fast 热态加速：工具链指纹缓存 + 主脚本 AST 单次解析"
+#   病根（2026-11-09 实测热态中位数 845 ms）：px --version 自调用 38 ms +
+#   px rtkey 自调用（30 次 fork sha256sum）461 ms + sha256sum pxc_vm 73 ms +
+#   sha256sum pxi 98 ms = 670 ms，全是**工具链不变时的常量**，却每次重算；
+#   另 run_subset_ok 与 px_dep_closure 对同一主脚本各解析一次 AST（26 ms × 2）。
+#   判据（每条都能红）：[1] 快路径 key == 强制重算(TTL=0) key（缓存不许改变 key）·
+#   [2] **负控**：篡改指纹缓存 ⇒ key 必须变（实现退化成每次重算时这条红）·
+#   [3] TTL=0 ⇒ stamp 必须更新 · [4] execve ≤ 40（旧 149 / 现 29，无 strace 则 SKIP）·
+#   [5] 大 AST（>32768 字符，不 export 分支）key == TTL=0。
+#   实测：845 ms → 146 ms（5.8×）· execve 149 → 29。
+run m383_speed_path bash examples/m383_speed_path/verify.sh
 step "M128 · 扩容分配移出临界区（C1–C12 · 缺陷 439 修好后**收编**为正式门）"
 #   为什么现在才收编：M251 的孤儿门体检把它判为**真回归**（缺陷 439）⇒ 它是「不在任何运行器里
 #   的历史资产」。M260 修掉 439 之后，它第一次可以进运行器（实测 pass=86 / fail=0）。

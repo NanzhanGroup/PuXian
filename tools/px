@@ -947,6 +947,46 @@ cmd_build() {
 PXPAR_BIN_RUN="$PXPAR_BIN"
 RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
 
+# ── M383-速度：单次 --fast 内主脚本 AST 只解析一次 ──────────────────────────
+# 病根：`run_subset_ok`（子集守卫）打一次 pxpar，`px_dep_closure → px_import_keys`
+#   对**同一个主脚本**再打一次 pxpar ⇒ 同一份 AST 解析两遍（实测 pxpar 26 ms/次）。
+#
+# ⚠️ 传递机制 = **环境变量**（父 shell export，子 shell 只读）。
+#   为什么不用函数内赋值做记忆：`x="$(f)"` 里 f 跑在**子 shell**，它对全局变量的赋值
+#   随子 shell 消失 —— 那样写出来的缓存是**假的**（看着在缓存，实际每次重解析）。
+#   父→子单向正是我们要的方向：父算一次，子只读。
+# ⚠️ 硬边界：Linux 单个环境变量上限 MAX_ARG_STRLEN = 128 KB。
+#   实测 AST 8 KB（hello）～186 KB（m57 那批大脚本）⇒ 只对**字符数 ≤ 32768**
+#   （最坏 UTF-8 3 字节/字符 ≈ 96 KB）的 AST 启用传递；更大的不传，退回各调用点
+#   自行解析（行为与优化前完全一致，零风险）。
+# ⚠️ 只对「主脚本」生效：依赖文件在 dep_closure 里各解析一次，本来就只需一次。
+_PX_AST_F=""
+_PX_AST_V=""
+px_ast_of() { # $1=文件 ⇒ stdout AST（命中已预解析的主脚本时零 fork）
+    local f v rc
+    case "$1" in
+        /*) f="$1" ;;
+        *)  f="$(readlink -f "$1" 2>/dev/null || echo "$1")" ;;
+    esac
+    if [ -n "${_PX_AST_F:-}" ] && [ "$f" = "$_PX_AST_F" ] && [ -n "${_PX_AST_V:-}" ]; then
+        printf '%s\n' "$_PX_AST_V"; return 0
+    fi
+    v="$("$PXPAR_BIN_RUN" "$f" 2>/dev/null)"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    printf '%s\n' "$v"
+}
+
+# 预解析主脚本，把 AST 交给后续子 shell（cmd_run_fast 在用到 AST 之前调一次）
+px_ast_prime() { # $1=绝对路径；解析失败返回 1（由调用方按原逻辑回落）
+    local v
+    _PX_AST_F=""; _PX_AST_V=""
+    v="$("$PXPAR_BIN_RUN" "$1" 2>/dev/null)" || return 1
+    [ "${#v}" -le 32768 ] || return 0     # 大 AST 不传（MAX_ARG_STRLEN 128 KB 上限）
+    _PX_AST_F="$1"; _PX_AST_V="$v"
+    export _PX_AST_F _PX_AST_V
+    return 0
+}
+
 # 子集守卫：脚本是否**在解释轨（Mini 子集）能力范围内** ⇒ 0=在（可走编译轨）
 #   名单来源：examples/m201_interp_ffi/verify.sh 的 WAIVED（6 条 native，机器核对过）
 #           + istmt.px/iexpr.px 的语句级拒绝（Spawn/Chan/Send/Recv/Select）。
@@ -954,7 +994,7 @@ RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
 #   方向：**过近似**（假阳性只损失速度，不损失正确性）。
 run_subset_ok() { # $1=脚本；stdout 输出违例名单（空=通过）
     local ast
-    ast="$("$PXPAR_BIN_RUN" "$1" 2>/dev/null)" || { echo "解析失败"; return 1; }
+    ast="$(px_ast_of "$1")" || { echo "解析失败"; return 1; }
     local bad=""
     if printf '%s' "$ast" | grep -qE '^[[:space:]]*(Spawn|Chan|Send|Recv|Select)[[:space:]]*\{'; then
         bad="并发语句(spawn/chan/send/recv/select)"
@@ -975,7 +1015,7 @@ run_subset_ok() { # $1=脚本；stdout 输出违例名单（空=通过）
 # 口径：① 沙箱 = 「与源目录可编译性等价的最小树」；② 依赖提取结果**同时**驱动
 #   沙箱内容与缓存 key（分两处写会漂移 ⇒ 改依赖不失效 = 跑旧逻辑）。
 px_import_keys() { # $1=文件 ⇒ stdout 每行一个 module key（点分：module: ["std","time"]）
-    "$PXPAR_BIN_RUN" "$1" 2>/dev/null | awk '
+    px_ast_of "$1" 2>/dev/null | awk '
         /^[[:space:]]*Import \{/ { inimp = 1; inmod = 0; key = ""; next }
         inimp && /^[[:space:]]*module: \[[[:space:]]*$/ { inmod = 1; next }
         inmod && /^[[:space:]]*\],?[[:space:]]*$/ {
@@ -1070,6 +1110,67 @@ px_common_root() { # $@=文件/目录 ⇒ 公共祖先目录（沙箱内保持�
     printf '%s\n' "$root"
 }
 
+# ── M383-速度：工具链指纹缓存（--fast 热态 670 ms → 15 ms 的关键）──────────
+# 病根（2026-11-09 实测本机，`px run --fast hello.px` 热态中位数 845 ms）：
+#     px --version 自调用             38 ms   bash 重解析 85KB 脚本
+#     px rtkey 自调用                461 ms   内部对 30 个 runtime 源逐个 fork sha256sum
+#     sha256sum bootstrap/pxc_vm      73 ms   10 MB
+#     sha256sum bootstrap/pxi         98 ms   10 MB
+#                                    ─────
+#                                    670 ms   ＝ 热态的 79%
+#   而它们**在工具链不变时是常量** —— 每次调用都重算是纯粹的重复劳动。
+#
+# 口径（只改快慢，不改语义）：
+#   指纹内容 = 旧实现那 5 个信号，一个不多一个不少（版本 / rtkey / pxc_vm / pxi / engine）
+#   ⇒ key 逐字节不变 ⇒ 既有 .runcache 条目继续命中，不做无谓重建。
+#   有效性 = `find -newer` 抓 runtime/、bootstrap/{pxc_vm,pxi}、VERSION 的**任何** mtime 更新
+#            （实测 317 个文件全扫 6–8 ms）+ 两个自举产物 size 双保险 + TTL 兜底。
+#   失效即重算并覆盖缓存 —— 结果与「每次重算」等价，只是省掉了重复。
+#   ⚠️ 已知边界（诚实写在这里）：若有人**原地改写文件同时刻意保留 mtime 与 size**，
+#      快路径不会失效 ⇒ 由 TTL（PX_TOOLCHAIN_FP_TTL，默认 1800 s）兜住，最坏滞后一个 TTL。
+#      不读内容就检测不到这种改动；要彻底消除只能每次全算（= 现状 670 ms）。这是一笔明账。
+toolchain_fp() { # stdout=5 行指纹（与旧实现逐字节同流）
+    local fp="$RUN_CACHE/.toolchain.fp"
+    local stamp="$RUN_CACHE/.toolchain.stamp"
+    local ttl="${PX_TOOLCHAIN_FP_TTL:-1800}"
+    local sizes
+    sizes="$(stat -c '%s' "$PXC_HOME/bootstrap/pxc_vm" "$PXC_HOME/bootstrap/pxi" 2>/dev/null | tr '\n' ' ')"
+    if [ -f "$fp" ] && [ -f "$stamp" ] && [ -n "$sizes" ]; then
+        local now age
+        # EPOCHSECONDS 是 bash 5 内建（零 fork）；el7 的 4.2 没有 ⇒ 惰性回退 date
+        now="${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}"
+        age=$(( now - $(stat -c %Y "$stamp" 2>/dev/null || echo 0) ))
+        # mapfile 是内建（零 fork）—— 快路径每省一次 fork 都是真金白银：这条路径走 N 次
+        local -a _fp; mapfile -t _fp < "$fp" 2>/dev/null
+        if [ "$age" -lt "$ttl" ] \
+           && [ "$sizes" = "${_fp[0]#'#SIZES '}" ] && [ "${_fp[1]:-}" = "#FP" ]; then
+            if [ -z "$(find "$RT_DIR" "$PXC_HOME/bootstrap/pxc_vm" \
+                           "$PXC_HOME/bootstrap/pxi" "$PXC_HOME/VERSION" \
+                           -newer "$stamp" -print -quit 2>/dev/null)" ]; then
+                # 命中：只吐指纹本体（跳过 #SIZES 与 #FP 两行标记）
+                printf '%s\n' "${_fp[@]:2}"
+                return 0
+            fi
+        fi
+    fi
+    # 慢路径：算一次（内联调用，省掉两次 bash 自调用的 ~76 ms）
+    local out
+    out="$( {
+        echo "px $RELEASE_VER" | head -1
+        rt_key "" gcc 0 | head -1
+        sha256sum "$PXC_HOME/bootstrap/pxc_vm" 2>/dev/null | cut -c1-16
+        sha256sum "$PXC_HOME/bootstrap/pxi"    2>/dev/null | cut -c1-16
+        echo "engine=${PX_BUILD_ENGINE:-vm}"
+    } 2>/dev/null )"
+    if mkdir -p "$RUN_CACHE" 2>/dev/null; then
+        { printf '#SIZES %s\n#FP\n%s\n' "$sizes" "$out"; } > "$fp.tmp.$$" 2>/dev/null \
+            && mv "$fp.tmp.$$" "$fp" 2>/dev/null \
+            && touch "$stamp" 2>/dev/null
+        rm -f "$fp.tmp.$$" 2>/dev/null
+    fi
+    printf '%s\n' "$out"
+}
+
 run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产物"的东西决定）
     # ⚠️ **必须含脚本内容** —— .rtcache 的 key 不含（那是 runtime 的缓存且按"引用集
     #    cuts"分桶，正确）；这里若不含脚本内容，改了脚本还命中旧产物 = 错误的缓存。
@@ -1087,9 +1188,9 @@ run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产�
             [ "$_df" = "$1" ] && continue
             sha256sum "$_df" 2>/dev/null | cut -c1-16
         done < <(px_dep_closure "$1") | LC_ALL=C sort
-        "$PXC_SELF" --version 2>/dev/null | head -1
-        "$PXC_SELF" rtkey "" gcc 0 2>/dev/null | head -1      # runtime 源内容哈希（不编译）
-        sha256sum "$PXC_HOME/bootstrap/pxc_vm" 2>/dev/null | cut -c1-16
+        # M383-速度：以下 5 个信号（版本 / rtkey / pxc_vm / pxi / engine）整体由
+        #   toolchain_fp 提供 —— 内容逐字节同旧实现，只是不再每次重算。
+        toolchain_fp
         # M271（晨曦 D1 第 1 条）：**运行器契约** = Mini 子集判据自身。
         #   子集判据是**代码**（selfhost/istmt.px 的 Spawn/Chan/Send/Recv/Select、
         #   selfhost/iexpr.px 的 chan/mutex/rwlock 构造），其载体就是 bootstrap/pxi
@@ -1098,8 +1199,7 @@ run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产�
         #     老缓存条目会按**旧契约**命中 ⇒ 本应被响亮拒绝的脚本悄悄跑起来
         #     （= 缓存改变了语义）。与 .rtcache 的教训同构：
         #     **key 必须由「真正决定行为的输入」驱动**。
-        sha256sum "$PXC_HOME/bootstrap/pxi" 2>/dev/null | cut -c1-16
-        echo "engine=${PX_BUILD_ENGINE:-vm}"
+        #   （M383：该信号由上面的 toolchain_fp 一并提供）
     } | sha256sum | cut -c1-16
 }
 
@@ -1109,6 +1209,10 @@ cmd_run_fast() {
     if [ -n "${PX_RUN_NOCACHE:-}" ]; then "$PXI_BIN" "$@" "$file"; return $?; fi
 
     local abs; abs="$(readlink -f "$file" 2>/dev/null || echo "$file")"
+    # M383-速度：主脚本 AST 在这里解析一次，下面 run_subset_ok（子 shell）与
+    #   px_dep_closure → px_import_keys（子 shell）都通过环境变量复用，不再重解析。
+    #   解析失败不在这里报错 —— 让 run_subset_ok 按原逻辑报「解析失败」并回落解释轨。
+    px_ast_prime "$abs" || true
 
     # ── M271（晨曦 D1 第 2 条）：**先判源码，再查缓存** ──────────────────────
     #   为什么顺序要紧：若「命中 ⇒ 直接 exec」，则子集判据一旦收紧，老缓存会按
