@@ -85,6 +85,19 @@ var intr_sent = 0
 var intr_handled = 0
 def on_intr(sig):
     intr_handled += 1
+# M383（缺陷 680）：**结构性静默窗口**（只给负控 B 用）——
+#   现象：分片满负载下 [6B] 出现过「可判 12 次 · 命中 0」（而 standalone 同代码 3/4 命中）。
+#   病根：故障要靠「注入信号恰好落在**阻塞中**的 recvfrom」才出现，而发送端每 100ms 一发，
+#     接收端多数时候**有包可取**（不阻塞 ⇒ 没有可打断的系统调用）⇒ 复现依赖时序。
+#   口径 13：不利状态要**结构造**，不要「等出来」。
+#   做法：把 UDP 发送端推迟 N ms（默认 1000）⇒ 接收端在「队列空」状态下进入阻塞 recvfrom，
+#     注入信号必然落在阻塞窗口内 ⇒ 撤回包装后**第一次就必然**返回 -1。
+#   ⚠️ 只在负控 B 的 run 里设该 env ⇒ [3]/[4] 两档 stdout 仍逐字节一致。
+var USEND_DELAY = 1000
+let _late = env("M256_PROBE_LATE_SEND")
+if _late != null:
+    if _late != "":
+        USEND_DELAY = int(_late)
 # 150ms 后开始、每 5ms 一次、共 3000 次（≈15s 覆盖 T1/U2 全程）——
 #   ⚠️ 实测（M354 首版）：只覆盖 U2 的前 2s **不够** —— 发送端每 100ms 一发，
 #   接收端的 recvfrom 多数时候**有包可取**（不阻塞 ⇒ 没有可打断的系统调用），
@@ -114,7 +127,7 @@ def srv():
 #      ⇒ U2 等满 20s 超时 ⇒ U2=-1（**假红**，不是缺陷）。窗口拉长到 60s 后不再发生。
 def usrv():
     let s = udp_open(0)
-    sleep(1000)
+    sleep(USEND_DELAY)
     var i = 0
     while i < 600:
         udp_send(s, "127.0.0.1", UPORT, "PING")

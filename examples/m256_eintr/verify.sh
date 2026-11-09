@@ -355,11 +355,13 @@ neg_any() {   # $1=撤回后应消失的键 $2=应保持的值 $3=另一键 $4=�
     local need_intr="${5:-0}"
     local MAXIT="${M256_NEG_MAXIT:-24}" MAXUSABLE="${M256_NEG_MAXUSABLE:-12}" MAXKEEPBAD=4
     local NMIN="${M256_NEG_NMIN:-3}"
-    local INTRENV=""
-    [ "$need_intr" = "1" ] && INTRENV="M256_PROBE_INTR=1"
+    local INTRENV1="" INTRENV2=""
+    # M383（缺陷 680）：负控 B 额外推退 UDP 发送端 ⇒ 把「阻塞中被打断」**结构造**出来，
+    #   不再靠「发送端恰好停顿」的时序。外部可用 M256_NEG_LATE_MS 覆盖（默认 4000）。
+    [ "$need_intr" = "1" ] && { INTRENV1="M256_PROBE_INTR=1"; INTRENV2="M256_PROBE_LATE_SEND=${M256_NEG_LATE_MS:-4000}"; }
     while [ "$i" -lt "$MAXIT" ] && [ "$usable" -lt "$MAXUSABLE" ]; do
         i=$((i + 1)); tag="n_${i}"
-        run_once "$tag" PX_GC_STRESS=1 PX_GC_INLINE=1 ${INTRENV:+"$INTRENV"} >/dev/null
+        run_once "$tag" PX_GC_STRESS=1 PX_GC_INLINE=1 ${INTRENV1:+"$INTRENV1"} ${INTRENV2:+"$INTRENV2"} >/dev/null
         if ! grep -q 'M256-PROBE-DONE' "$W/out_$tag.txt"; then
             N267=$((N267 + 1))
             echo "  ℹ️ [$tag] 探针未跑完（疑似缺陷 267 家族）⇒ 本次**不可判**，重试（已用 $i 次 · 可判 $usable 次）"

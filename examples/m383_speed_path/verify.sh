@@ -17,6 +17,7 @@
 #
 # 隔离：全程用临时 PX_RUNCACHE_DIR，不碰仓库 .runcache。
 # ═══════════════════════════════════════════════════════════════════════════
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT="$PWD"
