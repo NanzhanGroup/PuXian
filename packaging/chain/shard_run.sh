@@ -170,7 +170,15 @@ SRC="${PX_SRC:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BASE="${PX_GATEVM:-/data/gatevm}"
 TS=$(date +%Y%m%d-%H%M%S)
 LOG="$BASE/shard-$TS"
-mkdir -p "$LOG"
+# ── M383 · 3/3（缺陷 679）：门日志**按链留存** ──
+#   旧口径：门日志写在 /tmp（分片侧 = $BASE/tmp$i），而 tmp$i 每轮 rm -rf 重建
+#   ⇒ 上一轮失败门的现场被下一轮覆盖（M382 第三轮 m256 偶发红就是这样丢的）。
+#   新口径：每链一条 `$LOG/gatelog/{tmpN,quiet}`，红/超时门另存 `$LOG/red/`。
+#   量级实测：8 片一轮 gate_*.log 合计约 150KB（tmp1 29 份 148K）⇒ 留存成本可忽略。
+GLOG="$LOG/gatelog"
+mkdir -p "$LOG" "$GLOG"
+# 留存不无限长：14 天前的链目录里的 gatelog 清掉（链本身与 times.tsv 不动）
+find "$BASE" -maxdepth 2 -type d -name gatelog -mtime +14 -exec rm -rf {} + 2>/dev/null || true
 
 # ── 4) 准备分片环境（worktree + .rtcache reflink 副本 + 私有 tmp + 私有 devbuild 槽）──
 # ⚠️ worktree **不能放 /tmp 下** —— 私有 /tmp 一 bind 就把它遮蔽了（步2 实测）
@@ -437,7 +445,38 @@ if [ "$DRY" = 1 ]; then
   done
   if [ -n "$QUIET_LIST" ]; then
     _qt="$(awk -F'\t' -v L="$QUIET_LIST" 'BEGIN{n=split(L,a,",");for(i=1;i<=n;i++)w[a[i]]=1} $1 in w {s+=$3} END{printf "%d", s}' "$TIMES" 2>/dev/null)"
-    echo "  quiet 串行尾：$(printf '%s' "$QUIET_LIST" | awk -F, '{print NF}') 门 · 约 $(( ${_qt:-0} / 60 )) min（与分片串行，必须算进墙钟）"
+    echo "  quiet 档：$(printf '%s' "$QUIET_LIST" | awk -F, '{print NF}') 门 · 约 $(( ${_qt:-0} / 60 )) min（与分片串行，必须算进墙钟）"
+    # M383 · 2/3：dry 也要能看出**分档结论**（否则调用方只能靠跑一遍才知道改了没有）
+    if [ -s "$BASE/quiet_lanes.txt" ]; then
+      python3 - "$BASE/quiet_lanes.txt" "$QUIET_LIST" "$TIMES" <<'PY'
+import sys
+lf, qlist, tf = sys.argv[1], sys.argv[2], sys.argv[3]
+want = set(g for g in qlist.split(',') if g)
+lanes = {}
+for line in open(lf, encoding='utf-8'):
+    line = line.split('#')[0].strip()
+    p = line.split()
+    if len(p) >= 2 and p[1].isdigit():
+        lanes[p[0]] = int(p[1])
+t = {}
+try:
+    for line in open(tf, encoding='utf-8'):
+        p = line.rstrip('\n').split('\t')
+        if len(p) >= 3:
+            try: t[p[0]] = int(float(p[2]))
+            except ValueError: pass
+except FileNotFoundError:
+    pass
+par = sorted([g for g in want if g in lanes])
+solo = sorted([g for g in want if g not in lanes])
+load = {}
+for g in par:
+    load[lanes[g]] = load.get(lanes[g], 0) + t.get(g, 60)
+print('  quiet 车道：%s（墙钟下界 %ds）' % (
+    ' · '.join('L%d=%ds' % (k, v) for k, v in sorted(load.items())) or '（无）', max(load.values()) if load else 0))
+print('  quiet 独占：%d 门 %ds（%s）' % (len(solo), sum(t.get(g, 60) for g in solo), ' '.join(solo) or '无'))
+PY
+    fi
   fi
   echo "（--dry：不启动）"; exit 0
 fi
@@ -480,8 +519,12 @@ for i in $(seq 1 "$N"); do
       ip link set lo up 2>/dev/null
       cd $BASE/wt$i || exit 9
       GATE_TSV=/tmp/times.tsv GATE_TIMEOUT_DEFAULT=900 \
-      GATE_LOG_DIR_HINT=$BASE/tmp$i \
+      GATE_LOG_DIR_HINT=$GLOG/tmp$i \
       ${JOBS_ENV}${TSET}bash selfhost/run_gates.sh --only '$ONLY'
+      _rc=\$?
+      # M383 · 3/3：先把本轮门日志搬到链目录（此后 tmp$i 清不清都不影响回查）
+      bash $SRC/packaging/chain/keep_gate_logs.sh /tmp $GLOG/tmp$i /tmp/times.tsv $LOG/red shard$i || true
+      exit \$_rc
     " > "$LOG/shard$i.log" 2>&1
     echo "$?" > "$LOG/shard$i.rc"
   ) &
@@ -495,9 +538,16 @@ echo "── 等待 ${#PIDS[@]} 个分片（0 门的片不启动${SKIPPED:+，�
 for p in "${PIDS[@]}"; do wait "$p"; done
 echo "── 全部分片结束 ──"
 
-# ── 6b) 低负载门：此时机器已空闲 ⇒ 串行跑（见 quiet_needed.txt）──
+# ── 6b) 低负载门：此时机器已空闲 ⇒ 跑（见 quiet_needed.txt / quiet_lanes.txt · M383 2/3）──
+#   M383 之前：16 门**一律串行**，实测合计 2428s = 40.5min，成为整轮墙钟最堵的一段
+#   （M382 第四轮 /data/gatevm/shard-20261109-070339/quiet.times.tsv）。
+#   但「慢 ⇒ 挪回分片」是错读：这些门进 quiet 的理由是**分片并发下判据假红**，不是慢。
+#   ⇒ 两档：
+#     · 并行档：慢、但对「轻并发」不敏感 —— 进 K 条车道（每路 2 核 · JOBS=2 · 私有 /tmp），
+#       归属由 `packaging/chain/quiet_archive.py` 按实测归档（quiet_lanes.txt），不许手拍。
+#     · 独占档：判据前提取决于「机器空闲」（性能比 / 时延窗口 / 端口窗口 / GC 停顿），
+#       白名单在 quiet_exclusive.txt（每条带理由），一律串行。
 if [ -n "$QUIET_LIST" ]; then
-  echo "── 低负载门串行跑（$QUIET_LIST）──"
   # ── M372 r5（2026-11-03 · 东月）：quiet 档起跑前**等机器真静** ──
   #   实测（chain-m372-20261103-050252）：quiet 档里 m183 被拖到 900s 超时（同门空闲单跑 111s）。
   #   kernel 侧硬证据：06:47 `khugepaged` 与 `kworker/8:1H (blk_mq_timeout_work)` 各 **blocked 122s**、
@@ -520,9 +570,127 @@ if [ -n "$QUIET_LIST" ]; then
   fi
   # 用分片 worktree（与分片同一份代码）；先恢复被负控改过的受管目录，避免 run_gates 拒脏树
   git -C "$BASE/wt1" checkout -q -- selfhost runtime tools 2>/dev/null || true
-  ( cd "$BASE/wt1" && GATE_TSV="$LOG/quiet.times.tsv" GATE_TIMEOUT_DEFAULT=900 \
-      bash selfhost/run_gates.sh --only "$QUIET_LIST" ) > "$LOG/quiet.log" 2>&1
-  echo "  quiet rc=$?"
+
+  # ── 分档（与归档器同一口径：只认 quiet_lanes.txt 的 `<gate> <lane>`）──
+  QLANE_N="${QUIET_LANES:-3}"
+  eval "$(python3 - "$BASE/quiet_lanes.txt" "$QUIET_LIST" "$QLANE_N" <<'PY'
+import sys
+lf, qlist, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+want = [g for g in qlist.split(',') if g]
+lanes = {}
+try:
+    for line in open(lf, encoding='utf-8'):
+        line = line.split('#')[0].strip()
+        if not line:
+            continue
+        p = line.split()
+        if len(p) >= 2 and p[1].isdigit():
+            lanes[p[0]] = int(p[1])
+except FileNotFoundError:
+    pass
+used = sorted({lanes[g] for g in want if g in lanes})
+solo = [g for g in want if g not in lanes]
+print('QLANE_USED="%s"' % ','.join(str(i) for i in used))
+print('QSOLO="%s"' % ','.join(solo))
+for i in used:
+    print('QLANE_%d="%s"' % (i, ','.join(g for g in want if lanes.get(g) == i)))
+print('QLANE_COUNT=%d' % len(used))
+PY
+)"
+  QLANE_COUNT="${QLANE_COUNT:-0}"
+  QLANE_USED="${QLANE_USED:-}"
+  QSOLO="${QSOLO:-$QUIET_LIST}"
+  if [ "$QLANE_COUNT" -gt 0 ] && [ -n "${QLANE_USED// /}" ]; then
+    echo "── quiet 并行档：车道 $QLANE_USED（每路 2 核 · JOBS=2 · 私有 /tmp）──"
+    _qpids=()
+    _qbase=$(( $(nproc) - 2 * QLANE_COUNT )); [ "$_qbase" -lt 0 ] && _qbase=0
+    _lidx=0
+    for k in $(echo "$QLANE_USED" | tr ',' ' '); do
+      eval "_lk=\$QLANE_$k"
+      if [ -z "${_lk// /}" ]; then echo "  车道$k：0 门（跳过）"; continue; fi
+      _lidx=$(( _lidx + 1 ))
+      # ── M383 实测（2026-11-09 14:13）：车道**不能共用 wt1** ──
+      #   第 2 版探针 lane2 rc=1：`⚠️ 门有副作用：selfhost//runtime//tools/ 工作树状态与进门时不同`
+      #   （selfhost/ibuiltin.px、icall.px 被同轮另一条车道的负控改脏）⇒ 门自带的
+      #   「脏树拒绝 + 副作用判据」把并发车道判红。⇒ 每条车道独占分片 worktree wt$k
+      #   （shard 阶段跑完就是空闲的，HEAD/ .rtcache 与本轮分片同源，无需另建）。
+      if [ "$k" -gt "$N" ]; then
+        echo "  ❌ quiet 车道$k 需要 wt$k，但本轮 N=$N（车道数不能超过分片数）⇒ 该车道串行跑" >&2
+        QSOLO="${QSOLO:+$QSOLO,}$_lk"
+        continue
+      fi
+      _c0=$(( _qbase + 2 * (k - 1) )); _c1=$(( _c0 + 1 ))
+      _td="$BASE/qlane$k"
+      rm -rf "$_td"; mkdir -p "$_td"
+      [ -d /tmp/devbuild_slots ] && cp -a --reflink=auto /tmp/devbuild_slots "$_td/devbuild_slots" 2>/dev/null
+      git -C "$BASE/wt$k" checkout -q -- selfhost runtime tools 2>/dev/null || true
+      (
+        unshare --mount --pid --fork --mount-proc bash -c "
+          mount --bind $_td /tmp
+          cd $BASE/wt$k || exit 9
+          GATE_TSV=/tmp/times.tsv GATE_TIMEOUT_DEFAULT=900 GATE_JOBS=2 \
+          GATE_LOG_DIR_HINT=$GLOG/quiet$k \
+          taskset -c $_c0-$_c1 bash selfhost/run_gates.sh --only '$_lk'
+          _rc=\$?
+          bash $SRC/packaging/chain/keep_gate_logs.sh /tmp $GLOG/quiet$k /tmp/times.tsv $LOG/red quiet$k || true
+          exit \$_rc
+        " > "$LOG/quiet-lane$k.log" 2>&1
+        echo "$?" > "$LOG/quiet-lane$k.rc"
+        cp "$_td/times.tsv" "$LOG/quiet-lane$k.times.tsv" 2>/dev/null || true
+      ) &
+      _qpids+=($!)
+      echo "  车道$k 启动 pid=${_qpids[-1]}（$(printf '%s' "$_lk" | tr ',' '\n' | grep -c .) 门 · 核 $_c0-$_c1 · JOBS=2 · wt$k）"
+    done
+    echo "── 等待 ${#_qpids[@]} 条 quiet 车道 ──"
+    for p in "${_qpids[@]}"; do wait "$p"; done
+  fi
+
+  if [ -n "${QSOLO// /}" ]; then
+    echo "── quiet 独占档：串行跑（$QSOLO）──"
+    ( cd "$BASE/wt1" && GATE_TSV="$LOG/quiet.times.tsv" GATE_TIMEOUT_DEFAULT=900 \
+        GATE_LOG_DIR_HINT="$GLOG/quiet" \
+        bash selfhost/run_gates.sh --only "$QSOLO" ) > "$LOG/quiet.log" 2>&1
+    _qrc=$?
+    bash "$SRC/packaging/chain/keep_gate_logs.sh" /tmp "$GLOG/quiet" "$LOG/quiet.times.tsv" "$LOG/red" quiet \
+      >> "$LOG/quiet.log" 2>&1 || true
+    echo "  quiet 独占档 rc=$_qrc"
+  fi
+
+  # ── 合并各档结果 → $LOG/quiet.times.tsv（裁决脚本只认这一张表）──
+  python3 - "$QUIET_LIST" "$LOG" <<'PY'
+import os, sys
+qlist, log = sys.argv[1], sys.argv[2]
+want = [g for g in qlist.split(',') if g]
+files = []
+solo = os.path.join(log, 'quiet.times.tsv')
+# 独占档跑过 ⇒ 它自己的表里就有全部 quiet 门的行（非选门是 SKIP）；先读车道表再读它
+for f in sorted(os.listdir(log)):
+    if f.startswith('quiet-lane') and f.endswith('.times.tsv'):
+        files.append(os.path.join(log, f))
+files.append(solo)
+best = {}
+for f in files:
+    if not os.path.exists(f):
+        continue
+    for line in open(f, encoding='utf-8'):
+        p = line.rstrip('\n').split('\t')
+        if len(p) < 3 or p[0] not in set(want):
+            continue
+        cur = best.get(p[0])
+        if cur is None or (cur[1] == 'SKIP' and p[1] != 'SKIP'):
+            best[p[0]] = (p[1], p[1], p[2] if len(p) > 2 else '0')
+with open(os.path.join(log, 'quiet.times.tsv'), 'w', encoding='utf-8') as w:
+    for g in want:
+        st, _, sec = best.get(g, ('SKIP', 'SKIP', '0'))
+        w.write('%s\t%s\t%s\t-\n' % (g, st, sec))
+miss = [g for g in want if g not in best]
+ok = sum(1 for g in want if best.get(g, ('',))[0] == 'OK')
+bad = sum(1 for g in want if best.get(g, ('',))[0] not in ('OK', 'SKIP', ''))
+print('  quiet 合并：绿 %d · 红 %d · 缺 %d%s' % (ok, bad, len(miss), ('（%s）' % ','.join(miss)) if miss else ''))
+if bad:
+    sys.exit(1)
+PY
+  _qmerge_rc=$?
 fi
 
 # ── 7) 汇总 ──
@@ -541,12 +709,44 @@ for i in $(seq 1 "$N"); do
   cp "$BASE/tmp$i/times.tsv" "$LOG/shard$i.times.tsv" 2>/dev/null || true
 done
 if [ -n "$QUIET_LIST" ]; then
-  qok=$(grep -cE '^✅ [a-zA-Z0-9_]+（' "$LOG/quiet.log" 2>/dev/null)
-  qbad=$(grep -cE '^(❌|⏱)[[:space:]]+[a-zA-Z0-9_]+（' "$LOG/quiet.log" 2>/dev/null)
-  echo "  quiet : 绿 $qok · 红 $qbad（低负载档）"
+  # M383 · 2/3：quiet 分两档（并行车道 / 独占串行），计数改读**合并后的表**（唯一口径），
+  # 日志只作人读材料 —— 旧口径只 grep quiet.log，会把车道里的门漏掉（读数偏低 = 假绿）。
+  for _lf in "$LOG"/quiet-lane*.log; do
+    [ -f "$_lf" ] || continue
+    _lk=$(basename "$_lf" .log)
+    _lok=$(grep -cE '^✅ [a-zA-Z0-9_]+（' "$_lf" 2>/dev/null)
+    _lbad=$(grep -cE '^(❌|⏱)[[:space:]]+[a-zA-Z0-9_]+（' "$_lf" 2>/dev/null)
+    echo "  ${_lk} : 绿 $_lok · 红 $_lbad（并行档 · $(cat "$LOG/${_lk}.rc" 2>/dev/null || echo '?')）"
+  done
+  if [ -f "$LOG/quiet.times.tsv" ]; then
+    qok=$(awk -F'\t' '$2=="OK"' "$LOG/quiet.times.tsv" | wc -l)
+    qbad=$(awk -F'\t' '$2!="OK" && $2!="SKIP" && NF>1' "$LOG/quiet.times.tsv" | wc -l)
+  else
+    qok=0; qbad=0
+  fi
+  echo "  quiet : 绿 $qok · 红 $qbad（低负载档 · 独占 ${QSOLO:-无} · 车道 ${QLANE_USED:-无}）"
   TOT_OK=$((TOT_OK+qok)); TOT_FAIL=$((TOT_FAIL+qbad))
 fi
 echo "  合计：绿 $TOT_OK · 红 $TOT_FAIL（门清单 $NG）"
+# ── M383 · 2/3（缺陷 678）：**链完成戳** —— 让校验器区分「全量链」与「限范围探针」──
+#   现场（2026-11-09 14:1x）：我为「车道能不能并行」跑了一次 4 门探针，shard_run 照常
+#   写出 4 行 quiet.times.tsv；校验器旧口径取 mtime 最新 ⇒ 拿残表重算 16 门 ⇒ 12 门被判
+#   「无实测 ⇒ 保守独占」⇒ 假报「归档漂移」（--write 8 门 3422s vs --check 17s）。
+#   ⇒ 探针也留痕，但戳自己写明是 probe；校验器只认 quiet 门覆盖度（判据），戳只作溯源。
+_alln=$(grep -c . "$LOG/gates.all.txt" 2>/dev/null) || _alln=0
+case "$_alln" in ''|*[!0-9]*) _alln=0 ;; esac
+_qn=$(printf '%s' "${QUIET_LIST:-}" | awk -F, 'NF>0 && $0!="" {print NF}')
+[ "$NG" = "$_alln" ] && _stamp=full-basis || _stamp=probe
+{
+  echo "chain_ts=$TS"
+  echo "stamp=$_stamp"
+  echo "gates_total=$NG"
+  echo "gates_registry=$_alln"
+  echo "quiet_gates=${_qn:-0}"
+  echo "ok=$TOT_OK"
+  echo "fail=$TOT_FAIL"
+} > "$LOG/CHAIN-COMPLETE.txt" 2>/dev/null || true
+
 # ── 7b) 「空跑必红」：分片一个门都没跑出来 ⇒ 整轮**没有意义**，必须响亮 ──
 #   实测（2026-10-12 11:38）：分片全部因残留锁被拒（rc=1 / 0 门），而汇总只打
 #   「合计：绿 3」（那是 quiet 档那 3 个）—— 不细看会以为"绿了"。判据：分片侧合计必须 > 0。

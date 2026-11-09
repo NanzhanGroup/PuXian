@@ -1667,6 +1667,33 @@ jobs:
           bash selfhost/check_shard_wt_recovery.sh > /tmp/v_shardwt.log 2>&1 || { echo "❌ shard_wt_recovery 门失败（分片建树 / 真因丢失）"; tail -40 /tmp/v_shardwt.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_shardwt.log | tail -8
           echo "✅ shard_wt_recovery（建树失败留真因 · 脏注册仍建成）PASS"
+      - name: quiet_archive（quiet 档归档器判据 · M383 · 2/3）
+        # 判据：A1 归档器自证（7 断言，含 2 条负控：改快必须回独占 / 改慢必须进并行）
+        #       · A2 现场不漂移（宿主有 quiet_lanes.txt 时按实测重算；CI 上明确 SKIP）
+        #   纯 python3 + 宿主数据，秒级 ⇒ 不需要 --neg-skip。
+        if: ${{ !cancelled() }}
+        run: |
+          bash selfhost/check_quiet_archive.sh > /tmp/v_quietarch.log 2>&1 || { echo "❌ quiet_archive 门失败（归档器判据 / 归档漂移）"; tail -40 /tmp/v_quietarch.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_quietarch.log | tail -8
+          echo "✅ quiet_archive（归档器自证 + 两条负控 + 现场不漂移）PASS"
+      - name: m383_speed_path（px run --fast 热态加速 · M383 · 4/4 · 缺陷 676/677）
+        # 判据：[1] 快路径 key == 强制重算(TTL=0) key · [2] 负控：篡改指纹 ⇒ key 必须变
+        #       · [3] TTL=0 ⇒ stamp 更新 · [4] execve ≤ 40（旧 149 / 现 29；无 strace 则 SKIP）
+        #       · [5] 大 AST（>32768 字符）key == TTL=0。全程临时 PX_RUNCACHE_DIR，不碰仓内 .runcache。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m383_speed_path/verify.sh > /tmp/v_speedpath.log 2>&1 || { echo "❌ m383_speed_path 门失败（快路径 key / execve / TTL 兜底）"; tail -40 /tmp/v_speedpath.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_speedpath.log | tail -8
+          echo "✅ m383_speed_path（key 等价 + 篡改负控 + TTL + execve）PASS"
+      - name: m383_gate_logs（门日志按链留存 · M383 · 3/3 · 缺陷 679）
+        # 判据：[1] 两轮连跑第 1 轮日志逐字节仍在 · [2] 红门另存 red/ · [3] 缺日志被点名
+        #       · [4] 零日志 rc=3（响亮）· [5] 参数缺失 rc=4 · [6] shard_run 接线（链目录 + 完成戳 + 14 天清理）
+        #   负控：同目录覆写 ⇒ 内容必变（证明 [1] 不是恒真判据）。纯 bash，秒级。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m383_gate_logs/verify.sh > /tmp/v_gatelog.log 2>&1 || { echo "❌ m383_gate_logs 门失败（现场留存机制被写坏）"; tail -40 /tmp/v_gatelog.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_gatelog.log | tail -8
+          echo "✅ m383_gate_logs（两轮留存 + 红门另存 + 响亮失败 + 接线）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
