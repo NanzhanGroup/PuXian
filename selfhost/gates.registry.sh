@@ -1957,3 +1957,16 @@ run m375_ws_connect_timeout bash examples/m375_ws_connect_timeout/verify.sh
 #   为何不用「边打边 TERM」：旧夹具窗口为微秒级，修前 3/10 轮才红、修后同样会红 ⇒ 判据无牙。
 #   ⚠ 本门改 runtime/*.c ⇒ **必须先 --rebake-all 重烘 14 件**。
 run m376_sigterm_drain bash examples/m376_sigterm_drain/verify.sh
+
+#  m384_px_defects —— 清歌缺陷清单「纯增益 5 条」收口（M384 · 缺陷 683/685/686/688/689）
+#   来历：清歌把 23 个 Go 工具移植成 PuXian 时逐条撞出 34 条缺陷（2026-11-09 经节点总线转交）。
+#     我在 0.2.383 上抽验 11 条 → **11 条全中**（含两条原标「待复核」）⇒ 清单可信。
+#   口径（用户 22:52 令「动 runtime/*.c」）：只做**不改既有可观测行为**的 5 条；
+#     会改语义的 3 条与能力缺口 20 条留在 NEXT-QUEUE.md，不夹在同一轮（红了分不清是谁的问题）。
+#   判据：PX-001 空串不崩 + 静态 NULL 兜底（负控：副本删 guard ⇒ 扫描器必报警）·
+#     PX-005 严格 base64 十条规则（负控：宽松版语义必须原样仍是 "A"）·
+#     PX-011 \b \f 逐字节对齐 Go（负控：json_stringify 那支仍输出裸字节）·
+#     PX-014 \b\f\v\xNN 可编且语义对（负控：\q 仍 E1005）·
+#     PX-024 /dev/stdout fd 直写（负控：普通路径 O_TRUNC 语义不许被改）+ 静态分支在场。
+#   ⚠ 本门与 runtime/*.c 强相关 ⇒ 改 runtime 后**必须先 --rebake-all 重烘 14 件**，否则测的是旧运行时（假红）。
+run m384_px_defects bash examples/m384_px_defects/verify.sh

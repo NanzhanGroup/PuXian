@@ -710,6 +710,8 @@ static LXValue bi_bytes_concat(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_to_str(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_base64(LXValue* args, int nargs, void* ctx);
 static LXValue bi_base64_to_bytes(LXValue* args, int nargs, void* ctx);
+static LXValue bi_base64_decode_strict(LXValue* args, int nargs, void* ctx);
+static LXValue bi_base64_to_bytes_strict(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx);
 static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx);
@@ -12189,6 +12191,12 @@ static void jout_escape_go(JOut* o, const char* s, int n) {
                 case '\n': jout_append(o, "\\n"); break;
                 case '\r': jout_append(o, "\\r"); break;
                 case '\t': jout_append(o, "\\t"); break;
+                // M384（PX-011 / 缺陷 686）：Go encoding/json **确实**输出 \b / \f ——
+                //   实测 go1.23 json.Marshal("x\by\fz") ⇒ "x\\by\\fz"（不是 \u0008/\u000c）。
+                //   此处原先只特例 \n\r\t，其余 <0x20 一律 \u00XX ⇒ 与 Go 逐字节不一致。
+                //   注意：只补这两个；\x01 等仍走 \u00XX（与 Go 实测一致）。
+                case '\b': jout_append(o, "\\b"); break;
+                case '\f': jout_append(o, "\\f"); break;
                 case '<': if (g_json_go_escape_html) jout_append(o, "\\u003c"); else jout_append_n(o, s + i, 1); break;
                 case '>': if (g_json_go_escape_html) jout_append(o, "\\u003e"); else jout_append_n(o, s + i, 1); break;
                 case '&': if (g_json_go_escape_html) jout_append(o, "\\u0026"); else jout_append_n(o, s + i, 1); break;
@@ -13376,6 +13384,9 @@ void px_register_builtins(void) {
     px_set_global("bytes_to_str", px_native("bytes_to_str", bi_bytes_to_str));
     px_set_global("bytes_base64", px_native("bytes_base64", bi_bytes_base64));
     px_set_global("base64_to_bytes", px_native("base64_to_bytes", bi_base64_to_bytes));
+    // M384（PX-005 / 缺陷 685）：严格变体（纯增益，既有宽松函数一字不动）
+    px_set_global("base64_decode_strict", px_native("base64_decode_strict", bi_base64_decode_strict));
+    px_set_global("base64_to_bytes_strict", px_native("base64_to_bytes_strict", bi_base64_to_bytes_strict));
     px_set_global("bytes_find", px_native("bytes_find", bi_bytes_find));
     px_set_global("read_bytes", px_native("read_bytes", bi_read_bytes));
     px_set_global("write_bytes", px_native("write_bytes", bi_write_bytes));
@@ -15043,6 +15054,93 @@ static LXValue bi_base64_to_bytes(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// ==================== M384：base64 严格解码（PX-005 / 缺陷 685） ====================
+// 背景：既有 `base64_decode` / `base64_to_bytes` 是**宽松**的（注释虽写「严格解码」）：
+//   "QQ" → "A"、"QQ=" → "A"，而 Go base64.StdEncoding 对两者都报错。而 wst-ident 验签是
+//   「先 decode 再验签」⇒ 非法输入被放过 = **安全属性漂移**（Go 版判无效、px 版判通过）。
+// 口径：**不动既有函数**（它与 base32 族是同一约定，大量脚本依赖宽松语义），只新增严格变体：
+//   base64_decode_strict(s)   → str | null
+//   base64_to_bytes_strict(s) → bytes | null
+//   规则（对齐 Go base64.StdEncoding）：去 \r\n 后长度 %4==0 · 填充只在末尾且 ≤2 ·
+//   字面字符必在 A-Za-z0-9+/ · 填充之后不得再有数据。空串 → 空结果（Go 亦然）。
+//   诚实边界：不校验「尾字节未用位」是否为零（Go 的 Strict() 会，默认 Decode 不会）——
+//   本函数对齐的是默认 Decode 的宽容度，只把「长度/填充/字符集」这层收紧。
+static int b64_strict_check(const char* s, int* n_out) {
+    int n = 0, pad = 0, seen_pad = 0;
+    for (const char* q = s; *q; q++) {
+        char c = *q;
+        if (c == '\r' || c == '\n') continue;
+        if (c == '=') { seen_pad = 1; pad++; n++; continue; }
+        if (b64_val(c) < 0) return 0;
+        if (seen_pad) return 0;
+        n++;
+    }
+    if ((n % 4) != 0) return 0;
+    if (pad > 2) return 0;
+    *n_out = n;
+    return 1;
+}
+
+static char* b64_strict_decode(const char* s, int* olen, int* ok) {
+    int n = 0;
+    if (!b64_strict_check(s, &n)) { *ok = 0; *olen = 0; return NULL; }
+    int cap = (n / 4) * 3 + 1;
+    char* out = (char*)xmalloc((size_t)cap);
+    int oi = 0, qi = 0, qv[4];
+    for (const char* q = s; *q; q++) {
+        char c = *q;
+        if (c == '\r' || c == '\n' || c == '=') continue;
+        qv[qi++] = b64_val(c);
+        if (qi == 4) {
+            unsigned vv = ((unsigned)qv[0] << 18) | ((unsigned)qv[1] << 12) | ((unsigned)qv[2] << 6) | (unsigned)qv[3];
+            out[oi++] = (char)((vv >> 16) & 0xFF);
+            out[oi++] = (char)((vv >> 8) & 0xFF);
+            out[oi++] = (char)(vv & 0xFF);
+            qi = 0;
+        }
+    }
+    if (qi == 2) {
+        unsigned vv = ((unsigned)qv[0] << 18) | ((unsigned)qv[1] << 12);
+        out[oi++] = (char)((vv >> 16) & 0xFF);
+    } else if (qi == 3) {
+        unsigned vv = ((unsigned)qv[0] << 18) | ((unsigned)qv[1] << 12) | ((unsigned)qv[2] << 6);
+        out[oi++] = (char)((vv >> 16) & 0xFF);
+        out[oi++] = (char)((vv >> 8) & 0xFF);
+    } else if (qi != 0) {
+        xfree(out);
+        *ok = 0; *olen = 0;
+        return NULL;
+    }
+    out[oi] = 0;
+    *ok = 1;
+    *olen = oi;
+    return out;
+}
+
+static LXValue bi_base64_decode_strict(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: base64_decode_strict 需要一个参数");
+    const char* s = val_cstr(args[0]);
+    int olen = 0, ok = 0;
+    char* out = b64_strict_decode(s, &olen, &ok);
+    if (!ok) { if (out) xfree(out); return px_null(); }
+    LXValue r = px_str_len(out, olen);
+    xfree(out);
+    return r;
+}
+
+static LXValue bi_base64_to_bytes_strict(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: base64_to_bytes_strict 需要一个参数");
+    const char* s = val_cstr(args[0]);
+    int olen = 0, ok = 0;
+    char* out = b64_strict_decode(s, &olen, &ok);
+    if (!ok) { if (out) xfree(out); return px_null(); }
+    LXValue r = px_bytes_len(out, olen);
+    xfree(out);
+    return r;
+}
+
 // bytes_find(b, sub) → int|null（子串字节下标；sub 可为 bytes 或 str）
 static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -15089,6 +15187,39 @@ static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx) {
     const char* p = px_arg_str(args[0], "write_bytes", "路径");
     const char* d = bdata(args[1]);
     int len = blen(args[1]);
+    // M384（PX-024 / 缺陷 688）：`/dev/stdout` · `/dev/stderr` · `/dev/fd/N` 走 **fd 直写**。
+    //   病根：`fopen(p, "wb")` 是 O_TRUNC ⇒ 重定向到**普通文件**时每次调用都把文件截断，
+    //   只剩最后一次写的内容；重定向到**管道**时看不出来（所以本地测不出、上生产才缺行）。
+    //   wst-s3 已在这上栽过。其他路径保持原语义（不能偷偷改变普通文件行为）。
+    int fd = -1;
+    if (strcmp(p, "/dev/stdout") == 0) fd = 1;
+    else if (strcmp(p, "/dev/stderr") == 0) fd = 2;
+    else if (strncmp(p, "/dev/fd/", 8) == 0) {
+        const char* q = p + 8;
+        long v = 0;
+        int okd = (*q >= '0' && *q <= '9');
+        while (okd && *q >= '0' && *q <= '9') {
+            v = v * 10 + (*q - '0');
+            if (v > 4096) { okd = 0; break; }
+            q++;
+        }
+        if (okd && *q == '\0') fd = (int)v;
+    }
+    if (fd >= 0) {
+        const char* q = d;
+        int left = len;
+        while (left > 0) {
+            ssize_t w = write(fd, q, (size_t)left);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                return px_bool(0);
+            }
+            if (w == 0) return px_bool(0);
+            q += (int)w;
+            left -= (int)w;
+        }
+        return px_bool(1);
+    }
     FILE* f = fopen(p, "wb");
     if (!f) px_error("io: 写入文件失败 %s", p);
     size_t wr = fwrite(d, 1, (size_t)len, f);

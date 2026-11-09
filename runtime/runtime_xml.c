@@ -29,7 +29,17 @@ static void xbuf_push(XBuf* b, char c) {
     b->data[b->len] = '\0';
 }
 
-static char* xbuf_detach(XBuf* b) { char* d = b->data; *b = (XBuf){0}; return d; }
+// M384（PX-001 / 缺陷 683）：**空输入必须返回可 free 的空串，不能返回 NULL**。
+//   病根：len==0 时 while 不进循环 ⇒ out.data 恒 NULL ⇒ detach 返回 NULL ⇒
+//   `xml_unescape("")` 里 px_str(NULL) ⇒ SIGSEGV（rc=139），且崩在 native、不可捕获。
+//   XML 里空元素极常见（`<Prefix></Prefix>` / `<Key></Key>`）⇒ wst-s3 首跑即踩。
+//   同族 `*_unescape` / `*_decode` 已扫一遍（仓库内仅 xml_unescape 一例，其余空输入正常）。
+static char* xbuf_detach(XBuf* b) {
+    char* d = b->data;
+    if (!d) { d = (char*)malloc(1); if (d) d[0] = '\0'; }
+    *b = (XBuf){0};
+    return d;
+}
 
 static int xp_peek(XmlP* p) { return p->pos < p->len ? (unsigned char)p->s[p->pos] : -1; }
 static int xp_next(XmlP* p) { return p->pos < p->len ? (unsigned char)p->s[p->pos++] : -1; }
@@ -343,7 +353,8 @@ LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx) {
     const char* s = args[0].as.obj->as.str.data;
     int len = args[0].as.obj->as.str.len;
     char* dec = xml_decode_entities(s, len);
-    LXValue r = px_str(dec);
+    // M384（PX-001）：双保险 —— 即便上游再出现 NULL，也不让进程段错误
+    LXValue r = dec ? px_str(dec) : px_str("");
     free(dec);
     return r;
 }

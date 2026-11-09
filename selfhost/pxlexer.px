@@ -466,6 +466,9 @@ def scan_interp_expr(str_pos_line, str_pos_col):
 #   （这正是缺陷 148 的成因之一：三轨「一致地错」）。运行时构造在**新旧编译器下都正确**。
 def lx_nul_char():
     return bytes_to_str(int_to_bytes(0, 1))
+# M384（PX-014）：控制字符的运行时构造（\b=8 \f=12 \v=11）
+def lx_ctl_char(n):
+    return bytes_to_str(int_to_bytes(n, 1))
 def hex_to_char(hex):
     let cp = hex_to_int(hex)
     if cp <= 127:
@@ -498,6 +501,19 @@ def scan_escape(str_pos_line, str_pos_col):
     if c == "r":
         advance()
         return "\r"
+    # M384（PX-014 / 缺陷 689）：补 `\b` `\f` `\v` —— 此前它们都是 E1005「非法转义序列」，
+    #   而 chr() 按码点重编码、无法直接造字节 ⇒ 只能拼 hex_to_bytes 绕。纯增益：
+    #   旧源码里这些写法本来就编不过，新支持的不会改变任何既有程序的行为。
+    #   注：用 int_to_bytes 运行时构造（同 lx_nul_char 的理由 —— 自举安全）。
+    if c == "b":
+        advance()
+        return lx_ctl_char(8)
+    if c == "f":
+        advance()
+        return lx_ctl_char(12)
+    if c == "v":
+        advance()
+        return lx_ctl_char(11)
     if c == "\\":
         advance()
         return "\\"
@@ -537,6 +553,18 @@ def scan_escape(str_pos_line, str_pos_col):
         if cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
             return hex_to_char("FFFD")
         return hex_to_char(hex)
+    # M384（PX-014）：`\xNN`（两位十六进制）—— 之前也不支持，造任意单字节只能绕。
+    if c == "x":
+        advance()
+        let h1 = peek()
+        if is_hex_digit(h1) == false:
+            err("E1005", "\\x 转义需两位十六进制（\\xNN）")
+        advance()
+        let h2 = peek()
+        if is_hex_digit(h2) == false:
+            err("E1005", "\\x 转义需两位十六进制（\\xNN）")
+        advance()
+        return lx_ctl_char(hex_to_int(h1 + h2))
     err("E1005", "非法转义序列 \\" + c)
     return ""
 # ---------- char debug 表示（对齐 Rust char {:?}） ----------

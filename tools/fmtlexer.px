@@ -486,6 +486,8 @@ def hex_to_char(hex):
     let b3 = int_to_bytes(0x80 | ((cp >> 6) & 63), 1)
     let b4 = int_to_bytes(0x80 | (cp & 63), 1)
     return bytes_to_str(bytes_concat(b1, b2, b3, b4))
+def fmt_ctl_char(n):
+    return bytes_to_str(int_to_bytes(n, 1))
 def scan_escape(str_pos_line, str_pos_col):
     advance()  # 反斜杠
     let c = peek()
@@ -500,6 +502,17 @@ def scan_escape(str_pos_line, str_pos_col):
     if c == "r":
         advance()
         return "\r"
+    # M384（PX-014 / 缺陷 689）：与 selfhost/pxlexer.px **同步手改**（M64-S1 约定：
+    #   fmtlexer 由 pxlexer 复制派生，词法规则必须同源）。补 `\b` `\f` `\v` `\xNN`。
+    if c == "b":
+        advance()
+        return fmt_ctl_char(8)
+    if c == "f":
+        advance()
+        return fmt_ctl_char(12)
+    if c == "v":
+        advance()
+        return fmt_ctl_char(11)
     if c == "\\":
         advance()
         return "\\"
@@ -539,6 +552,18 @@ def scan_escape(str_pos_line, str_pos_col):
         if cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
             return hex_to_char("FFFD")
         return hex_to_char(hex)
+    # M384（PX-014）：`\xNN`（与 pxlexer.px 同步）
+    if c == "x":
+        advance()
+        let h1 = peek()
+        if is_hex_digit(h1) == false:
+            err("E1005", "\\x 转义需两位十六进制（\\xNN）")
+        advance()
+        let h2 = peek()
+        if is_hex_digit(h2) == false:
+            err("E1005", "\\x 转义需两位十六进制（\\xNN）")
+        advance()
+        return fmt_ctl_char(hex_to_int(h1 + h2))
     err("E1005", "非法转义序列 \\" + c)
     return ""
 # ---------- char debug 表示（对齐 Rust char {:?}） ----------

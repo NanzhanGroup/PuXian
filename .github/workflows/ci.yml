@@ -1694,6 +1694,17 @@ jobs:
           bash examples/m383_gate_logs/verify.sh > /tmp/v_gatelog.log 2>&1 || { echo "❌ m383_gate_logs 门失败（现场留存机制被写坏）"; tail -40 /tmp/v_gatelog.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_gatelog.log | tail -8
           echo "✅ m383_gate_logs（两轮留存 + 红门另存 + 响亮失败 + 接线）PASS"
+      - name: m384_px_defects（清歌缺陷清单纯增益 5 条 · M384 · 缺陷 683/685/686/688/689）
+        # 判据：[1] xml_unescape("") 不崩（修前 rc=139）+ 静态 NULL 兜底（负控：副本删 guard ⇒ 报警）
+        #       · [2] 严格 base64 十条规则（负控：宽松版必须仍是 "A"）· [3] json \b \f 对齐 Go
+        #       （负控：json_stringify 那支仍裸字节）· [4] \b\f\v\xNN（负控：\q 仍 E1005）
+        #       · [5] /dev/stdout fd 直写（负控：普通路径 O_TRUNC 不许变）。
+        #   ⚠ 本门依赖**已重烘**的入库件（runtime 改动必须先 --rebake-all）。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m384_px_defects/verify.sh > /tmp/v_pxdefects.log 2>&1 || { echo "❌ m384_px_defects 门失败（运行时/词法缺陷回归）"; tail -40 /tmp/v_pxdefects.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_pxdefects.log | tail -8
+          echo "✅ m384_px_defects（空输入不崩 + 严格 base64 + JSON 转义 + 词法转义 + fd 直写）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
