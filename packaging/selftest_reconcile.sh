@@ -136,7 +136,10 @@ if grep -q 'v9.9.3(fixture)' <<<"$o"; then ng "不应重跑豁免项"; else ok "
 
 printf '\n【8】用法与环境\n'
 bash "$SH" --bogus >/dev/null 2>&1; chk "未知选项 rc" "$?" "2"
-( env -u GH_TOKEN bash "$SH" --limit 1 >/dev/null 2>&1 ); chk "无 GH_TOKEN 且无 fixture ⇒ rc=2" "$?" "2"
+# 缺陷 709（M389）：脚本现在会兜底读 /data/pat.md ⇒ 裸 env -u GH_TOKEN 仍拿得到真令牌，
+#   这条用例就不再测「无令牌」，而是真的联网（实得 rc=0）。前提必须自己构造：
+#   把 GH_PAT_FILE 指到不存在路径，才真的证明「无令牌 ⇒ rc=2」。
+( env -u GH_TOKEN GH_ALLOW_ANON=0 GH_PAT_FILE="$W/no-such-pat" bash "$SH" --limit 1 >/dev/null 2>&1 ); chk "无 GH_TOKEN + 禁止匿名 + 无 fixture ⇒ rc=2" "$?" "2"
 
 printf '\n【9】负控 A：抽掉豁免处理 ⇒ 豁免项必须判异常（判据有牙）\n'
 sed 's/^        verdict = .STALE-IGNORE.*$/        pass/; s/^        verdict = .KNOWN-NO-RELEASE.*$/        pass/' "$SH" > "$W/no_ign.sh"

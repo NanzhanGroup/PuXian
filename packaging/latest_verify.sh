@@ -21,7 +21,12 @@
 #   LV_POLL_SEC      轮询间隔秒（默认 60；负控用 0）
 #   LV_FIXTURE       透传给 latest_guard.sh --api-fixture（离线判据，负控用）
 #   GH_TOKEN         走环境变量；缺省从 /data/pat.md 读（权限 600，不打印、不落日志）
-# 退出码：0=OK · 1=STALE · 2=用法错 · 3=BLOCKED
+# 退出码：0=OK · 1=STALE · 2=用法错 · 3=BLOCKED · 4=ENV-FAIL（取不到数/令牌失效）
+#
+# ★缺陷 709（M389）：guard 现在把「取不到数」报成 exit 2（而不是静默 PENDING）。
+#   本装置必须把它区分出来：连续 LV_ENV_FAIL_MAX（默认 3）次 rc=2 ⇒ ENV-FAIL。
+#   为什么不用「一次就失败」：瞬时网络毛刺不该误判；又为什么不能等到 deadline：
+#   认证错重试 30min 毫无意义，且最终会伪装成 BLOCKED（指向 Release job，指错方向）。
 # ============================================================
 set -uo pipefail
 
@@ -43,16 +48,26 @@ say "# 发布自证（releases/latest）· start $(date '+%F %T') · 期望 $TAG
 
 GUARD="$(dirname "$0")/latest_guard.sh"
 t_end=$(( $(date +%s) + DEADLINE ))
-verdict=""; reason=""; last=""; i=0
+verdict=""; reason=""; last=""; i=0; envfail=0; ENV_MAX="${LV_ENV_FAIL_MAX:-3}"
 while :; do
     i=$((i + 1))
     if [ -n "$FIX" ]; then
-        res="$(bash "$GUARD" --api-fixture "$FIX" 2>&1)" || true
+        res="$(bash "$GUARD" --api-fixture "$FIX" 2>&1)"; grc=$?
     else
-        res="$(bash "$GUARD" 2>&1)" || true
+        res="$(bash "$GUARD" 2>&1)"; grc=$?
     fi
     last="$res"
     say "poll $i $(date '+%T') :: $(printf '%s' "$res" | head -2 | tr '\n' ' ')"
+    if [ "$grc" = 2 ]; then
+        envfail=$((envfail + 1))
+        if [ "$envfail" -ge "$ENV_MAX" ]; then
+            verdict=ENV-FAIL
+            reason="guard-rc2×${envfail}(取不到数: $(printf '%s' "$res" | grep -m1 'auth=' || printf '%s' "$res" | head -1))"
+            break
+        fi
+    else
+        envfail=0
+    fi
     case "$res" in
         *LATEST-STALE*) verdict=STALE; reason="latest-not-expected($TAG)"; break;;
         *PENDING*)      : ;;                 # 中间态 ⇒ 继续等（**不是**结论）
@@ -81,7 +96,11 @@ fi
 say "DONE $(date '+%F %T')"
 
 case "$verdict" in
-    OK)    exit 0;;
-    STALE) exit 1;;
-    *)     exit 3;;
+    OK)      exit 0;;
+    STALE)   exit 1;;
+    ENV-FAIL)
+        say "⇒ **这不是「发布没发出去」，是「读不到数」**：先查令牌/网络，别去查 Release job。"
+        say "   自查：curl -sS -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer \$(cat /data/pat.md)\" https://api.github.com/user  # 401=令牌失效"
+        exit 4;;
+    *)       exit 3;;
 esac

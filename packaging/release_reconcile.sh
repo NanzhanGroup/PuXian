@@ -35,13 +35,20 @@
 # ============================================================
 set -uo pipefail
 
+HERE=$(cd "$(dirname "$0")" && pwd)
+# ★缺陷 709（M389）：取数改走唯一实现 packaging/gh_get.sh。
+#   旧 fetch 里 curl 401 时 rc=0、body 是 {"message":"Bad credentials"}
+#   ⇒ 两份数据都「成功」但内容为空 ⇒ 对账表空 ⇒ 报 RELEASE-RECONCILE-OK。
+#   这是假绿（看不见它要判的东西），与缺陷 586 同型。
+# shellcheck source=packaging/gh_get.sh
+. "$HERE/gh_get.sh"
+
 REPO=${GH_REPO:-NanzhanGroup/PuXian}
 LIMIT=30
 RERUN=0
 JSON=0
 FIXTURE=""
 API=${GH_API:-https://api.github.com}
-HERE=$(cd "$(dirname "$0")" && pwd)
 IGNORE=${GH_IGNORE:-$HERE/release_reconcile.ignore}
 
 usage(){ sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -60,14 +67,23 @@ while [ $# -gt 0 ]; do
 done
 
 fetch(){
-    local path="$1" file="$2"
+    local path="$1" file="$2" tmp rc=0
     if [ -n "$FIXTURE" ]; then
         cat "$FIXTURE/$file" 2>/dev/null || { echo "❌ fixture 缺 $file" >&2; return 1; }
         return 0
     fi
-    [ -n "${GH_TOKEN:-}" ] || { echo "❌ 未设置 GH_TOKEN（令牌只走环境变量）" >&2; return 2; }
-    curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-         "$API/repos/$REPO$path" || return 1
+    # 缺陷 709：取不到数（rc≥4）一律响亮失败，绝不让调用方拿到「空数据当成功」
+    tmp="$(mktemp)"
+    gh_get "/repos/$REPO$path" "$tmp" || rc=$?
+    if [ "$rc" -ge 4 ] 2>/dev/null || [ "$GH_LAST_CODE" != "200" ]; then
+        rm -f "$tmp"
+        echo "❌ [709] 取不到 $path（$GH_AUTH_STATE http=$GH_LAST_CODE）" >&2
+        echo "   ⇒ 测量失败不是「没有数据」：对账不敢在缺数据时判 OK" >&2
+        return 1
+    fi
+    [ "$rc" = 3 ] && echo "⚠️ [709] 令牌失效（$GH_AUTH_STATE）⇒ 已降级匿名取数：$path" >&2
+    cat "$tmp"; rm -f "$tmp"
+    return 0
 }
 
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
@@ -93,9 +109,13 @@ for pg in 1 2; do
     if [ -n "$FIXTURE" ]; then
         src="$FIXTURE/tags.json"; [ "$pg" = 2 ] && src="$FIXTURE/tags2.json"
         [ -f "$src" ] && { cp "$src" "$f"; TAG_FILES="$TAG_FILES $f"; }
-    elif curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-             "$API/repos/$REPO/tags?per_page=100&page=$pg" > "$f" 2>/dev/null && grep -q '\[' <<< "$(head -c1 "$f" 2>/dev/null)"; then
-        TAG_FILES="$TAG_FILES $f"
+    else
+        _rc=0; gh_get "/repos/$REPO/tags?per_page=100&page=$pg" "$f" || _rc=$?
+        if [ "$_rc" -ge 4 ] 2>/dev/null; then
+            echo "⚠️ [709] 取不到 git tag 列表 page=$pg（$GH_AUTH_STATE http=$GH_LAST_CODE）" >&2
+        elif [ "$GH_LAST_CODE" = "200" ]; then
+            TAG_FILES="$TAG_FILES $f"
+        fi
     fi
 done
 [ -n "$TAG_FILES" ] || echo "⚠️ [586] 拿不到 git tag 列表 ⇒ 本次无法发现「既无 Release 又无 run」的 tag（能力降级）" >&2
@@ -108,8 +128,11 @@ LATEST_FILE=""
 if [ -n "$FIXTURE" ]; then
     [ -f "$FIXTURE/latest.json" ] && LATEST_FILE="$FIXTURE/latest.json"
 else
-    if curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-         "$API/repos/$REPO/releases/latest" > "$W/latest.json" 2>/dev/null && grep -q '"tag_name"' "$W/latest.json"; then
+    _rc=0; gh_get "/repos/$REPO/releases/latest" "$W/latest.json" || _rc=$?
+    if [ "$_rc" -ge 4 ] 2>/dev/null; then
+        echo "❌ [709] 取不到 releases/latest（$GH_AUTH_STATE http=$GH_LAST_CODE）⇒ 不降级：latest 一致性无法校验就不能报 OK" >&2
+        exit 2
+    elif [ "$GH_LAST_CODE" = "200" ]; then
         LATEST_FILE="$W/latest.json"
     fi
 fi
@@ -233,13 +256,11 @@ if [ "$RERUN" = 1 ]; then
         [ "$verdict" = "NO-RELEASE-CANCELLED" ] || continue
         [ "$rid" != "-" ] || continue
         if [ -n "$FIXTURE" ]; then RERUN_DONE="$RERUN_DONE $tag(fixture)"; continue; fi
-        code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-               -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-               "$API/repos/$REPO/actions/runs/$rid/rerun")
-        case "$code" in
-          201|202|204) RERUN_DONE="$RERUN_DONE $tag";;
-          *)           RERUN_FAIL="$RERUN_FAIL $tag(HTTP $code)";;
-        esac
+        if ! gh_write POST "/repos/$REPO/actions/runs/$rid/rerun" '{}' /dev/null; then
+            RERUN_FAIL="$RERUN_FAIL $tag($GH_AUTH_STATE/HTTP $GH_LAST_CODE)"
+        else
+            RERUN_DONE="$RERUN_DONE $tag"
+        fi
     done < "$W/table.tsv"
 fi
 

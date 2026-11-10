@@ -2010,3 +2010,14 @@ run m387_lint_dir bash examples/m387_lint_dir/verify.sh
 #   负控（子自测内）：回退 703 修法 ⇒ C1 红；回退 sha 展开 ⇒ C7 红。
 #   注：本门只测仓库内 packaging/ 那份唯一实现，不碰 /data/autodrive 部署副本。
 run m388_publish_chain bash examples/m388_publish_chain/verify.sh
+# ── m389_gh_auth（M389 · 缺陷 709）──────────────────────────────────────────
+#   GitHub 取数的「测量失败被当成测量结果」。2026-11-10 实测：令牌 15:43 失效后，
+#   curl 401 仍 rc=0、body 是 {"message":"Bad credentials"} ⇒ 判据读到 assets=0；
+#   更严重的是三个自证脚本：latest_guard 读空 latest ⇒ PENDING + exit 0（假绿）、
+#   release_reconcile 空表 ⇒ OK（假绿）、latest_verify 轮询到 BLOCKED（指错方向）。
+#   判据：C1 token-ok · C2 失效令牌+匿名 ⇒ rc=3 且答案一致 · C3 禁止匿名 ⇒ rc=4
+#     · C4 两侧都取不到 ⇒ latest_guard 必须 exit 2（不许 PENDING/OK）
+#     · C5 404 是合法答案（与「读不到」分开）· C6 静态守卫（唯一实现/无裸 curl/ENV-FAIL）
+#     · C7 令牌本体不落输出。
+#   负控 2 条：401 当成功 ⇒ C2 红；取不到数返 rc=0+空文件 ⇒ C4 红（均带前提自证 P3）。
+run m389_gh_auth bash examples/m389_gh_auth/verify.sh

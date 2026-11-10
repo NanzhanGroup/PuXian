@@ -99,7 +99,10 @@ if grep -q OK <<< "$_jout"; then ok "--json OK 档"; else ng "--json OK 档"; fi
 # ── [7] 用法/环境 ──
 printf '\n【7】用法与环境\n'
 bash "$SH" --bogus >/dev/null 2>&1; chk "未知选项 rc" "$?" "2"
-( env -u GH_TOKEN bash "$SH" >/dev/null 2>&1 ); chk "无令牌无 fixture ⇒ rc=2" "$?" "2"
+# 缺陷 709（M389）：加了 /data/pat.md 兜底后，裸 env -u GH_TOKEN 仍会读到宿主机的真令牌 ⇒
+#   这条用例就不再测「无令牌」，而是真的联网跑（实测实得 rc=0）。判据必须自己构造前提：
+#   把 GH_PAT_FILE 指到不存在的路径，才真的证明「无令牌 ⇒ rc=2」。
+( env -u GH_TOKEN GH_ALLOW_ANON=0 GH_PAT_FILE="$W/no-such-pat" bash "$SH" >/dev/null 2>&1 ); chk "无令牌 + 禁止匿名 + 无 fixture ⇒ rc=2" "$?" "2"
 bash "$SH" --help >/dev/null 2>&1 && ok "--help rc=0" || ng "--help rc≠0"
 
 # ── [8] 负控 A：比较恒等 ⇒ 坏档变绿 ──

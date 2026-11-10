@@ -1,3 +1,104 @@
+## M389：取数失败不再冒充「没有数据」—— GitHub 取数收成唯一实现 + 一扇新门（缺陷 709）
+
+> **一句话**：令牌过期本身不致命，致命的是它让「读不到」长得和「没发布」一模一样。
+> 本轮把三份各自 curl 的发布自证脚本收成 `packaging/gh_get.sh`，新增 `m389_gh_auth` 门：
+> **测量失败必须响亮，404 才是「确实没有」。**
+
+### 一 现场：401 是怎么变成「资产 = 0」的
+
+```
+20:22 实测 /data/pat.md（mtime 2026-10-11）：
+  GET /user                  → HTTP 401 {"message":"Bad credentials"}
+  GET /releases/latest       → HTTP 401
+
+旧写法：curl -sS -H "Authorization: Bearer $PAT" ... | grep -c '"browser_download_url"'
+  curl 401 时 **rc=0**（没加 -f），响应体是 {"message":"Bad credentials"}
+  ⇒ grep 计数 0 ⇒ assets=0
+  ⇒ 判据读到的是「资产还没出」，而不是「我读不到」
+```
+
+失效时刻也在日志里：M386 的观察器 14:48–15:43 之间 `assets=2→4`、`latest=v0.2.386`
+都是真值（那些请求带的就是这个令牌），15:43 之后才失效。
+
+### 二 三条假绿出口（比「报警失效」更严重）
+
+```
+latest_guard.sh     读空 latest ⇒ CURRENT="" ⇒ EXPECTED_HAS_RELEASE=0
+                    ⇒ emit PENDING + **exit 0**     ← 把「读不到」说成「还没发」
+release_reconcile   两份数据都 rc=0 但内容为空 ⇒ 对账表空 ⇒ 报 OK
+                    （与缺陷 586 同型：判据看不见它要判的东西）
+latest_verify.sh    轮询 30min ⇒ BLOCKED，文案指向「查 Release job」——指错方向
+```
+
+三者共同点：**不崩溃，只是安静地少算**。与 696 / 697 / 703 / 705 / 707 同族，
+这是本族第 6 例。
+
+### 三 改法：唯一实现 + 明确返回码
+
+`packaging/gh_get.sh`（契约写死在文件头）：
+
+```
+gh_get <path> <outfile>
+  0  取到可解释的答案（200 有效 JSON / 404 显式不存在）
+  3  令牌失效，已降级匿名取到答案（可用，但**必须留痕**）
+  4  取不到数 —— 调用方必须响亮失败，绝不许当成「空结果」
+副作用  GH_LAST_CODE · GH_AUTH_STATE(token-ok / token-invalid-anon-ok / anon-ok /
+        notfound / fail-<code> / no-token-no-anon)
+gh_write <method> <path> <body> <out>   写操作不降级匿名（401 ⇒ write-token-invalid）
+```
+
+调用方的改动只做一件事：**把「取不到」与「确实没有」分开**。
+
+```
+latest_guard      rc≥4 ⇒ exit 2（环境错），404 ⇒ PENDING；
+                  写操作（PATCH make_latest）改走 gh_write
+release_reconcile fetch 取不到 ⇒ 直接失败（旧写法 curl 401 时 rc=0，`|| exit 2` 从未触发）
+latest_verify     连续 3 次 guard rc=2 ⇒ ENV-FAIL（rc=4），与 BLOCKED 分开
+```
+
+「无令牌」不再等于错误：仓库公开 ⇒ 匿名可读（自动降级并在日志标 DEGRADED）；
+只有显式 `GH_ALLOW_ANON=0` 且无令牌才算环境错（`gh_get` 里同一处判断）。
+
+### 四 新门 m389_gh_auth：31 判据 · 2 负控 · 3 条前提自证
+
+夹具是 127.0.0.1 上的假 GitHub（随机端口、不出网、不读真令牌），用路径前缀造三种故障：
+`/down/` = 全 500，`/nf/` = 只让 releases/latest 404。
+
+```
+C1 有效令牌 ⇒ token-ok          C5 404 = 合法答案（与「读不到」分开）
+C2 失效+匿名 ⇒ rc=3 且答案一致    C6 静态守卫（唯一实现 / 无裸 curl / ENV-FAIL）
+C3 禁止匿名 ⇒ rc=4               C7 令牌本体不落输出
+C4 两侧都取不到 ⇒ latest_guard 必须 exit 2（不许 PENDING/OK）
+负控 A 401 当成功 ⇒ C2 红   负控 B 取不到数返 rc=0+空文件 ⇒ C4 红
+前提 P1 坏令牌真回 401 · P2 匿名真回 200 · P3 负控副本 diff 非空（否则「没红」可能是没换成）
+```
+
+### 五 自测里的「假前提」——本轮最值钱的一条
+
+加兜底读 `/data/pat.md` 之后，两条旧用例（`env -u GH_TOKEN` ⇒ 期望 rc=2）**悄悄失效**：
+
+```
+selftest_latest_guard   「无令牌无 fixture ⇒ rc=2」实得 rc=0
+selftest_reconcile      「无 GH_TOKEN 且无 fixture ⇒ rc=2」实得 rc=0
+```
+
+不是回归，是**判据的前提被改掉了**：宿主机现在真有一份可读的令牌，
+`env -u GH_TOKEN` 已经不再等于「没有令牌」，用例于是变成「真的联网跑」。
+与 CRITERIA 第 4 条（负控必须有前提自证）同一形状。
+
+修法：用例自己构造前提 —— `GH_PAT_FILE=<不存在的路径> GH_ALLOW_ANON=0`，
+才真的证明「无令牌 + 禁止匿名 ⇒ rc=2」。
+
+### 六 边界（如实登记）
+
+```
+· 匿名限流 60/h（令牌 5000/h）⇒ 降级后只适合少量取数；高频轮询仍在观察器里自适应放宽
+· gh_get 只认 { 或 [ 开头的响应体；中间设备插页（HTML）按「取不到数」处理，不当空结果
+· 本轮的「401 降级」不能替代令牌管理：/usr/local/sbin/dy-pat-check.sh（每 6h）负责到期预警
+· 队列 Q388-2：/data/autodrive 的部署副本（观察器等）仍各有一份旧实现，下轮统一改为 source 唯一实现
+```
+
+
 ## M388：发布链「静默 / 重复」清零 —— 七份复制脚本收成一份 + 一扇新门（缺陷 698/703）
 
 > **一句话**：m380 / m381b / m382 / m383 / m384 / m386 / m387 每轮复制一份

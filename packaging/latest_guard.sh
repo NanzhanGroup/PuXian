@@ -26,8 +26,18 @@
 #     check_release_assets.sh / release_reconcile.sh 负责（各管一段，不重叠）
 #   · 仓库一个 Release 都没有 ⇒ 拿不到 latest ⇒ **响亮降级**（rc=0 + stderr 告警），不判红也不静默
 #   · --api-fixture 模式只判「发现」不判「修复」（不联网 ⇒ 不能 PATCH）
+#
+# ★缺陷 709（M389）：取数改走 packaging/gh_get.sh 唯一实现。
+#   旧写法 curl 401 时 rc=0、响应体是 {"message":"Bad credentials"} ⇒ api_get 返回假、
+#   latest 读空 ⇒ 走到「EXPECTED_HAS_RELEASE=0」⇒ emit PENDING + **exit 0**
+#   ＝把「令牌失效、读不到数」当成「期望版本还没发 Release」（假绿）。
+#   现契约：取不到数（rc≥4）⇒ exit 2 并点名 auth 状态；404 才是「一个 Release 都没有」。
 # ============================================================
 set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=packaging/gh_get.sh
+. "$HERE/gh_get.sh"
 
 REPO=${GH_REPO:-NanzhanGroup/PuXian}
 FIX=0; JSON=0; FIXTURE=""
@@ -46,19 +56,28 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$FIXTURE" ] && [ -z "${GH_TOKEN:-}" ]; then
-  echo "❌ 未设置 GH_TOKEN（令牌只走环境变量），也未给 --api-fixture" >&2
+# 无令牌本身**不是**错：仓库公开 ⇒ gh_get 会降级匿名（并在日志标 DEGRADED）。
+# 只有「显式禁止匿名（GH_ALLOW_ANON=0，写操作/precise 计数场景）且无令牌」才算环境错。
+if [ -z "$FIXTURE" ] && [ "$GH_ALLOW_ANON" != "1" ] && [ -z "${GH_TOKEN:-}" ] && [ ! -r "$GH_PAT_FILE" ]; then
+  echo "❌ 无令牌可用且已禁止匿名（GH_ALLOW_ANON=0），也未给 --api-fixture" >&2
   exit 2
 fi
 
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
-api_get(){   # $1=path $2=outfile  ⇒ 0 成功
-  curl -sS -H "Authorization: Bearer ${GH_TOKEN:-}" -H "Accept: application/vnd.github+json" \
-       "$API/repos/$REPO$1" -o "$2" 2>/dev/null || return 1
-  grep -q '\[' <<< "$(head -c1 "$2" 2>/dev/null)" && return 0
-  grep -q '"tag_name"\|"id"' "$2" 2>/dev/null && return 0
-  return 1
+api_get(){   # $1=path $2=outfile  ⇒ 0 成功（含 404；取不到数才返回 1）
+  local rc=0
+  gh_get "/repos/$REPO$1" "$2" || rc=$?
+  case "$rc" in
+    0) [ "$GH_AUTH_STATE" = "notfound" ] && return 1; return 0;;   # 404 = 资源不存在（合法答案）
+    3) echo "⚠️ [709] 令牌失效（$GH_AUTH_STATE）⇒ 已降级匿名取数：$1" >&2; return 0;;
+    *) echo "❌ [709] 取不到数：$1（$GH_AUTH_STATE http=$GH_LAST_CODE）" >&2; return 1;;
+  esac
+}
+
+api_get_soft(){  # 同 api_get，但区分不出数（rc≥4）与 404，供「允许降级」的调用点用
+  local rc=0; gh_get "/repos/$REPO$1" "$2" || rc=$?
+  GH_LAST_RC=$rc; return 0
 }
 
 # ---- ① git tag 列表（两页足够：仓库单页 100 个，最新版本都在第一页）----
@@ -82,7 +101,16 @@ LATEST_FILE=""
 if [ -n "$FIXTURE" ]; then
     [ -f "$FIXTURE/latest.json" ] && LATEST_FILE="$FIXTURE/latest.json"
 else
-    api_get "/releases/latest" "$W/latest.json" && LATEST_FILE="$W/latest.json"
+    GH_LAST_RC=0
+    api_get_soft "/releases/latest" "$W/latest.json"
+    if [ "$GH_LAST_RC" -ge 4 ] 2>/dev/null; then
+        echo "❌ [709] 取不到 releases/latest（$GH_AUTH_STATE http=$GH_LAST_CODE）" >&2
+        echo "   ⇒ 这是**测量失败**，不是「一个 Release 都没有」。判 PENDING/OK 都会把令牌/网络问题藏起来。" >&2
+        echo "   下一步：curl -sS -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer \$(cat /data/pat.md)\" $API/user   # 401 = 令牌失效" >&2
+        gh_auth_state >&2
+        exit 2
+    fi
+    [ "$GH_AUTH_STATE" = "notfound" ] || LATEST_FILE="$W/latest.json"
 fi
 
 EXPECTED=$(python3 - "$TAG_FILES" <<'PY'
@@ -143,9 +171,14 @@ EXPECTED_HAS_RELEASE=0
 if [ -n "$FIXTURE" ]; then
     [ -f "$FIXTURE/expected_release.json" ] && EXPECTED_HAS_RELEASE=1
 else
-    _code=$(curl -sS -o "$W/exp.json" -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN:-}" \
-         -H "Accept: application/vnd.github+json" "$API/repos/$REPO/releases/tags/$EXPECTED" 2>/dev/null) || _code=""
-    [ "$_code" = "200" ] && EXPECTED_HAS_RELEASE=1
+    GH_LAST_RC=0
+    api_get_soft "/releases/tags/$EXPECTED" "$W/exp.json"
+    if [ "$GH_LAST_RC" -ge 4 ] 2>/dev/null; then
+        echo "❌ [709] 取不到 $EXPECTED 的 Release 存在性（$GH_AUTH_STATE http=$GH_LAST_CODE）" >&2
+        echo "   ⇒ 「还没发」与「读不到」必须分开：不判 PENDING，直接响亮退出" >&2
+        exit 2
+    fi
+    [ "$GH_AUTH_STATE" != "notfound" ] && EXPECTED_HAS_RELEASE=1
 fi
 
 if [ "$EXPECTED_HAS_RELEASE" = 0 ]; then
@@ -160,20 +193,16 @@ echo "   ⇒ tools/install.sh 取 latest ⇒ 用户会装到 $CURRENT 的树（�
 
 if [ "$FIX" = 1 ] && [ -z "$FIXTURE" ]; then
     # 只把**期望的**那个 Release 标成 latest（幂等：重复执行结果相同）
-    rid=$(curl -sS -H "Authorization: Bearer ${GH_TOKEN:-}" -H "Accept: application/vnd.github+json" \
-              "$API/repos/$REPO/releases/tags/$EXPECTED" 2>/dev/null \
-          | python3 -c 'import json,sys; print((json.load(sys.stdin) or {}).get("id") or "")' 2>/dev/null || true)
+    rid=$(api_get "/releases/tags/$EXPECTED" "$W/rid.json" && python3 -c 'import json,sys; print((json.load(open(sys.argv[1])) or {}).get("id") or "")' "$W/rid.json" 2>/dev/null || true)
     if [ -z "$rid" ]; then
         echo "❌ 修复失败：找不到 $EXPECTED 的 Release（先补发布再谈 latest）" >&2
         emit STALE-NO-RELEASE; exit 1
     fi
-    code=$(curl -sS -o "$W/patch.json" -w '%{http_code}' -X PATCH \
-                -H "Authorization: Bearer ${GH_TOKEN:-}" -H "Accept: application/vnd.github+json" \
-                -d '{"latest":true}' "$API/repos/$REPO/releases/$rid")
-    case "$code" in
-      200) ;;
-      *) echo "❌ 修复失败：PATCH make_latest 返回 HTTP $code" >&2; emit STALE-PATCH-FAIL; exit 1;;
-    esac
+    if ! gh_write PATCH "/repos/$REPO/releases/$rid" '{"latest":true}' "$W/patch.json"; then
+        echo "❌ 修复失败：PATCH make_latest 失败（$GH_AUTH_STATE http=$GH_LAST_CODE）" >&2
+        echo "   ⇒ 写操作不降级匿名：若 $GH_AUTH_STATE = write-token-invalid，就是令牌缺 Releases: Read and write" >&2
+        emit STALE-PATCH-FAIL; exit 1
+    fi
     # **重新读一遍**（不信任 PATCH 回执 —— 与 GATE_8「复核已发布的包别只看仓库内件」同口径）
     api_get "/releases/latest" "$W/latest2.json" || { echo "❌ 修复后无法回读 latest" >&2; exit 1; }
     now=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])) or {}).get("tag_name") or "")' "$W/latest2.json" 2>/dev/null || true)

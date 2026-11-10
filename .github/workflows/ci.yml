@@ -1743,6 +1743,21 @@ jobs:
           bash examples/m388_publish_chain/verify.sh > /tmp/v_pubchain.log 2>&1 || { echo "❌ m388_publish_chain 门失败（发布链静默/重复回归）"; tail -40 /tmp/v_pubchain.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^OK  ' /tmp/v_pubchain.log | tail -10
           echo "✅ m388_publish_chain（sha 展开 / 单出口 / 锁 fd / 孤儿判定 / 26 条子自测）PASS"
+      - name: m389_gh_auth（GitHub 取数：测量失败≠测量结果 · M389 · 缺陷 709）
+        # 判据：C1 token-ok · C2 失效令牌+匿名 ⇒ rc=3 且答案与好令牌一致
+        #   · C3 禁止匿名 + 失效令牌 ⇒ rc=4（不许把空 body 当成功）
+        #   · C4 两侧都取不到（HTTP 500）⇒ latest_guard 必须 exit 2，不许 PENDING/OK（假绿）
+        #   · C5 404 是合法答案（与「读不到」分开）
+        #   · C6 静态守卫：直接取数的脚本走 packaging/gh_get.sh；无裸 curl+Authorization；
+        #        latest_verify 必须识别 ENV-FAIL（否则把「读不到」说成 BLOCKED，指错方向）
+        #   · C7 令牌本体不落输出
+        #   负控 2 条（401 当成功 ⇒ C2 红；取不到数返 rc=0+空文件 ⇒ C4 红），均带前提自证 P3。
+        #   ⚠ 夹具是本机 127.0.0.1 上的假 GitHub（随机端口），不出网、不读真令牌。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m389_gh_auth/verify.sh > /tmp/v_ghauth.log 2>&1 || { echo "❌ m389_gh_auth 门失败（取数失败被当成空结果）"; tail -40 /tmp/v_ghauth.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅ ' /tmp/v_ghauth.log | tail -6
+          echo "✅ m389_gh_auth（401 降级 / 测量失败响亮 / 404 语义 / 唯一实现 / 令牌不落地）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
