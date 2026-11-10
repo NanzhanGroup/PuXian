@@ -14,6 +14,12 @@
 #     · 不重试：**收到响应但不是 200**（真错误）、以及 refused（真停机）。
 #   防「重试掩盖真回归」：retried 有上界 n/100（700 次 ⇒ 至多 7 次），
 #   实测窗口只丢 1 条（0.14%），留 7 倍余量；若变成「每 N 条丢一条」，上界当场判红。
+#
+# ── 2026-11-10 M387 补（第二轮全量门红 · 缺陷 701）──────────────────────────
+#   connect 阶段返 errno=104(ECONNRESET) 时**不再记 refused**：104 证明握手到了对端
+#   （监听存在），只是连接被中断 ⇒ 属「零字节即断」，按下面的重试路径走（≤3 次）。
+#   只有 111(ECONNREFUSED) 才算停机。否则满负载下 RST 抢在 connect 结算前到达就会
+#   被误记 refused=1 ⇒ 假红（红日志实证：refused=1 bad=2 retried=6/7）。
 # ────────────────────────────────────────────────────────────────────────────
 let a = args()
 let port = int(a[1])
@@ -29,8 +35,23 @@ while i < n:
     while settled == 0:
         let c = tcp_connect_ex("127.0.0.1", port)
         if not c["ok"]:
-            refused += 1
-            settled = 1
+            # M387 补（2026-11-10 第二轮全量门红）：connect 阶段的「被 RST」≠「停机」。
+            #   实测（16 核跑满 + 8 分片）：夹具 accept 后立刻 RST 时，RST 可能在 connect()
+            #   结算前抵达 ⇒ connect 返 errno=104(ECONNRESET)。旧实现「not ok ⇒ refused」
+            #   把这种「零字节即断」记成了停机 ⇒ 与 raw==0 的重试同类却被判红（假红）。
+            #   判据收紧到**只认 111(ECONNREFUSED) 为停机**：111 是内核在「无人监听」时
+            #   唯一会返回的错；104 说明握手已抵达对端（监听存在），连接被中断而已 ⇒
+            #   按「零字节即断」重试同一请求，同样受 3 次上界约束（不许变成无限重试）。
+            #   负控（verify.sh [7]）：端口无人监听 ⇒ 必须 ok=0 refused=3 bad=0 retried=0。
+            if c["stage"] == "connect" and c["errno"] == 104:
+                attempt += 1
+                retried += 1
+                if attempt >= 3:
+                    bad += 1
+                    settled = 1
+            else:
+                refused += 1
+                settled = 1
         else:
             let fd = c["fd"]
             tcp_send_ex(fd, "GET /index.html HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")

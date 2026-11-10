@@ -156,7 +156,7 @@ examples/m175_bytes_stderr/popen_badopt.px src=004b0456e49bb9a5 rc=0 out=6a1b7e6
 examples/m175_bytes_stderr/popen_default.px src=0ee65fa043eea79f rc=0 out=69023009bd03eb685e91cd7f5a56d71b err=e3b0c44298fc1c14
 examples/m175_bytes_stderr/popen_null.px src=cce5f62a26649f0e rc=0 out=4c57796a70ea38fb79e3f59afad2aecf err=e3b0c44298fc1c14
 examples/m175_bytes_stderr/popen_pipe.px src=43b58031b6b14f7f rc=0 out=a517c0595f17e100d0051ba9e1b28ffb err=e3b0c44298fc1c14
-examples/m176_reuseport/client.px src=61d21699cbcb0588 rc=0 out=a3ce636ff8482e29c9ebcdaefec7a0c0 err=e3b0c44298fc1c14
+examples/m176_reuseport/client.px src=d3c545ed623cbbc9 rc=0 out=9e1e195df338a4a5b31c34c64a911986 err=e3b0c44298fc1c14
 examples/m176_reuseport/srv.px src=49585b4fcee06e60 rc=0 out=836524d0093e01cac0a58b2c250bde71 err=e3b0c44298fc1c14
 examples/m177_builtin_parity/err_min_empty.px src=a72412d2f887fb9d rc=0 out=ab4bff7506826cbbd936f704dcd729ce err=e3b0c44298fc1c14
 examples/m177_builtin_parity/err_sum_int.px src=321ec12b2688c39d rc=0 out=73a3d89182c15e7d3e827762252e8bbf err=e3b0c44298fc1c14

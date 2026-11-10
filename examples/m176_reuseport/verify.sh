@@ -182,6 +182,22 @@ else
     chk "重试路径自证（需要 client 构建产物）" "false"
 fi
 
+echo "=== [7] 负控：端口无人监听 ⇒ **必须**记 refused（111），不许被算成重试 ==="
+# 背景（缺陷 701 · 2026-11-10）：M387 第二轮全量门红，红在 [6] 的 refused=1。
+#   根因是 connect 阶段返 errno=104(ECONNRESET) 被记成了 refused —— 104 说明握手到了
+#   对端（监听存在），只是连接被中断，属「零字节即断」。client.px 已把判据收紧到
+#   「只有 111(ECONNREFUSED) 才算停机」，本负控负责证明**放宽 104 没有放宽 111**：
+#   端口真没人听 ⇒ 三次请求必须全部记 refused（refused=3 bad=0 retried=0）并判红。
+if [ -x "$D/build/client" ]; then
+    NPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+    timeout 20 "$D/build/client" "$NPORT" 3 > "$W/sc.nolisten.out" 2>&1; NRRC=$?
+    echo "     无监听端口 $NPORT: RC=$NRRC $(cat "$W/sc.nolisten.out")" >&2
+    chk "负控：真停机（111）仍判红 ⇒ ok=0 refused=3 bad=0 retried=0" \
+        "[ \"$NRRC\" = 1 ] && grep -q 'CLIENT ok=0 refused=3 bad=0 retried=0' $W/sc.nolisten.out"
+else
+    chk "负控：真停机（111）仍判红（需要 client 构建产物）" "false"
+fi
+
 echo
 echo "结果: $pass 通过 / $fail 失败"
 if [ $fail -eq 0 ]; then echo "M176-VERIFY-OK"; fi

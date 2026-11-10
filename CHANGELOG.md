@@ -107,6 +107,28 @@ P2/P3 嵌套与隐藏样本在场 · P4 入库版 `bootstrap/pxlint` 对目录�
 回滚          revert 本提交（pxlint 回到「目录当文件」= 恢复假绿，所以不许单独回滚门）
 ```
 
+### 八 补（第二轮全量门 2 红 · 缺陷 701）
+
+两红都不是运行时缺陷，但都不是「重跑就好了」，各有一条结构性原因：
+
+- **红 1 `fmt_check`**：本轮改 `tools/pxlint.px` 时留下 3 处「顶层 def 之间的空行」，`pxfmt` 要求删掉。
+  修法：`./bootstrap/pxfmt -w tools/pxlint.px`（只删 3 个空行，无语义变更；二进制无需重烘）。
+- **红 2 `m176_reuseport` §6**：红在 `refused=1 bad=2 retried=6/7`（判据要 `refused=0 bad=3 retried=9`）。
+  根因：RST 夹具 accept 后立刻 RST，**满负载下 RST 抢在 `connect()` 结算前抵达** ⇒
+  `tcp_connect_ex` 返 `errno=104(ECONNRESET)`；旧客户端把「不是 ok」一律记成 `refused`（停机），
+  于是「零字节即断」被记成「监听空窗」⇒ 假红。实测：16 核跑满 + 16 轮，修复前红 5/10；
+  诊断端打点确认 `stage=connect errno=104`（不是 111）。
+  修法：`client.px` 判据收紧 —— **只有 111(ECONNREFUSED) 才算停机**（内核只在「无人监听」时给 111），
+  104 归入「零字节即断」按每请求 3 次上界重试（**不是**无界重试）。
+  - 负控（新增 §7）：对**无人监听**端口 ⇒ 必须 `ok=0 refused=3 bad=0 retried=0` 且 rc=1
+    ⇒ 证明「放宽 104」没有连带放宽 111。
+  - 分支自证：并发施压 8 轮，104 分支共走 **63 次**，`refused` 恒 0 ⇒ 新分支确实在跑、不是摆设。
+- 验证：`m176_reuseport` **11/11 绿**（§1–§4 主场景 + §5 旧负控 + §6 + §7 新负控）；
+  `fmt_check`（selfhost+tools+stdlib）全绿；负载下 §6 形状 **16/16** 稳定 `retried=9 bad=3`。
+- 改动面：`examples/m176_reuseport/client.px` · `examples/m176_reuseport/verify.sh` · `tools/pxlint.px`（格式化）。
+  **无版本串变动 ⇒ 不重烘、不动 2 份自举基准**。
+- 回滚：revert 本提交（回到「104 记停机」= 满负载假红；回到空行 = `fmt_check` 红）。
+
 
 
 > **一句话**：清歌清单里「会改可观测行为」的三条，按**有没有契约保护**分两种处理：
