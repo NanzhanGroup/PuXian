@@ -144,6 +144,43 @@ N5  源码 0.2.369 ⇄ tag v0.2.367（差 2）· 368 **未登记** ⇒ 必须红
 > 判据 grep 行首里程碑号 ⇒ 读到「已登记 0」，门照样红。**判据没骗人，是文件写错了** ——
 > 这也说明它确实在按行首解析，不是模糊匹配。
 
+### 十 缺陷 695：自举基准的「重定基」必须排在「重烘」之后（第二轮全量门唯一的红）
+
+第二轮全量（11:35 起，HEAD 03d4939）**绿 262 / 红 1**，唯一的红是 `bootstrap_prove`：
+
+```
+13536,13537c13536,13541
+<     LXValue px_err_1622_val = px_null();
+---
+>     LXValue _v1622 = px_uninit();   ← 多出 4 个临时槽
+      ... 13613 / 13772 / 13792 起整个文件临时号 +4 级联
+```
+
+复现：`cd selfhost && ./bootstrap_prove.sh`（8s，B.c 与基准 103 hunk / 3126+ 3066-）。
+
+**根因不是语义错，是基准与二进制不同步**：多出的 4 个 `_v` 槽恰好对应 M386 在
+`codegen.px` 的 `cg_generate` 里新增的 4 个局部变量（`expl_main`/`ei4`/`est4`/`eex4`），
+其后全文件临时号 +4、`px_srcline` 顺移 —— 即「新 pxc 的产物」对「旧 pxc 生成的金标准」。
+顺序错在：**10:47 用未重烘的 pxc 重定基 golden，11:17 才把 `build/compiler_vm` 烘进 `bootstrap/pxc`**；
+基准是旧编译器的产物，二进制却是新编译器 ⇒ 自证必然失败。
+（文档里那句「改过基准后入库二进制同步重烘」只说了「要重烘」，没说**先后**。）
+
+**修**：用当前（已重烘）的 pxc 重定基两条基准，四条自证全绿：
+```
+selfhost/bootstrap_prove.sh --update-golden      ⇒ 新基准 == B.c 逐字节（21135 行）
+selfhost/bootstrap_prove.sh                      ⇒ ✅ 自举成立
+selfhost/bootstrap_prove_bc.sh --update-golden   ⇒ dump 45272 行，VM 重放逐字节一致
+selfhost/bootstrap_prove_bc.sh                   ⇒ ✅ BC 轨自举成立
+selfhost/engine_parity.sh                        ⇒ 负例 30/30 · 正例 6/6
+selfhost/rebake_bin.sh --check-all               ⇒ 14/14 与源码一致
+```
+
+**副作用面**：只改 `selfhost/golden/compiler.c`、`selfhost/golden/compiler.bc.dump` 两个基准文件
+（+60 行 / 不变量是「基准 == 当前 pxc 产物」）；**未改任何 .px 源码与 runtime**，故不需要重烘。
+**回滚**：`git revert` 本提交即可（基准退回旧值 ⇒ `bootstrap_prove` 恢复为红，不会静默放过）。
+
+> 教训同族于缺陷 694：**流程里的两个步骤有先后依赖时，光写「都要做」不够，要写「谁先谁后」。**
+
 ---
 
 

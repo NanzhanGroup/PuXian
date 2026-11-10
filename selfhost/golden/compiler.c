@@ -13534,8 +13534,12 @@ static LXValue fn_cg_generate(LXValue* args, int nargs, void* ctx) {
     LXValue _v1619 = px_uninit();
     LXValue _v1620 = px_uninit();
     LXValue _v1621 = px_uninit();
-    LXValue px_err_1622_val = px_null();
-    int px_err_1622_proped = 0;
+    LXValue _v1622 = px_uninit();
+    LXValue _v1623 = px_uninit();
+    LXValue _v1624 = px_uninit();
+    LXValue _v1625 = px_uninit();
+    LXValue px_err_1626_val = px_null();
+    int px_err_1626_proped = 0;
     px_srcline(886);
     _v1587 = px_str("/* 由普贤 (PuXian) 编译器自动生成 — px build */\n#include \"runtime.h\"\n#include <string.h>\n#include <stdio.h>\n\n");
     px_srcline(887);
@@ -13611,7 +13615,7 @@ static LXValue fn_cg_generate(LXValue* args, int nargs, void* ctx) {
             px_srcline(928);
             (void)(px_method(px_get_global("cg_globals"), "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1590, px_int(2LL))}, 1)}, 1));
             px_srcline(929);
-            if (px_is_truthy(({ LXValue _t1623 = px_eq(px_index(_v1590, px_int(1LL)), px_str("Let")); px_is_truthy(_t1623) ? _t1623 : px_eq(px_index(_v1590, px_int(1LL)), px_str("Const")); }))) {
+            if (px_is_truthy(({ LXValue _t1627 = px_eq(px_index(_v1590, px_int(1LL)), px_str("Let")); px_is_truthy(_t1627) ? _t1627 : px_eq(px_index(_v1590, px_int(1LL)), px_str("Const")); }))) {
                 px_srcline(930);
                 px_index_set(px_get_global("cg_immutables"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1590, px_int(2LL))}, 1), px_int(1LL));
             }
@@ -13770,7 +13774,7 @@ static LXValue fn_cg_generate(LXValue* args, int nargs, void* ctx) {
         px_srcline(1013);
         _v1591 = px_index(_v1590, px_int(0LL));
         px_srcline(1014);
-        if (px_is_truthy(({ LXValue _t1629 = ({ LXValue _t1628 = ({ LXValue _t1627 = ({ LXValue _t1626 = ({ LXValue _t1625 = ({ LXValue _t1624 = px_ne(_v1591, px_str("FuncDef")); px_is_truthy(_t1624) ? px_ne(_v1591, px_str("StructDef")) : _t1624; }); px_is_truthy(_t1625) ? px_ne(_v1591, px_str("EnumDef")) : _t1625; }); px_is_truthy(_t1626) ? px_ne(_v1591, px_str("TraitDef")) : _t1626; }); px_is_truthy(_t1627) ? px_ne(_v1591, px_str("ImplDef")) : _t1627; }); px_is_truthy(_t1628) ? px_ne(_v1591, px_str("Import")) : _t1628; }); px_is_truthy(_t1629) ? px_ne(_v1591, px_str("ExternDef")) : _t1629; }))) {
+        if (px_is_truthy(({ LXValue _t1633 = ({ LXValue _t1632 = ({ LXValue _t1631 = ({ LXValue _t1630 = ({ LXValue _t1629 = ({ LXValue _t1628 = px_ne(_v1591, px_str("FuncDef")); px_is_truthy(_t1628) ? px_ne(_v1591, px_str("StructDef")) : _t1628; }); px_is_truthy(_t1629) ? px_ne(_v1591, px_str("EnumDef")) : _t1629; }); px_is_truthy(_t1630) ? px_ne(_v1591, px_str("TraitDef")) : _t1630; }); px_is_truthy(_t1631) ? px_ne(_v1591, px_str("ImplDef")) : _t1631; }); px_is_truthy(_t1632) ? px_ne(_v1591, px_str("Import")) : _t1632; }); px_is_truthy(_t1633) ? px_ne(_v1591, px_str("ExternDef")) : _t1633; }))) {
             px_srcline(1015);
             (void)(px_method(_v1613, "push", (LXValue[]){px_call(px_get_global("cg_gen_stmt"), (LXValue[]){_v1590, px_int(1LL)}, 2)}, 1));
         }
@@ -13790,7 +13794,7 @@ static LXValue fn_cg_generate(LXValue* args, int nargs, void* ctx) {
         px_srcline(1023);
         _v1590 = px_index(_v1588, _v1616);
         px_srcline(1024);
-        if (px_is_truthy(({ LXValue _t1630 = px_eq(px_index(_v1590, px_int(0LL)), px_str("FuncDef")); px_is_truthy(_t1630) ? px_eq(px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1590, px_int(1LL))}, 1), px_str("main")) : _t1630; }))) {
+        if (px_is_truthy(({ LXValue _t1634 = px_eq(px_index(_v1590, px_int(0LL)), px_str("FuncDef")); px_is_truthy(_t1634) ? px_eq(px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1590, px_int(1LL))}, 1), px_str("main")) : _t1634; }))) {
             px_srcline(1025);
              _v1615 = px_bool(true);
             px_srcline(1026);
@@ -13799,73 +13803,99 @@ static LXValue fn_cg_generate(LXValue* args, int nargs, void* ctx) {
         px_srcline(1027);
          _v1616 = px_add(_v1616, px_int(1LL));
     }
-    px_srcline(1028);
-    if (px_is_truthy(_v1615)) {
-        px_srcline(1029);
-        _v1610 = px_str("fn_main");
-        px_srcline(1030);
-         _v1587 = px_add(_v1587, px_add(px_add(px_str("    { LXValue _r = "), _v1610), px_str("(NULL, 0, NULL); int _code = 0;\n")));
-        px_srcline(1031);
-         _v1587 = px_add(_v1587, px_str("      if (px_is_result(_r)) {\n"));
-        px_srcline(1032);
-         _v1587 = px_add(_v1587, px_str("        if (!px_result_ok(_r)) {\n"));
-        px_srcline(1033);
-         _v1587 = px_add(_v1587, px_str("          fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n"));
+    px_srcline(1031);
+    _v1617 = px_bool(false);
+    px_srcline(1032);
+    _v1618 = px_int(0LL);
+    px_srcline(1033);
+    while (px_is_truthy(px_lt(_v1618, px_call(px_get_global("len"), (LXValue[]){_v1588}, 1)))) {
         px_srcline(1034);
-         _v1587 = px_add(_v1587, px_str("          _code = 1;\n"));
+        _v1619 = px_index(_v1588, _v1618);
         px_srcline(1035);
-         _v1587 = px_add(_v1587, px_str("        } else {\n"));
-        px_srcline(1036);
-         _v1587 = px_add(_v1587, px_str("          LXValue _uv = px_result_unwrap(_r);\n"));
-        px_srcline(1037);
-         _v1587 = px_add(_v1587, px_str("          if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n"));
-        px_srcline(1038);
-         _v1587 = px_add(_v1587, px_str("        }\n"));
+        if (px_is_truthy(px_eq(px_index(_v1619, px_int(0LL)), px_str("ExprStmt")))) {
+            px_srcline(1036);
+            _v1620 = px_index(_v1619, px_int(1LL));
+            px_srcline(1037);
+            if (px_is_truthy(({ LXValue _t1636 = ({ LXValue _t1635 = px_eq(px_index(_v1620, px_int(0LL)), px_str("Call")); px_is_truthy(_t1635) ? px_eq(px_index(px_index(_v1620, px_int(1LL)), px_int(0LL)), px_str("Var")) : _t1635; }); px_is_truthy(_t1636) ? px_eq(px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v1620, px_int(1LL)), px_int(1LL))}, 1), px_str("main")) : _t1636; }))) {
+                px_srcline(1038);
+                 _v1617 = px_bool(true);
+            }
+        }
         px_srcline(1039);
-         _v1587 = px_add(_v1587, px_str("      } else if (_r.type == PX_INT) {\n"));
-        px_srcline(1040);
-         _v1587 = px_add(_v1587, px_str("        _code = (int)_r.as.i;\n"));
+         _v1618 = px_add(_v1618, px_int(1LL));
+    }
+    px_srcline(1040);
+    if (px_is_truthy(({ LXValue _t1637 = _v1615; px_is_truthy(_t1637) ? _v1617 : _t1637; }))) {
         px_srcline(1041);
-         _v1587 = px_add(_v1587, px_str("      }\n"));
-        px_srcline(1042);
-         _v1587 = px_add(_v1587, px_str("      return px_exit_code_final(_code);   // M120（qg-issue 76 E1）\n"));
+         _v1615 = px_bool(false);
+    }
+    px_srcline(1042);
+    if (px_is_truthy(_v1615)) {
         px_srcline(1043);
+        _v1610 = px_str("fn_main");
+        px_srcline(1044);
+         _v1587 = px_add(_v1587, px_add(px_add(px_str("    { LXValue _r = "), _v1610), px_str("(NULL, 0, NULL); int _code = 0;\n")));
+        px_srcline(1045);
+         _v1587 = px_add(_v1587, px_str("      if (px_is_result(_r)) {\n"));
+        px_srcline(1046);
+         _v1587 = px_add(_v1587, px_str("        if (!px_result_ok(_r)) {\n"));
+        px_srcline(1047);
+         _v1587 = px_add(_v1587, px_str("          fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n"));
+        px_srcline(1048);
+         _v1587 = px_add(_v1587, px_str("          _code = 1;\n"));
+        px_srcline(1049);
+         _v1587 = px_add(_v1587, px_str("        } else {\n"));
+        px_srcline(1050);
+         _v1587 = px_add(_v1587, px_str("          LXValue _uv = px_result_unwrap(_r);\n"));
+        px_srcline(1051);
+         _v1587 = px_add(_v1587, px_str("          if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n"));
+        px_srcline(1052);
+         _v1587 = px_add(_v1587, px_str("        }\n"));
+        px_srcline(1053);
+         _v1587 = px_add(_v1587, px_str("      } else if (_r.type == PX_INT) {\n"));
+        px_srcline(1054);
+         _v1587 = px_add(_v1587, px_str("        _code = (int)_r.as.i;\n"));
+        px_srcline(1055);
+         _v1587 = px_add(_v1587, px_str("      }\n"));
+        px_srcline(1056);
+         _v1587 = px_add(_v1587, px_str("      return px_exit_code_final(_code);   // M120（qg-issue 76 E1）\n"));
+        px_srcline(1057);
          _v1587 = px_add(_v1587, px_str("    }\n"));
     }
     else {
-        px_srcline(1045);
+        px_srcline(1059);
          _v1587 = px_add(_v1587, px_str("    return px_exit_code_final(0);   // M120（qg-issue 76 E1）\n"));
     }
-    px_srcline(1046);
+    px_srcline(1060);
      _v1587 = px_add(_v1587, px_str("}\n"));
-    px_srcline(1048);
-    _v1617 = px_call(px_get_global("cg_find"), (LXValue[]){_v1587, px_str("int main(")}, 2);
-    px_srcline(1049);
-    if (px_is_truthy(px_ge(_v1617, px_int(0LL)))) {
-        px_srcline(1050);
-        _v1618 = px_slice(_v1587, px_int(0LL), _v1617, px_null());
-        px_srcline(1051);
-        _v1619 = px_slice(_v1587, _v1617, px_call(px_get_global("len"), (LXValue[]){_v1587}, 1), px_null());
-        px_srcline(1052);
-        _v1620 = px_call(px_get_global("cg_find"), (LXValue[]){_v1618, px_str("static LXValue")}, 2);
-        px_srcline(1053);
-        _v1621 = px_str("");
-        px_srcline(1054);
-        if (px_is_truthy(px_ge(_v1620, px_int(0LL)))) {
-            px_srcline(1055);
-             _v1621 = px_add(px_add(px_add(px_add(px_slice(_v1618, px_int(0LL), _v1620, px_null()), px_get_global("cg_closures")), px_str("\n")), px_slice(_v1618, _v1620, px_call(px_get_global("len"), (LXValue[]){_v1618}, 1), px_null())), _v1619);
+    px_srcline(1062);
+    _v1621 = px_call(px_get_global("cg_find"), (LXValue[]){_v1587, px_str("int main(")}, 2);
+    px_srcline(1063);
+    if (px_is_truthy(px_ge(_v1621, px_int(0LL)))) {
+        px_srcline(1064);
+        _v1622 = px_slice(_v1587, px_int(0LL), _v1621, px_null());
+        px_srcline(1065);
+        _v1623 = px_slice(_v1587, _v1621, px_call(px_get_global("len"), (LXValue[]){_v1587}, 1), px_null());
+        px_srcline(1066);
+        _v1624 = px_call(px_get_global("cg_find"), (LXValue[]){_v1622, px_str("static LXValue")}, 2);
+        px_srcline(1067);
+        _v1625 = px_str("");
+        px_srcline(1068);
+        if (px_is_truthy(px_ge(_v1624, px_int(0LL)))) {
+            px_srcline(1069);
+             _v1625 = px_add(px_add(px_add(px_add(px_slice(_v1622, px_int(0LL), _v1624, px_null()), px_get_global("cg_closures")), px_str("\n")), px_slice(_v1622, _v1624, px_call(px_get_global("len"), (LXValue[]){_v1622}, 1), px_null())), _v1623);
         }
         else {
-            px_srcline(1057);
-             _v1621 = px_add(px_add(px_add(_v1618, px_get_global("cg_closures")), px_str("\n")), _v1619);
+            px_srcline(1071);
+             _v1625 = px_add(px_add(px_add(_v1622, px_get_global("cg_closures")), px_str("\n")), _v1623);
         }
-        px_srcline(1058);
-        return _v1621;
+        px_srcline(1072);
+        return _v1625;
     }
-    px_srcline(1059);
+    px_srcline(1073);
     return _v1587;
-px_err_1622:
-    if (px_err_1622_proped) return px_err_1622_val;
+px_err_1626:
+    if (px_err_1626_proped) return px_err_1626_val;
     return px_null();
 }
 
@@ -13873,17 +13903,17 @@ static LXValue fn_bc_new_dict(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("bc_new_dict");
     if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_new_dict", 0, nargs);
-    LXValue _v1631 = px_uninit();
-    LXValue px_err_1632_val = px_null();
-    int px_err_1632_proped = 0;
+    LXValue _v1638 = px_uninit();
+    LXValue px_err_1639_val = px_null();
+    int px_err_1639_proped = 0;
     px_srcline(41);
-    _v1631 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); LXValue _v = px_int(0LL); px_dict_set_checked(_d, _k, _v); } _d; });
+    _v1638 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); LXValue _v = px_int(0LL); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(42);
-    (void)(px_method(_v1631, "remove", (LXValue[]){px_str("_")}, 1));
+    (void)(px_method(_v1638, "remove", (LXValue[]){px_str("_")}, 1));
     px_srcline(43);
-    return _v1631;
-px_err_1632:
-    if (px_err_1632_proped) return px_err_1632_val;
+    return _v1638;
+px_err_1639:
+    if (px_err_1639_proped) return px_err_1639_val;
     return px_null();
 }
 
@@ -13892,60 +13922,60 @@ static LXValue fn_bc_k_find(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_k_find");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_k_find", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_k_find", 5, nargs);
-    LXValue _v1633 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1634 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1635 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1636 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1637 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v1638 = px_uninit();
-    LXValue _v1639 = px_uninit();
-    LXValue px_err_1640_val = px_null();
-    int px_err_1640_proped = 0;
+    LXValue _v1640 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1641 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1642 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1643 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1644 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v1645 = px_uninit();
+    LXValue _v1646 = px_uninit();
+    LXValue px_err_1647_val = px_null();
+    int px_err_1647_proped = 0;
     px_srcline(47);
-    _v1638 = px_int(0LL);
+    _v1645 = px_int(0LL);
     px_srcline(48);
-    while (px_is_truthy(px_lt(_v1638, px_call(px_get_global("len"), (LXValue[]){_v1633}, 1)))) {
+    while (px_is_truthy(px_lt(_v1645, px_call(px_get_global("len"), (LXValue[]){_v1640}, 1)))) {
         px_srcline(49);
-        _v1639 = px_index(_v1633, _v1638);
+        _v1646 = px_index(_v1640, _v1645);
         px_srcline(50);
-        if (px_is_truthy(px_eq(px_index(_v1639, px_str("kind")), _v1634))) {
+        if (px_is_truthy(px_eq(px_index(_v1646, px_str("kind")), _v1641))) {
             px_srcline(51);
-            if (px_is_truthy(px_eq(_v1634, px_str("int")))) {
+            if (px_is_truthy(px_eq(_v1641, px_str("int")))) {
                 px_srcline(52);
-                if (px_is_truthy(px_eq(px_index(_v1639, px_str("i")), _v1635))) {
+                if (px_is_truthy(px_eq(px_index(_v1646, px_str("i")), _v1642))) {
                     px_srcline(53);
-                    return _v1638;
+                    return _v1645;
                 }
             }
-            else if (px_is_truthy(px_eq(_v1634, px_str("float")))) {
+            else if (px_is_truthy(px_eq(_v1641, px_str("float")))) {
                 px_srcline(59);
-                if (px_is_truthy(({ LXValue _s230 = px_call(px_get_global("float64_bits"), (LXValue[]){px_index(_v1639, px_str("f"))}, 1); LXValue _s231 = px_call(px_get_global("float64_bits"), (LXValue[]){_v1636}, 1); px_eq(_s230, _s231); }))) {
+                if (px_is_truthy(({ LXValue _s230 = px_call(px_get_global("float64_bits"), (LXValue[]){px_index(_v1646, px_str("f"))}, 1); LXValue _s231 = px_call(px_get_global("float64_bits"), (LXValue[]){_v1643}, 1); px_eq(_s230, _s231); }))) {
                     px_srcline(60);
-                    return _v1638;
+                    return _v1645;
                 }
             }
-            else if (px_is_truthy(px_eq(_v1634, px_str("str")))) {
+            else if (px_is_truthy(px_eq(_v1641, px_str("str")))) {
                 px_srcline(62);
-                if (px_is_truthy(px_eq(px_index(_v1639, px_str("s")), _v1637))) {
+                if (px_is_truthy(px_eq(px_index(_v1646, px_str("s")), _v1644))) {
                     px_srcline(63);
-                    return _v1638;
+                    return _v1645;
                 }
             }
             else {
                 px_srcline(66);
-                if (px_is_truthy(px_eq(px_index(_v1639, px_str("i")), _v1635))) {
+                if (px_is_truthy(px_eq(px_index(_v1646, px_str("i")), _v1642))) {
                     px_srcline(67);
-                    return _v1638;
+                    return _v1645;
                 }
             }
         }
         px_srcline(68);
-         _v1638 = px_add(_v1638, px_int(1LL));
+         _v1645 = px_add(_v1645, px_int(1LL));
     }
     px_srcline(69);
     return px_neg(px_int(1LL));
-px_err_1640:
-    if (px_err_1640_proped) return px_err_1640_val;
+px_err_1647:
+    if (px_err_1647_proped) return px_err_1647_val;
     return px_null();
 }
 
@@ -13954,38 +13984,38 @@ static LXValue fn_bc_k_add(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_k_add");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_k_add", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_k_add", 5, nargs);
-    LXValue _v1641 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1642 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1643 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1644 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1645 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v1646 = px_uninit();
-    LXValue _v1647 = px_uninit();
-    LXValue px_err_1648_val = px_null();
-    int px_err_1648_proped = 0;
+    LXValue _v1648 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1649 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1650 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1651 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1652 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v1653 = px_uninit();
+    LXValue _v1654 = px_uninit();
+    LXValue px_err_1655_val = px_null();
+    int px_err_1655_proped = 0;
     px_srcline(71);
-    _v1646 = px_call(px_get_global("bc_k_find"), (LXValue[]){_v1641, _v1642, _v1643, _v1644, _v1645}, 5);
+    _v1653 = px_call(px_get_global("bc_k_find"), (LXValue[]){_v1648, _v1649, _v1650, _v1651, _v1652}, 5);
     px_srcline(72);
-    if (px_is_truthy(px_ge(_v1646, px_int(0LL)))) {
+    if (px_is_truthy(px_ge(_v1653, px_int(0LL)))) {
         px_srcline(73);
-        return _v1646;
+        return _v1653;
     }
     px_srcline(74);
-    _v1647 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+    _v1654 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
     px_srcline(75);
-    px_index_set(_v1647, px_str("kind"), _v1642);
+    px_index_set(_v1654, px_str("kind"), _v1649);
     px_srcline(76);
-    px_index_set(_v1647, px_str("i"), _v1643);
+    px_index_set(_v1654, px_str("i"), _v1650);
     px_srcline(77);
-    px_index_set(_v1647, px_str("f"), _v1644);
+    px_index_set(_v1654, px_str("f"), _v1651);
     px_srcline(78);
-    px_index_set(_v1647, px_str("s"), _v1645);
+    px_index_set(_v1654, px_str("s"), _v1652);
     px_srcline(79);
-    (void)(px_method(_v1641, "push", (LXValue[]){_v1647}, 1));
+    (void)(px_method(_v1648, "push", (LXValue[]){_v1654}, 1));
     px_srcline(80);
-    return px_sub(px_call(px_get_global("len"), (LXValue[]){_v1641}, 1), px_int(1LL));
-px_err_1648:
-    if (px_err_1648_proped) return px_err_1648_val;
+    return px_sub(px_call(px_get_global("len"), (LXValue[]){_v1648}, 1), px_int(1LL));
+px_err_1655:
+    if (px_err_1655_proped) return px_err_1655_val;
     return px_null();
 }
 
@@ -13994,29 +14024,29 @@ static LXValue fn_bc_n_add(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_n_add");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_n_add", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_n_add", 2, nargs);
-    LXValue _v1649 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1650 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1651 = px_uninit();
-    LXValue px_err_1652_val = px_null();
-    int px_err_1652_proped = 0;
+    LXValue _v1656 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1657 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1658 = px_uninit();
+    LXValue px_err_1659_val = px_null();
+    int px_err_1659_proped = 0;
     px_srcline(83);
-    _v1651 = px_int(0LL);
+    _v1658 = px_int(0LL);
     px_srcline(84);
-    while (px_is_truthy(px_lt(_v1651, px_call(px_get_global("len"), (LXValue[]){_v1649}, 1)))) {
+    while (px_is_truthy(px_lt(_v1658, px_call(px_get_global("len"), (LXValue[]){_v1656}, 1)))) {
         px_srcline(85);
-        if (px_is_truthy(px_eq(px_index(_v1649, _v1651), _v1650))) {
+        if (px_is_truthy(px_eq(px_index(_v1656, _v1658), _v1657))) {
             px_srcline(86);
-            return _v1651;
+            return _v1658;
         }
         px_srcline(87);
-         _v1651 = px_add(_v1651, px_int(1LL));
+         _v1658 = px_add(_v1658, px_int(1LL));
     }
     px_srcline(88);
-    (void)(px_method(_v1649, "push", (LXValue[]){_v1650}, 1));
+    (void)(px_method(_v1656, "push", (LXValue[]){_v1657}, 1));
     px_srcline(89);
-    return px_sub(px_call(px_get_global("len"), (LXValue[]){_v1649}, 1), px_int(1LL));
-px_err_1652:
-    if (px_err_1652_proped) return px_err_1652_val;
+    return px_sub(px_call(px_get_global("len"), (LXValue[]){_v1656}, 1), px_int(1LL));
+px_err_1659:
+    if (px_err_1659_proped) return px_err_1659_val;
     return px_null();
 }
 
@@ -14025,29 +14055,29 @@ static LXValue fn_bc_g_add(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_g_add");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_g_add", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_g_add", 2, nargs);
-    LXValue _v1653 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1654 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1655 = px_uninit();
-    LXValue px_err_1656_val = px_null();
-    int px_err_1656_proped = 0;
+    LXValue _v1660 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1661 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1662 = px_uninit();
+    LXValue px_err_1663_val = px_null();
+    int px_err_1663_proped = 0;
     px_srcline(92);
-    _v1655 = px_int(0LL);
+    _v1662 = px_int(0LL);
     px_srcline(93);
-    while (px_is_truthy(px_lt(_v1655, px_call(px_get_global("len"), (LXValue[]){_v1653}, 1)))) {
+    while (px_is_truthy(px_lt(_v1662, px_call(px_get_global("len"), (LXValue[]){_v1660}, 1)))) {
         px_srcline(94);
-        if (px_is_truthy(px_eq(px_index(_v1653, _v1655), _v1654))) {
+        if (px_is_truthy(px_eq(px_index(_v1660, _v1662), _v1661))) {
             px_srcline(95);
-            return _v1655;
+            return _v1662;
         }
         px_srcline(96);
-         _v1655 = px_add(_v1655, px_int(1LL));
+         _v1662 = px_add(_v1662, px_int(1LL));
     }
     px_srcline(97);
-    (void)(px_method(_v1653, "push", (LXValue[]){_v1654}, 1));
+    (void)(px_method(_v1660, "push", (LXValue[]){_v1661}, 1));
     px_srcline(98);
-    return px_sub(px_call(px_get_global("len"), (LXValue[]){_v1653}, 1), px_int(1LL));
-px_err_1656:
-    if (px_err_1656_proped) return px_err_1656_val;
+    return px_sub(px_call(px_get_global("len"), (LXValue[]){_v1660}, 1), px_int(1LL));
+px_err_1663:
+    if (px_err_1663_proped) return px_err_1663_val;
     return px_null();
 }
 
@@ -14056,18 +14086,18 @@ static LXValue fn_bc_is_global(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_is_global");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_is_global", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_is_global", 1, nargs);
-    LXValue _v1657 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_1658_val = px_null();
-    int px_err_1658_proped = 0;
+    LXValue _v1664 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_1665_val = px_null();
+    int px_err_1665_proped = 0;
     px_srcline(101);
     if (px_is_truthy(px_eq(px_get_global("g_bcm"), px_null()))) {
         px_srcline(102);
         return px_bool(false);
     }
     px_srcline(103);
-    return px_call(px_get_global("contains"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v1657}, 2);
-px_err_1658:
-    if (px_err_1658_proped) return px_err_1658_val;
+    return px_call(px_get_global("contains"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v1664}, 2);
+px_err_1665:
+    if (px_err_1665_proped) return px_err_1665_val;
     return px_null();
 }
 
@@ -14076,19 +14106,19 @@ static LXValue fn_bc_name_is_value(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_name_is_value");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_name_is_value", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_name_is_value", 2, nargs);
-    LXValue _v1659 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1660 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1661_val = px_null();
-    int px_err_1661_proped = 0;
+    LXValue _v1666 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1667 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1668_val = px_null();
+    int px_err_1668_proped = 0;
     px_srcline(113);
-    if (px_is_truthy(px_method(px_index(_v1659, px_str("smap")), "has", (LXValue[]){_v1660}, 1))) {
+    if (px_is_truthy(px_method(px_index(_v1666, px_str("smap")), "has", (LXValue[]){_v1667}, 1))) {
         px_srcline(114);
         return px_bool(true);
     }
     px_srcline(115);
-    return px_call(px_get_global("bc_is_global"), (LXValue[]){_v1660}, 1);
-px_err_1661:
-    if (px_err_1661_proped) return px_err_1661_val;
+    return px_call(px_get_global("bc_is_global"), (LXValue[]){_v1667}, 1);
+px_err_1668:
+    if (px_err_1668_proped) return px_err_1668_val;
     return px_null();
 }
 
@@ -14097,38 +14127,38 @@ static LXValue fn_bc_new_module(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_new_module");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_new_module", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_new_module", 1, nargs);
-    LXValue _v1662 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1663 = px_uninit();
-    LXValue px_err_1664_val = px_null();
-    int px_err_1664_proped = 0;
+    LXValue _v1669 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1670 = px_uninit();
+    LXValue px_err_1671_val = px_null();
+    int px_err_1671_proped = 0;
     px_srcline(118);
-    _v1663 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+    _v1670 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
     px_srcline(119);
-    px_index_set(_v1663, px_str("name"), _v1662);
+    px_index_set(_v1670, px_str("name"), _v1669);
     px_srcline(120);
-    px_index_set(_v1663, px_str("k_pool"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("k_pool"), px_list_n((LXValue[]){}, 0));
     px_srcline(121);
-    px_index_set(_v1663, px_str("n_pool"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("n_pool"), px_list_n((LXValue[]){}, 0));
     px_srcline(122);
-    px_index_set(_v1663, px_str("globals"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("globals"), px_list_n((LXValue[]){}, 0));
     px_srcline(123);
-    px_index_set(_v1663, px_str("funcs"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("funcs"), px_list_n((LXValue[]){}, 0));
     px_srcline(124);
-    px_index_set(_v1663, px_str("top"), px_neg(px_int(1LL)));
+    px_index_set(_v1670, px_str("top"), px_neg(px_int(1LL)));
     px_srcline(127);
-    px_index_set(_v1663, px_str("structs"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("structs"), px_list_n((LXValue[]){}, 0));
     px_srcline(128);
-    px_index_set(_v1663, px_str("enums"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("enums"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
     px_srcline(132);
-    px_index_set(_v1663, px_str("enum_fields"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("enum_fields"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
     px_srcline(133);
-    px_index_set(_v1663, px_str("consts"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
+    px_index_set(_v1670, px_str("consts"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
     px_srcline(134);
-    px_index_set(_v1663, px_str("nclosure"), px_int(0LL));
+    px_index_set(_v1670, px_str("nclosure"), px_int(0LL));
     px_srcline(135);
-    return _v1663;
-px_err_1664:
-    if (px_err_1664_proped) return px_err_1664_val;
+    return _v1670;
+px_err_1671:
+    if (px_err_1671_proped) return px_err_1671_val;
     return px_null();
 }
 
@@ -14137,26 +14167,26 @@ static LXValue fn_bc_struct_index(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_struct_index");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_struct_index", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_struct_index", 1, nargs);
-    LXValue _v1665 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1666 = px_uninit();
-    LXValue px_err_1667_val = px_null();
-    int px_err_1667_proped = 0;
+    LXValue _v1672 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1673 = px_uninit();
+    LXValue px_err_1674_val = px_null();
+    int px_err_1674_proped = 0;
     px_srcline(138);
-    _v1666 = px_int(0LL);
+    _v1673 = px_int(0LL);
     px_srcline(139);
-    while (px_is_truthy(px_lt(_v1666, px_call(px_get_global("len"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("structs"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v1673, px_call(px_get_global("len"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("structs"))}, 1)))) {
         px_srcline(140);
-        if (px_is_truthy(px_eq(px_index(px_index(px_index(px_get_global("g_bcm"), px_str("structs")), _v1666), px_str("name")), _v1665))) {
+        if (px_is_truthy(px_eq(px_index(px_index(px_index(px_get_global("g_bcm"), px_str("structs")), _v1673), px_str("name")), _v1672))) {
             px_srcline(141);
-            return _v1666;
+            return _v1673;
         }
         px_srcline(142);
-         _v1666 = px_add(_v1666, px_int(1LL));
+         _v1673 = px_add(_v1673, px_int(1LL));
     }
     px_srcline(143);
     return px_neg(px_int(1LL));
-px_err_1667:
-    if (px_err_1667_proped) return px_err_1667_val;
+px_err_1674:
+    if (px_err_1674_proped) return px_err_1674_val;
     return px_null();
 }
 
@@ -14165,19 +14195,19 @@ static LXValue fn_bc_enum_has(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_enum_has");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_enum_has", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_enum_has", 2, nargs);
-    LXValue _v1668 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1669 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1670_val = px_null();
-    int px_err_1670_proped = 0;
+    LXValue _v1675 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1676 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1677_val = px_null();
+    int px_err_1677_proped = 0;
     px_srcline(146);
-    if (px_is_truthy(px_not(px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1668}, 1)))) {
+    if (px_is_truthy(px_not(px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1675}, 1)))) {
         px_srcline(147);
         return px_bool(false);
     }
     px_srcline(148);
-    return px_call(px_get_global("contains"), (LXValue[]){px_index(px_index(px_get_global("g_bcm"), px_str("enums")), _v1668), _v1669}, 2);
-px_err_1670:
-    if (px_err_1670_proped) return px_err_1670_val;
+    return px_call(px_get_global("contains"), (LXValue[]){px_index(px_index(px_get_global("g_bcm"), px_str("enums")), _v1675), _v1676}, 2);
+px_err_1677:
+    if (px_err_1677_proped) return px_err_1677_val;
     return px_null();
 }
 
@@ -14186,22 +14216,22 @@ static LXValue fn_bc_enum_fields(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_enum_fields");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_enum_fields", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_enum_fields", 2, nargs);
-    LXValue _v1671 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1672 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1673_val = px_null();
-    int px_err_1673_proped = 0;
+    LXValue _v1678 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1679 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1680_val = px_null();
+    int px_err_1680_proped = 0;
     px_srcline(151);
-    if (px_is_truthy(px_method(px_index(px_get_global("g_bcm"), px_str("enum_fields")), "has", (LXValue[]){_v1671}, 1))) {
+    if (px_is_truthy(px_method(px_index(px_get_global("g_bcm"), px_str("enum_fields")), "has", (LXValue[]){_v1678}, 1))) {
         px_srcline(152);
-        if (px_is_truthy(px_method(px_index(px_index(px_get_global("g_bcm"), px_str("enum_fields")), _v1671), "has", (LXValue[]){_v1672}, 1))) {
+        if (px_is_truthy(px_method(px_index(px_index(px_get_global("g_bcm"), px_str("enum_fields")), _v1678), "has", (LXValue[]){_v1679}, 1))) {
             px_srcline(153);
-            return px_index(px_index(px_index(px_get_global("g_bcm"), px_str("enum_fields")), _v1671), _v1672);
+            return px_index(px_index(px_index(px_get_global("g_bcm"), px_str("enum_fields")), _v1678), _v1679);
         }
     }
     px_srcline(154);
     return px_list_n((LXValue[]){}, 0);
-px_err_1673:
-    if (px_err_1673_proped) return px_err_1673_val;
+px_err_1680:
+    if (px_err_1680_proped) return px_err_1680_val;
     return px_null();
 }
 
@@ -14210,26 +14240,26 @@ static LXValue fn_bc_enum_pos_style(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_enum_pos_style");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_enum_pos_style", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_enum_pos_style", 1, nargs);
-    LXValue _v1674 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1675 = px_uninit();
-    LXValue px_err_1676_val = px_null();
-    int px_err_1676_proped = 0;
+    LXValue _v1681 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1682 = px_uninit();
+    LXValue px_err_1683_val = px_null();
+    int px_err_1683_proped = 0;
     px_srcline(158);
-    _v1675 = px_int(0LL);
+    _v1682 = px_int(0LL);
     px_srcline(159);
-    while (px_is_truthy(px_lt(_v1675, px_call(px_get_global("len"), (LXValue[]){_v1674}, 1)))) {
+    while (px_is_truthy(px_lt(_v1682, px_call(px_get_global("len"), (LXValue[]){_v1681}, 1)))) {
         px_srcline(160);
-        if (px_is_truthy(px_ne(px_index(_v1674, _v1675), px_call(px_get_global("str"), (LXValue[]){_v1675}, 1)))) {
+        if (px_is_truthy(px_ne(px_index(_v1681, _v1682), px_call(px_get_global("str"), (LXValue[]){_v1682}, 1)))) {
             px_srcline(161);
             return px_bool(false);
         }
         px_srcline(162);
-         _v1675 = px_add(_v1675, px_int(1LL));
+         _v1682 = px_add(_v1682, px_int(1LL));
     }
     px_srcline(163);
     return px_bool(true);
-px_err_1676:
-    if (px_err_1676_proped) return px_err_1676_val;
+px_err_1683:
+    if (px_err_1683_proped) return px_err_1683_val;
     return px_null();
 }
 
@@ -14238,35 +14268,35 @@ static LXValue fn_bc_const_find(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_const_find");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_const_find", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_const_find", 2, nargs);
-    LXValue _v1677 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1678 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1679 = px_uninit();
-    LXValue _v1680 = px_uninit();
-    LXValue px_err_1681_val = px_null();
-    int px_err_1681_proped = 0;
+    LXValue _v1684 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1685 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1686 = px_uninit();
+    LXValue _v1687 = px_uninit();
+    LXValue px_err_1688_val = px_null();
+    int px_err_1688_proped = 0;
     px_srcline(166);
-    if (px_is_truthy(px_not(px_method(px_index(px_get_global("g_bcm"), px_str("consts")), "has", (LXValue[]){_v1677}, 1)))) {
+    if (px_is_truthy(px_not(px_method(px_index(px_get_global("g_bcm"), px_str("consts")), "has", (LXValue[]){_v1684}, 1)))) {
         px_srcline(167);
         return px_null();
     }
     px_srcline(168);
-    _v1679 = px_index(px_index(px_get_global("g_bcm"), px_str("consts")), _v1677);
+    _v1686 = px_index(px_index(px_get_global("g_bcm"), px_str("consts")), _v1684);
     px_srcline(169);
-    _v1680 = px_int(0LL);
+    _v1687 = px_int(0LL);
     px_srcline(170);
-    while (px_is_truthy(px_lt(_v1680, px_call(px_get_global("len"), (LXValue[]){_v1679}, 1)))) {
+    while (px_is_truthy(px_lt(_v1687, px_call(px_get_global("len"), (LXValue[]){_v1686}, 1)))) {
         px_srcline(171);
-        if (px_is_truthy(px_eq(px_index(px_index(_v1679, _v1680), px_str("n")), _v1678))) {
+        if (px_is_truthy(px_eq(px_index(px_index(_v1686, _v1687), px_str("n")), _v1685))) {
             px_srcline(172);
-            return px_index(px_index(_v1679, _v1680), px_str("e"));
+            return px_index(px_index(_v1686, _v1687), px_str("e"));
         }
         px_srcline(173);
-         _v1680 = px_add(_v1680, px_int(1LL));
+         _v1687 = px_add(_v1687, px_int(1LL));
     }
     px_srcline(174);
     return px_null();
-px_err_1681:
-    if (px_err_1681_proped) return px_err_1681_val;
+px_err_1688:
+    if (px_err_1688_proped) return px_err_1688_val;
     return px_null();
 }
 
@@ -14275,100 +14305,100 @@ static LXValue fn_bc_collect_consts(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_collect_consts");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_collect_consts", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_collect_consts", 1, nargs);
-    LXValue _v1682 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1683 = px_uninit();
-    LXValue _v1684 = px_uninit();
-    LXValue _v1685 = px_uninit();
-    LXValue _v1686 = px_uninit();
-    LXValue _v1687 = px_uninit();
-    LXValue _v1688 = px_uninit();
-    LXValue _v1689 = px_uninit();
+    LXValue _v1689 = (nargs > 0) ? args[0] : px_null();
     LXValue _v1690 = px_uninit();
     LXValue _v1691 = px_uninit();
     LXValue _v1692 = px_uninit();
-    LXValue px_err_1693_val = px_null();
-    int px_err_1693_proped = 0;
+    LXValue _v1693 = px_uninit();
+    LXValue _v1694 = px_uninit();
+    LXValue _v1695 = px_uninit();
+    LXValue _v1696 = px_uninit();
+    LXValue _v1697 = px_uninit();
+    LXValue _v1698 = px_uninit();
+    LXValue _v1699 = px_uninit();
+    LXValue px_err_1700_val = px_null();
+    int px_err_1700_proped = 0;
     px_srcline(177);
-    _v1683 = px_int(0LL);
+    _v1690 = px_int(0LL);
     px_srcline(178);
-    while (px_is_truthy(px_lt(_v1683, px_call(px_get_global("len"), (LXValue[]){_v1682}, 1)))) {
+    while (px_is_truthy(px_lt(_v1690, px_call(px_get_global("len"), (LXValue[]){_v1689}, 1)))) {
         px_srcline(179);
-        _v1684 = px_index(_v1682, _v1683);
+        _v1691 = px_index(_v1689, _v1690);
         px_srcline(180);
-        _v1685 = px_index(_v1684, px_int(0LL));
+        _v1692 = px_index(_v1691, px_int(0LL));
         px_srcline(181);
-        if (px_is_truthy(px_eq(_v1685, px_str("TypeConst")))) {
+        if (px_is_truthy(px_eq(_v1692, px_str("TypeConst")))) {
             px_srcline(182);
-            _v1686 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1684, px_int(1LL))}, 1);
+            _v1693 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1691, px_int(1LL))}, 1);
             px_srcline(183);
-            if (px_is_truthy(px_not(px_method(px_index(px_get_global("g_bcm"), px_str("consts")), "has", (LXValue[]){_v1686}, 1)))) {
+            if (px_is_truthy(px_not(px_method(px_index(px_get_global("g_bcm"), px_str("consts")), "has", (LXValue[]){_v1693}, 1)))) {
                 px_srcline(184);
-                px_index_set(px_index(px_get_global("g_bcm"), px_str("consts")), _v1686, px_list_n((LXValue[]){}, 0));
+                px_index_set(px_index(px_get_global("g_bcm"), px_str("consts")), _v1693, px_list_n((LXValue[]){}, 0));
             }
             px_srcline(185);
-            _v1687 = px_int(0LL);
+            _v1694 = px_int(0LL);
             px_srcline(186);
-            while (px_is_truthy(px_lt(_v1687, px_call(px_get_global("len"), (LXValue[]){px_index(_v1684, px_int(2LL))}, 1)))) {
+            while (px_is_truthy(px_lt(_v1694, px_call(px_get_global("len"), (LXValue[]){px_index(_v1691, px_int(2LL))}, 1)))) {
                 px_srcline(187);
-                _v1688 = px_index(px_index(_v1684, px_int(2LL)), _v1687);
+                _v1695 = px_index(px_index(_v1691, px_int(2LL)), _v1694);
                 px_srcline(188);
-                _v1689 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+                _v1696 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
                 px_srcline(189);
-                px_index_set(_v1689, px_str("n"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1688, px_int(1LL))}, 1));
+                px_index_set(_v1696, px_str("n"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1695, px_int(1LL))}, 1));
                 px_srcline(190);
-                px_index_set(_v1689, px_str("e"), px_index(_v1688, px_int(2LL)));
+                px_index_set(_v1696, px_str("e"), px_index(_v1695, px_int(2LL)));
                 px_srcline(191);
-                (void)(px_method(px_index(px_index(px_get_global("g_bcm"), px_str("consts")), _v1686), "push", (LXValue[]){_v1689}, 1));
+                (void)(px_method(px_index(px_index(px_get_global("g_bcm"), px_str("consts")), _v1693), "push", (LXValue[]){_v1696}, 1));
                 px_srcline(192);
-                 _v1687 = px_add(_v1687, px_int(1LL));
+                 _v1694 = px_add(_v1694, px_int(1LL));
             }
         }
-        else if (px_is_truthy(px_eq(_v1685, px_str("FuncDef")))) {
+        else if (px_is_truthy(px_eq(_v1692, px_str("FuncDef")))) {
             px_srcline(194);
-            (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1684, px_int(4LL))}, 1));
+            (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1691, px_int(4LL))}, 1));
         }
-        else if (px_is_truthy(px_eq(_v1685, px_str("ImplDef")))) {
+        else if (px_is_truthy(px_eq(_v1692, px_str("ImplDef")))) {
             px_srcline(196);
-            _v1690 = px_int(0LL);
+            _v1697 = px_int(0LL);
             px_srcline(197);
-            while (px_is_truthy(px_lt(_v1690, px_call(px_get_global("len"), (LXValue[]){px_index(_v1684, px_int(3LL))}, 1)))) {
+            while (px_is_truthy(px_lt(_v1697, px_call(px_get_global("len"), (LXValue[]){px_index(_v1691, px_int(3LL))}, 1)))) {
                 px_srcline(198);
-                (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(px_index(px_index(_v1684, px_int(3LL)), _v1690), px_int(4LL))}, 1));
+                (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(px_index(px_index(_v1691, px_int(3LL)), _v1697), px_int(4LL))}, 1));
                 px_srcline(199);
-                 _v1690 = px_add(_v1690, px_int(1LL));
+                 _v1697 = px_add(_v1697, px_int(1LL));
             }
         }
-        else if (px_is_truthy(px_eq(_v1685, px_str("If")))) {
+        else if (px_is_truthy(px_eq(_v1692, px_str("If")))) {
             px_srcline(201);
-            _v1691 = px_index(_v1684, px_int(1LL));
+            _v1698 = px_index(_v1691, px_int(1LL));
             px_srcline(202);
-            _v1692 = px_int(0LL);
+            _v1699 = px_int(0LL);
             px_srcline(203);
-            while (px_is_truthy(px_lt(_v1692, px_call(px_get_global("len"), (LXValue[]){_v1691}, 1)))) {
+            while (px_is_truthy(px_lt(_v1699, px_call(px_get_global("len"), (LXValue[]){_v1698}, 1)))) {
                 px_srcline(204);
-                (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(px_index(_v1691, _v1692), px_int(1LL))}, 1));
+                (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(px_index(_v1698, _v1699), px_int(1LL))}, 1));
                 px_srcline(205);
-                 _v1692 = px_add(_v1692, px_int(1LL));
+                 _v1699 = px_add(_v1699, px_int(1LL));
             }
             px_srcline(206);
-            if (px_is_truthy(px_ne(px_index(_v1684, px_int(2LL)), px_null()))) {
+            if (px_is_truthy(px_ne(px_index(_v1691, px_int(2LL)), px_null()))) {
                 px_srcline(207);
-                (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1684, px_int(2LL))}, 1));
+                (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1691, px_int(2LL))}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(_v1685, px_str("While")))) {
+        else if (px_is_truthy(px_eq(_v1692, px_str("While")))) {
             px_srcline(209);
-            (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1684, px_int(2LL))}, 1));
+            (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1691, px_int(2LL))}, 1));
         }
-        else if (px_is_truthy(px_eq(_v1685, px_str("For")))) {
+        else if (px_is_truthy(px_eq(_v1692, px_str("For")))) {
             px_srcline(211);
-            (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1684, px_int(3LL))}, 1));
+            (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){px_index(_v1691, px_int(3LL))}, 1));
         }
         px_srcline(212);
-         _v1683 = px_add(_v1683, px_int(1LL));
+         _v1690 = px_add(_v1690, px_int(1LL));
     }
-px_err_1693:
-    if (px_err_1693_proped) return px_err_1693_val;
+px_err_1700:
+    if (px_err_1700_proped) return px_err_1700_val;
     return px_null();
 }
 
@@ -14377,75 +14407,75 @@ static LXValue fn_bc_collect_impl_list(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_collect_impl_list");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_collect_impl_list", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_collect_impl_list", 1, nargs);
-    LXValue _v1694 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1695 = px_uninit();
-    LXValue _v1696 = px_uninit();
-    LXValue _v1697 = px_uninit();
-    LXValue _v1698 = px_uninit();
-    LXValue _v1699 = px_uninit();
-    LXValue _v1700 = px_uninit();
-    LXValue _v1701 = px_uninit();
+    LXValue _v1701 = (nargs > 0) ? args[0] : px_null();
     LXValue _v1702 = px_uninit();
     LXValue _v1703 = px_uninit();
     LXValue _v1704 = px_uninit();
-    LXValue px_err_1705_val = px_null();
-    int px_err_1705_proped = 0;
+    LXValue _v1705 = px_uninit();
+    LXValue _v1706 = px_uninit();
+    LXValue _v1707 = px_uninit();
+    LXValue _v1708 = px_uninit();
+    LXValue _v1709 = px_uninit();
+    LXValue _v1710 = px_uninit();
+    LXValue _v1711 = px_uninit();
+    LXValue px_err_1712_val = px_null();
+    int px_err_1712_proped = 0;
     px_srcline(216);
-    _v1695 = px_list_n((LXValue[]){}, 0);
+    _v1702 = px_list_n((LXValue[]){}, 0);
     px_srcline(217);
-    _v1696 = px_int(0LL);
+    _v1703 = px_int(0LL);
     px_srcline(218);
-    while (px_is_truthy(px_lt(_v1696, px_call(px_get_global("len"), (LXValue[]){_v1694}, 1)))) {
+    while (px_is_truthy(px_lt(_v1703, px_call(px_get_global("len"), (LXValue[]){_v1701}, 1)))) {
         px_srcline(219);
-        _v1697 = px_index(_v1694, _v1696);
+        _v1704 = px_index(_v1701, _v1703);
         px_srcline(220);
-        if (px_is_truthy(px_eq(px_index(_v1697, px_int(0LL)), px_str("ImplDef")))) {
+        if (px_is_truthy(px_eq(px_index(_v1704, px_int(0LL)), px_str("ImplDef")))) {
             px_srcline(221);
-            _v1698 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1697, px_int(1LL))}, 1);
+            _v1705 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1704, px_int(1LL))}, 1);
             px_srcline(222);
-            _v1699 = px_int(0LL);
+            _v1706 = px_int(0LL);
             px_srcline(223);
-            while (px_is_truthy(px_lt(_v1699, px_call(px_get_global("len"), (LXValue[]){px_index(_v1697, px_int(3LL))}, 1)))) {
+            while (px_is_truthy(px_lt(_v1706, px_call(px_get_global("len"), (LXValue[]){px_index(_v1704, px_int(3LL))}, 1)))) {
                 px_srcline(224);
-                (void)(px_method(_v1695, "append", (LXValue[]){px_list_n((LXValue[]){_v1698, px_index(px_index(_v1697, px_int(3LL)), _v1699)}, 2)}, 1));
+                (void)(px_method(_v1702, "append", (LXValue[]){px_list_n((LXValue[]){_v1705, px_index(px_index(_v1704, px_int(3LL)), _v1706)}, 2)}, 1));
                 px_srcline(225);
-                 _v1699 = px_add(_v1699, px_int(1LL));
+                 _v1706 = px_add(_v1706, px_int(1LL));
             }
         }
         px_srcline(226);
-         _v1696 = px_add(_v1696, px_int(1LL));
+         _v1703 = px_add(_v1703, px_int(1LL));
     }
     px_srcline(228);
-    _v1700 = px_int(1LL);
+    _v1707 = px_int(1LL);
     px_srcline(229);
-    while (px_is_truthy(px_lt(_v1700, px_call(px_get_global("len"), (LXValue[]){_v1695}, 1)))) {
+    while (px_is_truthy(px_lt(_v1707, px_call(px_get_global("len"), (LXValue[]){_v1702}, 1)))) {
         px_srcline(230);
-        _v1701 = _v1700;
+        _v1708 = _v1707;
         px_srcline(231);
-        while (px_is_truthy(px_gt(_v1701, px_int(0LL)))) {
+        while (px_is_truthy(px_gt(_v1708, px_int(0LL)))) {
             px_srcline(232);
-            _v1702 = px_add(px_add(px_index(px_index(_v1695, px_sub(_v1701, px_int(1LL))), px_int(0LL)), px_str(".")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v1695, px_sub(_v1701, px_int(1LL))), px_int(1LL)), px_int(1LL))}, 1));
+            _v1709 = px_add(px_add(px_index(px_index(_v1702, px_sub(_v1708, px_int(1LL))), px_int(0LL)), px_str(".")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v1702, px_sub(_v1708, px_int(1LL))), px_int(1LL)), px_int(1LL))}, 1));
             px_srcline(233);
-            _v1703 = px_add(px_add(px_index(px_index(_v1695, _v1701), px_int(0LL)), px_str(".")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v1695, _v1701), px_int(1LL)), px_int(1LL))}, 1));
+            _v1710 = px_add(px_add(px_index(px_index(_v1702, _v1708), px_int(0LL)), px_str(".")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v1702, _v1708), px_int(1LL)), px_int(1LL))}, 1));
             px_srcline(234);
-            if (px_is_truthy(px_lt(_v1703, _v1702))) {
+            if (px_is_truthy(px_lt(_v1710, _v1709))) {
                 px_srcline(235);
-                _v1704 = px_index(_v1695, _v1701);
+                _v1711 = px_index(_v1702, _v1708);
                 px_srcline(236);
-                px_index_set(_v1695, _v1701, px_index(_v1695, px_sub(_v1701, px_int(1LL))));
+                px_index_set(_v1702, _v1708, px_index(_v1702, px_sub(_v1708, px_int(1LL))));
                 px_srcline(237);
-                px_index_set(_v1695, px_sub(_v1701, px_int(1LL)), _v1704);
+                px_index_set(_v1702, px_sub(_v1708, px_int(1LL)), _v1711);
             }
             px_srcline(238);
-             _v1701 = px_sub(_v1701, px_int(1LL));
+             _v1708 = px_sub(_v1708, px_int(1LL));
         }
         px_srcline(239);
-         _v1700 = px_add(_v1700, px_int(1LL));
+         _v1707 = px_add(_v1707, px_int(1LL));
     }
     px_srcline(240);
-    return _v1695;
-px_err_1705:
-    if (px_err_1705_proped) return px_err_1705_val;
+    return _v1702;
+px_err_1712:
+    if (px_err_1712_proped) return px_err_1712_val;
     return px_null();
 }
 
@@ -14454,45 +14484,45 @@ static LXValue fn_bc_new_func(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_new_func");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_new_func", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_new_func", 2, nargs);
-    LXValue _v1706 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1707 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1708 = px_uninit();
-    LXValue px_err_1709_val = px_null();
-    int px_err_1709_proped = 0;
+    LXValue _v1713 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1714 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1715 = px_uninit();
+    LXValue px_err_1716_val = px_null();
+    int px_err_1716_proped = 0;
     px_srcline(245);
-    _v1708 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+    _v1715 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
     px_srcline(246);
-    px_index_set(_v1708, px_str("name"), _v1706);
+    px_index_set(_v1715, px_str("name"), _v1713);
     px_srcline(247);
-    px_index_set(_v1708, px_str("arity"), _v1707);
+    px_index_set(_v1715, px_str("arity"), _v1714);
     px_srcline(248);
-    px_index_set(_v1708, px_str("ndefault"), px_int(0LL));
+    px_index_set(_v1715, px_str("ndefault"), px_int(0LL));
     px_srcline(249);
-    px_index_set(_v1708, px_str("nslots"), _v1707);
+    px_index_set(_v1715, px_str("nslots"), _v1714);
     px_srcline(250);
-    px_index_set(_v1708, px_str("bc"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("bc"), px_list_n((LXValue[]){}, 0));
     px_srcline(251);
-    px_index_set(_v1708, px_str("smap"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("smap"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
     px_srcline(252);
-    px_index_set(_v1708, px_str("next_slot"), _v1707);
+    px_index_set(_v1715, px_str("next_slot"), _v1714);
     px_srcline(253);
-    px_index_set(_v1708, px_str("is_top"), px_bool(false));
+    px_index_set(_v1715, px_str("is_top"), px_bool(false));
     px_srcline(254);
-    px_index_set(_v1708, px_str("loops"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("loops"), px_list_n((LXValue[]){}, 0));
     px_srcline(260);
-    px_index_set(_v1708, px_str("upnames"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("upnames"), px_list_n((LXValue[]){}, 0));
     px_srcline(261);
-    px_index_set(_v1708, px_str("cell"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("cell"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
     px_srcline(262);
-    px_index_set(_v1708, px_str("boxed"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("boxed"), px_list_n((LXValue[]){}, 0));
     px_srcline(267);
-    px_index_set(_v1708, px_str("inited"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("inited"), px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0));
     px_srcline(269);
-    px_index_set(_v1708, px_str("hoist_slots"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v1715, px_str("hoist_slots"), px_list_n((LXValue[]){}, 0));
     px_srcline(270);
-    return _v1708;
-px_err_1709:
-    if (px_err_1709_proped) return px_err_1709_val;
+    return _v1715;
+px_err_1716:
+    if (px_err_1716_proped) return px_err_1716_val;
     return px_null();
 }
 
@@ -14501,13 +14531,13 @@ static LXValue fn_bc_inited_copy(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_inited_copy");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_inited_copy", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_inited_copy", 1, nargs);
-    LXValue _v1710 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_1711_val = px_null();
-    int px_err_1711_proped = 0;
+    LXValue _v1717 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_1718_val = px_null();
+    int px_err_1718_proped = 0;
     px_srcline(275);
-    return px_call(px_get_global("cg_dict_copy"), (LXValue[]){px_index(_v1710, px_str("inited"))}, 1);
-px_err_1711:
-    if (px_err_1711_proped) return px_err_1711_val;
+    return px_call(px_get_global("cg_dict_copy"), (LXValue[]){px_index(_v1717, px_str("inited"))}, 1);
+px_err_1718:
+    if (px_err_1718_proped) return px_err_1718_val;
     return px_null();
 }
 
@@ -14516,14 +14546,14 @@ static LXValue fn_bc_inited_restore(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_inited_restore");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_inited_restore", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_inited_restore", 2, nargs);
-    LXValue _v1712 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1713 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1714_val = px_null();
-    int px_err_1714_proped = 0;
+    LXValue _v1719 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1720 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1721_val = px_null();
+    int px_err_1721_proped = 0;
     px_srcline(277);
-    px_index_set(_v1712, px_str("inited"), px_call(px_get_global("cg_dict_copy"), (LXValue[]){_v1713}, 1));
-px_err_1714:
-    if (px_err_1714_proped) return px_err_1714_val;
+    px_index_set(_v1719, px_str("inited"), px_call(px_get_global("cg_dict_copy"), (LXValue[]){_v1720}, 1));
+px_err_1721:
+    if (px_err_1721_proped) return px_err_1721_val;
     return px_null();
 }
 
@@ -14532,33 +14562,33 @@ static LXValue fn_bc_inited_intersect(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_inited_intersect");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_inited_intersect", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_inited_intersect", 2, nargs);
-    LXValue _v1715 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1716 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1717 = px_uninit();
-    LXValue _v1718 = px_uninit();
-    LXValue _v1719 = px_uninit();
-    LXValue px_err_1720_val = px_null();
-    int px_err_1720_proped = 0;
+    LXValue _v1722 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1723 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1724 = px_uninit();
+    LXValue _v1725 = px_uninit();
+    LXValue _v1726 = px_uninit();
+    LXValue px_err_1727_val = px_null();
+    int px_err_1727_proped = 0;
     px_srcline(279);
-    _v1717 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+    _v1724 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
     px_srcline(280);
-    _v1718 = px_method(_v1715, "keys", (LXValue[]){}, 0);
+    _v1725 = px_method(_v1722, "keys", (LXValue[]){}, 0);
     px_srcline(281);
-    _v1719 = px_int(0LL);
+    _v1726 = px_int(0LL);
     px_srcline(282);
-    while (px_is_truthy(px_lt(_v1719, px_call(px_get_global("len"), (LXValue[]){_v1718}, 1)))) {
+    while (px_is_truthy(px_lt(_v1726, px_call(px_get_global("len"), (LXValue[]){_v1725}, 1)))) {
         px_srcline(283);
-        if (px_is_truthy(px_method(_v1716, "has", (LXValue[]){px_index(_v1718, _v1719)}, 1))) {
+        if (px_is_truthy(px_method(_v1723, "has", (LXValue[]){px_index(_v1725, _v1726)}, 1))) {
             px_srcline(284);
-            px_index_set(_v1717, px_index(_v1718, _v1719), px_int(1LL));
+            px_index_set(_v1724, px_index(_v1725, _v1726), px_int(1LL));
         }
         px_srcline(285);
-         _v1719 = px_add(_v1719, px_int(1LL));
+         _v1726 = px_add(_v1726, px_int(1LL));
     }
     px_srcline(286);
-    return _v1717;
-px_err_1720:
-    if (px_err_1720_proped) return px_err_1720_val;
+    return _v1724;
+px_err_1727:
+    if (px_err_1727_proped) return px_err_1727_val;
     return px_null();
 }
 
@@ -14567,14 +14597,14 @@ static LXValue fn_bc_inited_mark(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_inited_mark");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_inited_mark", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_inited_mark", 2, nargs);
-    LXValue _v1721 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1722 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1723_val = px_null();
-    int px_err_1723_proped = 0;
+    LXValue _v1728 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1729 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1730_val = px_null();
+    int px_err_1730_proped = 0;
     px_srcline(288);
-    px_index_set(px_index(_v1721, px_str("inited")), _v1722, px_int(1LL));
-px_err_1723:
-    if (px_err_1723_proped) return px_err_1723_val;
+    px_index_set(px_index(_v1728, px_str("inited")), _v1729, px_int(1LL));
+px_err_1730:
+    if (px_err_1730_proped) return px_err_1730_val;
     return px_null();
 }
 
@@ -14583,26 +14613,26 @@ static LXValue fn_bc_slot(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_slot");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_slot", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_slot", 2, nargs);
-    LXValue _v1724 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1725 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1726 = px_uninit();
-    LXValue px_err_1727_val = px_null();
-    int px_err_1727_proped = 0;
+    LXValue _v1731 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1732 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1733 = px_uninit();
+    LXValue px_err_1734_val = px_null();
+    int px_err_1734_proped = 0;
     px_srcline(291);
-    if (px_is_truthy(px_method(px_index(_v1724, px_str("smap")), "has", (LXValue[]){_v1725}, 1))) {
+    if (px_is_truthy(px_method(px_index(_v1731, px_str("smap")), "has", (LXValue[]){_v1732}, 1))) {
         px_srcline(292);
-        return px_index(px_index(_v1724, px_str("smap")), _v1725);
+        return px_index(px_index(_v1731, px_str("smap")), _v1732);
     }
     px_srcline(293);
-    _v1726 = px_index(_v1724, px_str("next_slot"));
+    _v1733 = px_index(_v1731, px_str("next_slot"));
     px_srcline(294);
-    px_index_set(_v1724, px_str("next_slot"), px_add(_v1726, px_int(1LL)));
+    px_index_set(_v1731, px_str("next_slot"), px_add(_v1733, px_int(1LL)));
     px_srcline(295);
-    px_index_set(px_index(_v1724, px_str("smap")), _v1725, _v1726);
+    px_index_set(px_index(_v1731, px_str("smap")), _v1732, _v1733);
     px_srcline(296);
-    return _v1726;
-px_err_1727:
-    if (px_err_1727_proped) return px_err_1727_val;
+    return _v1733;
+px_err_1734:
+    if (px_err_1734_proped) return px_err_1734_val;
     return px_null();
 }
 
@@ -14611,18 +14641,18 @@ static LXValue fn_bc_tmp(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_tmp");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_tmp", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_tmp", 1, nargs);
-    LXValue _v1728 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1729 = px_uninit();
-    LXValue px_err_1730_val = px_null();
-    int px_err_1730_proped = 0;
+    LXValue _v1735 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1736 = px_uninit();
+    LXValue px_err_1737_val = px_null();
+    int px_err_1737_proped = 0;
     px_srcline(299);
-    _v1729 = px_index(_v1728, px_str("next_slot"));
+    _v1736 = px_index(_v1735, px_str("next_slot"));
     px_srcline(300);
-    px_index_set(_v1728, px_str("next_slot"), px_add(_v1729, px_int(1LL)));
+    px_index_set(_v1735, px_str("next_slot"), px_add(_v1736, px_int(1LL)));
     px_srcline(301);
-    return _v1729;
-px_err_1730:
-    if (px_err_1730_proped) return px_err_1730_val;
+    return _v1736;
+px_err_1737:
+    if (px_err_1737_proped) return px_err_1737_val;
     return px_null();
 }
 
@@ -14631,14 +14661,14 @@ static LXValue fn_bc_cell_has(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_cell_has");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_cell_has", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_cell_has", 2, nargs);
-    LXValue _v1731 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1732 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1733_val = px_null();
-    int px_err_1733_proped = 0;
+    LXValue _v1738 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1739 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1740_val = px_null();
+    int px_err_1740_proped = 0;
     px_srcline(306);
-    return px_method(px_index(_v1731, px_str("cell")), "has", (LXValue[]){_v1732}, 1);
-px_err_1733:
-    if (px_err_1733_proped) return px_err_1733_val;
+    return px_method(px_index(_v1738, px_str("cell")), "has", (LXValue[]){_v1739}, 1);
+px_err_1740:
+    if (px_err_1740_proped) return px_err_1740_val;
     return px_null();
 }
 
@@ -14647,14 +14677,14 @@ static LXValue fn_bc_cell_mark(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_cell_mark");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_cell_mark", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_cell_mark", 2, nargs);
-    LXValue _v1734 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1735 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1736_val = px_null();
-    int px_err_1736_proped = 0;
+    LXValue _v1741 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1742 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1743_val = px_null();
+    int px_err_1743_proped = 0;
     px_srcline(308);
-    px_index_set(px_index(_v1734, px_str("cell")), _v1735, px_int(1LL));
-px_err_1736:
-    if (px_err_1736_proped) return px_err_1736_val;
+    px_index_set(px_index(_v1741, px_str("cell")), _v1742, px_int(1LL));
+px_err_1743:
+    if (px_err_1743_proped) return px_err_1743_val;
     return px_null();
 }
 
@@ -14663,45 +14693,45 @@ static LXValue fn_bc_load_var(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_load_var");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_load_var", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_load_var", 3, nargs);
-    LXValue _v1737 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1738 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1739 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1740 = px_uninit();
-    LXValue _v1741 = px_uninit();
-    LXValue px_err_1742_val = px_null();
-    int px_err_1742_proped = 0;
+    LXValue _v1744 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1745 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1746 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1747 = px_uninit();
+    LXValue _v1748 = px_uninit();
+    LXValue px_err_1749_val = px_null();
+    int px_err_1749_proped = 0;
     px_srcline(311);
-    _v1740 = px_index(px_index(_v1737, px_str("smap")), _v1738);
+    _v1747 = px_index(px_index(_v1744, px_str("smap")), _v1745);
     px_srcline(312);
-    if (px_is_truthy(px_not(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v1737, _v1738}, 2)))) {
+    if (px_is_truthy(px_not(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v1744, _v1745}, 2)))) {
         px_srcline(313);
-        if (px_is_truthy(({ LXValue _t1743 = px_ge(_v1739, px_int(0LL)); px_is_truthy(_t1743) ? px_ne(_v1739, _v1740) : _t1743; }))) {
+        if (px_is_truthy(({ LXValue _t1750 = px_ge(_v1746, px_int(0LL)); px_is_truthy(_t1750) ? px_ne(_v1746, _v1747) : _t1750; }))) {
             px_srcline(314);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1737, px_str("MOV"), _v1739, _v1740, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1744, px_str("MOV"), _v1746, _v1747, px_int(0LL)}, 5));
         }
         px_srcline(315);
         return px_null();
     }
     px_srcline(316);
-    if (px_is_truthy(px_lt(_v1739, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1746, px_int(0LL)))) {
         px_srcline(317);
         return px_null();
     }
     px_srcline(318);
-    if (px_is_truthy(px_eq(_v1739, _v1740))) {
+    if (px_is_truthy(px_eq(_v1746, _v1747))) {
         px_srcline(321);
-        _v1741 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1737}, 1);
+        _v1748 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1744}, 1);
         px_srcline(322);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1737, px_str("CELLGET"), _v1741, _v1740, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1744, px_str("CELLGET"), _v1748, _v1747, px_int(0LL)}, 5));
         px_srcline(323);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1737, px_str("MOV"), _v1740, _v1741, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1744, px_str("MOV"), _v1747, _v1748, px_int(0LL)}, 5));
         px_srcline(324);
         return px_null();
     }
     px_srcline(325);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1737, px_str("CELLGET"), _v1739, _v1740, px_int(0LL)}, 5));
-px_err_1742:
-    if (px_err_1742_proped) return px_err_1742_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1744, px_str("CELLGET"), _v1746, _v1747, px_int(0LL)}, 5));
+px_err_1749:
+    if (px_err_1749_proped) return px_err_1749_val;
     return px_null();
 }
 
@@ -14710,33 +14740,33 @@ static LXValue fn_bc_load_ck(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_load_ck");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_load_ck", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_load_ck", 3, nargs);
-    LXValue _v1744 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1745 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1746 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1747 = px_uninit();
-    LXValue _v1748 = px_uninit();
-    LXValue px_err_1749_val = px_null();
-    int px_err_1749_proped = 0;
+    LXValue _v1751 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1752 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1753 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1754 = px_uninit();
+    LXValue _v1755 = px_uninit();
+    LXValue px_err_1756_val = px_null();
+    int px_err_1756_proped = 0;
     px_srcline(330);
-    _v1747 = _v1746;
+    _v1754 = _v1753;
     px_srcline(331);
-    if (px_is_truthy(px_lt(_v1747, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1754, px_int(0LL)))) {
         px_srcline(333);
-         _v1747 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1744}, 1);
+         _v1754 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1751}, 1);
     }
     px_srcline(334);
-    (void)(px_call(px_get_global("bc_load_var"), (LXValue[]){_v1744, _v1745, _v1747}, 3));
+    (void)(px_call(px_get_global("bc_load_var"), (LXValue[]){_v1751, _v1752, _v1754}, 3));
     px_srcline(335);
-    if (px_is_truthy(px_not(px_method(px_index(_v1744, px_str("inited")), "has", (LXValue[]){_v1745}, 1)))) {
+    if (px_is_truthy(px_not(px_method(px_index(_v1751, px_str("inited")), "has", (LXValue[]){_v1752}, 1)))) {
         px_srcline(336);
-        _v1748 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1745}, 2);
+        _v1755 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1752}, 2);
         px_srcline(337);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1744, px_str("CHKINIT"), _v1747, px_int(0LL), _v1748}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1751, px_str("CHKINIT"), _v1754, px_int(0LL), _v1755}, 5));
     }
     px_srcline(338);
-    return _v1747;
-px_err_1749:
-    if (px_err_1749_proped) return px_err_1749_val;
+    return _v1754;
+px_err_1756:
+    if (px_err_1756_proped) return px_err_1756_val;
     return px_null();
 }
 
@@ -14745,23 +14775,23 @@ static LXValue fn_bc_store_var(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_store_var");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_store_var", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_store_var", 4, nargs);
-    LXValue _v1750 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1751 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1752 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1753 = (nargs > 3) ? args[3] : px_null();
-    LXValue px_err_1754_val = px_null();
-    int px_err_1754_proped = 0;
+    LXValue _v1757 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1758 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1759 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1760 = (nargs > 3) ? args[3] : px_null();
+    LXValue px_err_1761_val = px_null();
+    int px_err_1761_proped = 0;
     px_srcline(341);
-    if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v1750, _v1751}, 2))) {
+    if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v1757, _v1758}, 2))) {
         px_srcline(342);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1750, px_str("CELLSET"), _v1753, _v1752, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1757, px_str("CELLSET"), _v1760, _v1759, px_int(0LL)}, 5));
     }
     else {
         px_srcline(344);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1750, px_str("MOV"), _v1752, _v1753, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1757, px_str("MOV"), _v1759, _v1760, px_int(0LL)}, 5));
     }
-px_err_1754:
-    if (px_err_1754_proped) return px_err_1754_val;
+px_err_1761:
+    if (px_err_1761_proped) return px_err_1761_val;
     return px_null();
 }
 
@@ -14770,19 +14800,19 @@ static LXValue fn_bc_closure_free(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_closure_free");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_closure_free", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_closure_free", 2, nargs);
-    LXValue _v1755 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1756 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1757 = px_uninit();
-    LXValue px_err_1758_val = px_null();
-    int px_err_1758_proped = 0;
+    LXValue _v1762 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1763 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1764 = px_uninit();
+    LXValue px_err_1765_val = px_null();
+    int px_err_1765_proped = 0;
     px_srcline(348);
-    _v1757 = px_list_n((LXValue[]){}, 0);
+    _v1764 = px_list_n((LXValue[]){}, 0);
     px_srcline(349);
-    (void)(px_call(px_get_global("cg_closure_caps"), (LXValue[]){px_list_n((LXValue[]){px_str("Closure"), _v1755, px_null(), _v1756, px_list_n((LXValue[]){}, 0), px_null()}, 6), _v1757}, 2));
+    (void)(px_call(px_get_global("cg_closure_caps"), (LXValue[]){px_list_n((LXValue[]){px_str("Closure"), _v1762, px_null(), _v1763, px_list_n((LXValue[]){}, 0), px_null()}, 6), _v1764}, 2));
     px_srcline(350);
-    return _v1757;
-px_err_1758:
-    if (px_err_1758_proped) return px_err_1758_val;
+    return _v1764;
+px_err_1765:
+    if (px_err_1765_proped) return px_err_1765_val;
     return px_null();
 }
 
@@ -14791,17 +14821,17 @@ static LXValue fn_bc_lambda_hoist(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_lambda_hoist");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_lambda_hoist", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_lambda_hoist", 2, nargs);
-    LXValue _v1759 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1760 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1761_val = px_null();
-    int px_err_1761_proped = 0;
+    LXValue _v1766 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1767 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1768_val = px_null();
+    int px_err_1768_proped = 0;
     px_srcline(353);
-    if (px_is_truthy(({ LXValue _t1763 = ({ LXValue _t1762 = px_eq(px_call(px_get_global("type"), (LXValue[]){_v1759}, 1), px_str("list")); px_is_truthy(_t1762) ? px_gt(px_call(px_get_global("len"), (LXValue[]){_v1759}, 1), px_int(0LL)) : _t1762; }); px_is_truthy(_t1763) ? px_eq(px_index(_v1759, px_int(0LL)), px_str("Block")) : _t1763; }))) {
+    if (px_is_truthy(({ LXValue _t1770 = ({ LXValue _t1769 = px_eq(px_call(px_get_global("type"), (LXValue[]){_v1766}, 1), px_str("list")); px_is_truthy(_t1769) ? px_gt(px_call(px_get_global("len"), (LXValue[]){_v1766}, 1), px_int(0LL)) : _t1769; }); px_is_truthy(_t1770) ? px_eq(px_index(_v1766, px_int(0LL)), px_str("Block")) : _t1770; }))) {
         px_srcline(354);
-        (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1759, px_int(1LL)), _v1760}, 2));
+        (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1766, px_int(1LL)), _v1767}, 2));
     }
-px_err_1761:
-    if (px_err_1761_proped) return px_err_1761_val;
+px_err_1768:
+    if (px_err_1768_proped) return px_err_1768_val;
     return px_null();
 }
 
@@ -14810,17 +14840,17 @@ static LXValue fn_bc_lambda_decl(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_lambda_decl");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_lambda_decl", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_lambda_decl", 2, nargs);
-    LXValue _v1764 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1765 = (nargs > 1) ? args[1] : px_null();
-    LXValue px_err_1766_val = px_null();
-    int px_err_1766_proped = 0;
+    LXValue _v1771 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1772 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_err_1773_val = px_null();
+    int px_err_1773_proped = 0;
     px_srcline(357);
-    if (px_is_truthy(({ LXValue _t1768 = ({ LXValue _t1767 = px_eq(px_call(px_get_global("type"), (LXValue[]){_v1764}, 1), px_str("list")); px_is_truthy(_t1767) ? px_gt(px_call(px_get_global("len"), (LXValue[]){_v1764}, 1), px_int(0LL)) : _t1767; }); px_is_truthy(_t1768) ? px_eq(px_index(_v1764, px_int(0LL)), px_str("Block")) : _t1768; }))) {
+    if (px_is_truthy(({ LXValue _t1775 = ({ LXValue _t1774 = px_eq(px_call(px_get_global("type"), (LXValue[]){_v1771}, 1), px_str("list")); px_is_truthy(_t1774) ? px_gt(px_call(px_get_global("len"), (LXValue[]){_v1771}, 1), px_int(0LL)) : _t1774; }); px_is_truthy(_t1775) ? px_eq(px_index(_v1771, px_int(0LL)), px_str("Block")) : _t1775; }))) {
         px_srcline(358);
-        (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1764, px_int(1LL)), _v1765}, 2));
+        (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1771, px_int(1LL)), _v1772}, 2));
     }
-px_err_1766:
-    if (px_err_1766_proped) return px_err_1766_val;
+px_err_1773:
+    if (px_err_1773_proped) return px_err_1773_val;
     return px_null();
 }
 
@@ -14829,37 +14859,37 @@ static LXValue fn_bc_box_frame(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_box_frame");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_box_frame", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_box_frame", 2, nargs);
-    LXValue _v1769 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1770 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1771 = px_uninit();
-    LXValue _v1772 = px_uninit();
-    LXValue _v1773 = px_uninit();
-    LXValue px_err_1774_val = px_null();
-    int px_err_1774_proped = 0;
+    LXValue _v1776 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1777 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1778 = px_uninit();
+    LXValue _v1779 = px_uninit();
+    LXValue _v1780 = px_uninit();
+    LXValue px_err_1781_val = px_null();
+    int px_err_1781_proped = 0;
     px_srcline(364);
-    _v1771 = px_list_n((LXValue[]){}, 0);
+    _v1778 = px_list_n((LXValue[]){}, 0);
     px_srcline(365);
-    (void)(px_call(px_get_global("cg_scan_closure_caps"), (LXValue[]){_v1770, _v1771}, 2));
+    (void)(px_call(px_get_global("cg_scan_closure_caps"), (LXValue[]){_v1777, _v1778}, 2));
     px_srcline(366);
-    _v1772 = px_int(0LL);
+    _v1779 = px_int(0LL);
     px_srcline(367);
-    while (px_is_truthy(px_lt(_v1772, px_call(px_get_global("len"), (LXValue[]){_v1771}, 1)))) {
+    while (px_is_truthy(px_lt(_v1779, px_call(px_get_global("len"), (LXValue[]){_v1778}, 1)))) {
         px_srcline(368);
-        _v1773 = px_index(_v1771, _v1772);
+        _v1780 = px_index(_v1778, _v1779);
         px_srcline(369);
-        if (px_is_truthy(({ LXValue _t1775 = px_method(px_index(_v1769, px_str("smap")), "has", (LXValue[]){_v1773}, 1); px_is_truthy(_t1775) ? px_not(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v1769, _v1773}, 2)) : _t1775; }))) {
+        if (px_is_truthy(({ LXValue _t1782 = px_method(px_index(_v1776, px_str("smap")), "has", (LXValue[]){_v1780}, 1); px_is_truthy(_t1782) ? px_not(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v1776, _v1780}, 2)) : _t1782; }))) {
             px_srcline(370);
-            (void)(px_call(px_get_global("bc_cell_mark"), (LXValue[]){_v1769, _v1773}, 2));
+            (void)(px_call(px_get_global("bc_cell_mark"), (LXValue[]){_v1776, _v1780}, 2));
             px_srcline(371);
-            (void)(px_method(px_index(_v1769, px_str("boxed")), "push", (LXValue[]){_v1773}, 1));
+            (void)(px_method(px_index(_v1776, px_str("boxed")), "push", (LXValue[]){_v1780}, 1));
             px_srcline(372);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1769, px_str("CELLNEW"), px_index(px_index(_v1769, px_str("smap")), _v1773), px_index(px_index(_v1769, px_str("smap")), _v1773), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1776, px_str("CELLNEW"), px_index(px_index(_v1776, px_str("smap")), _v1780), px_index(px_index(_v1776, px_str("smap")), _v1780), px_int(0LL)}, 5));
         }
         px_srcline(373);
-         _v1772 = px_add(_v1772, px_int(1LL));
+         _v1779 = px_add(_v1779, px_int(1LL));
     }
-px_err_1774:
-    if (px_err_1774_proped) return px_err_1774_val;
+px_err_1781:
+    if (px_err_1781_proped) return px_err_1781_val;
     return px_null();
 }
 
@@ -14868,17 +14898,17 @@ static LXValue fn_bc_emit_inst(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_inst");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_inst", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_inst", 5, nargs);
-    LXValue _v1776 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1777 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1778 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1779 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1780 = (nargs > 4) ? args[4] : px_null();
-    LXValue px_err_1781_val = px_null();
-    int px_err_1781_proped = 0;
+    LXValue _v1783 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1784 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1785 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1786 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1787 = (nargs > 4) ? args[4] : px_null();
+    LXValue px_err_1788_val = px_null();
+    int px_err_1788_proped = 0;
     px_srcline(379);
-    (void)(px_method(px_index(_v1776, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){_v1777, px_int(0LL), _v1778, _v1779, _v1780}, 5)}, 1));
-px_err_1781:
-    if (px_err_1781_proped) return px_err_1781_val;
+    (void)(px_method(px_index(_v1783, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){_v1784, px_int(0LL), _v1785, _v1786, _v1787}, 5)}, 1));
+px_err_1788:
+    if (px_err_1788_proped) return px_err_1788_val;
     return px_null();
 }
 
@@ -14887,15 +14917,15 @@ static LXValue fn_bc_patch_off(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_patch_off");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_patch_off", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_patch_off", 3, nargs);
-    LXValue _v1782 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1783 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1784 = (nargs > 2) ? args[2] : px_null();
-    LXValue px_err_1785_val = px_null();
-    int px_err_1785_proped = 0;
+    LXValue _v1789 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1790 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1791 = (nargs > 2) ? args[2] : px_null();
+    LXValue px_err_1792_val = px_null();
+    int px_err_1792_proped = 0;
     px_srcline(383);
-    px_index_set(px_index(px_index(_v1782, px_str("bc")), _v1783), px_int(3LL), px_sub(_v1784, px_add(_v1783, px_int(1LL))));
-px_err_1785:
-    if (px_err_1785_proped) return px_err_1785_val;
+    px_index_set(px_index(px_index(_v1789, px_str("bc")), _v1790), px_int(3LL), px_sub(_v1791, px_add(_v1790, px_int(1LL))));
+px_err_1792:
+    if (px_err_1792_proped) return px_err_1792_val;
     return px_null();
 }
 
@@ -14904,115 +14934,115 @@ static LXValue fn_bc_collect_hoist(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_collect_hoist");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_collect_hoist", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_collect_hoist", 2, nargs);
-    LXValue _v1786 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1787 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1788 = px_uninit();
-    LXValue _v1789 = px_uninit();
-    LXValue _v1790 = px_uninit();
-    LXValue _v1791 = px_uninit();
-    LXValue _v1792 = px_uninit();
-    LXValue _v1793 = px_uninit();
-    LXValue _v1794 = px_uninit();
+    LXValue _v1793 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1794 = (nargs > 1) ? args[1] : px_null();
     LXValue _v1795 = px_uninit();
     LXValue _v1796 = px_uninit();
     LXValue _v1797 = px_uninit();
-    LXValue px_err_1798_val = px_null();
-    int px_err_1798_proped = 0;
+    LXValue _v1798 = px_uninit();
+    LXValue _v1799 = px_uninit();
+    LXValue _v1800 = px_uninit();
+    LXValue _v1801 = px_uninit();
+    LXValue _v1802 = px_uninit();
+    LXValue _v1803 = px_uninit();
+    LXValue _v1804 = px_uninit();
+    LXValue px_err_1805_val = px_null();
+    int px_err_1805_proped = 0;
     px_srcline(386);
-    _v1788 = px_int(0LL);
+    _v1795 = px_int(0LL);
     px_srcline(387);
-    while (px_is_truthy(px_lt(_v1788, px_call(px_get_global("len"), (LXValue[]){_v1786}, 1)))) {
+    while (px_is_truthy(px_lt(_v1795, px_call(px_get_global("len"), (LXValue[]){_v1793}, 1)))) {
         px_srcline(388);
-        _v1789 = px_index(_v1786, _v1788);
+        _v1796 = px_index(_v1793, _v1795);
         px_srcline(389);
-        _v1790 = px_index(_v1789, px_int(0LL));
+        _v1797 = px_index(_v1796, px_int(0LL));
         px_srcline(390);
-        if (px_is_truthy(px_eq(_v1790, px_str("Assign")))) {
+        if (px_is_truthy(px_eq(_v1797, px_str("Assign")))) {
             px_srcline(391);
-            _v1791 = px_index(_v1789, px_int(1LL));
+            _v1798 = px_index(_v1796, px_int(1LL));
             px_srcline(392);
-            if (px_is_truthy(px_eq(px_index(_v1791, px_int(0LL)), px_str("Var")))) {
+            if (px_is_truthy(px_eq(px_index(_v1798, px_int(0LL)), px_str("Var")))) {
                 px_srcline(393);
-                _v1792 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1791, px_int(1LL))}, 1);
+                _v1799 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1798, px_int(1LL))}, 1);
                 px_srcline(394);
-                if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1787, _v1792}, 2)))) {
+                if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1794, _v1799}, 2)))) {
                     px_srcline(395);
-                    (void)(px_method(_v1787, "append", (LXValue[]){_v1792}, 1));
+                    (void)(px_method(_v1794, "append", (LXValue[]){_v1799}, 1));
                 }
             }
         }
-        else if (px_is_truthy(px_eq(_v1790, px_str("VarDecl")))) {
+        else if (px_is_truthy(px_eq(_v1797, px_str("VarDecl")))) {
             px_srcline(397);
-            _v1792 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1789, px_int(2LL))}, 1);
+            _v1799 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1796, px_int(2LL))}, 1);
             px_srcline(398);
-            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1787, _v1792}, 2)))) {
+            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1794, _v1799}, 2)))) {
                 px_srcline(399);
-                (void)(px_method(_v1787, "append", (LXValue[]){_v1792}, 1));
+                (void)(px_method(_v1794, "append", (LXValue[]){_v1799}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(_v1790, px_str("FuncDef")))) {
+        else if (px_is_truthy(px_eq(_v1797, px_str("FuncDef")))) {
             px_srcline(403);
-            _v1792 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1789, px_int(1LL))}, 1);
+            _v1799 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1796, px_int(1LL))}, 1);
             px_srcline(404);
-            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1787, _v1792}, 2)))) {
+            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1794, _v1799}, 2)))) {
                 px_srcline(405);
-                (void)(px_method(_v1787, "append", (LXValue[]){_v1792}, 1));
+                (void)(px_method(_v1794, "append", (LXValue[]){_v1799}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(_v1790, px_str("If")))) {
+        else if (px_is_truthy(px_eq(_v1797, px_str("If")))) {
             px_srcline(407);
-            _v1793 = px_index(_v1789, px_int(1LL));
+            _v1800 = px_index(_v1796, px_int(1LL));
             px_srcline(408);
-            _v1794 = px_int(0LL);
+            _v1801 = px_int(0LL);
             px_srcline(409);
-            while (px_is_truthy(px_lt(_v1794, px_call(px_get_global("len"), (LXValue[]){_v1793}, 1)))) {
+            while (px_is_truthy(px_lt(_v1801, px_call(px_get_global("len"), (LXValue[]){_v1800}, 1)))) {
                 px_srcline(410);
-                (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(px_index(_v1793, _v1794), px_int(1LL)), _v1787}, 2));
+                (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(px_index(_v1800, _v1801), px_int(1LL)), _v1794}, 2));
                 px_srcline(411);
-                 _v1794 = px_add(_v1794, px_int(1LL));
+                 _v1801 = px_add(_v1801, px_int(1LL));
             }
             px_srcline(412);
-            if (px_is_truthy(px_ne(px_index(_v1789, px_int(2LL)), px_null()))) {
+            if (px_is_truthy(px_ne(px_index(_v1796, px_int(2LL)), px_null()))) {
                 px_srcline(413);
-                (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1789, px_int(2LL)), _v1787}, 2));
+                (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1796, px_int(2LL)), _v1794}, 2));
             }
         }
-        else if (px_is_truthy(px_eq(_v1790, px_str("While")))) {
+        else if (px_is_truthy(px_eq(_v1797, px_str("While")))) {
             px_srcline(415);
-            (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1789, px_int(2LL)), _v1787}, 2));
+            (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1796, px_int(2LL)), _v1794}, 2));
         }
-        else if (px_is_truthy(px_eq(_v1790, px_str("For")))) {
+        else if (px_is_truthy(px_eq(_v1797, px_str("For")))) {
             px_srcline(419);
-            _v1795 = px_call(px_get_global("bc_for_names"), (LXValue[]){px_index(_v1789, px_int(1LL))}, 1);
+            _v1802 = px_call(px_get_global("bc_for_names"), (LXValue[]){px_index(_v1796, px_int(1LL))}, 1);
             px_srcline(420);
-            _v1796 = px_int(0LL);
+            _v1803 = px_int(0LL);
             px_srcline(421);
-            while (px_is_truthy(px_lt(_v1796, px_call(px_get_global("len"), (LXValue[]){_v1795}, 1)))) {
+            while (px_is_truthy(px_lt(_v1803, px_call(px_get_global("len"), (LXValue[]){_v1802}, 1)))) {
                 px_srcline(422);
-                if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1787, px_index(_v1795, _v1796)}, 2)))) {
+                if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1794, px_index(_v1802, _v1803)}, 2)))) {
                     px_srcline(423);
-                    (void)(px_method(_v1787, "append", (LXValue[]){px_index(_v1795, _v1796)}, 1));
+                    (void)(px_method(_v1794, "append", (LXValue[]){px_index(_v1802, _v1803)}, 1));
                 }
                 px_srcline(424);
-                 _v1796 = px_add(_v1796, px_int(1LL));
+                 _v1803 = px_add(_v1803, px_int(1LL));
             }
             px_srcline(425);
-            (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1789, px_int(3LL)), _v1787}, 2));
+            (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v1796, px_int(3LL)), _v1794}, 2));
         }
-        else if (px_is_truthy(px_eq(_v1790, px_str("ChanDecl")))) {
+        else if (px_is_truthy(px_eq(_v1797, px_str("ChanDecl")))) {
             px_srcline(428);
-            _v1797 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1789, px_int(1LL))}, 1);
+            _v1804 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1796, px_int(1LL))}, 1);
             px_srcline(429);
-            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1787, _v1797}, 2)))) {
+            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1794, _v1804}, 2)))) {
                 px_srcline(430);
-                (void)(px_method(_v1787, "append", (LXValue[]){_v1797}, 1));
+                (void)(px_method(_v1794, "append", (LXValue[]){_v1804}, 1));
             }
         }
         px_srcline(431);
-         _v1788 = px_add(_v1788, px_int(1LL));
+         _v1795 = px_add(_v1795, px_int(1LL));
     }
-px_err_1798:
-    if (px_err_1798_proped) return px_err_1798_val;
+px_err_1805:
+    if (px_err_1805_proped) return px_err_1805_val;
     return px_null();
 }
 
@@ -15021,101 +15051,101 @@ static LXValue fn_bc_collect_decl_vars(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_collect_decl_vars");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_collect_decl_vars", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_collect_decl_vars", 2, nargs);
-    LXValue _v1799 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1800 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1801 = px_uninit();
-    LXValue _v1802 = px_uninit();
-    LXValue _v1803 = px_uninit();
-    LXValue _v1804 = px_uninit();
-    LXValue _v1805 = px_uninit();
-    LXValue _v1806 = px_uninit();
-    LXValue _v1807 = px_uninit();
+    LXValue _v1806 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1807 = (nargs > 1) ? args[1] : px_null();
     LXValue _v1808 = px_uninit();
     LXValue _v1809 = px_uninit();
     LXValue _v1810 = px_uninit();
-    LXValue px_err_1811_val = px_null();
-    int px_err_1811_proped = 0;
+    LXValue _v1811 = px_uninit();
+    LXValue _v1812 = px_uninit();
+    LXValue _v1813 = px_uninit();
+    LXValue _v1814 = px_uninit();
+    LXValue _v1815 = px_uninit();
+    LXValue _v1816 = px_uninit();
+    LXValue _v1817 = px_uninit();
+    LXValue px_err_1818_val = px_null();
+    int px_err_1818_proped = 0;
     px_srcline(440);
-    _v1801 = px_int(0LL);
+    _v1808 = px_int(0LL);
     px_srcline(441);
-    while (px_is_truthy(px_lt(_v1801, px_call(px_get_global("len"), (LXValue[]){_v1799}, 1)))) {
+    while (px_is_truthy(px_lt(_v1808, px_call(px_get_global("len"), (LXValue[]){_v1806}, 1)))) {
         px_srcline(442);
-        _v1802 = px_index(_v1799, _v1801);
+        _v1809 = px_index(_v1806, _v1808);
         px_srcline(443);
-        _v1803 = px_index(_v1802, px_int(0LL));
+        _v1810 = px_index(_v1809, px_int(0LL));
         px_srcline(444);
-        if (px_is_truthy(px_eq(_v1803, px_str("VarDecl")))) {
+        if (px_is_truthy(px_eq(_v1810, px_str("VarDecl")))) {
             px_srcline(445);
-            _v1804 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1802, px_int(2LL))}, 1);
+            _v1811 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1809, px_int(2LL))}, 1);
             px_srcline(446);
-            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1800, _v1804}, 2)))) {
+            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1807, _v1811}, 2)))) {
                 px_srcline(447);
-                (void)(px_method(_v1800, "append", (LXValue[]){_v1804}, 1));
+                (void)(px_method(_v1807, "append", (LXValue[]){_v1811}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(_v1803, px_str("FuncDef")))) {
+        else if (px_is_truthy(px_eq(_v1810, px_str("FuncDef")))) {
             px_srcline(449);
-            _v1805 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1802, px_int(1LL))}, 1);
+            _v1812 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1809, px_int(1LL))}, 1);
             px_srcline(450);
-            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1800, _v1805}, 2)))) {
+            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1807, _v1812}, 2)))) {
                 px_srcline(451);
-                (void)(px_method(_v1800, "append", (LXValue[]){_v1805}, 1));
+                (void)(px_method(_v1807, "append", (LXValue[]){_v1812}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(_v1803, px_str("ChanDecl")))) {
+        else if (px_is_truthy(px_eq(_v1810, px_str("ChanDecl")))) {
             px_srcline(453);
-            _v1806 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1802, px_int(1LL))}, 1);
+            _v1813 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1809, px_int(1LL))}, 1);
             px_srcline(454);
-            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1800, _v1806}, 2)))) {
+            if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1807, _v1813}, 2)))) {
                 px_srcline(455);
-                (void)(px_method(_v1800, "append", (LXValue[]){_v1806}, 1));
+                (void)(px_method(_v1807, "append", (LXValue[]){_v1813}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(_v1803, px_str("If")))) {
+        else if (px_is_truthy(px_eq(_v1810, px_str("If")))) {
             px_srcline(457);
-            _v1807 = px_index(_v1802, px_int(1LL));
+            _v1814 = px_index(_v1809, px_int(1LL));
             px_srcline(458);
-            _v1808 = px_int(0LL);
+            _v1815 = px_int(0LL);
             px_srcline(459);
-            while (px_is_truthy(px_lt(_v1808, px_call(px_get_global("len"), (LXValue[]){_v1807}, 1)))) {
+            while (px_is_truthy(px_lt(_v1815, px_call(px_get_global("len"), (LXValue[]){_v1814}, 1)))) {
                 px_srcline(460);
-                (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(px_index(_v1807, _v1808), px_int(1LL)), _v1800}, 2));
+                (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(px_index(_v1814, _v1815), px_int(1LL)), _v1807}, 2));
                 px_srcline(461);
-                 _v1808 = px_add(_v1808, px_int(1LL));
+                 _v1815 = px_add(_v1815, px_int(1LL));
             }
             px_srcline(462);
-            if (px_is_truthy(px_ne(px_index(_v1802, px_int(2LL)), px_null()))) {
+            if (px_is_truthy(px_ne(px_index(_v1809, px_int(2LL)), px_null()))) {
                 px_srcline(463);
-                (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1802, px_int(2LL)), _v1800}, 2));
+                (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1809, px_int(2LL)), _v1807}, 2));
             }
         }
-        else if (px_is_truthy(px_eq(_v1803, px_str("For")))) {
+        else if (px_is_truthy(px_eq(_v1810, px_str("For")))) {
             px_srcline(465);
-            _v1809 = px_call(px_get_global("bc_for_names"), (LXValue[]){px_index(_v1802, px_int(1LL))}, 1);
+            _v1816 = px_call(px_get_global("bc_for_names"), (LXValue[]){px_index(_v1809, px_int(1LL))}, 1);
             px_srcline(466);
-            _v1810 = px_int(0LL);
+            _v1817 = px_int(0LL);
             px_srcline(467);
-            while (px_is_truthy(px_lt(_v1810, px_call(px_get_global("len"), (LXValue[]){_v1809}, 1)))) {
+            while (px_is_truthy(px_lt(_v1817, px_call(px_get_global("len"), (LXValue[]){_v1816}, 1)))) {
                 px_srcline(468);
-                if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1800, px_index(_v1809, _v1810)}, 2)))) {
+                if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v1807, px_index(_v1816, _v1817)}, 2)))) {
                     px_srcline(469);
-                    (void)(px_method(_v1800, "append", (LXValue[]){px_index(_v1809, _v1810)}, 1));
+                    (void)(px_method(_v1807, "append", (LXValue[]){px_index(_v1816, _v1817)}, 1));
                 }
                 px_srcline(470);
-                 _v1810 = px_add(_v1810, px_int(1LL));
+                 _v1817 = px_add(_v1817, px_int(1LL));
             }
             px_srcline(471);
-            (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1802, px_int(3LL)), _v1800}, 2));
+            (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1809, px_int(3LL)), _v1807}, 2));
         }
-        else if (px_is_truthy(px_eq(_v1803, px_str("While")))) {
+        else if (px_is_truthy(px_eq(_v1810, px_str("While")))) {
             px_srcline(473);
-            (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1802, px_int(2LL)), _v1800}, 2));
+            (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v1809, px_int(2LL)), _v1807}, 2));
         }
         px_srcline(474);
-         _v1801 = px_add(_v1801, px_int(1LL));
+         _v1808 = px_add(_v1808, px_int(1LL));
     }
-px_err_1811:
-    if (px_err_1811_proped) return px_err_1811_val;
+px_err_1818:
+    if (px_err_1818_proped) return px_err_1818_val;
     return px_null();
 }
 
@@ -15124,17 +15154,17 @@ static LXValue fn_bc_emit_null(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_null");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_null", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_null", 2, nargs);
-    LXValue _v1812 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1813 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1814 = px_uninit();
-    LXValue px_err_1815_val = px_null();
-    int px_err_1815_proped = 0;
+    LXValue _v1819 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1820 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1821 = px_uninit();
+    LXValue px_err_1822_val = px_null();
+    int px_err_1822_proped = 0;
     px_srcline(477);
-    _v1814 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("null"), px_int(0LL), px_float(0), px_str("")}, 5);
+    _v1821 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("null"), px_int(0LL), px_float(0), px_str("")}, 5);
     px_srcline(478);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1812, px_str("LOADK"), _v1813, _v1814, px_int(0LL)}, 5));
-px_err_1815:
-    if (px_err_1815_proped) return px_err_1815_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1819, px_str("LOADK"), _v1820, _v1821, px_int(0LL)}, 5));
+px_err_1822:
+    if (px_err_1822_proped) return px_err_1822_val;
     return px_null();
 }
 
@@ -15143,25 +15173,25 @@ static LXValue fn_bc_emit_int(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_int");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_int", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_int", 3, nargs);
-    LXValue _v1816 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1817 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1818 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1819 = px_uninit();
-    LXValue px_err_1820_val = px_null();
-    int px_err_1820_proped = 0;
+    LXValue _v1823 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1824 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1825 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1826 = px_uninit();
+    LXValue px_err_1827_val = px_null();
+    int px_err_1827_proped = 0;
     px_srcline(481);
-    if (px_is_truthy(({ LXValue _t1821 = px_ge(_v1818, px_neg(px_int(32768LL))); px_is_truthy(_t1821) ? px_le(_v1818, px_int(32767LL)) : _t1821; }))) {
+    if (px_is_truthy(({ LXValue _t1828 = px_ge(_v1825, px_neg(px_int(32768LL))); px_is_truthy(_t1828) ? px_le(_v1825, px_int(32767LL)) : _t1828; }))) {
         px_srcline(482);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1816, px_str("IMM"), _v1817, _v1818, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1823, px_str("IMM"), _v1824, _v1825, px_int(0LL)}, 5));
     }
     else {
         px_srcline(484);
-        _v1819 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("int"), _v1818, px_float(0), px_str("")}, 5);
+        _v1826 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("int"), _v1825, px_float(0), px_str("")}, 5);
         px_srcline(485);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1816, px_str("LOADK"), _v1817, _v1819, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1823, px_str("LOADK"), _v1824, _v1826, px_int(0LL)}, 5));
     }
-px_err_1820:
-    if (px_err_1820_proped) return px_err_1820_val;
+px_err_1827:
+    if (px_err_1827_proped) return px_err_1827_val;
     return px_null();
 }
 
@@ -15170,13 +15200,13 @@ static LXValue fn_bc_neg_float(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_neg_float");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_neg_float", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_neg_float", 1, nargs);
-    LXValue _v1822 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_1823_val = px_null();
-    int px_err_1823_proped = 0;
+    LXValue _v1829 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_1830_val = px_null();
+    int px_err_1830_proped = 0;
     px_srcline(492);
-    return px_call(px_get_global("bits_to_float64"), (LXValue[]){px_bitxor(px_call(px_get_global("float64_bits"), (LXValue[]){_v1822}, 1), px_sub(px_sub(px_int(0LL), px_int(9223372036854775807LL)), px_int(1LL)))}, 1);
-px_err_1823:
-    if (px_err_1823_proped) return px_err_1823_val;
+    return px_call(px_get_global("bits_to_float64"), (LXValue[]){px_bitxor(px_call(px_get_global("float64_bits"), (LXValue[]){_v1829}, 1), px_sub(px_sub(px_int(0LL), px_int(9223372036854775807LL)), px_int(1LL)))}, 1);
+px_err_1830:
+    if (px_err_1830_proped) return px_err_1830_val;
     return px_null();
 }
 
@@ -15185,18 +15215,18 @@ static LXValue fn_bc_emit_float(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_float");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_float", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_float", 3, nargs);
-    LXValue _v1824 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1825 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1826 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1827 = px_uninit();
-    LXValue px_err_1828_val = px_null();
-    int px_err_1828_proped = 0;
+    LXValue _v1831 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1832 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1833 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1834 = px_uninit();
+    LXValue px_err_1835_val = px_null();
+    int px_err_1835_proped = 0;
     px_srcline(495);
-    _v1827 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("float"), px_int(0LL), _v1826, px_str("")}, 5);
+    _v1834 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("float"), px_int(0LL), _v1833, px_str("")}, 5);
     px_srcline(496);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1824, px_str("LOADK"), _v1825, _v1827, px_int(0LL)}, 5));
-px_err_1828:
-    if (px_err_1828_proped) return px_err_1828_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1831, px_str("LOADK"), _v1832, _v1834, px_int(0LL)}, 5));
+px_err_1835:
+    if (px_err_1835_proped) return px_err_1835_val;
     return px_null();
 }
 
@@ -15205,28 +15235,28 @@ static LXValue fn_bc_unop_op(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_unop_op");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_unop_op", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_unop_op", 1, nargs);
-    LXValue _v1829 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_1830_val = px_null();
-    int px_err_1830_proped = 0;
+    LXValue _v1836 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_1837_val = px_null();
+    int px_err_1837_proped = 0;
     px_srcline(499);
-    if (px_is_truthy(px_eq(_v1829, px_str("Neg")))) {
+    if (px_is_truthy(px_eq(_v1836, px_str("Neg")))) {
         px_srcline(500);
         return px_str("NEG");
     }
     px_srcline(501);
-    if (px_is_truthy(px_eq(_v1829, px_str("Not")))) {
+    if (px_is_truthy(px_eq(_v1836, px_str("Not")))) {
         px_srcline(502);
         return px_str("NOT");
     }
     px_srcline(503);
-    if (px_is_truthy(px_eq(_v1829, px_str("BitNot")))) {
+    if (px_is_truthy(px_eq(_v1836, px_str("BitNot")))) {
         px_srcline(504);
         return px_str("BITNOT");
     }
     px_srcline(505);
-    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_unop_op 未知一元 op: "), px_call(px_get_global("str"), (LXValue[]){_v1829}, 1))}, 1));
-px_err_1830:
-    if (px_err_1830_proped) return px_err_1830_val;
+    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_unop_op 未知一元 op: "), px_call(px_get_global("str"), (LXValue[]){_v1836}, 1))}, 1));
+px_err_1837:
+    if (px_err_1837_proped) return px_err_1837_val;
     return px_null();
 }
 
@@ -15235,118 +15265,118 @@ static LXValue fn_bc_binop_op(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_binop_op");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_binop_op", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_binop_op", 1, nargs);
-    LXValue _v1831 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_1832_val = px_null();
-    int px_err_1832_proped = 0;
+    LXValue _v1838 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_1839_val = px_null();
+    int px_err_1839_proped = 0;
     px_srcline(507);
-    if (px_is_truthy(px_eq(_v1831, px_str("Add")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Add")))) {
         px_srcline(508);
         return px_str("ADD");
     }
     px_srcline(509);
-    if (px_is_truthy(px_eq(_v1831, px_str("Sub")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Sub")))) {
         px_srcline(510);
         return px_str("SUB");
     }
     px_srcline(511);
-    if (px_is_truthy(px_eq(_v1831, px_str("Mul")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Mul")))) {
         px_srcline(512);
         return px_str("MUL");
     }
     px_srcline(513);
-    if (px_is_truthy(px_eq(_v1831, px_str("Div")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Div")))) {
         px_srcline(514);
         return px_str("DIV");
     }
     px_srcline(515);
-    if (px_is_truthy(px_eq(_v1831, px_str("IntDiv")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("IntDiv")))) {
         px_srcline(516);
         return px_str("IDIV");
     }
     px_srcline(517);
-    if (px_is_truthy(px_eq(_v1831, px_str("Mod")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Mod")))) {
         px_srcline(518);
         return px_str("MOD");
     }
     px_srcline(519);
-    if (px_is_truthy(px_eq(_v1831, px_str("Pow")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Pow")))) {
         px_srcline(520);
         return px_str("POW");
     }
     px_srcline(521);
-    if (px_is_truthy(px_eq(_v1831, px_str("Eq")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Eq")))) {
         px_srcline(522);
         return px_str("EQ");
     }
     px_srcline(523);
-    if (px_is_truthy(px_eq(_v1831, px_str("Ne")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Ne")))) {
         px_srcline(524);
         return px_str("NE");
     }
     px_srcline(525);
-    if (px_is_truthy(px_eq(_v1831, px_str("Lt")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Lt")))) {
         px_srcline(526);
         return px_str("LT");
     }
     px_srcline(527);
-    if (px_is_truthy(px_eq(_v1831, px_str("Le")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Le")))) {
         px_srcline(528);
         return px_str("LE");
     }
     px_srcline(529);
-    if (px_is_truthy(px_eq(_v1831, px_str("Gt")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Gt")))) {
         px_srcline(530);
         return px_str("GT");
     }
     px_srcline(531);
-    if (px_is_truthy(px_eq(_v1831, px_str("Ge")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Ge")))) {
         px_srcline(532);
         return px_str("GE");
     }
     px_srcline(534);
-    if (px_is_truthy(px_eq(_v1831, px_str("In")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("In")))) {
         px_srcline(535);
         return px_str("IN");
     }
     px_srcline(536);
-    if (px_is_truthy(px_eq(_v1831, px_str("NotIn")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("NotIn")))) {
         px_srcline(537);
         return px_str("NOTIN");
     }
     px_srcline(538);
-    if (px_is_truthy(px_eq(_v1831, px_str("BitAnd")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("BitAnd")))) {
         px_srcline(539);
         return px_str("BITAND");
     }
     px_srcline(540);
-    if (px_is_truthy(px_eq(_v1831, px_str("BitOr")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("BitOr")))) {
         px_srcline(541);
         return px_str("BITOR");
     }
     px_srcline(542);
-    if (px_is_truthy(px_eq(_v1831, px_str("BitXor")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("BitXor")))) {
         px_srcline(543);
         return px_str("BITXOR");
     }
     px_srcline(544);
-    if (px_is_truthy(px_eq(_v1831, px_str("Shl")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Shl")))) {
         px_srcline(545);
         return px_str("SHL");
     }
     px_srcline(546);
-    if (px_is_truthy(px_eq(_v1831, px_str("Shr")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("Shr")))) {
         px_srcline(547);
         return px_str("SHR");
     }
     px_srcline(548);
-    if (px_is_truthy(px_eq(_v1831, px_str("ShrU")))) {
+    if (px_is_truthy(px_eq(_v1838, px_str("ShrU")))) {
         px_srcline(549);
         return px_str("SHRU");
     }
     px_srcline(550);
-    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_binop_op 未知二元 op: "), px_call(px_get_global("str"), (LXValue[]){_v1831}, 1))}, 1));
-px_err_1832:
-    if (px_err_1832_proped) return px_err_1832_val;
+    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_binop_op 未知二元 op: "), px_call(px_get_global("str"), (LXValue[]){_v1838}, 1))}, 1));
+px_err_1839:
+    if (px_err_1839_proped) return px_err_1839_val;
     return px_null();
 }
 
@@ -15355,16 +15385,9 @@ static LXValue fn_bc_emit_expr(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_expr");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_expr", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_expr", 3, nargs);
-    LXValue _v1833 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1834 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1835 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1836 = px_uninit();
-    LXValue _v1837 = px_uninit();
-    LXValue _v1838 = px_uninit();
-    LXValue _v1839 = px_uninit();
-    LXValue _v1840 = px_uninit();
-    LXValue _v1841 = px_uninit();
-    LXValue _v1842 = px_uninit();
+    LXValue _v1840 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1841 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1842 = (nargs > 2) ? args[2] : px_null();
     LXValue _v1843 = px_uninit();
     LXValue _v1844 = px_uninit();
     LXValue _v1845 = px_uninit();
@@ -15431,874 +15454,881 @@ static LXValue fn_bc_emit_expr(LXValue* args, int nargs, void* ctx) {
     LXValue _v1906 = px_uninit();
     LXValue _v1907 = px_uninit();
     LXValue _v1908 = px_uninit();
-    LXValue px_err_1909_val = px_null();
-    int px_err_1909_proped = 0;
+    LXValue _v1909 = px_uninit();
+    LXValue _v1910 = px_uninit();
+    LXValue _v1911 = px_uninit();
+    LXValue _v1912 = px_uninit();
+    LXValue _v1913 = px_uninit();
+    LXValue _v1914 = px_uninit();
+    LXValue _v1915 = px_uninit();
+    LXValue px_err_1916_val = px_null();
+    int px_err_1916_proped = 0;
     px_srcline(555);
-    _v1836 = px_index(_v1833, px_int(0LL));
+    _v1843 = px_index(_v1840, px_int(0LL));
     px_srcline(556);
-    if (px_is_truthy(px_eq(_v1836, px_str("Int")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Int")))) {
         px_srcline(557);
-        (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v1835, _v1834, px_index(_v1833, px_int(1LL))}, 3));
+        (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v1842, _v1841, px_index(_v1840, px_int(1LL))}, 3));
         px_srcline(558);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(559);
-    if (px_is_truthy(px_eq(_v1836, px_str("Float")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Float")))) {
         px_srcline(560);
-        (void)(px_call(px_get_global("bc_emit_float"), (LXValue[]){_v1835, _v1834, px_index(_v1833, px_int(1LL))}, 3));
+        (void)(px_call(px_get_global("bc_emit_float"), (LXValue[]){_v1842, _v1841, px_index(_v1840, px_int(1LL))}, 3));
         px_srcline(561);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(562);
-    if (px_is_truthy(px_eq(_v1836, px_str("Unary")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Unary")))) {
         px_srcline(565);
-        _v1837 = px_index(_v1833, px_int(2LL));
+        _v1844 = px_index(_v1840, px_int(2LL));
         px_srcline(566);
-        _v1838 = px_index(_v1833, px_int(1LL));
+        _v1845 = px_index(_v1840, px_int(1LL));
         px_srcline(567);
-        if (px_is_truthy(({ LXValue _t1910 = px_eq(px_index(_v1837, px_int(0LL)), px_str("Int")); px_is_truthy(_t1910) ? px_eq(_v1838, px_str("Neg")) : _t1910; }))) {
+        if (px_is_truthy(({ LXValue _t1917 = px_eq(px_index(_v1844, px_int(0LL)), px_str("Int")); px_is_truthy(_t1917) ? px_eq(_v1845, px_str("Neg")) : _t1917; }))) {
             px_srcline(568);
-            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v1835, _v1834, px_sub(px_int(0LL), px_index(_v1837, px_int(1LL)))}, 3));
+            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v1842, _v1841, px_sub(px_int(0LL), px_index(_v1844, px_int(1LL)))}, 3));
             px_srcline(569);
-            return _v1834;
+            return _v1841;
         }
         px_srcline(570);
-        if (px_is_truthy(({ LXValue _t1911 = px_eq(px_index(_v1837, px_int(0LL)), px_str("Float")); px_is_truthy(_t1911) ? px_eq(_v1838, px_str("Neg")) : _t1911; }))) {
+        if (px_is_truthy(({ LXValue _t1918 = px_eq(px_index(_v1844, px_int(0LL)), px_str("Float")); px_is_truthy(_t1918) ? px_eq(_v1845, px_str("Neg")) : _t1918; }))) {
             px_srcline(577);
-            (void)(px_call(px_get_global("bc_emit_float"), (LXValue[]){_v1835, _v1834, px_call(px_get_global("bc_neg_float"), (LXValue[]){px_index(_v1837, px_int(1LL))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_emit_float"), (LXValue[]){_v1842, _v1841, px_call(px_get_global("bc_neg_float"), (LXValue[]){px_index(_v1844, px_int(1LL))}, 1)}, 3));
             px_srcline(578);
-            return _v1834;
+            return _v1841;
         }
         px_srcline(579);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(580);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(581);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(582);
-        _v1840 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1847 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(583);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1837, _v1840, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1844, _v1847, _v1842}, 3));
         px_srcline(584);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_call(px_get_global("bc_unop_op"), (LXValue[]){_v1838}, 1), _v1839, _v1840, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_call(px_get_global("bc_unop_op"), (LXValue[]){_v1845}, 1), _v1846, _v1847, px_int(0LL)}, 5));
         px_srcline(585);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(586);
-    if (px_is_truthy(px_eq(_v1836, px_str("Str")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Str")))) {
         px_srcline(587);
-        _v1841 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1833, px_int(1LL))}, 1)}, 5);
+        _v1848 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1840, px_int(1LL))}, 1)}, 5);
         px_srcline(588);
-        if (px_is_truthy(px_ge(_v1834, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v1841, px_int(0LL)))) {
             px_srcline(589);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("LOADK"), _v1834, _v1841, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("LOADK"), _v1841, _v1848, px_int(0LL)}, 5));
         }
         px_srcline(590);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(591);
-    if (px_is_truthy(px_eq(_v1836, px_str("Bool")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Bool")))) {
         px_srcline(592);
-        _v1842 = px_int(0LL);
+        _v1849 = px_int(0LL);
         px_srcline(593);
-        if (px_is_truthy(px_index(_v1833, px_int(1LL)))) {
+        if (px_is_truthy(px_index(_v1840, px_int(1LL)))) {
             px_srcline(594);
-             _v1842 = px_int(1LL);
+             _v1849 = px_int(1LL);
         }
         px_srcline(595);
-        _v1841 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("bool"), _v1842, px_float(0), px_str("")}, 5);
+        _v1848 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("bool"), _v1849, px_float(0), px_str("")}, 5);
         px_srcline(596);
-        if (px_is_truthy(px_ge(_v1834, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v1841, px_int(0LL)))) {
             px_srcline(597);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("LOADK"), _v1834, _v1841, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("LOADK"), _v1841, _v1848, px_int(0LL)}, 5));
         }
         px_srcline(598);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(599);
-    if (px_is_truthy(px_eq(_v1836, px_str("Null")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Null")))) {
         px_srcline(600);
-        if (px_is_truthy(px_ge(_v1834, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v1841, px_int(0LL)))) {
             px_srcline(601);
-            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1835, _v1834}, 2));
+            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1842, _v1841}, 2));
         }
         px_srcline(602);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(603);
-    if (px_is_truthy(px_eq(_v1836, px_str("Var")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Var")))) {
         px_srcline(604);
-        _v1843 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1833, px_int(1LL))}, 1);
+        _v1850 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1840, px_int(1LL))}, 1);
         px_srcline(605);
-        if (px_is_truthy(px_method(px_index(_v1835, px_str("smap")), "has", (LXValue[]){_v1843}, 1))) {
+        if (px_is_truthy(px_method(px_index(_v1842, px_str("smap")), "has", (LXValue[]){_v1850}, 1))) {
             px_srcline(608);
-            (void)(px_call(px_get_global("bc_load_ck"), (LXValue[]){_v1835, _v1843, _v1834}, 3));
+            (void)(px_call(px_get_global("bc_load_ck"), (LXValue[]){_v1842, _v1850, _v1841}, 3));
             px_srcline(609);
-            return _v1834;
+            return _v1841;
         }
         px_srcline(611);
-        _v1844 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v1843}, 2);
+        _v1851 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v1850}, 2);
         px_srcline(612);
-        if (px_is_truthy(px_ge(_v1834, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v1841, px_int(0LL)))) {
             px_srcline(613);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("GETG"), _v1834, _v1844, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("GETG"), _v1841, _v1851, px_int(0LL)}, 5));
         }
         px_srcline(614);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(615);
-    if (px_is_truthy(px_eq(_v1836, px_str("Binary")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Binary")))) {
         px_srcline(617);
-        _v1838 = px_index(_v1833, px_int(1LL));
+        _v1845 = px_index(_v1840, px_int(1LL));
         px_srcline(618);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(619);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(620);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(621);
-        if (px_is_truthy(px_eq(_v1838, px_str("And")))) {
+        if (px_is_truthy(px_eq(_v1845, px_str("And")))) {
             px_srcline(623);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1839, _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1846, _v1842}, 3));
             px_srcline(624);
-            _v1845 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+            _v1852 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
             px_srcline(625);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMPF"), _v1839, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMPF"), _v1846, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(626);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(3LL)), _v1839, _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(3LL)), _v1846, _v1842}, 3));
             px_srcline(627);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, _v1845, px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, _v1852, px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1)}, 3));
             px_srcline(628);
-            return _v1839;
+            return _v1846;
         }
         px_srcline(629);
-        if (px_is_truthy(px_eq(_v1838, px_str("Or")))) {
+        if (px_is_truthy(px_eq(_v1845, px_str("Or")))) {
             px_srcline(631);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1839, _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1846, _v1842}, 3));
             px_srcline(632);
-            _v1845 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+            _v1852 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
             px_srcline(633);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMPT"), _v1839, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMPT"), _v1846, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(634);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(3LL)), _v1839, _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(3LL)), _v1846, _v1842}, 3));
             px_srcline(635);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, _v1845, px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, _v1852, px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1)}, 3));
             px_srcline(636);
-            return _v1839;
+            return _v1846;
         }
         px_srcline(637);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1846, _v1842}, 3));
         px_srcline(638);
-        _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1853 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(639);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(3LL)), _v1846, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(3LL)), _v1853, _v1842}, 3));
         px_srcline(640);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_call(px_get_global("bc_binop_op"), (LXValue[]){_v1838}, 1), _v1839, _v1839, _v1846}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_call(px_get_global("bc_binop_op"), (LXValue[]){_v1845}, 1), _v1846, _v1846, _v1853}, 5));
         px_srcline(641);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(642);
-    if (px_is_truthy(px_eq(_v1836, px_str("NullCoalesce")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("NullCoalesce")))) {
         px_srcline(644);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(645);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(646);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(647);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1846, _v1842}, 3));
         px_srcline(648);
-        _v1847 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1854 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(649);
-        (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1835, _v1847}, 2));
+        (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1842, _v1854}, 2));
         px_srcline(650);
-        _v1848 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1855 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(651);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("EQ"), _v1848, _v1839, _v1847}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("EQ"), _v1855, _v1846, _v1854}, 5));
         px_srcline(652);
-        _v1845 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+        _v1852 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
         px_srcline(653);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMPF"), _v1848, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMPF"), _v1855, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(654);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1846, _v1842}, 3));
         px_srcline(655);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, _v1845, px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1)}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, _v1852, px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1)}, 3));
         px_srcline(656);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(657);
-    if (px_is_truthy(px_eq(_v1836, px_str("IfExpr")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("IfExpr")))) {
         px_srcline(659);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(660);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(661);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(662);
-        _v1849 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1856 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(663);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1849, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1856, _v1842}, 3));
         px_srcline(664);
-        _v1850 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+        _v1857 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
         px_srcline(665);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMPF"), _v1849, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMPF"), _v1856, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(666);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1846, _v1842}, 3));
         px_srcline(667);
-        _v1851 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+        _v1858 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
         px_srcline(668);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(669);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, _v1850, px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1)}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, _v1857, px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1)}, 3));
         px_srcline(670);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(3LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(3LL)), _v1846, _v1842}, 3));
         px_srcline(671);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, _v1851, px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1)}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, _v1858, px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1)}, 3));
         px_srcline(672);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(673);
-    if (px_is_truthy(px_eq(_v1836, px_str("Try")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Try")))) {
         px_srcline(680);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(681);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(682);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(683);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1846, _v1842}, 3));
         px_srcline(684);
-        _v1852 = px_int(0LL);
+        _v1859 = px_int(0LL);
         px_srcline(685);
-        if (px_is_truthy(px_index(_v1835, px_str("is_top")))) {
+        if (px_is_truthy(px_index(_v1842, px_str("is_top")))) {
             px_srcline(686);
-             _v1852 = px_int(1LL);
+             _v1859 = px_int(1LL);
         }
         px_srcline(687);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("TRY"), _v1839, _v1852, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("TRY"), _v1846, _v1859, px_int(0LL)}, 5));
         px_srcline(688);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(689);
-    if (px_is_truthy(px_eq(_v1836, px_str("ForceUnwrap")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("ForceUnwrap")))) {
         px_srcline(691);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(692);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(693);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(694);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1839, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1846, _v1842}, 3));
         px_srcline(695);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("FORCE"), _v1839, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("FORCE"), _v1846, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(696);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(697);
-    if (px_is_truthy(({ LXValue _t1912 = px_eq(_v1836, px_str("List")); px_is_truthy(_t1912) ? _t1912 : px_eq(_v1836, px_str("Tuple")); }))) {
+    if (px_is_truthy(({ LXValue _t1919 = px_eq(_v1843, px_str("List")); px_is_truthy(_t1919) ? _t1919 : px_eq(_v1843, px_str("Tuple")); }))) {
         px_srcline(699);
-        _v1853 = px_index(_v1833, px_int(1LL));
+        _v1860 = px_index(_v1840, px_int(1LL));
         px_srcline(700);
-        _v1854 = px_call(px_get_global("len"), (LXValue[]){_v1853}, 1);
+        _v1861 = px_call(px_get_global("len"), (LXValue[]){_v1860}, 1);
         px_srcline(701);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(702);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(703);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(704);
-        _v1855 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1862 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(705);
-        while (px_is_truthy(px_lt(px_index(_v1835, px_str("next_slot")), px_add(_v1855, _v1854)))) {
+        while (px_is_truthy(px_lt(px_index(_v1842, px_str("next_slot")), px_add(_v1862, _v1861)))) {
             px_srcline(706);
-            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1));
+            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1));
         }
         px_srcline(707);
-        _v1856 = px_int(0LL);
+        _v1863 = px_int(0LL);
         px_srcline(708);
-        while (px_is_truthy(px_lt(_v1856, _v1854))) {
+        while (px_is_truthy(px_lt(_v1863, _v1861))) {
             px_srcline(709);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1853, _v1856), px_add(_v1855, _v1856), _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1860, _v1863), px_add(_v1862, _v1863), _v1842}, 3));
             px_srcline(710);
-             _v1856 = px_add(_v1856, px_int(1LL));
+             _v1863 = px_add(_v1863, px_int(1LL));
         }
         px_srcline(711);
-        if (px_is_truthy(px_eq(_v1836, px_str("List")))) {
+        if (px_is_truthy(px_eq(_v1843, px_str("List")))) {
             px_srcline(712);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("NEWLIST"), _v1839, _v1855, _v1854}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("NEWLIST"), _v1846, _v1862, _v1861}, 5));
         }
         else {
             px_srcline(714);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("NEWTUPLE"), _v1839, _v1855, _v1854}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("NEWTUPLE"), _v1846, _v1862, _v1861}, 5));
         }
         px_srcline(715);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(716);
-    if (px_is_truthy(px_eq(_v1836, px_str("Dict")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Dict")))) {
         px_srcline(718);
-        _v1857 = px_index(_v1833, px_int(1LL));
+        _v1864 = px_index(_v1840, px_int(1LL));
         px_srcline(719);
-        _v1854 = px_call(px_get_global("len"), (LXValue[]){_v1857}, 1);
+        _v1861 = px_call(px_get_global("len"), (LXValue[]){_v1864}, 1);
         px_srcline(720);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(721);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(722);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(723);
-        _v1855 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1862 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(724);
-        while (px_is_truthy(px_lt(px_index(_v1835, px_str("next_slot")), px_add(_v1855, px_mul(px_int(2LL), _v1854))))) {
+        while (px_is_truthy(px_lt(px_index(_v1842, px_str("next_slot")), px_add(_v1862, px_mul(px_int(2LL), _v1861))))) {
             px_srcline(725);
-            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1));
+            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1));
         }
         px_srcline(726);
-        _v1858 = px_int(0LL);
+        _v1865 = px_int(0LL);
         px_srcline(727);
-        while (px_is_truthy(px_lt(_v1858, _v1854))) {
+        while (px_is_truthy(px_lt(_v1865, _v1861))) {
             px_srcline(728);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v1857, _v1858), px_int(0LL)), px_add(_v1855, px_mul(px_int(2LL), _v1858)), _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v1864, _v1865), px_int(0LL)), px_add(_v1862, px_mul(px_int(2LL), _v1865)), _v1842}, 3));
             px_srcline(729);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v1857, _v1858), px_int(1LL)), px_add(px_add(_v1855, px_mul(px_int(2LL), _v1858)), px_int(1LL)), _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v1864, _v1865), px_int(1LL)), px_add(px_add(_v1862, px_mul(px_int(2LL), _v1865)), px_int(1LL)), _v1842}, 3));
             px_srcline(730);
-             _v1858 = px_add(_v1858, px_int(1LL));
+             _v1865 = px_add(_v1865, px_int(1LL));
         }
         px_srcline(731);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("NEWDICT"), _v1839, _v1855, _v1854}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("NEWDICT"), _v1846, _v1862, _v1861}, 5));
         px_srcline(732);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(733);
-    if (px_is_truthy(px_eq(_v1836, px_str("Index")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Index")))) {
         px_srcline(735);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(736);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(737);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(738);
-        _v1859 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1866 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(739);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1859, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1866, _v1842}, 3));
         px_srcline(740);
-        _v1860 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1867 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(741);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1860, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1867, _v1842}, 3));
         px_srcline(742);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("INDEX"), _v1839, _v1859, _v1860}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("INDEX"), _v1846, _v1866, _v1867}, 5));
         px_srcline(743);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(744);
-    if (px_is_truthy(px_eq(_v1836, px_str("Slice")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Slice")))) {
         px_srcline(746);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(747);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(748);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(749);
-        _v1859 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1866 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(750);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1859, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1866, _v1842}, 3));
         px_srcline(751);
-        _v1855 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1862 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(752);
-        while (px_is_truthy(px_lt(px_index(_v1835, px_str("next_slot")), px_add(_v1855, px_int(3LL))))) {
+        while (px_is_truthy(px_lt(px_index(_v1842, px_str("next_slot")), px_add(_v1862, px_int(3LL))))) {
             px_srcline(753);
-            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1));
+            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1));
         }
         px_srcline(754);
-        if (px_is_truthy(px_eq(px_index(_v1833, px_int(2LL)), px_null()))) {
+        if (px_is_truthy(px_eq(px_index(_v1840, px_int(2LL)), px_null()))) {
             px_srcline(755);
-            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1835, _v1855}, 2));
+            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1842, _v1862}, 2));
         }
         else {
             px_srcline(757);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(2LL)), _v1855, _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(2LL)), _v1862, _v1842}, 3));
         }
         px_srcline(758);
-        if (px_is_truthy(px_eq(px_index(_v1833, px_int(3LL)), px_null()))) {
+        if (px_is_truthy(px_eq(px_index(_v1840, px_int(3LL)), px_null()))) {
             px_srcline(759);
-            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1835, px_add(_v1855, px_int(1LL))}, 2));
+            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1842, px_add(_v1862, px_int(1LL))}, 2));
         }
         else {
             px_srcline(761);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(3LL)), px_add(_v1855, px_int(1LL)), _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(3LL)), px_add(_v1862, px_int(1LL)), _v1842}, 3));
         }
         px_srcline(762);
-        if (px_is_truthy(px_eq(px_index(_v1833, px_int(4LL)), px_null()))) {
+        if (px_is_truthy(px_eq(px_index(_v1840, px_int(4LL)), px_null()))) {
             px_srcline(763);
-            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1835, px_add(_v1855, px_int(2LL))}, 2));
+            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1842, px_add(_v1862, px_int(2LL))}, 2));
         }
         else {
             px_srcline(765);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(4LL)), px_add(_v1855, px_int(2LL)), _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(4LL)), px_add(_v1862, px_int(2LL)), _v1842}, 3));
         }
         px_srcline(766);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("SLICE"), _v1839, _v1859, _v1855}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("SLICE"), _v1846, _v1866, _v1862}, 5));
         px_srcline(767);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(768);
-    if (px_is_truthy(px_eq(_v1836, px_str("Field")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Field")))) {
         px_srcline(772);
-        _v1861 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1833, px_int(2LL))}, 1);
+        _v1868 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1840, px_int(2LL))}, 1);
         px_srcline(773);
-        _v1862 = px_index(_v1833, px_int(1LL));
+        _v1869 = px_index(_v1840, px_int(1LL));
         px_srcline(774);
-        if (px_is_truthy(px_eq(px_index(_v1862, px_int(0LL)), px_str("Var")))) {
+        if (px_is_truthy(px_eq(px_index(_v1869, px_int(0LL)), px_str("Var")))) {
             px_srcline(775);
-            _v1863 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1862, px_int(1LL))}, 1);
+            _v1870 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1869, px_int(1LL))}, 1);
             px_srcline(776);
-            _v1864 = px_call(px_get_global("bc_const_find"), (LXValue[]){_v1863, _v1861}, 2);
+            _v1871 = px_call(px_get_global("bc_const_find"), (LXValue[]){_v1870, _v1868}, 2);
             px_srcline(777);
-            if (px_is_truthy(px_ne(_v1864, px_null()))) {
+            if (px_is_truthy(px_ne(_v1871, px_null()))) {
                 px_srcline(778);
-                _v1839 = _v1834;
+                _v1846 = _v1841;
                 px_srcline(779);
-                if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+                if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
                     px_srcline(780);
-                     _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+                     _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
                 }
                 px_srcline(781);
-                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1864, _v1839, _v1835}, 3));
+                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1871, _v1846, _v1842}, 3));
                 px_srcline(782);
-                return _v1839;
+                return _v1846;
             }
             px_srcline(783);
-            if (px_is_truthy(({ LXValue _t1913 = px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v1835, _v1863}, 2)); px_is_truthy(_t1913) ? px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1863}, 1) : _t1913; }))) {
+            if (px_is_truthy(({ LXValue _t1920 = px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v1842, _v1870}, 2)); px_is_truthy(_t1920) ? px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1870}, 1) : _t1920; }))) {
                 px_srcline(787);
-                _v1839 = _v1834;
+                _v1846 = _v1841;
                 px_srcline(788);
-                if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+                if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
                     px_srcline(789);
-                     _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+                     _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
                 }
                 px_srcline(790);
-                if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1863, _v1861}, 2)))) {
+                if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1870, _v1868}, 2)))) {
                     px_srcline(791);
-                    _v1865 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1863), px_str(" 没有变体 '")), _v1861), px_str("'"))}, 2);
+                    _v1872 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1870), px_str(" 没有变体 '")), _v1868), px_str("'"))}, 2);
                     px_srcline(792);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("RAISE"), px_int(0LL), _v1865, px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("RAISE"), px_int(0LL), _v1872, px_int(0LL)}, 5));
                     px_srcline(793);
-                    return _v1839;
+                    return _v1846;
                 }
                 px_srcline(797);
-                _v1866 = px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1863, _v1861}, 2);
+                _v1873 = px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1870, _v1868}, 2);
                 px_srcline(798);
-                if (px_is_truthy(({ LXValue _t1914 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v1866}, 1), px_int(0LL)); px_is_truthy(_t1914) ? px_not(px_call(px_get_global("bc_enum_pos_style"), (LXValue[]){_v1866}, 1)) : _t1914; }))) {
+                if (px_is_truthy(({ LXValue _t1921 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v1873}, 1), px_int(0LL)); px_is_truthy(_t1921) ? px_not(px_call(px_get_global("bc_enum_pos_style"), (LXValue[]){_v1873}, 1)) : _t1921; }))) {
                     px_srcline(799);
-                    _v1867 = px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_str("R1005: 枚举变体 "), _v1863), px_str(".")), _v1861), px_str(" 需要 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1866}, 1)}, 1)), px_str(" 个字段，给出 0；请写 ")), _v1863), px_str(".")), _v1861), px_str("(...)"));
+                    _v1874 = px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_str("R1005: 枚举变体 "), _v1870), px_str(".")), _v1868), px_str(" 需要 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1873}, 1)}, 1)), px_str(" 个字段，给出 0；请写 ")), _v1870), px_str(".")), _v1868), px_str("(...)"));
                     px_srcline(800);
-                    _v1868 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1867}, 2);
+                    _v1875 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1874}, 2);
                     px_srcline(801);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("RAISE"), px_int(0LL), _v1868, px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("RAISE"), px_int(0LL), _v1875, px_int(0LL)}, 5));
                     px_srcline(802);
-                    return _v1839;
+                    return _v1846;
                 }
                 px_srcline(803);
-                _v1847 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1863}, 2);
+                _v1854 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1870}, 2);
                 px_srcline(804);
-                _v1869 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1861}, 2);
+                _v1876 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1868}, 2);
                 px_srcline(805);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("NEWENUM"), _v1839, _v1847, _v1869}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("NEWENUM"), _v1846, _v1854, _v1876}, 5));
                 px_srcline(806);
-                return _v1839;
+                return _v1846;
             }
         }
         px_srcline(807);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(808);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(809);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(810);
-        _v1859 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1866 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(811);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1859, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1866, _v1842}, 3));
         px_srcline(812);
-        _v1870 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1861}, 2);
+        _v1877 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1868}, 2);
         px_srcline(813);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("GETF"), _v1839, _v1859, _v1870}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("GETF"), _v1846, _v1866, _v1877}, 5));
         px_srcline(814);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(815);
-    if (px_is_truthy(px_eq(_v1836, px_str("OptionalField")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("OptionalField")))) {
         px_srcline(817);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(818);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(819);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(820);
-        _v1859 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1866 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(821);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1859, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1866, _v1842}, 3));
         px_srcline(822);
-        _v1870 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1833, px_int(2LL))}, 1)}, 2);
+        _v1877 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1840, px_int(2LL))}, 1)}, 2);
         px_srcline(823);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("GETF_OPT"), _v1839, _v1859, _v1870}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("GETF_OPT"), _v1846, _v1866, _v1877}, 5));
         px_srcline(824);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(825);
-    if (px_is_truthy(px_eq(_v1836, px_str("Call")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Call")))) {
         px_srcline(828);
-        _v1871 = px_index(_v1833, px_int(1LL));
+        _v1878 = px_index(_v1840, px_int(1LL));
         px_srcline(832);
-        if (px_is_truthy(px_call(px_get_global("argmap_has_named"), (LXValue[]){px_index(_v1833, px_int(2LL))}, 1))) {
+        if (px_is_truthy(px_call(px_get_global("argmap_has_named"), (LXValue[]){px_index(_v1840, px_int(2LL))}, 1))) {
             px_srcline(835);
-            if (px_is_truthy(px_eq(px_index(_v1871, px_int(0LL)), px_str("Field")))) {
+            if (px_is_truthy(px_eq(px_index(_v1878, px_int(0LL)), px_str("Field")))) {
                 px_srcline(836);
-                _v1872 = px_index(_v1871, px_int(1LL));
+                _v1879 = px_index(_v1878, px_int(1LL));
                 px_srcline(837);
-                if (px_is_truthy(({ LXValue _t1916 = ({ LXValue _t1915 = px_eq(px_index(_v1872, px_int(0LL)), px_str("Var")); px_is_truthy(_t1915) ? px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v1835, px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1872, px_int(1LL))}, 1)}, 2)) : _t1915; }); px_is_truthy(_t1916) ? px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1872, px_int(1LL))}, 1)}, 1) : _t1916; }))) {
+                if (px_is_truthy(({ LXValue _t1923 = ({ LXValue _t1922 = px_eq(px_index(_v1879, px_int(0LL)), px_str("Var")); px_is_truthy(_t1922) ? px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v1842, px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1879, px_int(1LL))}, 1)}, 2)) : _t1922; }); px_is_truthy(_t1923) ? px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1879, px_int(1LL))}, 1)}, 1) : _t1923; }))) {
                     px_srcline(838);
-                    _v1873 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1872, px_int(1LL))}, 1);
+                    _v1880 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1879, px_int(1LL))}, 1);
                     px_srcline(839);
-                    _v1874 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1871, px_int(2LL))}, 1);
+                    _v1881 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1878, px_int(2LL))}, 1);
                     px_srcline(840);
-                    _v1875 = _v1834;
+                    _v1882 = _v1841;
                     px_srcline(841);
-                    if (px_is_truthy(px_lt(_v1875, px_int(0LL)))) {
+                    if (px_is_truthy(px_lt(_v1882, px_int(0LL)))) {
                         px_srcline(842);
-                         _v1875 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+                         _v1882 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
                     }
                     px_srcline(843);
-                    if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1873, _v1874}, 2)))) {
+                    if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1880, _v1881}, 2)))) {
                         px_srcline(844);
-                        _v1876 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1873), px_str(" 没有变体 '")), _v1874), px_str("'"))}, 2);
+                        _v1883 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1880), px_str(" 没有变体 '")), _v1881), px_str("'"))}, 2);
                         px_srcline(845);
-                        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("RAISE"), px_int(0LL), _v1876, px_int(0LL)}, 5));
+                        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("RAISE"), px_int(0LL), _v1883, px_int(0LL)}, 5));
                         px_srcline(846);
-                        return _v1875;
+                        return _v1882;
                     }
                     px_srcline(847);
-                    return px_call(px_get_global("bc_emit_enum_payload_new"), (LXValue[]){_v1873, _v1874, px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1873, _v1874}, 2), px_index(_v1833, px_int(2LL)), _v1875, _v1835}, 6);
+                    return px_call(px_get_global("bc_emit_enum_payload_new"), (LXValue[]){_v1880, _v1881, px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1880, _v1881}, 2), px_index(_v1840, px_int(2LL)), _v1882, _v1842}, 6);
                 }
             }
             px_srcline(848);
-            _v1877 = px_null();
+            _v1884 = px_null();
             px_srcline(849);
-            if (px_is_truthy(px_eq(px_index(_v1871, px_int(0LL)), px_str("Var")))) {
+            if (px_is_truthy(px_eq(px_index(_v1878, px_int(0LL)), px_str("Var")))) {
                 px_srcline(850);
-                 _v1877 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1871, px_int(1LL))}, 1);
+                 _v1884 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1878, px_int(1LL))}, 1);
             }
             px_srcline(851);
-            _v1878 = px_neg(px_int(1LL));
+            _v1885 = px_neg(px_int(1LL));
             px_srcline(852);
-            if (px_is_truthy(px_ne(_v1877, px_null()))) {
+            if (px_is_truthy(px_ne(_v1884, px_null()))) {
                 px_srcline(853);
-                 _v1878 = px_call(px_get_global("bc_struct_index"), (LXValue[]){_v1877}, 1);
+                 _v1885 = px_call(px_get_global("bc_struct_index"), (LXValue[]){_v1884}, 1);
             }
             px_srcline(854);
-            if (px_is_truthy(px_lt(_v1878, px_int(0LL)))) {
+            if (px_is_truthy(px_lt(_v1885, px_int(0LL)))) {
                 px_srcline(855);
-                _v1879 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_str("R2001: "), px_call(px_get_global("argmap_reject"), (LXValue[]){_v1877}, 1))}, 2);
+                _v1886 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_str("R2001: "), px_call(px_get_global("argmap_reject"), (LXValue[]){_v1884}, 1))}, 2);
                 px_srcline(856);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("RAISE"), px_int(0LL), _v1879, px_int(0LL)}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("RAISE"), px_int(0LL), _v1886, px_int(0LL)}, 5));
                 px_srcline(857);
-                _v1880 = _v1834;
+                _v1887 = _v1841;
                 px_srcline(858);
-                if (px_is_truthy(px_lt(_v1880, px_int(0LL)))) {
+                if (px_is_truthy(px_lt(_v1887, px_int(0LL)))) {
                     px_srcline(859);
-                     _v1880 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+                     _v1887 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
                 }
                 px_srcline(860);
-                return _v1880;
+                return _v1887;
             }
             px_srcline(861);
-            return px_call(px_get_global("bc_emit_struct_named"), (LXValue[]){_v1877, _v1878, px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 5);
+            return px_call(px_get_global("bc_emit_struct_named"), (LXValue[]){_v1884, _v1885, px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 5);
         }
         px_srcline(865);
-        (void)(px_call(px_get_global("cg_sem_call"), (LXValue[]){_v1871, px_index(_v1833, px_int(2LL))}, 2));
+        (void)(px_call(px_get_global("cg_sem_call"), (LXValue[]){_v1878, px_index(_v1840, px_int(2LL))}, 2));
         px_srcline(866);
-        if (px_is_truthy(px_eq(px_index(_v1871, px_int(0LL)), px_str("Var")))) {
+        if (px_is_truthy(px_eq(px_index(_v1878, px_int(0LL)), px_str("Var")))) {
             px_srcline(867);
-            _v1881 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1871, px_int(1LL))}, 1);
+            _v1888 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1878, px_int(1LL))}, 1);
             px_srcline(868);
-            _v1882 = px_call(px_get_global("bc_struct_index"), (LXValue[]){_v1881}, 1);
+            _v1889 = px_call(px_get_global("bc_struct_index"), (LXValue[]){_v1888}, 1);
             px_srcline(869);
-            if (px_is_truthy(px_ge(_v1882, px_int(0LL)))) {
+            if (px_is_truthy(px_ge(_v1889, px_int(0LL)))) {
                 px_srcline(870);
-                return px_call(px_get_global("bc_emit_struct_new"), (LXValue[]){_v1881, _v1882, px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 5);
+                return px_call(px_get_global("bc_emit_struct_new"), (LXValue[]){_v1888, _v1889, px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 5);
             }
             px_srcline(871);
-            if (px_is_truthy(px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1881}, 1))) {
+            if (px_is_truthy(px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1888}, 1))) {
                 px_srcline(872);
-                return px_call(px_get_global("bc_emit_enum_new"), (LXValue[]){_v1881, px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 4);
+                return px_call(px_get_global("bc_emit_enum_new"), (LXValue[]){_v1888, px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 4);
             }
         }
         px_srcline(873);
-        if (px_is_truthy(px_eq(px_index(_v1871, px_int(0LL)), px_str("Field")))) {
+        if (px_is_truthy(px_eq(px_index(_v1878, px_int(0LL)), px_str("Field")))) {
             px_srcline(878);
-            _v1883 = px_index(_v1871, px_int(1LL));
+            _v1890 = px_index(_v1878, px_int(1LL));
             px_srcline(879);
-            if (px_is_truthy(({ LXValue _t1918 = ({ LXValue _t1917 = px_eq(px_index(_v1883, px_int(0LL)), px_str("Var")); px_is_truthy(_t1917) ? px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v1835, px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1883, px_int(1LL))}, 1)}, 2)) : _t1917; }); px_is_truthy(_t1918) ? px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1883, px_int(1LL))}, 1)}, 1) : _t1918; }))) {
+            if (px_is_truthy(({ LXValue _t1925 = ({ LXValue _t1924 = px_eq(px_index(_v1890, px_int(0LL)), px_str("Var")); px_is_truthy(_t1924) ? px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v1842, px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1890, px_int(1LL))}, 1)}, 2)) : _t1924; }); px_is_truthy(_t1925) ? px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1890, px_int(1LL))}, 1)}, 1) : _t1925; }))) {
                 px_srcline(880);
-                _v1884 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1883, px_int(1LL))}, 1);
+                _v1891 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1890, px_int(1LL))}, 1);
                 px_srcline(881);
-                _v1885 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1871, px_int(2LL))}, 1);
+                _v1892 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1878, px_int(2LL))}, 1);
                 px_srcline(882);
-                _v1886 = _v1834;
+                _v1893 = _v1841;
                 px_srcline(883);
-                if (px_is_truthy(px_lt(_v1886, px_int(0LL)))) {
+                if (px_is_truthy(px_lt(_v1893, px_int(0LL)))) {
                     px_srcline(884);
-                     _v1886 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+                     _v1893 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
                 }
                 px_srcline(885);
-                if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1884, _v1885}, 2)))) {
+                if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1891, _v1892}, 2)))) {
                     px_srcline(886);
-                    _v1879 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1884), px_str(" 没有变体 '")), _v1885), px_str("'"))}, 2);
+                    _v1886 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1891), px_str(" 没有变体 '")), _v1892), px_str("'"))}, 2);
                     px_srcline(887);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("RAISE"), px_int(0LL), _v1879, px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("RAISE"), px_int(0LL), _v1886, px_int(0LL)}, 5));
                     px_srcline(888);
-                    return _v1886;
+                    return _v1893;
                 }
                 px_srcline(891);
-                return px_call(px_get_global("bc_emit_enum_payload_new"), (LXValue[]){_v1884, _v1885, px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1884, _v1885}, 2), px_index(_v1833, px_int(2LL)), _v1886, _v1835}, 6);
+                return px_call(px_get_global("bc_emit_enum_payload_new"), (LXValue[]){_v1891, _v1892, px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1891, _v1892}, 2), px_index(_v1840, px_int(2LL)), _v1893, _v1842}, 6);
             }
             px_srcline(892);
-            return px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){px_index(_v1871, px_int(1LL)), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1871, px_int(2LL))}, 1), px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 5);
+            return px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){px_index(_v1878, px_int(1LL)), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1878, px_int(2LL))}, 1), px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 5);
         }
         px_srcline(893);
-        return px_call(px_get_global("bc_emit_call"), (LXValue[]){_v1871, px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 4);
+        return px_call(px_get_global("bc_emit_call"), (LXValue[]){_v1878, px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 4);
     }
     px_srcline(894);
-    if (px_is_truthy(px_eq(_v1836, px_str("Constructor")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Constructor")))) {
         px_srcline(896);
-        _v1881 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1833, px_int(1LL))}, 1);
+        _v1888 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1840, px_int(1LL))}, 1);
         px_srcline(897);
-        _v1882 = px_call(px_get_global("bc_struct_index"), (LXValue[]){_v1881}, 1);
+        _v1889 = px_call(px_get_global("bc_struct_index"), (LXValue[]){_v1888}, 1);
         px_srcline(898);
-        if (px_is_truthy(px_ge(_v1882, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v1889, px_int(0LL)))) {
             px_srcline(899);
-            return px_call(px_get_global("bc_emit_struct_new"), (LXValue[]){_v1881, _v1882, px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 5);
+            return px_call(px_get_global("bc_emit_struct_new"), (LXValue[]){_v1888, _v1889, px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 5);
         }
         px_srcline(900);
-        if (px_is_truthy(px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1881}, 1))) {
+        if (px_is_truthy(px_method(px_index(px_get_global("g_bcm"), px_str("enums")), "has", (LXValue[]){_v1888}, 1))) {
             px_srcline(901);
-            return px_call(px_get_global("bc_emit_enum_new"), (LXValue[]){_v1881, px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 4);
+            return px_call(px_get_global("bc_emit_enum_new"), (LXValue[]){_v1888, px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 4);
         }
         px_srcline(903);
-        return px_call(px_get_global("bc_emit_call"), (LXValue[]){px_index(_v1833, px_int(1LL)), px_index(_v1833, px_int(2LL)), _v1834, _v1835}, 4);
+        return px_call(px_get_global("bc_emit_call"), (LXValue[]){px_index(_v1840, px_int(1LL)), px_index(_v1840, px_int(2LL)), _v1841, _v1842}, 4);
     }
     px_srcline(904);
-    if (px_is_truthy(px_eq(_v1836, px_str("Pipe")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Pipe")))) {
         px_srcline(906);
-        _v1887 = px_index(_v1833, px_int(1LL));
+        _v1894 = px_index(_v1840, px_int(1LL));
         px_srcline(907);
-        _v1888 = px_index(_v1833, px_int(2LL));
+        _v1895 = px_index(_v1840, px_int(2LL));
         px_srcline(908);
-        if (px_is_truthy(px_eq(px_index(_v1888, px_int(0LL)), px_str("Call")))) {
+        if (px_is_truthy(px_eq(px_index(_v1895, px_int(0LL)), px_str("Call")))) {
             px_srcline(909);
-            _v1889 = px_list_n((LXValue[]){}, 0);
+            _v1896 = px_list_n((LXValue[]){}, 0);
             px_srcline(910);
-            (void)(px_method(_v1889, "append", (LXValue[]){_v1887}, 1));
+            (void)(px_method(_v1896, "append", (LXValue[]){_v1894}, 1));
             px_srcline(911);
-            _v1890 = px_int(0LL);
+            _v1897 = px_int(0LL);
             px_srcline(912);
-            while (px_is_truthy(px_lt(_v1890, px_call(px_get_global("len"), (LXValue[]){px_index(_v1888, px_int(2LL))}, 1)))) {
+            while (px_is_truthy(px_lt(_v1897, px_call(px_get_global("len"), (LXValue[]){px_index(_v1895, px_int(2LL))}, 1)))) {
                 px_srcline(913);
-                (void)(px_method(_v1889, "append", (LXValue[]){px_index(px_index(_v1888, px_int(2LL)), _v1890)}, 1));
+                (void)(px_method(_v1896, "append", (LXValue[]){px_index(px_index(_v1895, px_int(2LL)), _v1897)}, 1));
                 px_srcline(914);
-                 _v1890 = px_add(_v1890, px_int(1LL));
+                 _v1897 = px_add(_v1897, px_int(1LL));
             }
             px_srcline(915);
-            return px_call(px_get_global("bc_emit_call"), (LXValue[]){px_index(_v1888, px_int(1LL)), _v1889, _v1834, _v1835}, 4);
+            return px_call(px_get_global("bc_emit_call"), (LXValue[]){px_index(_v1895, px_int(1LL)), _v1896, _v1841, _v1842}, 4);
         }
         px_srcline(916);
-        _v1889 = px_list_n((LXValue[]){_v1887}, 1);
+        _v1896 = px_list_n((LXValue[]){_v1894}, 1);
         px_srcline(917);
-        return px_call(px_get_global("bc_emit_call"), (LXValue[]){_v1888, _v1889, _v1834, _v1835}, 4);
+        return px_call(px_get_global("bc_emit_call"), (LXValue[]){_v1895, _v1896, _v1841, _v1842}, 4);
     }
     px_srcline(918);
-    if (px_is_truthy(px_eq(_v1836, px_str("ListComp")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("ListComp")))) {
         px_srcline(920);
-        _v1891 = px_index(_v1833, px_int(2LL));
+        _v1898 = px_index(_v1840, px_int(2LL));
         px_srcline(921);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(922);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(923);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(924);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("NEWLIST"), _v1839, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("NEWLIST"), _v1846, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(925);
-        (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v1835, px_str("push"), px_list_n((LXValue[]){px_index(_v1833, px_int(1LL))}, 1), px_index(_v1833, px_int(3LL)), _v1839, _v1891, px_int(0LL)}, 7));
+        (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v1842, px_str("push"), px_list_n((LXValue[]){px_index(_v1840, px_int(1LL))}, 1), px_index(_v1840, px_int(3LL)), _v1846, _v1898, px_int(0LL)}, 7));
         px_srcline(926);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(927);
-    if (px_is_truthy(px_eq(_v1836, px_str("DictComp")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("DictComp")))) {
         px_srcline(930);
-        _v1891 = px_index(_v1833, px_int(3LL));
+        _v1898 = px_index(_v1840, px_int(3LL));
         px_srcline(931);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(932);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(933);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(934);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("NEWDICT"), _v1839, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("NEWDICT"), _v1846, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(935);
-        (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v1835, px_str("dict"), px_list_n((LXValue[]){px_index(_v1833, px_int(1LL)), px_index(_v1833, px_int(2LL))}, 2), px_index(_v1833, px_int(4LL)), _v1839, _v1891, px_int(0LL)}, 7));
+        (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v1842, px_str("dict"), px_list_n((LXValue[]){px_index(_v1840, px_int(1LL)), px_index(_v1840, px_int(2LL))}, 2), px_index(_v1840, px_int(4LL)), _v1846, _v1898, px_int(0LL)}, 7));
         px_srcline(936);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(937);
-    if (px_is_truthy(px_eq(_v1836, px_str("GenExp")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("GenExp")))) {
         px_srcline(938);
-        return px_call(px_get_global("bc_emit_genexp"), (LXValue[]){_v1833, _v1834, _v1835}, 3);
+        return px_call(px_get_global("bc_emit_genexp"), (LXValue[]){_v1840, _v1841, _v1842}, 3);
     }
     px_srcline(939);
-    if (px_is_truthy(px_eq(_v1836, px_str("Match")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Match")))) {
         px_srcline(944);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(945);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(946);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(947);
-        _v1892 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+        _v1899 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         px_srcline(948);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1833, px_int(1LL)), _v1892, _v1835}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1840, px_int(1LL)), _v1899, _v1842}, 3));
         px_srcline(949);
-        _v1893 = px_index(_v1833, px_int(2LL));
+        _v1900 = px_index(_v1840, px_int(2LL));
         px_srcline(950);
-        _v1894 = px_list_n((LXValue[]){}, 0);
+        _v1901 = px_list_n((LXValue[]){}, 0);
         px_srcline(951);
-        _v1895 = px_int(0LL);
+        _v1902 = px_int(0LL);
         px_srcline(952);
-        while (px_is_truthy(px_lt(_v1895, px_call(px_get_global("len"), (LXValue[]){_v1893}, 1)))) {
+        while (px_is_truthy(px_lt(_v1902, px_call(px_get_global("len"), (LXValue[]){_v1900}, 1)))) {
             px_srcline(953);
-            _v1896 = px_index(_v1893, _v1895);
+            _v1903 = px_index(_v1900, _v1902);
             px_srcline(954);
-            _v1897 = px_list_n((LXValue[]){}, 0);
+            _v1904 = px_list_n((LXValue[]){}, 0);
             px_srcline(955);
-            (void)(px_call(px_get_global("bc_pattern_names"), (LXValue[]){px_index(_v1896, px_int(1LL)), _v1897}, 2));
+            (void)(px_call(px_get_global("bc_pattern_names"), (LXValue[]){px_index(_v1903, px_int(1LL)), _v1904}, 2));
             px_srcline(956);
-            _v1898 = px_call(px_get_global("bc_shadow_save"), (LXValue[]){_v1835, _v1897}, 2);
+            _v1905 = px_call(px_get_global("bc_shadow_save"), (LXValue[]){_v1842, _v1904}, 2);
             px_srcline(957);
-            _v1899 = px_list_n((LXValue[]){}, 0);
+            _v1906 = px_list_n((LXValue[]){}, 0);
             px_srcline(958);
-            (void)(px_call(px_get_global("bc_match_cond"), (LXValue[]){px_index(_v1896, px_int(1LL)), _v1892, _v1835, _v1899}, 4));
+            (void)(px_call(px_get_global("bc_match_cond"), (LXValue[]){px_index(_v1903, px_int(1LL)), _v1899, _v1842, _v1906}, 4));
             px_srcline(959);
-            if (px_is_truthy(px_ne(px_index(_v1896, px_int(2LL)), px_null()))) {
+            if (px_is_truthy(px_ne(px_index(_v1903, px_int(2LL)), px_null()))) {
                 px_srcline(960);
-                _v1900 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+                _v1907 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
                 px_srcline(961);
-                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1896, px_int(2LL)), _v1900, _v1835}, 3));
+                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1903, px_int(2LL)), _v1907, _v1842}, 3));
                 px_srcline(962);
-                _v1901 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+                _v1908 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
                 px_srcline(963);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMPF"), _v1900, px_int(0LL), px_int(0LL)}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMPF"), _v1907, px_int(0LL), px_int(0LL)}, 5));
                 px_srcline(964);
-                (void)(px_method(_v1899, "append", (LXValue[]){_v1901}, 1));
+                (void)(px_method(_v1906, "append", (LXValue[]){_v1908}, 1));
             }
             px_srcline(965);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1896, px_int(3LL)), _v1839, _v1835}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1903, px_int(3LL)), _v1846, _v1842}, 3));
             px_srcline(966);
-            _v1851 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+            _v1858 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
             px_srcline(967);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
             px_srcline(968);
-            _v1902 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+            _v1909 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
             px_srcline(969);
-            _v1903 = px_int(0LL);
+            _v1910 = px_int(0LL);
             px_srcline(970);
-            while (px_is_truthy(px_lt(_v1903, px_call(px_get_global("len"), (LXValue[]){_v1899}, 1)))) {
+            while (px_is_truthy(px_lt(_v1910, px_call(px_get_global("len"), (LXValue[]){_v1906}, 1)))) {
                 px_srcline(971);
-                (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, px_index(_v1899, _v1903), _v1902}, 3));
+                (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, px_index(_v1906, _v1910), _v1909}, 3));
                 px_srcline(972);
-                 _v1903 = px_add(_v1903, px_int(1LL));
+                 _v1910 = px_add(_v1910, px_int(1LL));
             }
             px_srcline(973);
-            (void)(px_method(_v1894, "append", (LXValue[]){_v1851}, 1));
+            (void)(px_method(_v1901, "append", (LXValue[]){_v1858}, 1));
             px_srcline(974);
-            (void)(px_call(px_get_global("bc_shadow_restore"), (LXValue[]){_v1835, _v1898}, 2));
+            (void)(px_call(px_get_global("bc_shadow_restore"), (LXValue[]){_v1842, _v1905}, 2));
             px_srcline(975);
-             _v1895 = px_add(_v1895, px_int(1LL));
+             _v1902 = px_add(_v1902, px_int(1LL));
         }
         px_srcline(976);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1835, px_str("MATCHFAIL"), px_int(0LL), _v1892, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1842, px_str("MATCHFAIL"), px_int(0LL), _v1899, px_int(0LL)}, 5));
         px_srcline(977);
-        _v1904 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1835, px_str("bc"))}, 1);
+        _v1911 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1842, px_str("bc"))}, 1);
         px_srcline(978);
-        _v1905 = px_int(0LL);
+        _v1912 = px_int(0LL);
         px_srcline(979);
-        while (px_is_truthy(px_lt(_v1905, px_call(px_get_global("len"), (LXValue[]){_v1894}, 1)))) {
+        while (px_is_truthy(px_lt(_v1912, px_call(px_get_global("len"), (LXValue[]){_v1901}, 1)))) {
             px_srcline(980);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1835, px_index(_v1894, _v1905), _v1904}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v1842, px_index(_v1901, _v1912), _v1911}, 3));
             px_srcline(981);
-             _v1905 = px_add(_v1905, px_int(1LL));
+             _v1912 = px_add(_v1912, px_int(1LL));
         }
         px_srcline(982);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(983);
-    if (px_is_truthy(px_eq(_v1836, px_str("Block")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Block")))) {
         px_srcline(987);
-        _v1839 = _v1834;
+        _v1846 = _v1841;
         px_srcline(988);
-        if (px_is_truthy(px_lt(_v1839, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v1846, px_int(0LL)))) {
             px_srcline(989);
-             _v1839 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1835}, 1);
+             _v1846 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1842}, 1);
         }
         px_srcline(990);
-        (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1835, _v1839}, 2));
+        (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v1842, _v1846}, 2));
         px_srcline(991);
-        _v1906 = px_index(_v1833, px_int(1LL));
+        _v1913 = px_index(_v1840, px_int(1LL));
         px_srcline(992);
-        _v1907 = px_int(0LL);
+        _v1914 = px_int(0LL);
         px_srcline(993);
-        while (px_is_truthy(px_lt(_v1907, px_call(px_get_global("len"), (LXValue[]){_v1906}, 1)))) {
+        while (px_is_truthy(px_lt(_v1914, px_call(px_get_global("len"), (LXValue[]){_v1913}, 1)))) {
             px_srcline(994);
-            _v1908 = px_index(_v1906, _v1907);
+            _v1915 = px_index(_v1913, _v1914);
             px_srcline(995);
-            if (px_is_truthy(px_eq(px_index(_v1908, px_int(0LL)), px_str("ExprStmt")))) {
+            if (px_is_truthy(px_eq(px_index(_v1915, px_int(0LL)), px_str("ExprStmt")))) {
                 px_srcline(996);
-                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1908, px_int(1LL)), _v1839, _v1835}, 3));
+                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1915, px_int(1LL)), _v1846, _v1842}, 3));
             }
             else {
                 px_srcline(998);
-                (void)(px_call(px_get_global("bc_emit_stmt"), (LXValue[]){_v1908, _v1835}, 2));
+                (void)(px_call(px_get_global("bc_emit_stmt"), (LXValue[]){_v1915, _v1842}, 2));
             }
             px_srcline(999);
-             _v1907 = px_add(_v1907, px_int(1LL));
+             _v1914 = px_add(_v1914, px_int(1LL));
         }
         px_srcline(1000);
-        return _v1839;
+        return _v1846;
     }
     px_srcline(1001);
-    if (px_is_truthy(px_eq(_v1836, px_str("Closure")))) {
+    if (px_is_truthy(px_eq(_v1843, px_str("Closure")))) {
         px_srcline(1004);
-        (void)(px_call(px_get_global("bc_emit_closure"), (LXValue[]){px_index(_v1833, px_int(1LL)), px_index(_v1833, px_int(3LL)), _v1834, _v1835}, 4));
+        (void)(px_call(px_get_global("bc_emit_closure"), (LXValue[]){px_index(_v1840, px_int(1LL)), px_index(_v1840, px_int(3LL)), _v1841, _v1842}, 4));
         px_srcline(1005);
-        return _v1834;
+        return _v1841;
     }
     px_srcline(1006);
-    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit_expr 未实现: "), px_call(px_get_global("str"), (LXValue[]){_v1833}, 1))}, 1));
-px_err_1909:
-    if (px_err_1909_proped) return px_err_1909_val;
+    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit_expr 未实现: "), px_call(px_get_global("str"), (LXValue[]){_v1840}, 1))}, 1));
+px_err_1916:
+    if (px_err_1916_proped) return px_err_1916_val;
     return px_null();
 }
 
@@ -16307,52 +16337,52 @@ static LXValue fn_bc_emit_call(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_call");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_call", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_call", 4, nargs);
-    LXValue _v1919 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1920 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1921 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1922 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1923 = px_uninit();
-    LXValue _v1924 = px_uninit();
-    LXValue _v1925 = px_uninit();
-    LXValue _v1926 = px_uninit();
-    LXValue _v1927 = px_uninit();
-    LXValue px_err_1928_val = px_null();
-    int px_err_1928_proped = 0;
+    LXValue _v1926 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1927 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1928 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1929 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1930 = px_uninit();
+    LXValue _v1931 = px_uninit();
+    LXValue _v1932 = px_uninit();
+    LXValue _v1933 = px_uninit();
+    LXValue _v1934 = px_uninit();
+    LXValue px_err_1935_val = px_null();
+    int px_err_1935_proped = 0;
     px_srcline(1010);
-    _v1923 = _v1921;
+    _v1930 = _v1928;
     px_srcline(1011);
-    if (px_is_truthy(px_lt(_v1923, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1930, px_int(0LL)))) {
         px_srcline(1012);
-         _v1923 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1922}, 1);
+         _v1930 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1929}, 1);
     }
     px_srcline(1013);
-    _v1924 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1922}, 1);
+    _v1931 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1929}, 1);
     px_srcline(1014);
-    _v1925 = px_call(px_get_global("len"), (LXValue[]){_v1920}, 1);
+    _v1932 = px_call(px_get_global("len"), (LXValue[]){_v1927}, 1);
     px_srcline(1015);
-    _v1926 = px_add(px_add(_v1924, px_int(1LL)), _v1925);
+    _v1933 = px_add(px_add(_v1931, px_int(1LL)), _v1932);
     px_srcline(1016);
-    while (px_is_truthy(px_lt(px_index(_v1922, px_str("next_slot")), _v1926))) {
+    while (px_is_truthy(px_lt(px_index(_v1929, px_str("next_slot")), _v1933))) {
         px_srcline(1017);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1922}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1929}, 1));
     }
     px_srcline(1018);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1919, _v1924, _v1922}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1926, _v1931, _v1929}, 3));
     px_srcline(1019);
-    _v1927 = px_int(0LL);
+    _v1934 = px_int(0LL);
     px_srcline(1020);
-    while (px_is_truthy(px_lt(_v1927, _v1925))) {
+    while (px_is_truthy(px_lt(_v1934, _v1932))) {
         px_srcline(1021);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1920, _v1927), px_add(px_add(_v1924, px_int(1LL)), _v1927), _v1922}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1927, _v1934), px_add(px_add(_v1931, px_int(1LL)), _v1934), _v1929}, 3));
         px_srcline(1022);
-         _v1927 = px_add(_v1927, px_int(1LL));
+         _v1934 = px_add(_v1934, px_int(1LL));
     }
     px_srcline(1023);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1922, px_str("CALL"), _v1923, _v1924, _v1925}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1929, px_str("CALL"), _v1930, _v1931, _v1932}, 5));
     px_srcline(1024);
-    return _v1923;
-px_err_1928:
-    if (px_err_1928_proped) return px_err_1928_val;
+    return _v1930;
+px_err_1935:
+    if (px_err_1935_proped) return px_err_1935_val;
     return px_null();
 }
 
@@ -16361,56 +16391,56 @@ static LXValue fn_bc_emit_methodcall(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_methodcall");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_methodcall", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_methodcall", 5, nargs);
-    LXValue _v1929 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1930 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1931 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1932 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1933 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v1934 = px_uninit();
-    LXValue _v1935 = px_uninit();
-    LXValue _v1936 = px_uninit();
-    LXValue _v1937 = px_uninit();
-    LXValue _v1938 = px_uninit();
-    LXValue _v1939 = px_uninit();
-    LXValue px_err_1940_val = px_null();
-    int px_err_1940_proped = 0;
+    LXValue _v1936 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1937 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1938 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1939 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1940 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v1941 = px_uninit();
+    LXValue _v1942 = px_uninit();
+    LXValue _v1943 = px_uninit();
+    LXValue _v1944 = px_uninit();
+    LXValue _v1945 = px_uninit();
+    LXValue _v1946 = px_uninit();
+    LXValue px_err_1947_val = px_null();
+    int px_err_1947_proped = 0;
     px_srcline(1030);
-    _v1934 = _v1932;
+    _v1941 = _v1939;
     px_srcline(1031);
-    if (px_is_truthy(px_lt(_v1934, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1941, px_int(0LL)))) {
         px_srcline(1032);
-         _v1934 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1933}, 1);
+         _v1941 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1940}, 1);
     }
     px_srcline(1033);
-    _v1935 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1933}, 1);
+    _v1942 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1940}, 1);
     px_srcline(1034);
-    _v1936 = px_call(px_get_global("len"), (LXValue[]){_v1931}, 1);
+    _v1943 = px_call(px_get_global("len"), (LXValue[]){_v1938}, 1);
     px_srcline(1035);
-    _v1937 = px_add(px_add(_v1935, px_int(1LL)), _v1936);
+    _v1944 = px_add(px_add(_v1942, px_int(1LL)), _v1943);
     px_srcline(1036);
-    while (px_is_truthy(px_lt(px_index(_v1933, px_str("next_slot")), _v1937))) {
+    while (px_is_truthy(px_lt(px_index(_v1940, px_str("next_slot")), _v1944))) {
         px_srcline(1037);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1933}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1940}, 1));
     }
     px_srcline(1038);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1929, _v1935, _v1933}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1936, _v1942, _v1940}, 3));
     px_srcline(1039);
-    _v1938 = px_int(0LL);
+    _v1945 = px_int(0LL);
     px_srcline(1040);
-    while (px_is_truthy(px_lt(_v1938, _v1936))) {
+    while (px_is_truthy(px_lt(_v1945, _v1943))) {
         px_srcline(1041);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1931, _v1938), px_add(px_add(_v1935, px_int(1LL)), _v1938), _v1933}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1938, _v1945), px_add(px_add(_v1942, px_int(1LL)), _v1945), _v1940}, 3));
         px_srcline(1042);
-         _v1938 = px_add(_v1938, px_int(1LL));
+         _v1945 = px_add(_v1945, px_int(1LL));
     }
     px_srcline(1043);
-    _v1939 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1930}, 2);
+    _v1946 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1937}, 2);
     px_srcline(1044);
-    (void)(px_method(px_index(_v1933, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("CALLM"), _v1936, _v1934, _v1935, _v1939}, 5)}, 1));
+    (void)(px_method(px_index(_v1940, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("CALLM"), _v1943, _v1941, _v1942, _v1946}, 5)}, 1));
     px_srcline(1045);
-    return _v1934;
-px_err_1940:
-    if (px_err_1940_proped) return px_err_1940_val;
+    return _v1941;
+px_err_1947:
+    if (px_err_1947_proped) return px_err_1947_val;
     return px_null();
 }
 
@@ -16419,61 +16449,61 @@ static LXValue fn_bc_emit_struct_new(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_struct_new");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_struct_new", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_struct_new", 5, nargs);
-    LXValue _v1941 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1942 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1943 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1944 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1945 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v1946 = px_uninit();
-    LXValue _v1947 = px_uninit();
-    LXValue _v1948 = px_uninit();
-    LXValue _v1949 = px_uninit();
-    LXValue _v1950 = px_uninit();
-    LXValue _v1951 = px_uninit();
-    LXValue px_err_1952_val = px_null();
-    int px_err_1952_proped = 0;
+    LXValue _v1948 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1949 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1950 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1951 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1952 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v1953 = px_uninit();
+    LXValue _v1954 = px_uninit();
+    LXValue _v1955 = px_uninit();
+    LXValue _v1956 = px_uninit();
+    LXValue _v1957 = px_uninit();
+    LXValue _v1958 = px_uninit();
+    LXValue px_err_1959_val = px_null();
+    int px_err_1959_proped = 0;
     px_srcline(1049);
-    _v1946 = px_index(px_index(px_get_global("g_bcm"), px_str("structs")), _v1942);
+    _v1953 = px_index(px_index(px_get_global("g_bcm"), px_str("structs")), _v1949);
     px_srcline(1050);
-    _v1947 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1946, px_str("fnames"))}, 1);
+    _v1954 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1953, px_str("fnames"))}, 1);
     px_srcline(1051);
-    _v1948 = _v1944;
+    _v1955 = _v1951;
     px_srcline(1052);
-    if (px_is_truthy(px_lt(_v1948, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1955, px_int(0LL)))) {
         px_srcline(1053);
-         _v1948 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1945}, 1);
+         _v1955 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1952}, 1);
     }
     px_srcline(1056);
-    if (px_is_truthy(px_ne(px_call(px_get_global("len"), (LXValue[]){_v1943}, 1), _v1947))) {
+    if (px_is_truthy(px_ne(px_call(px_get_global("len"), (LXValue[]){_v1950}, 1), _v1954))) {
         px_srcline(1057);
-        _v1949 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), ({ LXValue _s232 = px_add(px_add(px_add(px_add(px_str("R2001: 结构体 "), _v1941), px_str(" 需要 ")), px_call(px_get_global("str"), (LXValue[]){_v1947}, 1)), px_str(" 个字段，给出 ")); LXValue _s233 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1943}, 1)}, 1); px_add(_s232, _s233); })}, 2);
+        _v1956 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), ({ LXValue _s232 = px_add(px_add(px_add(px_add(px_str("R2001: 结构体 "), _v1948), px_str(" 需要 ")), px_call(px_get_global("str"), (LXValue[]){_v1954}, 1)), px_str(" 个字段，给出 ")); LXValue _s233 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1950}, 1)}, 1); px_add(_s232, _s233); })}, 2);
         px_srcline(1058);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1945, px_str("RAISE"), px_int(0LL), _v1949, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1952, px_str("RAISE"), px_int(0LL), _v1956, px_int(0LL)}, 5));
         px_srcline(1059);
-        return _v1948;
+        return _v1955;
     }
     px_srcline(1060);
-    _v1950 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1945}, 1);
+    _v1957 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1952}, 1);
     px_srcline(1061);
-    while (px_is_truthy(px_lt(px_index(_v1945, px_str("next_slot")), px_add(_v1950, _v1947)))) {
+    while (px_is_truthy(px_lt(px_index(_v1952, px_str("next_slot")), px_add(_v1957, _v1954)))) {
         px_srcline(1062);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1945}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1952}, 1));
     }
     px_srcline(1063);
-    _v1951 = px_int(0LL);
+    _v1958 = px_int(0LL);
     px_srcline(1064);
-    while (px_is_truthy(px_lt(_v1951, _v1947))) {
+    while (px_is_truthy(px_lt(_v1958, _v1954))) {
         px_srcline(1065);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1943, _v1951), px_add(_v1950, _v1951), _v1945}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v1950, _v1958), px_add(_v1957, _v1958), _v1952}, 3));
         px_srcline(1066);
-         _v1951 = px_add(_v1951, px_int(1LL));
+         _v1958 = px_add(_v1958, px_int(1LL));
     }
     px_srcline(1067);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1945, px_str("NEWSTRUCT"), _v1948, _v1942, _v1950}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1952, px_str("NEWSTRUCT"), _v1955, _v1949, _v1957}, 5));
     px_srcline(1068);
-    return _v1948;
-px_err_1952:
-    if (px_err_1952_proped) return px_err_1952_val;
+    return _v1955;
+px_err_1959:
+    if (px_err_1959_proped) return px_err_1959_val;
     return px_null();
 }
 
@@ -16482,90 +16512,90 @@ static LXValue fn_bc_emit_struct_named(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_struct_named");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_struct_named", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_struct_named", 5, nargs);
-    LXValue _v1953 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1954 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1955 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1956 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1957 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v1958 = px_uninit();
-    LXValue _v1959 = px_uninit();
-    LXValue _v1960 = px_uninit();
-    LXValue _v1961 = px_uninit();
-    LXValue _v1962 = px_uninit();
-    LXValue _v1963 = px_uninit();
-    LXValue _v1964 = px_uninit();
+    LXValue _v1960 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1961 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1962 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1963 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1964 = (nargs > 4) ? args[4] : px_null();
     LXValue _v1965 = px_uninit();
     LXValue _v1966 = px_uninit();
     LXValue _v1967 = px_uninit();
     LXValue _v1968 = px_uninit();
-    LXValue px_err_1969_val = px_null();
-    int px_err_1969_proped = 0;
+    LXValue _v1969 = px_uninit();
+    LXValue _v1970 = px_uninit();
+    LXValue _v1971 = px_uninit();
+    LXValue _v1972 = px_uninit();
+    LXValue _v1973 = px_uninit();
+    LXValue _v1974 = px_uninit();
+    LXValue _v1975 = px_uninit();
+    LXValue px_err_1976_val = px_null();
+    int px_err_1976_proped = 0;
     px_srcline(1073);
-    _v1958 = px_index(px_index(px_get_global("g_bcm"), px_str("structs")), _v1954);
+    _v1965 = px_index(px_index(px_get_global("g_bcm"), px_str("structs")), _v1961);
     px_srcline(1074);
-    _v1959 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1958, px_str("fnames"))}, 1);
+    _v1966 = px_call(px_get_global("len"), (LXValue[]){px_index(_v1965, px_str("fnames"))}, 1);
     px_srcline(1075);
-    _v1960 = _v1956;
+    _v1967 = _v1963;
     px_srcline(1076);
-    if (px_is_truthy(px_lt(_v1960, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1967, px_int(0LL)))) {
         px_srcline(1077);
-         _v1960 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1957}, 1);
+         _v1967 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1964}, 1);
     }
     px_srcline(1078);
-    _v1961 = px_call(px_get_global("argmap_struct"), (LXValue[]){px_index(_v1958, px_str("fnames")), _v1955, _v1953}, 3);
+    _v1968 = px_call(px_get_global("argmap_struct"), (LXValue[]){px_index(_v1965, px_str("fnames")), _v1962, _v1960}, 3);
     px_srcline(1079);
-    if (px_is_truthy(px_ne(px_index(_v1961, px_int(0LL)), px_null()))) {
+    if (px_is_truthy(px_ne(px_index(_v1968, px_int(0LL)), px_null()))) {
         px_srcline(1080);
-        _v1962 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_str("R2001: "), px_index(_v1961, px_int(0LL)))}, 2);
+        _v1969 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_str("R2001: "), px_index(_v1968, px_int(0LL)))}, 2);
         px_srcline(1081);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1957, px_str("RAISE"), px_int(0LL), _v1962, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1964, px_str("RAISE"), px_int(0LL), _v1969, px_int(0LL)}, 5));
         px_srcline(1082);
-        return _v1960;
+        return _v1967;
     }
     px_srcline(1083);
-    _v1963 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1957}, 1);
+    _v1970 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1964}, 1);
     px_srcline(1084);
-    while (px_is_truthy(px_lt(px_index(_v1957, px_str("next_slot")), px_add(_v1963, _v1959)))) {
+    while (px_is_truthy(px_lt(px_index(_v1964, px_str("next_slot")), px_add(_v1970, _v1966)))) {
         px_srcline(1085);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1957}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1964}, 1));
     }
     px_srcline(1086);
-    _v1964 = px_list_n((LXValue[]){}, 0);
+    _v1971 = px_list_n((LXValue[]){}, 0);
     px_srcline(1087);
-    _v1965 = px_int(0LL);
+    _v1972 = px_int(0LL);
     px_srcline(1088);
-    while (px_is_truthy(px_lt(_v1965, px_call(px_get_global("len"), (LXValue[]){_v1955}, 1)))) {
+    while (px_is_truthy(px_lt(_v1972, px_call(px_get_global("len"), (LXValue[]){_v1962}, 1)))) {
         px_srcline(1089);
-        _v1966 = px_index(_v1955, _v1965);
+        _v1973 = px_index(_v1962, _v1972);
         px_srcline(1090);
-        if (px_is_truthy(px_eq(px_index(_v1966, px_int(0LL)), px_str("NamedArg")))) {
+        if (px_is_truthy(px_eq(px_index(_v1973, px_int(0LL)), px_str("NamedArg")))) {
             px_srcline(1091);
-             _v1966 = px_index(_v1966, px_int(2LL));
+             _v1973 = px_index(_v1973, px_int(2LL));
         }
         px_srcline(1092);
-        _v1967 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1957}, 1);
+        _v1974 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1964}, 1);
         px_srcline(1093);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1966, _v1967, _v1957}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1973, _v1974, _v1964}, 3));
         px_srcline(1094);
-        (void)(px_method(_v1964, "append", (LXValue[]){_v1967}, 1));
+        (void)(px_method(_v1971, "append", (LXValue[]){_v1974}, 1));
         px_srcline(1095);
-         _v1965 = px_add(_v1965, px_int(1LL));
+         _v1972 = px_add(_v1972, px_int(1LL));
     }
     px_srcline(1096);
-    _v1968 = px_int(0LL);
+    _v1975 = px_int(0LL);
     px_srcline(1097);
-    while (px_is_truthy(px_lt(_v1968, _v1959))) {
+    while (px_is_truthy(px_lt(_v1975, _v1966))) {
         px_srcline(1098);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1957, px_str("MOV"), px_add(_v1963, _v1968), px_index(_v1964, px_index(px_index(_v1961, px_int(1LL)), _v1968)), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1964, px_str("MOV"), px_add(_v1970, _v1975), px_index(_v1971, px_index(px_index(_v1968, px_int(1LL)), _v1975)), px_int(0LL)}, 5));
         px_srcline(1099);
-         _v1968 = px_add(_v1968, px_int(1LL));
+         _v1975 = px_add(_v1975, px_int(1LL));
     }
     px_srcline(1100);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1957, px_str("NEWSTRUCT"), _v1960, _v1954, _v1963}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1964, px_str("NEWSTRUCT"), _v1967, _v1961, _v1970}, 5));
     px_srcline(1101);
-    return _v1960;
-px_err_1969:
-    if (px_err_1969_proped) return px_err_1969_val;
+    return _v1967;
+px_err_1976:
+    if (px_err_1976_proped) return px_err_1976_val;
     return px_null();
 }
 
@@ -16574,86 +16604,86 @@ static LXValue fn_bc_emit_enum_new(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_enum_new");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_enum_new", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_enum_new", 4, nargs);
-    LXValue _v1970 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1971 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1972 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1973 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1974 = px_uninit();
-    LXValue _v1975 = px_uninit();
-    LXValue _v1976 = px_uninit();
-    LXValue _v1977 = px_uninit();
-    LXValue _v1978 = px_uninit();
-    LXValue _v1979 = px_uninit();
-    LXValue _v1980 = px_uninit();
+    LXValue _v1977 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1978 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1979 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1980 = (nargs > 3) ? args[3] : px_null();
     LXValue _v1981 = px_uninit();
     LXValue _v1982 = px_uninit();
-    LXValue px_err_1983_val = px_null();
-    int px_err_1983_proped = 0;
+    LXValue _v1983 = px_uninit();
+    LXValue _v1984 = px_uninit();
+    LXValue _v1985 = px_uninit();
+    LXValue _v1986 = px_uninit();
+    LXValue _v1987 = px_uninit();
+    LXValue _v1988 = px_uninit();
+    LXValue _v1989 = px_uninit();
+    LXValue px_err_1990_val = px_null();
+    int px_err_1990_proped = 0;
     px_srcline(1104);
-    _v1974 = _v1972;
+    _v1981 = _v1979;
     px_srcline(1105);
-    if (px_is_truthy(px_lt(_v1974, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1981, px_int(0LL)))) {
         px_srcline(1106);
-         _v1974 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1973}, 1);
+         _v1981 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1980}, 1);
     }
     px_srcline(1107);
-    _v1975 = px_null();
+    _v1982 = px_null();
     px_srcline(1108);
-    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v1971}, 1), px_int(1LL)))) {
+    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v1978}, 1), px_int(1LL)))) {
         px_srcline(1109);
-        _v1976 = px_index(_v1971, px_int(0LL));
+        _v1983 = px_index(_v1978, px_int(0LL));
         px_srcline(1110);
-        if (px_is_truthy(px_eq(px_index(_v1976, px_int(0LL)), px_str("Var")))) {
+        if (px_is_truthy(px_eq(px_index(_v1983, px_int(0LL)), px_str("Var")))) {
             px_srcline(1111);
-             _v1975 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1976, px_int(1LL))}, 1);
+             _v1982 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1983, px_int(1LL))}, 1);
         }
         px_srcline(1112);
-        if (px_is_truthy(px_eq(px_index(_v1976, px_int(0LL)), px_str("Str")))) {
+        if (px_is_truthy(px_eq(px_index(_v1983, px_int(0LL)), px_str("Str")))) {
             px_srcline(1113);
-             _v1975 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1976, px_int(1LL))}, 1);
+             _v1982 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v1983, px_int(1LL))}, 1);
         }
     }
     px_srcline(1115);
-    if (px_is_truthy(px_eq(_v1975, px_null()))) {
+    if (px_is_truthy(px_eq(_v1982, px_null()))) {
         px_srcline(1116);
-        _v1977 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_str("R1005: 枚举 "), _v1970), px_str(" 构造需要 1 个变体名，给出 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1971}, 1)}, 1))}, 2);
+        _v1984 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_str("R1005: 枚举 "), _v1977), px_str(" 构造需要 1 个变体名，给出 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1978}, 1)}, 1))}, 2);
         px_srcline(1117);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1973, px_str("RAISE"), px_int(0LL), _v1977, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1980, px_str("RAISE"), px_int(0LL), _v1984, px_int(0LL)}, 5));
         px_srcline(1118);
-        return _v1974;
+        return _v1981;
     }
     px_srcline(1122);
-    if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1970, _v1975}, 2)))) {
+    if (px_is_truthy(px_not(px_call(px_get_global("bc_enum_has"), (LXValue[]){_v1977, _v1982}, 2)))) {
         px_srcline(1123);
-        _v1977 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1970), px_str(" 没有变体 '")), _v1975), px_str("'"))}, 2);
+        _v1984 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(px_add(px_add(px_str("R1008: 枚举 "), _v1977), px_str(" 没有变体 '")), _v1982), px_str("'"))}, 2);
         px_srcline(1124);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1973, px_str("RAISE"), px_int(0LL), _v1977, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1980, px_str("RAISE"), px_int(0LL), _v1984, px_int(0LL)}, 5));
         px_srcline(1125);
-        return _v1974;
+        return _v1981;
     }
     px_srcline(1128);
-    _v1978 = px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1970, _v1975}, 2);
+    _v1985 = px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v1977, _v1982}, 2);
     px_srcline(1129);
-    if (px_is_truthy(({ LXValue _t1984 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v1978}, 1), px_int(0LL)); px_is_truthy(_t1984) ? px_not(px_call(px_get_global("bc_enum_pos_style"), (LXValue[]){_v1978}, 1)) : _t1984; }))) {
+    if (px_is_truthy(({ LXValue _t1991 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v1985}, 1), px_int(0LL)); px_is_truthy(_t1991) ? px_not(px_call(px_get_global("bc_enum_pos_style"), (LXValue[]){_v1985}, 1)) : _t1991; }))) {
         px_srcline(1130);
-        _v1979 = px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_str("R1005: 枚举变体 "), _v1970), px_str(".")), _v1975), px_str(" 需要 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1978}, 1)}, 1)), px_str(" 个字段，请用 ")), _v1970), px_str(".")), _v1975), px_str("(...) 构造"));
+        _v1986 = px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_add(px_str("R1005: 枚举变体 "), _v1977), px_str(".")), _v1982), px_str(" 需要 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1985}, 1)}, 1)), px_str(" 个字段，请用 ")), _v1977), px_str(".")), _v1982), px_str("(...) 构造"));
         px_srcline(1131);
-        _v1980 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1979}, 2);
+        _v1987 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1986}, 2);
         px_srcline(1132);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1973, px_str("RAISE"), px_int(0LL), _v1980, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1980, px_str("RAISE"), px_int(0LL), _v1987, px_int(0LL)}, 5));
         px_srcline(1133);
-        return _v1974;
+        return _v1981;
     }
     px_srcline(1134);
-    _v1981 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1970}, 2);
+    _v1988 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1977}, 2);
     px_srcline(1135);
-    _v1982 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1975}, 2);
+    _v1989 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1982}, 2);
     px_srcline(1136);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1973, px_str("NEWENUM"), _v1974, _v1981, _v1982}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1980, px_str("NEWENUM"), _v1981, _v1988, _v1989}, 5));
     px_srcline(1137);
-    return _v1974;
-px_err_1983:
-    if (px_err_1983_proped) return px_err_1983_val;
+    return _v1981;
+px_err_1990:
+    if (px_err_1990_proped) return px_err_1990_val;
     return px_null();
 }
 
@@ -16662,19 +16692,12 @@ static LXValue fn_bc_emit_enum_payload_new(LXValue* args, int nargs, void* ctx) 
     px_srcfunc("bc_emit_enum_payload_new");
     if (nargs < 6) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_enum_payload_new", 6, nargs);
     if (nargs > 6) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_enum_payload_new", 6, nargs);
-    LXValue _v1985 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v1986 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v1987 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v1988 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v1989 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v1990 = (nargs > 5) ? args[5] : px_null();
-    LXValue _v1991 = px_uninit();
-    LXValue _v1992 = px_uninit();
-    LXValue _v1993 = px_uninit();
-    LXValue _v1994 = px_uninit();
-    LXValue _v1995 = px_uninit();
-    LXValue _v1996 = px_uninit();
-    LXValue _v1997 = px_uninit();
+    LXValue _v1992 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v1993 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v1994 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v1995 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v1996 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v1997 = (nargs > 5) ? args[5] : px_null();
     LXValue _v1998 = px_uninit();
     LXValue _v1999 = px_uninit();
     LXValue _v2000 = px_uninit();
@@ -16684,97 +16707,104 @@ static LXValue fn_bc_emit_enum_payload_new(LXValue* args, int nargs, void* ctx) 
     LXValue _v2004 = px_uninit();
     LXValue _v2005 = px_uninit();
     LXValue _v2006 = px_uninit();
-    LXValue px_err_2007_val = px_null();
-    int px_err_2007_proped = 0;
+    LXValue _v2007 = px_uninit();
+    LXValue _v2008 = px_uninit();
+    LXValue _v2009 = px_uninit();
+    LXValue _v2010 = px_uninit();
+    LXValue _v2011 = px_uninit();
+    LXValue _v2012 = px_uninit();
+    LXValue _v2013 = px_uninit();
+    LXValue px_err_2014_val = px_null();
+    int px_err_2014_proped = 0;
     px_srcline(1144);
-    _v1991 = _v1989;
+    _v1998 = _v1996;
     px_srcline(1145);
-    if (px_is_truthy(px_lt(_v1991, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v1998, px_int(0LL)))) {
         px_srcline(1146);
-         _v1991 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1990}, 1);
+         _v1998 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1997}, 1);
     }
     px_srcline(1147);
-    _v1992 = px_call(px_get_global("len"), (LXValue[]){_v1987}, 1);
+    _v1999 = px_call(px_get_global("len"), (LXValue[]){_v1994}, 1);
     px_srcline(1148);
-    if (px_is_truthy(px_eq(_v1992, px_int(0LL)))) {
+    if (px_is_truthy(px_eq(_v1999, px_int(0LL)))) {
         px_srcline(1150);
-        _v1993 = px_add(px_add(px_add(px_add(px_add(px_str("R1005: 枚举变体 "), _v1985), px_str(".")), _v1986), px_str(" 不接受参数，给出 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1988}, 1)}, 1));
+        _v2000 = px_add(px_add(px_add(px_add(px_add(px_str("R1005: 枚举变体 "), _v1992), px_str(".")), _v1993), px_str(" 不接受参数，给出 ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1995}, 1)}, 1));
         px_srcline(1151);
-        _v1994 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1993}, 2);
+        _v2001 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2000}, 2);
         px_srcline(1152);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("RAISE"), px_int(0LL), _v1994, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("RAISE"), px_int(0LL), _v2001, px_int(0LL)}, 5));
         px_srcline(1153);
-        return _v1991;
+        return _v1998;
     }
     px_srcline(1154);
-    _v1995 = px_call(px_get_global("argmap_fields"), (LXValue[]){_v1987, _v1988, px_add(px_add(_v1985, px_str(".")), _v1986), px_str("枚举变体")}, 4);
+    _v2002 = px_call(px_get_global("argmap_fields"), (LXValue[]){_v1994, _v1995, px_add(px_add(_v1992, px_str(".")), _v1993), px_str("枚举变体")}, 4);
     px_srcline(1155);
-    if (px_is_truthy(px_ne(px_index(_v1995, px_int(0LL)), px_null()))) {
+    if (px_is_truthy(px_ne(px_index(_v2002, px_int(0LL)), px_null()))) {
         px_srcline(1156);
-        _v1996 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_str("R2001: "), px_index(_v1995, px_int(0LL)))}, 2);
+        _v2003 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_str("R2001: "), px_index(_v2002, px_int(0LL)))}, 2);
         px_srcline(1157);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("RAISE"), px_int(0LL), _v1996, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("RAISE"), px_int(0LL), _v2003, px_int(0LL)}, 5));
         px_srcline(1158);
-        return _v1991;
+        return _v1998;
     }
     px_srcline(1159);
-    _v1997 = px_list_n((LXValue[]){}, 0);
+    _v2004 = px_list_n((LXValue[]){}, 0);
     px_srcline(1160);
-    _v1998 = px_int(0LL);
+    _v2005 = px_int(0LL);
     px_srcline(1161);
-    while (px_is_truthy(px_lt(_v1998, px_call(px_get_global("len"), (LXValue[]){_v1988}, 1)))) {
+    while (px_is_truthy(px_lt(_v2005, px_call(px_get_global("len"), (LXValue[]){_v1995}, 1)))) {
         px_srcline(1162);
-        _v1999 = px_index(_v1988, _v1998);
+        _v2006 = px_index(_v1995, _v2005);
         px_srcline(1163);
-        if (px_is_truthy(px_eq(px_index(_v1999, px_int(0LL)), px_str("NamedArg")))) {
+        if (px_is_truthy(px_eq(px_index(_v2006, px_int(0LL)), px_str("NamedArg")))) {
             px_srcline(1164);
-             _v1999 = px_index(_v1999, px_int(2LL));
+             _v2006 = px_index(_v2006, px_int(2LL));
         }
         px_srcline(1165);
-        _v2000 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1990}, 1);
+        _v2007 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1997}, 1);
         px_srcline(1166);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v1999, _v2000, _v1990}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2006, _v2007, _v1997}, 3));
         px_srcline(1167);
-        (void)(px_method(_v1997, "append", (LXValue[]){_v2000}, 1));
+        (void)(px_method(_v2004, "append", (LXValue[]){_v2007}, 1));
         px_srcline(1168);
-         _v1998 = px_add(_v1998, px_int(1LL));
+         _v2005 = px_add(_v2005, px_int(1LL));
     }
     px_srcline(1169);
-    _v2001 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1990}, 1);
+    _v2008 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1997}, 1);
     px_srcline(1170);
-    while (px_is_truthy(px_lt(px_index(_v1990, px_str("next_slot")), px_add(_v2001, px_mul(px_int(2LL), _v1992))))) {
+    while (px_is_truthy(px_lt(px_index(_v1997, px_str("next_slot")), px_add(_v2008, px_mul(px_int(2LL), _v1999))))) {
         px_srcline(1171);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1990}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v1997}, 1));
     }
     px_srcline(1172);
-    _v2002 = px_int(0LL);
+    _v2009 = px_int(0LL);
     px_srcline(1173);
-    while (px_is_truthy(px_lt(_v2002, _v1992))) {
+    while (px_is_truthy(px_lt(_v2009, _v1999))) {
         px_srcline(1174);
-        _v2003 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), px_call(px_get_global("str"), (LXValue[]){_v2002}, 1)}, 5);
+        _v2010 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), px_call(px_get_global("str"), (LXValue[]){_v2009}, 1)}, 5);
         px_srcline(1175);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("LOADK"), px_add(_v2001, px_mul(px_int(2LL), _v2002)), _v2003, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("LOADK"), px_add(_v2008, px_mul(px_int(2LL), _v2009)), _v2010, px_int(0LL)}, 5));
         px_srcline(1176);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("MOV"), px_add(px_add(_v2001, px_mul(px_int(2LL), _v2002)), px_int(1LL)), px_index(_v1997, px_index(px_index(_v1995, px_int(1LL)), _v2002)), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("MOV"), px_add(px_add(_v2008, px_mul(px_int(2LL), _v2009)), px_int(1LL)), px_index(_v2004, px_index(px_index(_v2002, px_int(1LL)), _v2009)), px_int(0LL)}, 5));
         px_srcline(1177);
-         _v2002 = px_add(_v2002, px_int(1LL));
+         _v2009 = px_add(_v2009, px_int(1LL));
     }
     px_srcline(1178);
-    _v2004 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1990}, 1);
+    _v2011 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v1997}, 1);
     px_srcline(1179);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("NEWDICT"), _v2004, _v2001, _v1992}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("NEWDICT"), _v2011, _v2008, _v1999}, 5));
     px_srcline(1180);
-    _v2005 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1985}, 2);
+    _v2012 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1992}, 2);
     px_srcline(1181);
-    _v2006 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1986}, 2);
+    _v2013 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v1993}, 2);
     px_srcline(1182);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("NEWENUM"), _v1991, _v2005, _v2006}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("NEWENUM"), _v1998, _v2012, _v2013}, 5));
     px_srcline(1183);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1990, px_str("ENUMP"), _v1991, _v1991, _v2004}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v1997, px_str("ENUMP"), _v1998, _v1998, _v2011}, 5));
     px_srcline(1184);
-    return _v1991;
-px_err_2007:
-    if (px_err_2007_proped) return px_err_2007_val;
+    return _v1998;
+px_err_2014:
+    if (px_err_2014_proped) return px_err_2014_val;
     return px_null();
 }
 
@@ -16783,58 +16813,58 @@ static LXValue fn_bc_emit_methodcall_slot(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_methodcall_slot");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_methodcall_slot", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_methodcall_slot", 5, nargs);
-    LXValue _v2008 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2009 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2010 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2011 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2012 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v2013 = px_uninit();
-    LXValue _v2014 = px_uninit();
-    LXValue _v2015 = px_uninit();
-    LXValue _v2016 = px_uninit();
-    LXValue _v2017 = px_uninit();
-    LXValue _v2018 = px_uninit();
-    LXValue px_err_2019_val = px_null();
-    int px_err_2019_proped = 0;
+    LXValue _v2015 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2016 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2017 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2018 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2019 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v2020 = px_uninit();
+    LXValue _v2021 = px_uninit();
+    LXValue _v2022 = px_uninit();
+    LXValue _v2023 = px_uninit();
+    LXValue _v2024 = px_uninit();
+    LXValue _v2025 = px_uninit();
+    LXValue px_err_2026_val = px_null();
+    int px_err_2026_proped = 0;
     px_srcline(1191);
-    _v2013 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2008}, 1);
+    _v2020 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2015}, 1);
     px_srcline(1192);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2008, px_str("MOV"), _v2013, _v2009, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2015, px_str("MOV"), _v2020, _v2016, px_int(0LL)}, 5));
     px_srcline(1193);
-    _v2014 = px_call(px_get_global("len"), (LXValue[]){_v2011}, 1);
+    _v2021 = px_call(px_get_global("len"), (LXValue[]){_v2018}, 1);
     px_srcline(1194);
-    _v2015 = px_add(px_add(_v2013, px_int(1LL)), _v2014);
+    _v2022 = px_add(px_add(_v2020, px_int(1LL)), _v2021);
     px_srcline(1195);
-    while (px_is_truthy(px_lt(px_index(_v2008, px_str("next_slot")), _v2015))) {
+    while (px_is_truthy(px_lt(px_index(_v2015, px_str("next_slot")), _v2022))) {
         px_srcline(1196);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2008}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2015}, 1));
     }
     px_srcline(1197);
-    _v2016 = px_int(0LL);
+    _v2023 = px_int(0LL);
     px_srcline(1198);
-    while (px_is_truthy(px_lt(_v2016, _v2014))) {
+    while (px_is_truthy(px_lt(_v2023, _v2021))) {
         px_srcline(1199);
-        _v2017 = px_index(_v2011, _v2016);
+        _v2024 = px_index(_v2018, _v2023);
         px_srcline(1200);
-        if (px_is_truthy(px_eq(px_call(px_get_global("type"), (LXValue[]){_v2017}, 1), px_str("int")))) {
+        if (px_is_truthy(px_eq(px_call(px_get_global("type"), (LXValue[]){_v2024}, 1), px_str("int")))) {
             px_srcline(1201);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2008, px_str("MOV"), px_add(px_add(_v2013, px_int(1LL)), _v2016), _v2017, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2015, px_str("MOV"), px_add(px_add(_v2020, px_int(1LL)), _v2023), _v2024, px_int(0LL)}, 5));
         }
         else {
             px_srcline(1203);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2017, px_add(px_add(_v2013, px_int(1LL)), _v2016), _v2008}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2024, px_add(px_add(_v2020, px_int(1LL)), _v2023), _v2015}, 3));
         }
         px_srcline(1204);
-         _v2016 = px_add(_v2016, px_int(1LL));
+         _v2023 = px_add(_v2023, px_int(1LL));
     }
     px_srcline(1205);
-    _v2018 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2010}, 2);
+    _v2025 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2017}, 2);
     px_srcline(1206);
-    (void)(px_method(px_index(_v2008, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("CALLM"), _v2014, _v2012, _v2013, _v2018}, 5)}, 1));
+    (void)(px_method(px_index(_v2015, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("CALLM"), _v2021, _v2019, _v2020, _v2025}, 5)}, 1));
     px_srcline(1207);
-    return _v2012;
-px_err_2019:
-    if (px_err_2019_proped) return px_err_2019_val;
+    return _v2019;
+px_err_2026:
+    if (px_err_2026_proped) return px_err_2026_val;
     return px_null();
 }
 
@@ -16843,18 +16873,11 @@ static LXValue fn_bc_emit_push_lambda(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_push_lambda");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_push_lambda", 4, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_push_lambda", 5, nargs);
-    LXValue _v2020 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2021 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2022 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2023 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2024 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v2025 = px_uninit();
-    LXValue _v2026 = px_uninit();
-    LXValue _v2027 = px_uninit();
-    LXValue _v2028 = px_uninit();
-    LXValue _v2029 = px_uninit();
-    LXValue _v2030 = px_uninit();
-    LXValue _v2031 = px_uninit();
+    LXValue _v2027 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2028 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2029 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2030 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2031 = (nargs > 4) ? args[4] : px_null();
     LXValue _v2032 = px_uninit();
     LXValue _v2033 = px_uninit();
     LXValue _v2034 = px_uninit();
@@ -16863,132 +16886,139 @@ static LXValue fn_bc_emit_push_lambda(LXValue* args, int nargs, void* ctx) {
     LXValue _v2037 = px_uninit();
     LXValue _v2038 = px_uninit();
     LXValue _v2039 = px_uninit();
-    LXValue px_err_2040_val = px_null();
-    int px_err_2040_proped = 0;
+    LXValue _v2040 = px_uninit();
+    LXValue _v2041 = px_uninit();
+    LXValue _v2042 = px_uninit();
+    LXValue _v2043 = px_uninit();
+    LXValue _v2044 = px_uninit();
+    LXValue _v2045 = px_uninit();
+    LXValue _v2046 = px_uninit();
+    LXValue px_err_2047_val = px_null();
+    int px_err_2047_proped = 0;
     px_srcline(1211);
-    _v2025 = px_add(px_add(px_str("<closure"), px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("nclosure"))}, 1)), px_str(">"));
+    _v2032 = px_add(px_add(px_str("<closure"), px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("nclosure"))}, 1)), px_str(">"));
     px_srcline(1212);
     px_index_set(px_get_global("g_bcm"), px_str("nclosure"), px_add(px_index(px_get_global("g_bcm"), px_str("nclosure")), px_int(1LL)));
     px_srcline(1215);
-    _v2026 = px_call(px_get_global("len"), (LXValue[]){_v2020}, 1);
+    _v2033 = px_call(px_get_global("len"), (LXValue[]){_v2027}, 1);
     px_srcline(1216);
-    _v2027 = px_int(0LL);
+    _v2034 = px_int(0LL);
     px_srcline(1217);
-    if (px_is_truthy(px_ne(_v2024, px_null()))) {
+    if (px_is_truthy(px_ne(_v2031, px_null()))) {
         px_srcline(1218);
-        _v2028 = px_int(0LL);
+        _v2035 = px_int(0LL);
         px_srcline(1219);
-        while (px_is_truthy(px_lt(_v2028, px_call(px_get_global("len"), (LXValue[]){_v2024}, 1)))) {
+        while (px_is_truthy(px_lt(_v2035, px_call(px_get_global("len"), (LXValue[]){_v2031}, 1)))) {
             px_srcline(1220);
-            if (px_is_truthy(px_ne(px_index(px_index(_v2024, _v2028), px_int(3LL)), px_null()))) {
+            if (px_is_truthy(px_ne(px_index(px_index(_v2031, _v2035), px_int(3LL)), px_null()))) {
                 px_srcline(1221);
-                if (px_is_truthy(px_eq(_v2027, px_int(0LL)))) {
+                if (px_is_truthy(px_eq(_v2034, px_int(0LL)))) {
                     px_srcline(1222);
-                     _v2026 = _v2028;
+                     _v2033 = _v2035;
                 }
                 px_srcline(1223);
-                 _v2027 = px_add(_v2027, px_int(1LL));
+                 _v2034 = px_add(_v2034, px_int(1LL));
             }
             px_srcline(1224);
-             _v2028 = px_add(_v2028, px_int(1LL));
+             _v2035 = px_add(_v2035, px_int(1LL));
         }
     }
     px_srcline(1225);
-    _v2029 = px_call(px_get_global("bc_new_func"), (LXValue[]){_v2025, _v2026}, 2);
+    _v2036 = px_call(px_get_global("bc_new_func"), (LXValue[]){_v2032, _v2033}, 2);
     px_srcline(1226);
-    px_index_set(_v2029, px_str("ndefault"), _v2027);
+    px_index_set(_v2036, px_str("ndefault"), _v2034);
     px_srcline(1227);
-    _v2030 = px_int(0LL);
+    _v2037 = px_int(0LL);
     px_srcline(1228);
-    while (px_is_truthy(px_lt(_v2030, px_call(px_get_global("len"), (LXValue[]){_v2020}, 1)))) {
+    while (px_is_truthy(px_lt(_v2037, px_call(px_get_global("len"), (LXValue[]){_v2027}, 1)))) {
         px_srcline(1229);
-        px_index_set(px_index(_v2029, px_str("smap")), px_index(_v2020, _v2030), _v2030);
+        px_index_set(px_index(_v2036, px_str("smap")), px_index(_v2027, _v2037), _v2037);
         px_srcline(1231);
-        px_index_set(px_index(_v2029, px_str("inited")), px_index(_v2020, _v2030), px_int(1LL));
+        px_index_set(px_index(_v2036, px_str("inited")), px_index(_v2027, _v2037), px_int(1LL));
         px_srcline(1232);
-         _v2030 = px_add(_v2030, px_int(1LL));
+         _v2037 = px_add(_v2037, px_int(1LL));
     }
     px_srcline(1235);
-    _v2031 = px_int(0LL);
+    _v2038 = px_int(0LL);
     px_srcline(1236);
-    while (px_is_truthy(px_lt(_v2031, px_call(px_get_global("len"), (LXValue[]){_v2022}, 1)))) {
+    while (px_is_truthy(px_lt(_v2038, px_call(px_get_global("len"), (LXValue[]){_v2029}, 1)))) {
         px_srcline(1237);
-        _v2032 = px_index(_v2022, _v2031);
+        _v2039 = px_index(_v2029, _v2038);
         px_srcline(1238);
-        px_index_set(px_index(_v2029, px_str("smap")), _v2032, px_add(px_call(px_get_global("len"), (LXValue[]){_v2020}, 1), _v2031));
+        px_index_set(px_index(_v2036, px_str("smap")), _v2039, px_add(px_call(px_get_global("len"), (LXValue[]){_v2027}, 1), _v2038));
         px_srcline(1239);
-        (void)(px_method(px_index(_v2029, px_str("upnames")), "push", (LXValue[]){_v2032}, 1));
+        (void)(px_method(px_index(_v2036, px_str("upnames")), "push", (LXValue[]){_v2039}, 1));
         px_srcline(1240);
-        (void)(px_call(px_get_global("bc_cell_mark"), (LXValue[]){_v2029, _v2032}, 2));
+        (void)(px_call(px_get_global("bc_cell_mark"), (LXValue[]){_v2036, _v2039}, 2));
         px_srcline(1245);
-        if (px_is_truthy(({ LXValue _t2041 = px_ne(_v2023, px_null()); px_is_truthy(_t2041) ? px_method(_v2023, "has", (LXValue[]){_v2032}, 1) : _t2041; }))) {
+        if (px_is_truthy(({ LXValue _t2048 = px_ne(_v2030, px_null()); px_is_truthy(_t2048) ? px_method(_v2030, "has", (LXValue[]){_v2039}, 1) : _t2048; }))) {
             px_srcline(1246);
-            px_index_set(px_index(_v2029, px_str("inited")), _v2032, px_int(1LL));
+            px_index_set(px_index(_v2036, px_str("inited")), _v2039, px_int(1LL));
         }
         px_srcline(1247);
-         _v2031 = px_add(_v2031, px_int(1LL));
-    }
-    px_srcline(1248);
-    if (px_is_truthy(px_lt(px_index(_v2029, px_str("next_slot")), ({ LXValue _s234 = px_call(px_get_global("len"), (LXValue[]){_v2020}, 1); LXValue _s235 = px_call(px_get_global("len"), (LXValue[]){_v2022}, 1); px_add(_s234, _s235); })))) {
-        px_srcline(1249);
-        px_index_set(_v2029, px_str("next_slot"), ({ LXValue _s236 = px_call(px_get_global("len"), (LXValue[]){_v2020}, 1); LXValue _s237 = px_call(px_get_global("len"), (LXValue[]){_v2022}, 1); px_add(_s236, _s237); }));
-    }
-    px_srcline(1250);
-    (void)(px_method(px_index(px_get_global("g_bcm"), px_str("funcs")), "push", (LXValue[]){_v2029}, 1));
-    px_srcline(1255);
-    _v2033 = px_sub(px_call(px_get_global("len"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("funcs"))}, 1), px_int(1LL));
-    px_srcline(1259);
-    _v2034 = px_list_n((LXValue[]){}, 0);
-    px_srcline(1260);
-    (void)(px_call(px_get_global("bc_lambda_hoist"), (LXValue[]){_v2021, _v2034}, 2));
-    px_srcline(1262);
-    _v2035 = px_list_n((LXValue[]){}, 0);
-    px_srcline(1263);
-    (void)(px_call(px_get_global("bc_lambda_decl"), (LXValue[]){_v2021, _v2035}, 2));
-    px_srcline(1264);
-    _v2036 = px_int(0LL);
-    px_srcline(1265);
-    while (px_is_truthy(px_lt(_v2036, px_call(px_get_global("len"), (LXValue[]){_v2034}, 1)))) {
-        px_srcline(1266);
-        _v2037 = px_index(_v2034, _v2036);
-        px_srcline(1275);
-        if (px_is_truthy(({ LXValue _t2043 = px_not(px_method(px_index(_v2029, px_str("smap")), "has", (LXValue[]){_v2037}, 1)); px_is_truthy(_t2043) ? px_not(({ LXValue _t2042 = px_not(px_call(px_get_global("contains"), (LXValue[]){_v2035, _v2037}, 2)); px_is_truthy(_t2042) ? px_call(px_get_global("contains"), (LXValue[]){px_get_global("g_topnames"), _v2037}, 2) : _t2042; })) : _t2043; }))) {
-            px_srcline(1276);
-            (void)(px_call(px_get_global("bc_slot"), (LXValue[]){_v2029, _v2037}, 2));
-            px_srcline(1277);
-            (void)(px_method(px_index(_v2029, px_str("hoist_slots")), "push", (LXValue[]){px_index(px_index(_v2029, px_str("smap")), _v2037)}, 1));
-        }
-        px_srcline(1278);
-         _v2036 = px_add(_v2036, px_int(1LL));
-    }
-    px_srcline(1280);
-    _v2038 = px_int(0LL);
-    px_srcline(1281);
-    while (px_is_truthy(px_lt(_v2038, px_call(px_get_global("len"), (LXValue[]){px_index(_v2029, px_str("hoist_slots"))}, 1)))) {
-        px_srcline(1282);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2029, px_str("UNINIT"), px_index(px_index(_v2029, px_str("hoist_slots")), _v2038), px_int(0LL), px_int(0LL)}, 5));
-        px_srcline(1283);
          _v2038 = px_add(_v2038, px_int(1LL));
     }
+    px_srcline(1248);
+    if (px_is_truthy(px_lt(px_index(_v2036, px_str("next_slot")), ({ LXValue _s234 = px_call(px_get_global("len"), (LXValue[]){_v2027}, 1); LXValue _s235 = px_call(px_get_global("len"), (LXValue[]){_v2029}, 1); px_add(_s234, _s235); })))) {
+        px_srcline(1249);
+        px_index_set(_v2036, px_str("next_slot"), ({ LXValue _s236 = px_call(px_get_global("len"), (LXValue[]){_v2027}, 1); LXValue _s237 = px_call(px_get_global("len"), (LXValue[]){_v2029}, 1); px_add(_s236, _s237); }));
+    }
+    px_srcline(1250);
+    (void)(px_method(px_index(px_get_global("g_bcm"), px_str("funcs")), "push", (LXValue[]){_v2036}, 1));
+    px_srcline(1255);
+    _v2040 = px_sub(px_call(px_get_global("len"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("funcs"))}, 1), px_int(1LL));
+    px_srcline(1259);
+    _v2041 = px_list_n((LXValue[]){}, 0);
+    px_srcline(1260);
+    (void)(px_call(px_get_global("bc_lambda_hoist"), (LXValue[]){_v2028, _v2041}, 2));
+    px_srcline(1262);
+    _v2042 = px_list_n((LXValue[]){}, 0);
+    px_srcline(1263);
+    (void)(px_call(px_get_global("bc_lambda_decl"), (LXValue[]){_v2028, _v2042}, 2));
+    px_srcline(1264);
+    _v2043 = px_int(0LL);
+    px_srcline(1265);
+    while (px_is_truthy(px_lt(_v2043, px_call(px_get_global("len"), (LXValue[]){_v2041}, 1)))) {
+        px_srcline(1266);
+        _v2044 = px_index(_v2041, _v2043);
+        px_srcline(1275);
+        if (px_is_truthy(({ LXValue _t2050 = px_not(px_method(px_index(_v2036, px_str("smap")), "has", (LXValue[]){_v2044}, 1)); px_is_truthy(_t2050) ? px_not(({ LXValue _t2049 = px_not(px_call(px_get_global("contains"), (LXValue[]){_v2042, _v2044}, 2)); px_is_truthy(_t2049) ? px_call(px_get_global("contains"), (LXValue[]){px_get_global("g_topnames"), _v2044}, 2) : _t2049; })) : _t2050; }))) {
+            px_srcline(1276);
+            (void)(px_call(px_get_global("bc_slot"), (LXValue[]){_v2036, _v2044}, 2));
+            px_srcline(1277);
+            (void)(px_method(px_index(_v2036, px_str("hoist_slots")), "push", (LXValue[]){px_index(px_index(_v2036, px_str("smap")), _v2044)}, 1));
+        }
+        px_srcline(1278);
+         _v2043 = px_add(_v2043, px_int(1LL));
+    }
+    px_srcline(1280);
+    _v2045 = px_int(0LL);
+    px_srcline(1281);
+    while (px_is_truthy(px_lt(_v2045, px_call(px_get_global("len"), (LXValue[]){px_index(_v2036, px_str("hoist_slots"))}, 1)))) {
+        px_srcline(1282);
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2036, px_str("UNINIT"), px_index(px_index(_v2036, px_str("hoist_slots")), _v2045), px_int(0LL), px_int(0LL)}, 5));
+        px_srcline(1283);
+         _v2045 = px_add(_v2045, px_int(1LL));
+    }
     px_srcline(1285);
-    (void)(px_call(px_get_global("bc_box_frame"), (LXValue[]){_v2029, _v2021}, 2));
+    (void)(px_call(px_get_global("bc_box_frame"), (LXValue[]){_v2036, _v2028}, 2));
     px_srcline(1288);
-    if (px_is_truthy(px_gt(_v2027, px_int(0LL)))) {
+    if (px_is_truthy(px_gt(_v2034, px_int(0LL)))) {
         px_srcline(1289);
-        (void)(px_call(px_get_global("bc_emit_default_fill"), (LXValue[]){_v2029, _v2024, _v2026}, 3));
+        (void)(px_call(px_get_global("bc_emit_default_fill"), (LXValue[]){_v2036, _v2031, _v2033}, 3));
     }
     px_srcline(1290);
-    _v2039 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2029}, 1);
+    _v2046 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2036}, 1);
     px_srcline(1291);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2021, _v2039, _v2029}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2028, _v2046, _v2036}, 3));
     px_srcline(1292);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2029, px_str("RET"), _v2039, px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2036, px_str("RET"), _v2046, px_int(0LL), px_int(0LL)}, 5));
     px_srcline(1293);
-    px_index_set(_v2029, px_str("nslots"), px_index(_v2029, px_str("next_slot")));
+    px_index_set(_v2036, px_str("nslots"), px_index(_v2036, px_str("next_slot")));
     px_srcline(1294);
-    return _v2033;
-px_err_2040:
-    if (px_err_2040_proped) return px_err_2040_val;
+    return _v2040;
+px_err_2047:
+    if (px_err_2047_proped) return px_err_2047_val;
     return px_null();
 }
 
@@ -16997,93 +17027,93 @@ static LXValue fn_bc_emit_closure(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_closure");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_closure", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_closure", 4, nargs);
-    LXValue _v2044 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2045 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2046 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2047 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2048 = px_uninit();
-    LXValue _v2049 = px_uninit();
-    LXValue _v2050 = px_uninit();
-    LXValue _v2051 = px_uninit();
-    LXValue _v2052 = px_uninit();
-    LXValue _v2053 = px_uninit();
-    LXValue _v2054 = px_uninit();
+    LXValue _v2051 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2052 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2053 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2054 = (nargs > 3) ? args[3] : px_null();
     LXValue _v2055 = px_uninit();
     LXValue _v2056 = px_uninit();
     LXValue _v2057 = px_uninit();
     LXValue _v2058 = px_uninit();
     LXValue _v2059 = px_uninit();
     LXValue _v2060 = px_uninit();
-    LXValue px_err_2061_val = px_null();
-    int px_err_2061_proped = 0;
+    LXValue _v2061 = px_uninit();
+    LXValue _v2062 = px_uninit();
+    LXValue _v2063 = px_uninit();
+    LXValue _v2064 = px_uninit();
+    LXValue _v2065 = px_uninit();
+    LXValue _v2066 = px_uninit();
+    LXValue _v2067 = px_uninit();
+    LXValue px_err_2068_val = px_null();
+    int px_err_2068_proped = 0;
     px_srcline(1299);
-    _v2048 = px_list_n((LXValue[]){}, 0);
+    _v2055 = px_list_n((LXValue[]){}, 0);
     px_srcline(1300);
-    _v2049 = px_int(0LL);
+    _v2056 = px_int(0LL);
     px_srcline(1301);
-    while (px_is_truthy(px_lt(_v2049, px_call(px_get_global("len"), (LXValue[]){_v2044}, 1)))) {
+    while (px_is_truthy(px_lt(_v2056, px_call(px_get_global("len"), (LXValue[]){_v2051}, 1)))) {
         px_srcline(1302);
-        (void)(px_method(_v2048, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2044, _v2049), px_int(1LL))}, 1)}, 1));
+        (void)(px_method(_v2055, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2051, _v2056), px_int(1LL))}, 1)}, 1));
         px_srcline(1303);
-         _v2049 = px_add(_v2049, px_int(1LL));
+         _v2056 = px_add(_v2056, px_int(1LL));
     }
     px_srcline(1304);
-    _v2050 = px_call(px_get_global("bc_closure_free"), (LXValue[]){_v2044, _v2045}, 2);
+    _v2057 = px_call(px_get_global("bc_closure_free"), (LXValue[]){_v2051, _v2052}, 2);
     px_srcline(1305);
-    _v2051 = px_list_n((LXValue[]){}, 0);
+    _v2058 = px_list_n((LXValue[]){}, 0);
     px_srcline(1306);
-    _v2052 = px_int(0LL);
+    _v2059 = px_int(0LL);
     px_srcline(1307);
-    while (px_is_truthy(px_lt(_v2052, px_call(px_get_global("len"), (LXValue[]){_v2050}, 1)))) {
+    while (px_is_truthy(px_lt(_v2059, px_call(px_get_global("len"), (LXValue[]){_v2057}, 1)))) {
         px_srcline(1308);
-        _v2053 = px_index(_v2050, _v2052);
+        _v2060 = px_index(_v2057, _v2059);
         px_srcline(1309);
-        if (px_is_truthy(px_method(px_index(_v2047, px_str("smap")), "has", (LXValue[]){_v2053}, 1))) {
+        if (px_is_truthy(px_method(px_index(_v2054, px_str("smap")), "has", (LXValue[]){_v2060}, 1))) {
             px_srcline(1310);
-            (void)(px_method(_v2051, "append", (LXValue[]){_v2053}, 1));
+            (void)(px_method(_v2058, "append", (LXValue[]){_v2060}, 1));
         }
         px_srcline(1311);
-         _v2052 = px_add(_v2052, px_int(1LL));
+         _v2059 = px_add(_v2059, px_int(1LL));
     }
     px_srcline(1312);
-    _v2054 = px_call(px_get_global("bc_emit_push_lambda"), (LXValue[]){_v2048, _v2045, _v2051, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2047}, 1), _v2044}, 5);
+    _v2061 = px_call(px_get_global("bc_emit_push_lambda"), (LXValue[]){_v2055, _v2052, _v2058, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2054}, 1), _v2051}, 5);
     px_srcline(1313);
-    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2051}, 1), px_int(0LL)))) {
+    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2058}, 1), px_int(0LL)))) {
         px_srcline(1314);
-        _v2055 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("func"), _v2054, px_float(0), px_str("")}, 5);
+        _v2062 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("func"), _v2061, px_float(0), px_str("")}, 5);
         px_srcline(1315);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2047, px_str("LOADK"), _v2046, _v2055, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2054, px_str("LOADK"), _v2053, _v2062, px_int(0LL)}, 5));
         px_srcline(1316);
-        return _v2046;
+        return _v2053;
     }
     px_srcline(1319);
-    _v2056 = px_index(_v2047, px_str("next_slot"));
+    _v2063 = px_index(_v2054, px_str("next_slot"));
     px_srcline(1320);
-    _v2057 = px_int(0LL);
+    _v2064 = px_int(0LL);
     px_srcline(1321);
-    while (px_is_truthy(px_lt(_v2057, px_call(px_get_global("len"), (LXValue[]){_v2051}, 1)))) {
+    while (px_is_truthy(px_lt(_v2064, px_call(px_get_global("len"), (LXValue[]){_v2058}, 1)))) {
         px_srcline(1322);
-        _v2058 = px_index(px_index(_v2047, px_str("smap")), px_index(_v2051, _v2057));
+        _v2065 = px_index(px_index(_v2054, px_str("smap")), px_index(_v2058, _v2064));
         px_srcline(1323);
-        _v2059 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2047}, 1);
+        _v2066 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2054}, 1);
         px_srcline(1324);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2047, px_str("MOV"), _v2059, _v2058, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2054, px_str("MOV"), _v2066, _v2065, px_int(0LL)}, 5));
         px_srcline(1325);
-         _v2057 = px_add(_v2057, px_int(1LL));
+         _v2064 = px_add(_v2064, px_int(1LL));
     }
     px_srcline(1326);
-    _v2060 = _v2046;
+    _v2067 = _v2053;
     px_srcline(1327);
-    if (px_is_truthy(px_lt(_v2060, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v2067, px_int(0LL)))) {
         px_srcline(1328);
-         _v2060 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2047}, 1);
+         _v2067 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2054}, 1);
     }
     px_srcline(1329);
-    (void)(px_method(px_index(_v2047, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("MKCLO"), px_int(0LL), _v2060, _v2054, _v2056}, 5)}, 1));
+    (void)(px_method(px_index(_v2054, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("MKCLO"), px_int(0LL), _v2067, _v2061, _v2063}, 5)}, 1));
     px_srcline(1330);
-    return _v2060;
-px_err_2061:
-    if (px_err_2061_proped) return px_err_2061_val;
+    return _v2067;
+px_err_2068:
+    if (px_err_2068_proped) return px_err_2068_val;
     return px_null();
 }
 
@@ -17092,20 +17122,13 @@ static LXValue fn_bc_emit_comp(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_comp");
     if (nargs < 7) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_comp", 7, nargs);
     if (nargs > 7) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_comp", 7, nargs);
-    LXValue _v2062 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2063 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2064 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2065 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2066 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v2067 = (nargs > 5) ? args[5] : px_null();
-    LXValue _v2068 = (nargs > 6) ? args[6] : px_null();
-    LXValue _v2069 = px_uninit();
-    LXValue _v2070 = px_uninit();
-    LXValue _v2071 = px_uninit();
-    LXValue _v2072 = px_uninit();
-    LXValue _v2073 = px_uninit();
-    LXValue _v2074 = px_uninit();
-    LXValue _v2075 = px_uninit();
+    LXValue _v2069 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2070 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2071 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2072 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2073 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v2074 = (nargs > 5) ? args[5] : px_null();
+    LXValue _v2075 = (nargs > 6) ? args[6] : px_null();
     LXValue _v2076 = px_uninit();
     LXValue _v2077 = px_uninit();
     LXValue _v2078 = px_uninit();
@@ -17128,183 +17151,190 @@ static LXValue fn_bc_emit_comp(LXValue* args, int nargs, void* ctx) {
     LXValue _v2095 = px_uninit();
     LXValue _v2096 = px_uninit();
     LXValue _v2097 = px_uninit();
-    LXValue px_err_2098_val = px_null();
-    int px_err_2098_proped = 0;
+    LXValue _v2098 = px_uninit();
+    LXValue _v2099 = px_uninit();
+    LXValue _v2100 = px_uninit();
+    LXValue _v2101 = px_uninit();
+    LXValue _v2102 = px_uninit();
+    LXValue _v2103 = px_uninit();
+    LXValue _v2104 = px_uninit();
+    LXValue px_err_2105_val = px_null();
+    int px_err_2105_proped = 0;
     px_srcline(1337);
-    _v2069 = px_call(px_get_global("len"), (LXValue[]){_v2067}, 1);
+    _v2076 = px_call(px_get_global("len"), (LXValue[]){_v2074}, 1);
     px_srcline(1338);
-    if (px_is_truthy(px_ge(_v2068, _v2069))) {
+    if (px_is_truthy(px_ge(_v2075, _v2076))) {
         px_srcline(1339);
-        _v2070 = px_neg(px_int(1LL));
+        _v2077 = px_neg(px_int(1LL));
         px_srcline(1340);
-        if (px_is_truthy(px_ne(_v2065, px_null()))) {
+        if (px_is_truthy(px_ne(_v2072, px_null()))) {
             px_srcline(1341);
-            _v2071 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+            _v2078 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
             px_srcline(1342);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2065, _v2071, _v2062}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2072, _v2078, _v2069}, 3));
             px_srcline(1343);
-             _v2070 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2062, px_str("bc"))}, 1);
+             _v2077 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2069, px_str("bc"))}, 1);
             px_srcline(1344);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("JMPF"), _v2071, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("JMPF"), _v2078, px_int(0LL), px_int(0LL)}, 5));
         }
         px_srcline(1345);
-        if (px_is_truthy(px_eq(_v2063, px_str("dict")))) {
+        if (px_is_truthy(px_eq(_v2070, px_str("dict")))) {
             px_srcline(1346);
-            _v2072 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+            _v2079 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
             px_srcline(1347);
-            _v2073 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+            _v2080 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
             px_srcline(1348);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2064, px_int(0LL)), _v2072, _v2062}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2071, px_int(0LL)), _v2079, _v2069}, 3));
             px_srcline(1349);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2064, px_int(1LL)), _v2073, _v2062}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2071, px_int(1LL)), _v2080, _v2069}, 3));
             px_srcline(1354);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("DICTSET"), _v2066, _v2072, _v2073}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("DICTSET"), _v2073, _v2079, _v2080}, 5));
         }
         else {
             px_srcline(1356);
-            _v2074 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+            _v2081 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
             px_srcline(1357);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2064, px_int(0LL)), _v2074, _v2062}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2071, px_int(0LL)), _v2081, _v2069}, 3));
             px_srcline(1358);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("LISTPUSH"), _v2074, _v2066, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("LISTPUSH"), _v2081, _v2073, px_int(0LL)}, 5));
         }
         px_srcline(1359);
-        if (px_is_truthy(px_ge(_v2070, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v2077, px_int(0LL)))) {
             px_srcline(1360);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2062, _v2070, px_call(px_get_global("len"), (LXValue[]){px_index(_v2062, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2069, _v2077, px_call(px_get_global("len"), (LXValue[]){px_index(_v2069, px_str("bc"))}, 1)}, 3));
         }
         px_srcline(1361);
         return px_null();
     }
     px_srcline(1362);
-    _v2075 = px_index(_v2067, _v2068);
+    _v2082 = px_index(_v2074, _v2075);
     px_srcline(1363);
-    _v2076 = px_index(_v2075, px_int(1LL));
+    _v2083 = px_index(_v2082, px_int(1LL));
     px_srcline(1369);
-    _v2077 = px_list_n((LXValue[]){}, 0);
+    _v2084 = px_list_n((LXValue[]){}, 0);
     px_srcline(1370);
-    _v2078 = px_int(0LL);
+    _v2085 = px_int(0LL);
     px_srcline(1371);
-    while (px_is_truthy(px_lt(_v2078, px_call(px_get_global("len"), (LXValue[]){_v2076}, 1)))) {
+    while (px_is_truthy(px_lt(_v2085, px_call(px_get_global("len"), (LXValue[]){_v2083}, 1)))) {
         px_srcline(1372);
-        _v2079 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2076, _v2078)}, 1);
+        _v2086 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2083, _v2085)}, 1);
         px_srcline(1373);
-        _v2080 = px_neg(px_int(1LL));
+        _v2087 = px_neg(px_int(1LL));
         px_srcline(1374);
-        if (px_is_truthy(px_method(px_index(_v2062, px_str("smap")), "has", (LXValue[]){_v2079}, 1))) {
+        if (px_is_truthy(px_method(px_index(_v2069, px_str("smap")), "has", (LXValue[]){_v2086}, 1))) {
             px_srcline(1375);
-             _v2080 = px_index(px_index(_v2062, px_str("smap")), _v2079);
+             _v2087 = px_index(px_index(_v2069, px_str("smap")), _v2086);
         }
         px_srcline(1376);
-        _v2081 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+        _v2088 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
         px_srcline(1377);
-        px_index_set(px_index(_v2062, px_str("smap")), _v2079, _v2081);
+        px_index_set(px_index(_v2069, px_str("smap")), _v2086, _v2088);
         px_srcline(1378);
-        (void)(px_method(_v2077, "append", (LXValue[]){px_list_n((LXValue[]){_v2079, _v2080}, 2)}, 1));
+        (void)(px_method(_v2084, "append", (LXValue[]){px_list_n((LXValue[]){_v2086, _v2087}, 2)}, 1));
         px_srcline(1379);
-         _v2078 = px_add(_v2078, px_int(1LL));
+         _v2085 = px_add(_v2085, px_int(1LL));
     }
     px_srcline(1380);
-    _v2082 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+    _v2089 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
     px_srcline(1381);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2075, px_int(2LL)), _v2082, _v2062}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2082, px_int(2LL)), _v2089, _v2069}, 3));
     px_srcline(1382);
-    _v2083 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+    _v2090 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
     px_srcline(1383);
-    _v2084 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+    _v2091 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
     px_srcline(1384);
-    while (px_is_truthy(px_lt(px_index(_v2062, px_str("next_slot")), px_add(_v2083, px_int(2LL))))) {
+    while (px_is_truthy(px_lt(px_index(_v2069, px_str("next_slot")), px_add(_v2090, px_int(2LL))))) {
         px_srcline(1385);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1));
     }
     px_srcline(1386);
-    _v2085 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("__iter_len")}, 2);
+    _v2092 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("__iter_len")}, 2);
     px_srcline(1387);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("GETG"), _v2083, _v2085, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("GETG"), _v2090, _v2092, px_int(0LL)}, 5));
     px_srcline(1388);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("MOV"), px_add(_v2083, px_int(1LL)), _v2082, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("MOV"), px_add(_v2090, px_int(1LL)), _v2089, px_int(0LL)}, 5));
     px_srcline(1389);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("CALL"), _v2084, _v2083, px_int(1LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("CALL"), _v2091, _v2090, px_int(1LL)}, 5));
     px_srcline(1390);
-    _v2086 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+    _v2093 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
     px_srcline(1391);
-    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2062, _v2086, px_int(0LL)}, 3));
+    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2069, _v2093, px_int(0LL)}, 3));
     px_srcline(1392);
-    _v2087 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2062, px_str("bc"))}, 1);
+    _v2094 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2069, px_str("bc"))}, 1);
     px_srcline(1393);
-    _v2088 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+    _v2095 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
     px_srcline(1394);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("LT"), _v2088, _v2086, _v2084}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("LT"), _v2095, _v2093, _v2091}, 5));
     px_srcline(1395);
-    _v2089 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2062, px_str("bc"))}, 1);
+    _v2096 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2069, px_str("bc"))}, 1);
     px_srcline(1396);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("JMPF"), _v2088, px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("JMPF"), _v2095, px_int(0LL), px_int(0LL)}, 5));
     px_srcline(1398);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("ITERLEN"), _v2082, _v2084, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("ITERLEN"), _v2089, _v2091, px_int(0LL)}, 5));
     px_srcline(1399);
-    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2076}, 1), px_int(1LL)))) {
+    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2083}, 1), px_int(1LL)))) {
         px_srcline(1401);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("ITERAT"), px_index(px_index(_v2062, px_str("smap")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2076, px_int(0LL))}, 1)), _v2082, _v2086}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("ITERAT"), px_index(px_index(_v2069, px_str("smap")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2083, px_int(0LL))}, 1)), _v2089, _v2093}, 5));
     }
     else {
         px_srcline(1406);
-        _v2090 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+        _v2097 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
         px_srcline(1407);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("ITERAT"), _v2090, _v2082, _v2086}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("ITERAT"), _v2097, _v2089, _v2093}, 5));
         px_srcline(1408);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("UNPACKCK"), _v2090, px_call(px_get_global("len"), (LXValue[]){_v2076}, 1), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("UNPACKCK"), _v2097, px_call(px_get_global("len"), (LXValue[]){_v2083}, 1), px_int(0LL)}, 5));
         px_srcline(1409);
-        _v2091 = px_int(0LL);
+        _v2098 = px_int(0LL);
         px_srcline(1410);
-        while (px_is_truthy(px_lt(_v2091, px_call(px_get_global("len"), (LXValue[]){_v2076}, 1)))) {
+        while (px_is_truthy(px_lt(_v2098, px_call(px_get_global("len"), (LXValue[]){_v2083}, 1)))) {
             px_srcline(1411);
-            _v2092 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+            _v2099 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
             px_srcline(1412);
-            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2062, _v2092, _v2091}, 3));
+            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2069, _v2099, _v2098}, 3));
             px_srcline(1413);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("INDEX"), px_index(px_index(_v2062, px_str("smap")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2076, _v2091)}, 1)), _v2090, _v2092}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("INDEX"), px_index(px_index(_v2069, px_str("smap")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2083, _v2098)}, 1)), _v2097, _v2099}, 5));
             px_srcline(1414);
-             _v2091 = px_add(_v2091, px_int(1LL));
+             _v2098 = px_add(_v2098, px_int(1LL));
         }
     }
     px_srcline(1415);
-    (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v2062, _v2063, _v2064, _v2065, _v2066, _v2067, px_add(_v2068, px_int(1LL))}, 7));
+    (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v2069, _v2070, _v2071, _v2072, _v2073, _v2074, px_add(_v2075, px_int(1LL))}, 7));
     px_srcline(1416);
-    _v2093 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2062}, 1);
+    _v2100 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2069}, 1);
     px_srcline(1417);
-    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2062, _v2093, px_int(1LL)}, 3));
+    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2069, _v2100, px_int(1LL)}, 3));
     px_srcline(1418);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("ADD"), _v2086, _v2086, _v2093}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("ADD"), _v2093, _v2093, _v2100}, 5));
     px_srcline(1419);
-    _v2094 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2062, px_str("bc"))}, 1);
+    _v2101 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2069, px_str("bc"))}, 1);
     px_srcline(1420);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2062, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2069, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
     px_srcline(1421);
-    _v2095 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2062, px_str("bc"))}, 1);
+    _v2102 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2069, px_str("bc"))}, 1);
     px_srcline(1422);
-    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2062, _v2094, _v2087}, 3));
+    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2069, _v2101, _v2094}, 3));
     px_srcline(1423);
-    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2062, _v2089, _v2095}, 3));
+    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2069, _v2096, _v2102}, 3));
     px_srcline(1425);
-    _v2096 = px_int(0LL);
+    _v2103 = px_int(0LL);
     px_srcline(1426);
-    while (px_is_truthy(px_lt(_v2096, px_call(px_get_global("len"), (LXValue[]){_v2077}, 1)))) {
+    while (px_is_truthy(px_lt(_v2103, px_call(px_get_global("len"), (LXValue[]){_v2084}, 1)))) {
         px_srcline(1427);
-        _v2097 = px_index(_v2077, _v2096);
+        _v2104 = px_index(_v2084, _v2103);
         px_srcline(1428);
-        if (px_is_truthy(px_lt(px_index(_v2097, px_int(1LL)), px_int(0LL)))) {
+        if (px_is_truthy(px_lt(px_index(_v2104, px_int(1LL)), px_int(0LL)))) {
             px_srcline(1429);
-            (void)(px_method(px_index(_v2062, px_str("smap")), "remove", (LXValue[]){px_index(_v2097, px_int(0LL))}, 1));
+            (void)(px_method(px_index(_v2069, px_str("smap")), "remove", (LXValue[]){px_index(_v2104, px_int(0LL))}, 1));
         }
         else {
             px_srcline(1431);
-            px_index_set(px_index(_v2062, px_str("smap")), px_index(_v2097, px_int(0LL)), px_index(_v2097, px_int(1LL)));
+            px_index_set(px_index(_v2069, px_str("smap")), px_index(_v2104, px_int(0LL)), px_index(_v2104, px_int(1LL)));
         }
         px_srcline(1432);
-         _v2096 = px_add(_v2096, px_int(1LL));
+         _v2103 = px_add(_v2103, px_int(1LL));
     }
-px_err_2098:
-    if (px_err_2098_proped) return px_err_2098_val;
+px_err_2105:
+    if (px_err_2105_proped) return px_err_2105_val;
     return px_null();
 }
 
@@ -17313,62 +17343,62 @@ static LXValue fn_bc_emit_caps_snapshot(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_caps_snapshot");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_caps_snapshot", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_caps_snapshot", 2, nargs);
-    LXValue _v2099 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2100 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2101 = px_uninit();
-    LXValue _v2102 = px_uninit();
-    LXValue _v2103 = px_uninit();
-    LXValue _v2104 = px_uninit();
-    LXValue _v2105 = px_uninit();
-    LXValue _v2106 = px_uninit();
-    LXValue _v2107 = px_uninit();
+    LXValue _v2106 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2107 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2108 = px_uninit();
     LXValue _v2109 = px_uninit();
-    LXValue px_err_2110_val = px_null();
-    int px_err_2110_proped = 0;
+    LXValue _v2110 = px_uninit();
+    LXValue _v2111 = px_uninit();
+    LXValue _v2112 = px_uninit();
+    LXValue _v2113 = px_uninit();
+    LXValue _v2114 = px_uninit();
+    LXValue _v2115 = px_uninit();
+    LXValue _v2116 = px_uninit();
+    LXValue px_err_2117_val = px_null();
+    int px_err_2117_proped = 0;
     px_srcline(1440);
-    _v2101 = px_call(px_get_global("len"), (LXValue[]){_v2100}, 1);
+    _v2108 = px_call(px_get_global("len"), (LXValue[]){_v2107}, 1);
     px_srcline(1441);
-    _v2102 = px_index(_v2099, px_str("next_slot"));
+    _v2109 = px_index(_v2106, px_str("next_slot"));
     px_srcline(1442);
-    _v2103 = px_int(0LL);
+    _v2110 = px_int(0LL);
     px_srcline(1443);
-    while (px_is_truthy(px_lt(_v2103, _v2101))) {
+    while (px_is_truthy(px_lt(_v2110, _v2108))) {
         px_srcline(1444);
-        _v2104 = px_index(_v2100, _v2103);
+        _v2111 = px_index(_v2107, _v2110);
         px_srcline(1445);
-        _v2105 = px_index(px_index(_v2099, px_str("smap")), _v2104);
+        _v2112 = px_index(px_index(_v2106, px_str("smap")), _v2111);
         px_srcline(1446);
-        _v2106 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2099}, 1);
+        _v2113 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2106}, 1);
         px_srcline(1447);
-        if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2099, _v2104}, 2))) {
+        if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2106, _v2111}, 2))) {
             px_srcline(1448);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2099, px_str("CELLGET"), _v2106, _v2105, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2106, px_str("CELLGET"), _v2113, _v2112, px_int(0LL)}, 5));
         }
         else {
             px_srcline(1450);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2099, px_str("MOV"), _v2106, _v2105, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2106, px_str("MOV"), _v2113, _v2112, px_int(0LL)}, 5));
         }
         px_srcline(1451);
-         _v2103 = px_add(_v2103, px_int(1LL));
+         _v2110 = px_add(_v2110, px_int(1LL));
     }
     px_srcline(1452);
-    _v2107 = px_index(_v2099, px_str("next_slot"));
+    _v2114 = px_index(_v2106, px_str("next_slot"));
     px_srcline(1453);
-    _v2108 = px_int(0LL);
+    _v2115 = px_int(0LL);
     px_srcline(1454);
-    while (px_is_truthy(px_lt(_v2108, _v2101))) {
+    while (px_is_truthy(px_lt(_v2115, _v2108))) {
         px_srcline(1455);
-        _v2109 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2099}, 1);
+        _v2116 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2106}, 1);
         px_srcline(1456);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2099, px_str("CELLNEW"), _v2109, px_add(_v2102, _v2108), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2106, px_str("CELLNEW"), _v2116, px_add(_v2109, _v2115), px_int(0LL)}, 5));
         px_srcline(1457);
-         _v2108 = px_add(_v2108, px_int(1LL));
+         _v2115 = px_add(_v2115, px_int(1LL));
     }
     px_srcline(1458);
-    return _v2107;
-px_err_2110:
-    if (px_err_2110_proped) return px_err_2110_val;
+    return _v2114;
+px_err_2117:
+    if (px_err_2117_proped) return px_err_2117_val;
     return px_null();
 }
 
@@ -17377,39 +17407,39 @@ static LXValue fn_bc_genexp_caps(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_genexp_caps");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_genexp_caps", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_genexp_caps", 3, nargs);
-    LXValue _v2111 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2112 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2113 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2114 = px_uninit();
-    LXValue _v2115 = px_uninit();
-    LXValue _v2116 = px_uninit();
-    LXValue _v2117 = px_uninit();
-    LXValue px_err_2118_val = px_null();
-    int px_err_2118_proped = 0;
+    LXValue _v2118 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2119 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2120 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2121 = px_uninit();
+    LXValue _v2122 = px_uninit();
+    LXValue _v2123 = px_uninit();
+    LXValue _v2124 = px_uninit();
+    LXValue px_err_2125_val = px_null();
+    int px_err_2125_proped = 0;
     px_srcline(1473);
-    _v2114 = px_list_n((LXValue[]){}, 0);
+    _v2121 = px_list_n((LXValue[]){}, 0);
     px_srcline(1474);
-    (void)(px_call(px_get_global("cg_ast_used"), (LXValue[]){_v2112, _v2114}, 2));
+    (void)(px_call(px_get_global("cg_ast_used"), (LXValue[]){_v2119, _v2121}, 2));
     px_srcline(1475);
-    _v2115 = px_list_n((LXValue[]){}, 0);
+    _v2122 = px_list_n((LXValue[]){}, 0);
     px_srcline(1476);
-    _v2116 = px_int(0LL);
+    _v2123 = px_int(0LL);
     px_srcline(1477);
-    while (px_is_truthy(px_lt(_v2116, px_call(px_get_global("len"), (LXValue[]){_v2114}, 1)))) {
+    while (px_is_truthy(px_lt(_v2123, px_call(px_get_global("len"), (LXValue[]){_v2121}, 1)))) {
         px_srcline(1478);
-        _v2117 = px_index(_v2114, _v2116);
+        _v2124 = px_index(_v2121, _v2123);
         px_srcline(1479);
-        if (px_is_truthy(({ LXValue _t2119 = px_not(px_call(px_get_global("contains"), (LXValue[]){_v2111, _v2117}, 2)); px_is_truthy(_t2119) ? px_method(px_index(_v2113, px_str("smap")), "has", (LXValue[]){_v2117}, 1) : _t2119; }))) {
+        if (px_is_truthy(({ LXValue _t2126 = px_not(px_call(px_get_global("contains"), (LXValue[]){_v2118, _v2124}, 2)); px_is_truthy(_t2126) ? px_method(px_index(_v2120, px_str("smap")), "has", (LXValue[]){_v2124}, 1) : _t2126; }))) {
             px_srcline(1480);
-            (void)(px_method(_v2115, "append", (LXValue[]){_v2117}, 1));
+            (void)(px_method(_v2122, "append", (LXValue[]){_v2124}, 1));
         }
         px_srcline(1481);
-         _v2116 = px_add(_v2116, px_int(1LL));
+         _v2123 = px_add(_v2123, px_int(1LL));
     }
     px_srcline(1482);
-    return _v2115;
-px_err_2118:
-    if (px_err_2118_proped) return px_err_2118_val;
+    return _v2122;
+px_err_2125:
+    if (px_err_2125_proped) return px_err_2125_val;
     return px_null();
 }
 
@@ -17418,121 +17448,121 @@ static LXValue fn_bc_emit_genexp(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_genexp");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_genexp", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_genexp", 3, nargs);
-    LXValue _v2120 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2121 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2122 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2123 = px_uninit();
-    LXValue _v2124 = px_uninit();
-    LXValue _v2125 = px_uninit();
-    LXValue _v2126 = px_uninit();
-    LXValue _v2127 = px_uninit();
-    LXValue _v2128 = px_uninit();
-    LXValue _v2129 = px_uninit();
+    LXValue _v2127 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2128 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2129 = (nargs > 2) ? args[2] : px_null();
     LXValue _v2130 = px_uninit();
     LXValue _v2131 = px_uninit();
     LXValue _v2132 = px_uninit();
     LXValue _v2133 = px_uninit();
     LXValue _v2134 = px_uninit();
     LXValue _v2135 = px_uninit();
-    LXValue px_err_2136_val = px_null();
-    int px_err_2136_proped = 0;
+    LXValue _v2136 = px_uninit();
+    LXValue _v2137 = px_uninit();
+    LXValue _v2138 = px_uninit();
+    LXValue _v2139 = px_uninit();
+    LXValue _v2140 = px_uninit();
+    LXValue _v2141 = px_uninit();
+    LXValue _v2142 = px_uninit();
+    LXValue px_err_2143_val = px_null();
+    int px_err_2143_proped = 0;
     px_srcline(1486);
-    _v2123 = px_index(_v2120, px_int(2LL));
+    _v2130 = px_index(_v2127, px_int(2LL));
     px_srcline(1487);
-    if (px_is_truthy(({ LXValue _t2137 = px_eq(px_call(px_get_global("len"), (LXValue[]){_v2123}, 1), px_int(1LL)); px_is_truthy(_t2137) ? px_eq(px_call(px_get_global("len"), (LXValue[]){px_index(px_index(_v2123, px_int(0LL)), px_int(1LL))}, 1), px_int(1LL)) : _t2137; }))) {
+    if (px_is_truthy(({ LXValue _t2144 = px_eq(px_call(px_get_global("len"), (LXValue[]){_v2130}, 1), px_int(1LL)); px_is_truthy(_t2144) ? px_eq(px_call(px_get_global("len"), (LXValue[]){px_index(px_index(_v2130, px_int(0LL)), px_int(1LL))}, 1), px_int(1LL)) : _t2144; }))) {
         px_srcline(1490);
-        _v2124 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v2123, px_int(0LL)), px_int(1LL)), px_int(0LL))}, 1);
+        _v2131 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v2130, px_int(0LL)), px_int(1LL)), px_int(0LL))}, 1);
         px_srcline(1491);
-        _v2125 = _v2121;
+        _v2132 = _v2128;
         px_srcline(1492);
-        if (px_is_truthy(px_lt(_v2125, px_int(0LL)))) {
+        if (px_is_truthy(px_lt(_v2132, px_int(0LL)))) {
             px_srcline(1493);
-             _v2125 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2122}, 1);
+             _v2132 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2129}, 1);
         }
         px_srcline(1494);
-        _v2126 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2122}, 1);
+        _v2133 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2129}, 1);
         px_srcline(1495);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2123, px_int(0LL)), px_int(2LL)), _v2126, _v2122}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2130, px_int(0LL)), px_int(2LL)), _v2133, _v2129}, 3));
         px_srcline(1501);
-        _v2127 = px_call(px_get_global("bc_genexp_caps"), (LXValue[]){px_list_n((LXValue[]){_v2124}, 1), px_index(_v2120, px_int(1LL)), _v2122}, 3);
+        _v2134 = px_call(px_get_global("bc_genexp_caps"), (LXValue[]){px_list_n((LXValue[]){_v2131}, 1), px_index(_v2127, px_int(1LL)), _v2129}, 3);
         px_srcline(1502);
-        _v2128 = px_list_n((LXValue[]){}, 0);
+        _v2135 = px_list_n((LXValue[]){}, 0);
         px_srcline(1503);
-        if (px_is_truthy(px_ne(px_index(_v2120, px_int(3LL)), px_null()))) {
+        if (px_is_truthy(px_ne(px_index(_v2127, px_int(3LL)), px_null()))) {
             px_srcline(1504);
-             _v2128 = px_call(px_get_global("bc_genexp_caps"), (LXValue[]){px_list_n((LXValue[]){_v2124}, 1), px_index(_v2120, px_int(3LL)), _v2122}, 3);
+             _v2135 = px_call(px_get_global("bc_genexp_caps"), (LXValue[]){px_list_n((LXValue[]){_v2131}, 1), px_index(_v2127, px_int(3LL)), _v2129}, 3);
         }
         px_srcline(1505);
-        _v2129 = px_call(px_get_global("bc_emit_push_lambda"), (LXValue[]){px_list_n((LXValue[]){_v2124}, 1), px_index(_v2120, px_int(1LL)), _v2127, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2122}, 1)}, 4);
+        _v2136 = px_call(px_get_global("bc_emit_push_lambda"), (LXValue[]){px_list_n((LXValue[]){_v2131}, 1), px_index(_v2127, px_int(1LL)), _v2134, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2129}, 1)}, 4);
         px_srcline(1506);
-        _v2130 = px_neg(px_int(1LL));
+        _v2137 = px_neg(px_int(1LL));
         px_srcline(1507);
-        if (px_is_truthy(px_ne(px_index(_v2120, px_int(3LL)), px_null()))) {
+        if (px_is_truthy(px_ne(px_index(_v2127, px_int(3LL)), px_null()))) {
             px_srcline(1508);
-             _v2130 = px_call(px_get_global("bc_emit_push_lambda"), (LXValue[]){px_list_n((LXValue[]){_v2124}, 1), px_index(_v2120, px_int(3LL)), _v2128, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2122}, 1)}, 4);
+             _v2137 = px_call(px_get_global("bc_emit_push_lambda"), (LXValue[]){px_list_n((LXValue[]){_v2131}, 1), px_index(_v2127, px_int(3LL)), _v2135, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2129}, 1)}, 4);
         }
         px_srcline(1509);
-        _v2131 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2122}, 1);
+        _v2138 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2129}, 1);
         px_srcline(1510);
-        while (px_is_truthy(px_lt(px_index(_v2122, px_str("next_slot")), px_add(_v2131, px_int(2LL))))) {
+        while (px_is_truthy(px_lt(px_index(_v2129, px_str("next_slot")), px_add(_v2138, px_int(2LL))))) {
             px_srcline(1511);
-            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2122}, 1));
+            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2129}, 1));
         }
         px_srcline(1514);
-        if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2127}, 1), px_int(0LL)))) {
+        if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2134}, 1), px_int(0LL)))) {
             px_srcline(1515);
-            _v2132 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("func"), _v2129, px_float(0), px_str("")}, 5);
+            _v2139 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("func"), _v2136, px_float(0), px_str("")}, 5);
             px_srcline(1516);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2122, px_str("LOADK"), _v2131, _v2132, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2129, px_str("LOADK"), _v2138, _v2139, px_int(0LL)}, 5));
         }
         else {
             px_srcline(1518);
-            _v2133 = px_call(px_get_global("bc_emit_caps_snapshot"), (LXValue[]){_v2122, _v2127}, 2);
+            _v2140 = px_call(px_get_global("bc_emit_caps_snapshot"), (LXValue[]){_v2129, _v2134}, 2);
             px_srcline(1519);
-            (void)(px_method(px_index(_v2122, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("MKCLO"), px_int(0LL), _v2131, _v2129, _v2133}, 5)}, 1));
+            (void)(px_method(px_index(_v2129, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("MKCLO"), px_int(0LL), _v2138, _v2136, _v2140}, 5)}, 1));
         }
         px_srcline(1520);
-        if (px_is_truthy(px_ge(_v2130, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v2137, px_int(0LL)))) {
             px_srcline(1521);
-            if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2128}, 1), px_int(0LL)))) {
+            if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2135}, 1), px_int(0LL)))) {
                 px_srcline(1522);
-                _v2134 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("func"), _v2130, px_float(0), px_str("")}, 5);
+                _v2141 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("func"), _v2137, px_float(0), px_str("")}, 5);
                 px_srcline(1523);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2122, px_str("LOADK"), px_add(_v2131, px_int(1LL)), _v2134, px_int(0LL)}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2129, px_str("LOADK"), px_add(_v2138, px_int(1LL)), _v2141, px_int(0LL)}, 5));
             }
             else {
                 px_srcline(1525);
-                _v2135 = px_call(px_get_global("bc_emit_caps_snapshot"), (LXValue[]){_v2122, _v2128}, 2);
+                _v2142 = px_call(px_get_global("bc_emit_caps_snapshot"), (LXValue[]){_v2129, _v2135}, 2);
                 px_srcline(1526);
-                (void)(px_method(px_index(_v2122, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("MKCLO"), px_int(0LL), px_add(_v2131, px_int(1LL)), _v2130, _v2135}, 5)}, 1));
+                (void)(px_method(px_index(_v2129, px_str("bc")), "push", (LXValue[]){px_list_n((LXValue[]){px_str("MKCLO"), px_int(0LL), px_add(_v2138, px_int(1LL)), _v2137, _v2142}, 5)}, 1));
             }
         }
         else {
             px_srcline(1528);
-            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v2122, px_add(_v2131, px_int(1LL))}, 2));
+            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v2129, px_add(_v2138, px_int(1LL))}, 2));
         }
         px_srcline(1529);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2122, px_str("NEWGEN"), _v2125, _v2126, _v2131}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2129, px_str("NEWGEN"), _v2132, _v2133, _v2138}, 5));
         px_srcline(1530);
-        return _v2125;
+        return _v2132;
     }
     px_srcline(1534);
-    _v2125 = _v2121;
+    _v2132 = _v2128;
     px_srcline(1535);
-    if (px_is_truthy(px_lt(_v2125, px_int(0LL)))) {
+    if (px_is_truthy(px_lt(_v2132, px_int(0LL)))) {
         px_srcline(1536);
-         _v2125 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2122}, 1);
+         _v2132 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2129}, 1);
     }
     px_srcline(1537);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2122, px_str("NEWLIST"), _v2125, px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2129, px_str("NEWLIST"), _v2132, px_int(0LL), px_int(0LL)}, 5));
     px_srcline(1538);
-    (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v2122, px_str("push"), px_list_n((LXValue[]){px_index(_v2120, px_int(1LL))}, 1), px_index(_v2120, px_int(3LL)), _v2125, _v2123, px_int(0LL)}, 7));
+    (void)(px_call(px_get_global("bc_emit_comp"), (LXValue[]){_v2129, px_str("push"), px_list_n((LXValue[]){px_index(_v2127, px_int(1LL))}, 1), px_index(_v2127, px_int(3LL)), _v2132, _v2130, px_int(0LL)}, 7));
     px_srcline(1539);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2122, px_str("GENFROMLIST"), _v2125, _v2125, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2129, px_str("GENFROMLIST"), _v2132, _v2132, px_int(0LL)}, 5));
     px_srcline(1540);
-    return _v2125;
-px_err_2136:
-    if (px_err_2136_proped) return px_err_2136_val;
+    return _v2132;
+px_err_2143:
+    if (px_err_2143_proped) return px_err_2143_val;
     return px_null();
 }
 
@@ -17541,33 +17571,33 @@ static LXValue fn_bc_match_enumvar(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_match_enumvar");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_match_enumvar", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_match_enumvar", 3, nargs);
-    LXValue _v2138 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2139 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2140 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2141 = px_uninit();
-    LXValue _v2142 = px_uninit();
-    LXValue _v2143 = px_uninit();
-    LXValue _v2144 = px_uninit();
-    LXValue px_err_2145_val = px_null();
-    int px_err_2145_proped = 0;
+    LXValue _v2145 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2146 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2147 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2148 = px_uninit();
+    LXValue _v2149 = px_uninit();
+    LXValue _v2150 = px_uninit();
+    LXValue _v2151 = px_uninit();
+    LXValue px_err_2152_val = px_null();
+    int px_err_2152_proped = 0;
     px_srcline(1546);
-    _v2141 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2140}, 1);
+    _v2148 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2147}, 1);
     px_srcline(1547);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2140, px_str("ENUMVAR"), _v2141, _v2139, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2147, px_str("ENUMVAR"), _v2148, _v2146, px_int(0LL)}, 5));
     px_srcline(1548);
-    _v2142 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), _v2138}, 5);
+    _v2149 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), _v2145}, 5);
     px_srcline(1549);
-    _v2143 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2140}, 1);
+    _v2150 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2147}, 1);
     px_srcline(1550);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2140, px_str("LOADK"), _v2143, _v2142, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2147, px_str("LOADK"), _v2150, _v2149, px_int(0LL)}, 5));
     px_srcline(1551);
-    _v2144 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2140}, 1);
+    _v2151 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2147}, 1);
     px_srcline(1552);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2140, px_str("EQ"), _v2144, _v2141, _v2143}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2147, px_str("EQ"), _v2151, _v2148, _v2150}, 5));
     px_srcline(1553);
-    return _v2144;
-px_err_2145:
-    if (px_err_2145_proped) return px_err_2145_val;
+    return _v2151;
+px_err_2152:
+    if (px_err_2152_proped) return px_err_2152_val;
     return px_null();
 }
 
@@ -17576,24 +17606,24 @@ static LXValue fn_bc_match_enumlit(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_match_enumlit");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_match_enumlit", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_match_enumlit", 4, nargs);
-    LXValue _v2146 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2147 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2148 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2149 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2150 = px_uninit();
-    LXValue _v2151 = px_uninit();
-    LXValue px_err_2152_val = px_null();
-    int px_err_2152_proped = 0;
+    LXValue _v2153 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2154 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2155 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2156 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2157 = px_uninit();
+    LXValue _v2158 = px_uninit();
+    LXValue px_err_2159_val = px_null();
+    int px_err_2159_proped = 0;
     px_srcline(1558);
-    _v2150 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(_v2146, px_str(".")), _v2147)}, 2);
+    _v2157 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_add(px_add(_v2153, px_str(".")), _v2154)}, 2);
     px_srcline(1559);
-    _v2151 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2149}, 1);
+    _v2158 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2156}, 1);
     px_srcline(1560);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2149, px_str("ENUMIS"), _v2151, _v2148, _v2150}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2156, px_str("ENUMIS"), _v2158, _v2155, _v2157}, 5));
     px_srcline(1561);
-    return _v2151;
-px_err_2152:
-    if (px_err_2152_proped) return px_err_2152_val;
+    return _v2158;
+px_err_2159:
+    if (px_err_2159_proped) return px_err_2159_val;
     return px_null();
 }
 
@@ -17602,20 +17632,20 @@ static LXValue fn_bc_bind_var(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_bind_var");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_bind_var", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_bind_var", 3, nargs);
-    LXValue _v2153 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2154 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2155 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2156 = px_uninit();
-    LXValue px_err_2157_val = px_null();
-    int px_err_2157_proped = 0;
+    LXValue _v2160 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2161 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2162 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2163 = px_uninit();
+    LXValue px_err_2164_val = px_null();
+    int px_err_2164_proped = 0;
     px_srcline(1566);
-    _v2156 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2153}, 1);
+    _v2163 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2160}, 1);
     px_srcline(1567);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2153, px_str("MOV"), _v2156, _v2155, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2160, px_str("MOV"), _v2163, _v2162, px_int(0LL)}, 5));
     px_srcline(1568);
-    px_index_set(px_index(_v2153, px_str("smap")), _v2154, _v2156);
-px_err_2157:
-    if (px_err_2157_proped) return px_err_2157_val;
+    px_index_set(px_index(_v2160, px_str("smap")), _v2161, _v2163);
+px_err_2164:
+    if (px_err_2164_proped) return px_err_2164_val;
     return px_null();
 }
 
@@ -17624,48 +17654,48 @@ static LXValue fn_bc_pattern_names(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_pattern_names");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_pattern_names", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_pattern_names", 2, nargs);
-    LXValue _v2158 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2159 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2160 = px_uninit();
-    LXValue _v2161 = px_uninit();
-    LXValue _v2162 = px_uninit();
-    LXValue px_err_2163_val = px_null();
-    int px_err_2163_proped = 0;
+    LXValue _v2165 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2166 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2167 = px_uninit();
+    LXValue _v2168 = px_uninit();
+    LXValue _v2169 = px_uninit();
+    LXValue px_err_2170_val = px_null();
+    int px_err_2170_proped = 0;
     px_srcline(1570);
-    _v2160 = px_index(_v2158, px_int(0LL));
+    _v2167 = px_index(_v2165, px_int(0LL));
     px_srcline(1571);
-    if (px_is_truthy(px_eq(_v2160, px_str("PatBinding")))) {
+    if (px_is_truthy(px_eq(_v2167, px_str("PatBinding")))) {
         px_srcline(1572);
-        _v2161 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2158, px_int(1LL))}, 1);
+        _v2168 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2165, px_int(1LL))}, 1);
         px_srcline(1573);
-        if (px_is_truthy(({ LXValue _t2165 = ({ LXValue _t2164 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2161}, 1), px_int(0LL)); px_is_truthy(_t2164) ? px_ge(px_index(_v2161, px_int(0LL)), px_str("A")) : _t2164; }); px_is_truthy(_t2165) ? px_le(px_index(_v2161, px_int(0LL)), px_str("Z")) : _t2165; }))) {
+        if (px_is_truthy(({ LXValue _t2172 = ({ LXValue _t2171 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2168}, 1), px_int(0LL)); px_is_truthy(_t2171) ? px_ge(px_index(_v2168, px_int(0LL)), px_str("A")) : _t2171; }); px_is_truthy(_t2172) ? px_le(px_index(_v2168, px_int(0LL)), px_str("Z")) : _t2172; }))) {
             px_srcline(1574);
             return px_null();
         }
         px_srcline(1575);
-        if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v2159, _v2161}, 2)))) {
+        if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v2166, _v2168}, 2)))) {
             px_srcline(1576);
-            (void)(px_method(_v2159, "append", (LXValue[]){_v2161}, 1));
+            (void)(px_method(_v2166, "append", (LXValue[]){_v2168}, 1));
         }
         px_srcline(1577);
         return px_null();
     }
     px_srcline(1578);
-    if (px_is_truthy(px_eq(_v2160, px_str("PatTuple")))) {
+    if (px_is_truthy(px_eq(_v2167, px_str("PatTuple")))) {
         px_srcline(1579);
-        _v2162 = px_int(0LL);
+        _v2169 = px_int(0LL);
         px_srcline(1580);
-        while (px_is_truthy(px_lt(_v2162, px_call(px_get_global("len"), (LXValue[]){px_index(_v2158, px_int(1LL))}, 1)))) {
+        while (px_is_truthy(px_lt(_v2169, px_call(px_get_global("len"), (LXValue[]){px_index(_v2165, px_int(1LL))}, 1)))) {
             px_srcline(1581);
-            (void)(px_call(px_get_global("bc_pattern_names"), (LXValue[]){px_index(px_index(_v2158, px_int(1LL)), _v2162), _v2159}, 2));
+            (void)(px_call(px_get_global("bc_pattern_names"), (LXValue[]){px_index(px_index(_v2165, px_int(1LL)), _v2169), _v2166}, 2));
             px_srcline(1582);
-             _v2162 = px_add(_v2162, px_int(1LL));
+             _v2169 = px_add(_v2169, px_int(1LL));
         }
         px_srcline(1583);
         return px_null();
     }
-px_err_2163:
-    if (px_err_2163_proped) return px_err_2163_val;
+px_err_2170:
+    if (px_err_2170_proped) return px_err_2170_val;
     return px_null();
 }
 
@@ -17674,35 +17704,35 @@ static LXValue fn_bc_shadow_save(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_shadow_save");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_shadow_save", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_shadow_save", 2, nargs);
-    LXValue _v2166 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2167 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2168 = px_uninit();
-    LXValue _v2169 = px_uninit();
-    LXValue _v2170 = px_uninit();
-    LXValue px_err_2171_val = px_null();
-    int px_err_2171_proped = 0;
+    LXValue _v2173 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2174 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2175 = px_uninit();
+    LXValue _v2176 = px_uninit();
+    LXValue _v2177 = px_uninit();
+    LXValue px_err_2178_val = px_null();
+    int px_err_2178_proped = 0;
     px_srcline(1585);
-    _v2168 = px_list_n((LXValue[]){}, 0);
+    _v2175 = px_list_n((LXValue[]){}, 0);
     px_srcline(1586);
-    _v2169 = px_int(0LL);
+    _v2176 = px_int(0LL);
     px_srcline(1587);
-    while (px_is_truthy(px_lt(_v2169, px_call(px_get_global("len"), (LXValue[]){_v2167}, 1)))) {
+    while (px_is_truthy(px_lt(_v2176, px_call(px_get_global("len"), (LXValue[]){_v2174}, 1)))) {
         px_srcline(1588);
-        _v2170 = px_neg(px_int(1LL));
+        _v2177 = px_neg(px_int(1LL));
         px_srcline(1589);
-        if (px_is_truthy(px_method(px_index(_v2166, px_str("smap")), "has", (LXValue[]){px_index(_v2167, _v2169)}, 1))) {
+        if (px_is_truthy(px_method(px_index(_v2173, px_str("smap")), "has", (LXValue[]){px_index(_v2174, _v2176)}, 1))) {
             px_srcline(1590);
-             _v2170 = px_index(px_index(_v2166, px_str("smap")), px_index(_v2167, _v2169));
+             _v2177 = px_index(px_index(_v2173, px_str("smap")), px_index(_v2174, _v2176));
         }
         px_srcline(1591);
-        (void)(px_method(_v2168, "append", (LXValue[]){px_list_n((LXValue[]){px_index(_v2167, _v2169), _v2170}, 2)}, 1));
+        (void)(px_method(_v2175, "append", (LXValue[]){px_list_n((LXValue[]){px_index(_v2174, _v2176), _v2177}, 2)}, 1));
         px_srcline(1592);
-         _v2169 = px_add(_v2169, px_int(1LL));
+         _v2176 = px_add(_v2176, px_int(1LL));
     }
     px_srcline(1593);
-    return _v2168;
-px_err_2171:
-    if (px_err_2171_proped) return px_err_2171_val;
+    return _v2175;
+px_err_2178:
+    if (px_err_2178_proped) return px_err_2178_val;
     return px_null();
 }
 
@@ -17711,35 +17741,35 @@ static LXValue fn_bc_shadow_restore(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_shadow_restore");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_shadow_restore", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_shadow_restore", 2, nargs);
-    LXValue _v2172 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2173 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2174 = px_uninit();
-    LXValue _v2175 = px_uninit();
-    LXValue px_err_2176_val = px_null();
-    int px_err_2176_proped = 0;
+    LXValue _v2179 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2180 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2181 = px_uninit();
+    LXValue _v2182 = px_uninit();
+    LXValue px_err_2183_val = px_null();
+    int px_err_2183_proped = 0;
     px_srcline(1595);
-    _v2174 = px_int(0LL);
+    _v2181 = px_int(0LL);
     px_srcline(1596);
-    while (px_is_truthy(px_lt(_v2174, px_call(px_get_global("len"), (LXValue[]){_v2173}, 1)))) {
+    while (px_is_truthy(px_lt(_v2181, px_call(px_get_global("len"), (LXValue[]){_v2180}, 1)))) {
         px_srcline(1597);
-        _v2175 = px_index(px_index(_v2173, _v2174), px_int(0LL));
+        _v2182 = px_index(px_index(_v2180, _v2181), px_int(0LL));
         px_srcline(1598);
-        if (px_is_truthy(px_lt(px_index(px_index(_v2173, _v2174), px_int(1LL)), px_int(0LL)))) {
+        if (px_is_truthy(px_lt(px_index(px_index(_v2180, _v2181), px_int(1LL)), px_int(0LL)))) {
             px_srcline(1599);
-            if (px_is_truthy(px_method(px_index(_v2172, px_str("smap")), "has", (LXValue[]){_v2175}, 1))) {
+            if (px_is_truthy(px_method(px_index(_v2179, px_str("smap")), "has", (LXValue[]){_v2182}, 1))) {
                 px_srcline(1600);
-                (void)(px_method(px_index(_v2172, px_str("smap")), "remove", (LXValue[]){_v2175}, 1));
+                (void)(px_method(px_index(_v2179, px_str("smap")), "remove", (LXValue[]){_v2182}, 1));
             }
         }
         else {
             px_srcline(1602);
-            px_index_set(px_index(_v2172, px_str("smap")), _v2175, px_index(px_index(_v2173, _v2174), px_int(1LL)));
+            px_index_set(px_index(_v2179, px_str("smap")), _v2182, px_index(px_index(_v2180, _v2181), px_int(1LL)));
         }
         px_srcline(1603);
-         _v2174 = px_add(_v2174, px_int(1LL));
+         _v2181 = px_add(_v2181, px_int(1LL));
     }
-px_err_2176:
-    if (px_err_2176_proped) return px_err_2176_val;
+px_err_2183:
+    if (px_err_2183_proped) return px_err_2183_val;
     return px_null();
 }
 
@@ -17748,17 +17778,10 @@ static LXValue fn_bc_match_cond(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_match_cond");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_match_cond", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_match_cond", 4, nargs);
-    LXValue _v2177 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2178 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2179 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2180 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2181 = px_uninit();
-    LXValue _v2182 = px_uninit();
-    LXValue _v2183 = px_uninit();
-    LXValue _v2184 = px_uninit();
-    LXValue _v2185 = px_uninit();
-    LXValue _v2186 = px_uninit();
-    LXValue _v2187 = px_uninit();
+    LXValue _v2184 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2185 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2186 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2187 = (nargs > 3) ? args[3] : px_null();
     LXValue _v2188 = px_uninit();
     LXValue _v2189 = px_uninit();
     LXValue _v2190 = px_uninit();
@@ -17780,195 +17803,202 @@ static LXValue fn_bc_match_cond(LXValue* args, int nargs, void* ctx) {
     LXValue _v2206 = px_uninit();
     LXValue _v2207 = px_uninit();
     LXValue _v2208 = px_uninit();
-    LXValue px_err_2209_val = px_null();
-    int px_err_2209_proped = 0;
+    LXValue _v2209 = px_uninit();
+    LXValue _v2210 = px_uninit();
+    LXValue _v2211 = px_uninit();
+    LXValue _v2212 = px_uninit();
+    LXValue _v2213 = px_uninit();
+    LXValue _v2214 = px_uninit();
+    LXValue _v2215 = px_uninit();
+    LXValue px_err_2216_val = px_null();
+    int px_err_2216_proped = 0;
     px_srcline(1605);
-    _v2181 = px_index(_v2177, px_int(0LL));
+    _v2188 = px_index(_v2184, px_int(0LL));
     px_srcline(1606);
-    if (px_is_truthy(px_eq(_v2181, px_str("PatWildcard")))) {
+    if (px_is_truthy(px_eq(_v2188, px_str("PatWildcard")))) {
         px_srcline(1607);
         return px_null();
     }
     px_srcline(1608);
-    if (px_is_truthy(px_eq(_v2181, px_str("PatBinding")))) {
+    if (px_is_truthy(px_eq(_v2188, px_str("PatBinding")))) {
         px_srcline(1609);
-        _v2182 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2177, px_int(1LL))}, 1);
+        _v2189 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2184, px_int(1LL))}, 1);
         px_srcline(1610);
-        if (px_is_truthy(({ LXValue _t2211 = ({ LXValue _t2210 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2182}, 1), px_int(0LL)); px_is_truthy(_t2210) ? px_ge(px_index(_v2182, px_int(0LL)), px_str("A")) : _t2210; }); px_is_truthy(_t2211) ? px_le(px_index(_v2182, px_int(0LL)), px_str("Z")) : _t2211; }))) {
+        if (px_is_truthy(({ LXValue _t2218 = ({ LXValue _t2217 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2189}, 1), px_int(0LL)); px_is_truthy(_t2217) ? px_ge(px_index(_v2189, px_int(0LL)), px_str("A")) : _t2217; }); px_is_truthy(_t2218) ? px_le(px_index(_v2189, px_int(0LL)), px_str("Z")) : _t2218; }))) {
             px_srcline(1615);
-            _v2183 = px_call(px_get_global("bc_match_enumvar"), (LXValue[]){_v2182, _v2178, _v2179}, 3);
+            _v2190 = px_call(px_get_global("bc_match_enumvar"), (LXValue[]){_v2189, _v2185, _v2186}, 3);
             px_srcline(1616);
-            (void)(px_method(_v2180, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1)}, 1));
+            (void)(px_method(_v2187, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1)}, 1));
             px_srcline(1617);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2183, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2190, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(1618);
             return px_null();
         }
         px_srcline(1619);
-        (void)(px_call(px_get_global("bc_bind_var"), (LXValue[]){_v2179, _v2182, _v2178}, 3));
+        (void)(px_call(px_get_global("bc_bind_var"), (LXValue[]){_v2186, _v2189, _v2185}, 3));
         px_srcline(1620);
         return px_null();
     }
     px_srcline(1621);
-    if (px_is_truthy(px_eq(_v2181, px_str("PatTuple")))) {
+    if (px_is_truthy(px_eq(_v2188, px_str("PatTuple")))) {
         px_srcline(1622);
-        _v2184 = px_index(_v2177, px_int(1LL));
+        _v2191 = px_index(_v2184, px_int(1LL));
         px_srcline(1623);
-        _v2185 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+        _v2192 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
         px_srcline(1624);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("MATCHTUP"), _v2185, _v2178, px_call(px_get_global("len"), (LXValue[]){_v2184}, 1)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("MATCHTUP"), _v2192, _v2185, px_call(px_get_global("len"), (LXValue[]){_v2191}, 1)}, 5));
         px_srcline(1625);
-        _v2186 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1);
+        _v2193 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1);
         px_srcline(1626);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2185, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2192, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(1627);
-        (void)(px_method(_v2180, "append", (LXValue[]){_v2186}, 1));
+        (void)(px_method(_v2187, "append", (LXValue[]){_v2193}, 1));
         px_srcline(1628);
-        _v2187 = px_int(0LL);
+        _v2194 = px_int(0LL);
         px_srcline(1629);
-        while (px_is_truthy(px_lt(_v2187, px_call(px_get_global("len"), (LXValue[]){_v2184}, 1)))) {
+        while (px_is_truthy(px_lt(_v2194, px_call(px_get_global("len"), (LXValue[]){_v2191}, 1)))) {
             px_srcline(1630);
-            _v2188 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+            _v2195 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
             px_srcline(1631);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("IMM"), _v2188, _v2187, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("IMM"), _v2195, _v2194, px_int(0LL)}, 5));
             px_srcline(1632);
-            _v2189 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+            _v2196 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
             px_srcline(1633);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("INDEX"), _v2189, _v2178, _v2188}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("INDEX"), _v2196, _v2185, _v2195}, 5));
             px_srcline(1634);
-            (void)(px_call(px_get_global("bc_match_cond"), (LXValue[]){px_index(_v2184, _v2187), _v2189, _v2179, _v2180}, 4));
+            (void)(px_call(px_get_global("bc_match_cond"), (LXValue[]){px_index(_v2191, _v2194), _v2196, _v2186, _v2187}, 4));
             px_srcline(1635);
-             _v2187 = px_add(_v2187, px_int(1LL));
+             _v2194 = px_add(_v2194, px_int(1LL));
         }
         px_srcline(1636);
         return px_null();
     }
     px_srcline(1637);
-    if (px_is_truthy(px_eq(_v2181, px_str("PatConstructor")))) {
+    if (px_is_truthy(px_eq(_v2188, px_str("PatConstructor")))) {
         px_srcline(1638);
-        _v2182 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2177, px_int(1LL))}, 1);
+        _v2189 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2184, px_int(1LL))}, 1);
         px_srcline(1639);
-        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2177, px_int(2LL))}, 1), px_int(0LL)))) {
+        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2184, px_int(2LL))}, 1), px_int(0LL)))) {
             px_srcline(1645);
-            _v2190 = px_index(_v2177, px_int(2LL));
+            _v2197 = px_index(_v2184, px_int(2LL));
             px_srcline(1648);
-            _v2191 = px_list_n((LXValue[]){}, 0);
+            _v2198 = px_list_n((LXValue[]){}, 0);
             px_srcline(1649);
-            _v2192 = px_int(0LL);
+            _v2199 = px_int(0LL);
             px_srcline(1650);
-            while (px_is_truthy(px_lt(_v2192, px_call(px_get_global("len"), (LXValue[]){_v2190}, 1)))) {
+            while (px_is_truthy(px_lt(_v2199, px_call(px_get_global("len"), (LXValue[]){_v2197}, 1)))) {
                 px_srcline(1651);
-                (void)(px_method(_v2191, "append", (LXValue[]){_v2192}, 1));
+                (void)(px_method(_v2198, "append", (LXValue[]){_v2199}, 1));
                 px_srcline(1652);
-                 _v2192 = px_add(_v2192, px_int(1LL));
+                 _v2199 = px_add(_v2199, px_int(1LL));
             }
             px_srcline(1653);
-            if (px_is_truthy(px_call(px_get_global("argmap_has_named_pat"), (LXValue[]){_v2190}, 1))) {
+            if (px_is_truthy(px_call(px_get_global("argmap_has_named_pat"), (LXValue[]){_v2197}, 1))) {
                 px_srcline(1654);
-                if (px_is_truthy(px_lt(px_call(px_get_global("len"), (LXValue[]){_v2177}, 1), px_int(4LL)))) {
+                if (px_is_truthy(px_lt(px_call(px_get_global("len"), (LXValue[]){_v2184}, 1), px_int(4LL)))) {
                     px_srcline(1655);
-                    _v2193 = px_str("R2001: 具名解构需要写出枚举类型名（`类型.变体(字段名: 模式)`）");
+                    _v2200 = px_str("R2001: 具名解构需要写出枚举类型名（`类型.变体(字段名: 模式)`）");
                     px_srcline(1656);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("RAISE"), px_int(0LL), px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2193}, 2), px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("RAISE"), px_int(0LL), px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2200}, 2), px_int(0LL)}, 5));
                     px_srcline(1657);
                     return px_null();
                 }
                 px_srcline(1658);
-                _v2194 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2177, px_int(3LL))}, 1);
+                _v2201 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2184, px_int(3LL))}, 1);
                 px_srcline(1659);
-                _v2195 = px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v2194, _v2182}, 2);
+                _v2202 = px_call(px_get_global("bc_enum_fields"), (LXValue[]){_v2201, _v2189}, 2);
                 px_srcline(1660);
-                if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2195}, 1), px_int(0LL)))) {
+                if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2202}, 1), px_int(0LL)))) {
                     px_srcline(1661);
-                    _v2196 = px_add(px_add(px_add(px_add(px_str("R2001: 枚举 "), _v2194), px_str(" 没有带字段的变体「")), _v2182), px_str("」"));
+                    _v2203 = px_add(px_add(px_add(px_add(px_str("R2001: 枚举 "), _v2201), px_str(" 没有带字段的变体「")), _v2189), px_str("」"));
                     px_srcline(1662);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("RAISE"), px_int(0LL), px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2196}, 2), px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("RAISE"), px_int(0LL), px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2203}, 2), px_int(0LL)}, 5));
                     px_srcline(1663);
                     return px_null();
                 }
                 px_srcline(1664);
-                _v2197 = px_call(px_get_global("argmap_fields"), (LXValue[]){_v2195, _v2190, px_add(px_add(_v2194, px_str(".")), _v2182), px_str("枚举变体")}, 4);
+                _v2204 = px_call(px_get_global("argmap_fields"), (LXValue[]){_v2202, _v2197, px_add(px_add(_v2201, px_str(".")), _v2189), px_str("枚举变体")}, 4);
                 px_srcline(1665);
-                if (px_is_truthy(px_ne(px_index(_v2197, px_int(0LL)), px_null()))) {
+                if (px_is_truthy(px_ne(px_index(_v2204, px_int(0LL)), px_null()))) {
                     px_srcline(1666);
-                    _v2198 = px_add(px_str("R2001: "), px_index(_v2197, px_int(0LL)));
+                    _v2205 = px_add(px_str("R2001: "), px_index(_v2204, px_int(0LL)));
                     px_srcline(1667);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("RAISE"), px_int(0LL), px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2198}, 2), px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("RAISE"), px_int(0LL), px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2205}, 2), px_int(0LL)}, 5));
                     px_srcline(1668);
                     return px_null();
                 }
                 px_srcline(1669);
-                 _v2191 = px_index(_v2197, px_int(1LL));
+                 _v2198 = px_index(_v2204, px_int(1LL));
             }
             px_srcline(1670);
-            _v2183 = px_call(px_get_global("bc_match_enumvar"), (LXValue[]){_v2182, _v2178, _v2179}, 3);
+            _v2190 = px_call(px_get_global("bc_match_enumvar"), (LXValue[]){_v2189, _v2185, _v2186}, 3);
             px_srcline(1671);
-            (void)(px_method(_v2180, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1)}, 1));
+            (void)(px_method(_v2187, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1)}, 1));
             px_srcline(1672);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2183, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2190, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(1673);
-            _v2199 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+            _v2206 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
             px_srcline(1674);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("MATCHENUMP"), _v2199, _v2178, px_call(px_get_global("len"), (LXValue[]){_v2190}, 1)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("MATCHENUMP"), _v2206, _v2185, px_call(px_get_global("len"), (LXValue[]){_v2197}, 1)}, 5));
             px_srcline(1675);
-            (void)(px_method(_v2180, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1)}, 1));
+            (void)(px_method(_v2187, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1)}, 1));
             px_srcline(1676);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2199, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2206, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(1677);
-            _v2200 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+            _v2207 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
             px_srcline(1678);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("ENUMPAY"), _v2200, _v2178, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("ENUMPAY"), _v2207, _v2185, px_int(0LL)}, 5));
             px_srcline(1679);
-            _v2201 = px_int(0LL);
+            _v2208 = px_int(0LL);
             px_srcline(1680);
-            while (px_is_truthy(px_lt(_v2201, px_call(px_get_global("len"), (LXValue[]){_v2190}, 1)))) {
+            while (px_is_truthy(px_lt(_v2208, px_call(px_get_global("len"), (LXValue[]){_v2197}, 1)))) {
                 px_srcline(1681);
-                _v2189 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+                _v2196 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
                 px_srcline(1682);
-                _v2202 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_call(px_get_global("str"), (LXValue[]){_v2201}, 1)}, 2);
+                _v2209 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_call(px_get_global("str"), (LXValue[]){_v2208}, 1)}, 2);
                 px_srcline(1683);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("GETF"), _v2189, _v2200, _v2202}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("GETF"), _v2196, _v2207, _v2209}, 5));
                 px_srcline(1684);
-                (void)(px_call(px_get_global("bc_match_cond"), (LXValue[]){px_call(px_get_global("argmap_pat_sub"), (LXValue[]){px_index(_v2190, px_index(_v2191, _v2201))}, 1), _v2189, _v2179, _v2180}, 4));
+                (void)(px_call(px_get_global("bc_match_cond"), (LXValue[]){px_call(px_get_global("argmap_pat_sub"), (LXValue[]){px_index(_v2197, px_index(_v2198, _v2208))}, 1), _v2196, _v2186, _v2187}, 4));
                 px_srcline(1685);
-                 _v2201 = px_add(_v2201, px_int(1LL));
+                 _v2208 = px_add(_v2208, px_int(1LL));
             }
             px_srcline(1686);
             return px_null();
         }
         px_srcline(1687);
-        _v2203 = px_call(px_get_global("bc_match_enumvar"), (LXValue[]){_v2182, _v2178, _v2179}, 3);
+        _v2210 = px_call(px_get_global("bc_match_enumvar"), (LXValue[]){_v2189, _v2185, _v2186}, 3);
         px_srcline(1688);
-        (void)(px_method(_v2180, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1)}, 1));
+        (void)(px_method(_v2187, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1)}, 1));
         px_srcline(1689);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2203, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2210, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(1690);
         return px_null();
     }
     px_srcline(1691);
-    if (px_is_truthy(px_eq(_v2181, px_str("PatLiteral")))) {
+    if (px_is_truthy(px_eq(_v2188, px_str("PatLiteral")))) {
         px_srcline(1696);
-        _v2204 = px_index(_v2177, px_int(1LL));
+        _v2211 = px_index(_v2184, px_int(1LL));
         px_srcline(1697);
-        if (px_is_truthy(px_eq(px_index(_v2204, px_int(0LL)), px_str("Field")))) {
+        if (px_is_truthy(px_eq(px_index(_v2211, px_int(0LL)), px_str("Field")))) {
             px_srcline(1698);
-            _v2205 = px_index(_v2204, px_int(1LL));
+            _v2212 = px_index(_v2211, px_int(1LL));
             px_srcline(1699);
-            if (px_is_truthy(px_eq(px_index(_v2205, px_int(0LL)), px_str("Var")))) {
+            if (px_is_truthy(px_eq(px_index(_v2212, px_int(0LL)), px_str("Var")))) {
                 px_srcline(1700);
-                _v2206 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2205, px_int(1LL))}, 1);
+                _v2213 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2212, px_int(1LL))}, 1);
                 px_srcline(1701);
-                _v2207 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2204, px_int(2LL))}, 1);
+                _v2214 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2211, px_int(2LL))}, 1);
                 px_srcline(1702);
-                if (px_is_truthy(({ LXValue _t2212 = px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v2179, _v2206}, 2)); px_is_truthy(_t2212) ? px_call(px_get_global("bc_enum_has"), (LXValue[]){_v2206, _v2207}, 2) : _t2212; }))) {
+                if (px_is_truthy(({ LXValue _t2219 = px_not(px_call(px_get_global("bc_name_is_value"), (LXValue[]){_v2186, _v2213}, 2)); px_is_truthy(_t2219) ? px_call(px_get_global("bc_enum_has"), (LXValue[]){_v2213, _v2214}, 2) : _t2219; }))) {
                     px_srcline(1703);
-                    if (px_is_truthy(px_eq(px_call(px_get_global("bc_const_find"), (LXValue[]){_v2206, _v2207}, 2), px_null()))) {
+                    if (px_is_truthy(px_eq(px_call(px_get_global("bc_const_find"), (LXValue[]){_v2213, _v2214}, 2), px_null()))) {
                         px_srcline(1704);
-                        _v2208 = px_call(px_get_global("bc_match_enumlit"), (LXValue[]){_v2206, _v2207, _v2178, _v2179}, 4);
+                        _v2215 = px_call(px_get_global("bc_match_enumlit"), (LXValue[]){_v2213, _v2214, _v2185, _v2186}, 4);
                         px_srcline(1705);
-                        (void)(px_method(_v2180, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1)}, 1));
+                        (void)(px_method(_v2187, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1)}, 1));
                         px_srcline(1706);
-                        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2208, px_int(0LL), px_int(0LL)}, 5));
+                        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2215, px_int(0LL), px_int(0LL)}, 5));
                         px_srcline(1707);
                         return px_null();
                     }
@@ -17976,24 +18006,24 @@ static LXValue fn_bc_match_cond(LXValue* args, int nargs, void* ctx) {
             }
         }
         px_srcline(1708);
-        _v2189 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+        _v2196 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
         px_srcline(1709);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2177, px_int(1LL)), _v2189, _v2179}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2184, px_int(1LL)), _v2196, _v2186}, 3));
         px_srcline(1710);
-        _v2183 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2179}, 1);
+        _v2190 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2186}, 1);
         px_srcline(1711);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("EQ"), _v2183, _v2178, _v2189}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("EQ"), _v2190, _v2185, _v2196}, 5));
         px_srcline(1712);
-        (void)(px_method(_v2180, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2179, px_str("bc"))}, 1)}, 1));
+        (void)(px_method(_v2187, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2186, px_str("bc"))}, 1)}, 1));
         px_srcline(1713);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2179, px_str("JMPF"), _v2183, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2186, px_str("JMPF"), _v2190, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(1714);
         return px_null();
     }
     px_srcline(1715);
-    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_match_cond 未知 pattern: "), px_call(px_get_global("str"), (LXValue[]){_v2177}, 1))}, 1));
-px_err_2209:
-    if (px_err_2209_proped) return px_err_2209_val;
+    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_match_cond 未知 pattern: "), px_call(px_get_global("str"), (LXValue[]){_v2184}, 1))}, 1));
+px_err_2216:
+    if (px_err_2216_proped) return px_err_2216_val;
     return px_null();
 }
 
@@ -18002,21 +18032,21 @@ static LXValue fn_bc_chk_slot(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_chk_slot");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_chk_slot", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_chk_slot", 3, nargs);
-    LXValue _v2213 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2214 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2215 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2216 = px_uninit();
-    LXValue px_err_2217_val = px_null();
-    int px_err_2217_proped = 0;
+    LXValue _v2220 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2221 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2222 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2223 = px_uninit();
+    LXValue px_err_2224_val = px_null();
+    int px_err_2224_proped = 0;
     px_srcline(1720);
-    if (px_is_truthy(px_not(px_method(px_index(_v2213, px_str("inited")), "has", (LXValue[]){_v2214}, 1)))) {
+    if (px_is_truthy(px_not(px_method(px_index(_v2220, px_str("inited")), "has", (LXValue[]){_v2221}, 1)))) {
         px_srcline(1721);
-        _v2216 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2214}, 2);
+        _v2223 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), _v2221}, 2);
         px_srcline(1722);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2213, px_str("CHKINIT"), _v2215, px_int(0LL), _v2216}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2220, px_str("CHKINIT"), _v2222, px_int(0LL), _v2223}, 5));
     }
-px_err_2217:
-    if (px_err_2217_proped) return px_err_2217_val;
+px_err_2224:
+    if (px_err_2224_proped) return px_err_2224_val;
     return px_null();
 }
 
@@ -18025,36 +18055,36 @@ static LXValue fn_bc_assign_local_slot(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_assign_local_slot");
     if (nargs < 5) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_assign_local_slot", 5, nargs);
     if (nargs > 5) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_assign_local_slot", 5, nargs);
-    LXValue _v2218 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2219 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2220 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2221 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2222 = (nargs > 4) ? args[4] : px_null();
-    LXValue _v2223 = px_uninit();
-    LXValue _v2224 = px_uninit();
-    LXValue px_err_2225_val = px_null();
-    int px_err_2225_proped = 0;
+    LXValue _v2225 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2226 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2227 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2228 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2229 = (nargs > 4) ? args[4] : px_null();
+    LXValue _v2230 = px_uninit();
+    LXValue _v2231 = px_uninit();
+    LXValue px_err_2232_val = px_null();
+    int px_err_2232_proped = 0;
     px_srcline(1724);
-    if (px_is_truthy(px_eq(_v2220, px_str("Assign")))) {
+    if (px_is_truthy(px_eq(_v2227, px_str("Assign")))) {
         px_srcline(1731);
-        _v2223 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2222}, 1);
+        _v2230 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2229}, 1);
         px_srcline(1732);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2221, _v2223, _v2222}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2228, _v2230, _v2229}, 3));
         px_srcline(1733);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2222, px_str("MOV"), _v2218, _v2223, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2229, px_str("MOV"), _v2225, _v2230, px_int(0LL)}, 5));
         px_srcline(1734);
         return px_null();
     }
     px_srcline(1735);
-    _v2224 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2222}, 1);
+    _v2231 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2229}, 1);
     px_srcline(1736);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2221, _v2224, _v2222}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2228, _v2231, _v2229}, 3));
     px_srcline(1739);
-    (void)(px_call(px_get_global("bc_chk_slot"), (LXValue[]){_v2222, _v2219, _v2218}, 3));
+    (void)(px_call(px_get_global("bc_chk_slot"), (LXValue[]){_v2229, _v2226, _v2225}, 3));
     px_srcline(1740);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2222, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2220}, 1)}, 1), _v2218, _v2218, _v2224}, 5));
-px_err_2225:
-    if (px_err_2225_proped) return px_err_2225_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2229, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2227}, 1)}, 1), _v2225, _v2225, _v2231}, 5));
+px_err_2232:
+    if (px_err_2232_proped) return px_err_2232_val;
     return px_null();
 }
 
@@ -18063,42 +18093,42 @@ static LXValue fn_bc_assign_global(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_assign_global");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_assign_global", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_assign_global", 4, nargs);
-    LXValue _v2226 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2227 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2228 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2229 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2230 = px_uninit();
-    LXValue _v2231 = px_uninit();
-    LXValue _v2232 = px_uninit();
-    LXValue px_err_2233_val = px_null();
-    int px_err_2233_proped = 0;
+    LXValue _v2233 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2234 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2235 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2236 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2237 = px_uninit();
+    LXValue _v2238 = px_uninit();
+    LXValue _v2239 = px_uninit();
+    LXValue px_err_2240_val = px_null();
+    int px_err_2240_proped = 0;
     px_srcline(1742);
-    _v2230 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2226}, 2);
+    _v2237 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2233}, 2);
     px_srcline(1743);
-    if (px_is_truthy(px_eq(_v2227, px_str("Assign")))) {
+    if (px_is_truthy(px_eq(_v2234, px_str("Assign")))) {
         px_srcline(1744);
-        _v2231 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2229}, 1);
+        _v2238 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2236}, 1);
         px_srcline(1745);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2228, _v2231, _v2229}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2235, _v2238, _v2236}, 3));
         px_srcline(1746);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2229, px_str("SETG"), _v2230, _v2231, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2236, px_str("SETG"), _v2237, _v2238, px_int(0LL)}, 5));
         px_srcline(1747);
         return px_null();
     }
     px_srcline(1748);
-    _v2231 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2229}, 1);
+    _v2238 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2236}, 1);
     px_srcline(1749);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2229, px_str("GETG"), _v2231, _v2230, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2236, px_str("GETG"), _v2238, _v2237, px_int(0LL)}, 5));
     px_srcline(1750);
-    _v2232 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2229}, 1);
+    _v2239 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2236}, 1);
     px_srcline(1751);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2228, _v2232, _v2229}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2235, _v2239, _v2236}, 3));
     px_srcline(1752);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2229, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2227}, 1)}, 1), _v2231, _v2231, _v2232}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2236, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2234}, 1)}, 1), _v2238, _v2238, _v2239}, 5));
     px_srcline(1753);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2229, px_str("SETG"), _v2230, _v2231, px_int(0LL)}, 5));
-px_err_2233:
-    if (px_err_2233_proped) return px_err_2233_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2236, px_str("SETG"), _v2237, _v2238, px_int(0LL)}, 5));
+px_err_2240:
+    if (px_err_2240_proped) return px_err_2240_val;
     return px_null();
 }
 
@@ -18107,45 +18137,45 @@ static LXValue fn_bc_assign_index(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_assign_index");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_assign_index", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_assign_index", 4, nargs);
-    LXValue _v2234 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2235 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2236 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2237 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2238 = px_uninit();
-    LXValue _v2239 = px_uninit();
-    LXValue _v2240 = px_uninit();
-    LXValue _v2241 = px_uninit();
-    LXValue px_err_2242_val = px_null();
-    int px_err_2242_proped = 0;
+    LXValue _v2241 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2242 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2243 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2244 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2245 = px_uninit();
+    LXValue _v2246 = px_uninit();
+    LXValue _v2247 = px_uninit();
+    LXValue _v2248 = px_uninit();
+    LXValue px_err_2249_val = px_null();
+    int px_err_2249_proped = 0;
     px_srcline(1756);
-    _v2238 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2237}, 1);
+    _v2245 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2244}, 1);
     px_srcline(1757);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2234, px_int(1LL)), _v2238, _v2237}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2241, px_int(1LL)), _v2245, _v2244}, 3));
     px_srcline(1758);
-    _v2239 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2237}, 1);
+    _v2246 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2244}, 1);
     px_srcline(1759);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2234, px_int(2LL)), _v2239, _v2237}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2241, px_int(2LL)), _v2246, _v2244}, 3));
     px_srcline(1760);
-    _v2240 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2237}, 1);
+    _v2247 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2244}, 1);
     px_srcline(1761);
-    if (px_is_truthy(px_eq(_v2235, px_str("Assign")))) {
+    if (px_is_truthy(px_eq(_v2242, px_str("Assign")))) {
         px_srcline(1762);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2236, _v2240, _v2237}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2243, _v2247, _v2244}, 3));
     }
     else {
         px_srcline(1764);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2237, px_str("INDEX"), _v2240, _v2238, _v2239}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2244, px_str("INDEX"), _v2247, _v2245, _v2246}, 5));
         px_srcline(1765);
-        _v2241 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2237}, 1);
+        _v2248 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2244}, 1);
         px_srcline(1766);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2236, _v2241, _v2237}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2243, _v2248, _v2244}, 3));
         px_srcline(1767);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2237, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2235}, 1)}, 1), _v2240, _v2240, _v2241}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2244, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2242}, 1)}, 1), _v2247, _v2247, _v2248}, 5));
     }
     px_srcline(1768);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2237, px_str("SETIDX"), _v2240, _v2238, _v2239}, 5));
-px_err_2242:
-    if (px_err_2242_proped) return px_err_2242_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2244, px_str("SETIDX"), _v2247, _v2245, _v2246}, 5));
+px_err_2249:
+    if (px_err_2249_proped) return px_err_2249_val;
     return px_null();
 }
 
@@ -18154,43 +18184,43 @@ static LXValue fn_bc_assign_field(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_assign_field");
     if (nargs < 4) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_assign_field", 4, nargs);
     if (nargs > 4) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_assign_field", 4, nargs);
-    LXValue _v2243 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2244 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2245 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2246 = (nargs > 3) ? args[3] : px_null();
-    LXValue _v2247 = px_uninit();
-    LXValue _v2248 = px_uninit();
-    LXValue _v2249 = px_uninit();
-    LXValue _v2250 = px_uninit();
-    LXValue px_err_2251_val = px_null();
-    int px_err_2251_proped = 0;
+    LXValue _v2250 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2251 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2252 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2253 = (nargs > 3) ? args[3] : px_null();
+    LXValue _v2254 = px_uninit();
+    LXValue _v2255 = px_uninit();
+    LXValue _v2256 = px_uninit();
+    LXValue _v2257 = px_uninit();
+    LXValue px_err_2258_val = px_null();
+    int px_err_2258_proped = 0;
     px_srcline(1771);
-    _v2247 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2246}, 1);
+    _v2254 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2253}, 1);
     px_srcline(1772);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2243, px_int(1LL)), _v2247, _v2246}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2250, px_int(1LL)), _v2254, _v2253}, 3));
     px_srcline(1773);
-    _v2248 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2243, px_int(2LL))}, 1)}, 2);
+    _v2255 = px_call(px_get_global("bc_n_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("n_pool")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2250, px_int(2LL))}, 1)}, 2);
     px_srcline(1774);
-    _v2249 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2246}, 1);
+    _v2256 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2253}, 1);
     px_srcline(1775);
-    if (px_is_truthy(px_eq(_v2244, px_str("Assign")))) {
+    if (px_is_truthy(px_eq(_v2251, px_str("Assign")))) {
         px_srcline(1776);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2245, _v2249, _v2246}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2252, _v2256, _v2253}, 3));
     }
     else {
         px_srcline(1778);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2246, px_str("GETF"), _v2249, _v2247, _v2248}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2253, px_str("GETF"), _v2256, _v2254, _v2255}, 5));
         px_srcline(1779);
-        _v2250 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2246}, 1);
+        _v2257 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2253}, 1);
         px_srcline(1780);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2245, _v2250, _v2246}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2252, _v2257, _v2253}, 3));
         px_srcline(1781);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2246, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2244}, 1)}, 1), _v2249, _v2249, _v2250}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2253, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2251}, 1)}, 1), _v2256, _v2256, _v2257}, 5));
     }
     px_srcline(1782);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2246, px_str("SETF"), _v2249, _v2247, _v2248}, 5));
-px_err_2251:
-    if (px_err_2251_proped) return px_err_2251_val;
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2253, px_str("SETF"), _v2256, _v2254, _v2255}, 5));
+px_err_2258:
+    if (px_err_2258_proped) return px_err_2258_val;
     return px_null();
 }
 
@@ -18199,78 +18229,78 @@ static LXValue fn_bc_assign_op_name(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_assign_op_name");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_assign_op_name", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_assign_op_name", 1, nargs);
-    LXValue _v2252 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_2253_val = px_null();
-    int px_err_2253_proped = 0;
+    LXValue _v2259 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_2260_val = px_null();
+    int px_err_2260_proped = 0;
     px_srcline(1785);
-    if (px_is_truthy(px_eq(_v2252, px_str("Plus")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Plus")))) {
         px_srcline(1786);
         return px_str("Add");
     }
     px_srcline(1787);
-    if (px_is_truthy(px_eq(_v2252, px_str("Minus")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Minus")))) {
         px_srcline(1788);
         return px_str("Sub");
     }
     px_srcline(1789);
-    if (px_is_truthy(px_eq(_v2252, px_str("Star")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Star")))) {
         px_srcline(1790);
         return px_str("Mul");
     }
     px_srcline(1791);
-    if (px_is_truthy(px_eq(_v2252, px_str("Slash")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Slash")))) {
         px_srcline(1792);
         return px_str("Div");
     }
     px_srcline(1793);
-    if (px_is_truthy(px_eq(_v2252, px_str("IntDiv")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("IntDiv")))) {
         px_srcline(1794);
         return px_str("IntDiv");
     }
     px_srcline(1795);
-    if (px_is_truthy(px_eq(_v2252, px_str("Mod")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Mod")))) {
         px_srcline(1796);
         return px_str("Mod");
     }
     px_srcline(1797);
-    if (px_is_truthy(px_eq(_v2252, px_str("Pow")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Pow")))) {
         px_srcline(1798);
         return px_str("Pow");
     }
     px_srcline(1799);
-    if (px_is_truthy(px_eq(_v2252, px_str("BitAnd")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("BitAnd")))) {
         px_srcline(1800);
         return px_str("BitAnd");
     }
     px_srcline(1801);
-    if (px_is_truthy(px_eq(_v2252, px_str("BitOr")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("BitOr")))) {
         px_srcline(1802);
         return px_str("BitOr");
     }
     px_srcline(1803);
-    if (px_is_truthy(px_eq(_v2252, px_str("BitXor")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("BitXor")))) {
         px_srcline(1804);
         return px_str("BitXor");
     }
     px_srcline(1805);
-    if (px_is_truthy(px_eq(_v2252, px_str("Shl")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Shl")))) {
         px_srcline(1806);
         return px_str("Shl");
     }
     px_srcline(1807);
-    if (px_is_truthy(px_eq(_v2252, px_str("Shr")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("Shr")))) {
         px_srcline(1808);
         return px_str("Shr");
     }
     px_srcline(1809);
-    if (px_is_truthy(px_eq(_v2252, px_str("ShrU")))) {
+    if (px_is_truthy(px_eq(_v2259, px_str("ShrU")))) {
         px_srcline(1810);
         return px_str("ShrU");
     }
     px_srcline(1811);
-    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_assign_op_name 未知赋值 op: "), px_call(px_get_global("str"), (LXValue[]){_v2252}, 1))}, 1));
-px_err_2253:
-    if (px_err_2253_proped) return px_err_2253_val;
+    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_assign_op_name 未知赋值 op: "), px_call(px_get_global("str"), (LXValue[]){_v2259}, 1))}, 1));
+px_err_2260:
+    if (px_err_2260_proped) return px_err_2260_val;
     return px_null();
 }
 
@@ -18279,15 +18309,8 @@ static LXValue fn_bc_emit_stmt_inner(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_stmt_inner");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_stmt_inner", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_stmt_inner", 2, nargs);
-    LXValue _v2254 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2255 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2256 = px_uninit();
-    LXValue _v2257 = px_uninit();
-    LXValue _v2258 = px_uninit();
-    LXValue _v2259 = px_uninit();
-    LXValue _v2260 = px_uninit();
-    LXValue _v2261 = px_uninit();
-    LXValue _v2262 = px_uninit();
+    LXValue _v2261 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2262 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2263 = px_uninit();
     LXValue _v2264 = px_uninit();
     LXValue _v2265 = px_uninit();
@@ -18315,415 +18338,422 @@ static LXValue fn_bc_emit_stmt_inner(LXValue* args, int nargs, void* ctx) {
     LXValue _v2287 = px_uninit();
     LXValue _v2288 = px_uninit();
     LXValue _v2289 = px_uninit();
-    LXValue px_err_2290_val = px_null();
-    int px_err_2290_proped = 0;
+    LXValue _v2290 = px_uninit();
+    LXValue _v2291 = px_uninit();
+    LXValue _v2292 = px_uninit();
+    LXValue _v2293 = px_uninit();
+    LXValue _v2294 = px_uninit();
+    LXValue _v2295 = px_uninit();
+    LXValue _v2296 = px_uninit();
+    LXValue px_err_2297_val = px_null();
+    int px_err_2297_proped = 0;
     px_srcline(1814);
-    _v2256 = px_index(_v2254, px_int(0LL));
+    _v2263 = px_index(_v2261, px_int(0LL));
     px_srcline(1821);
-    if (px_is_truthy(({ LXValue _t2293 = ({ LXValue _t2292 = ({ LXValue _t2291 = px_eq(_v2256, px_str("StructDef")); px_is_truthy(_t2291) ? _t2291 : px_eq(_v2256, px_str("EnumDef")); }); px_is_truthy(_t2292) ? _t2292 : px_eq(_v2256, px_str("TraitDef")); }); px_is_truthy(_t2293) ? _t2293 : px_eq(_v2256, px_str("ImplDef")); }))) {
+    if (px_is_truthy(({ LXValue _t2300 = ({ LXValue _t2299 = ({ LXValue _t2298 = px_eq(_v2263, px_str("StructDef")); px_is_truthy(_t2298) ? _t2298 : px_eq(_v2263, px_str("EnumDef")); }); px_is_truthy(_t2299) ? _t2299 : px_eq(_v2263, px_str("TraitDef")); }); px_is_truthy(_t2300) ? _t2300 : px_eq(_v2263, px_str("ImplDef")); }))) {
         px_srcline(1822);
         return px_null();
     }
     px_srcline(1823);
-    if (px_is_truthy(px_eq(_v2256, px_str("VarDecl")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("VarDecl")))) {
         px_srcline(1826);
-        (void)(px_call(px_get_global("cg_sem_vardecl"), (LXValue[]){_v2254}, 1));
+        (void)(px_call(px_get_global("cg_sem_vardecl"), (LXValue[]){_v2261}, 1));
         px_srcline(1828);
-        _v2257 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2254, px_int(2LL))}, 1);
+        _v2264 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2261, px_int(2LL))}, 1);
         px_srcline(1829);
-        if (px_is_truthy(px_eq(px_index(_v2254, px_int(4LL)), px_null()))) {
+        if (px_is_truthy(px_eq(px_index(_v2261, px_int(4LL)), px_null()))) {
             px_srcline(1833);
-            if (px_is_truthy(px_index(_v2255, px_str("is_top")))) {
+            if (px_is_truthy(px_index(_v2262, px_str("is_top")))) {
                 px_srcline(1834);
-                _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+                _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
                 px_srcline(1835);
-                (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v2255, _v2258}, 2));
+                (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v2262, _v2265}, 2));
                 px_srcline(1836);
-                _v2259 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2257}, 2);
+                _v2266 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2264}, 2);
                 px_srcline(1837);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("SETG"), _v2259, _v2258, px_int(0LL)}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("SETG"), _v2266, _v2265, px_int(0LL)}, 5));
                 px_srcline(1838);
                 return px_null();
             }
             px_srcline(1839);
-            _v2260 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2255, _v2257}, 2);
+            _v2267 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2262, _v2264}, 2);
             px_srcline(1840);
-            _v2261 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+            _v2268 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
             px_srcline(1841);
-            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v2255, _v2261}, 2));
+            (void)(px_call(px_get_global("bc_emit_null"), (LXValue[]){_v2262, _v2268}, 2));
             px_srcline(1842);
-            (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2255, _v2257, _v2260, _v2261}, 4));
+            (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2262, _v2264, _v2267, _v2268}, 4));
             px_srcline(1843);
-            px_index_set(px_index(_v2255, px_str("inited")), _v2257, px_int(1LL));
+            px_index_set(px_index(_v2262, px_str("inited")), _v2264, px_int(1LL));
             px_srcline(1844);
             return px_null();
         }
         px_srcline(1845);
-        if (px_is_truthy(px_index(_v2255, px_str("is_top")))) {
+        if (px_is_truthy(px_index(_v2262, px_str("is_top")))) {
             px_srcline(1847);
-            _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+            _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
             px_srcline(1848);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2254, px_int(4LL)), _v2258, _v2255}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2261, px_int(4LL)), _v2265, _v2262}, 3));
             px_srcline(1849);
-            _v2259 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2257}, 2);
+            _v2266 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2264}, 2);
             px_srcline(1850);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("SETG"), _v2259, _v2258, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("SETG"), _v2266, _v2265, px_int(0LL)}, 5));
             px_srcline(1851);
             return px_null();
         }
         px_srcline(1855);
-        _v2262 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2255, _v2257}, 2);
+        _v2269 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2262, _v2264}, 2);
         px_srcline(1856);
-        _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+        _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
         px_srcline(1857);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2254, px_int(4LL)), _v2258, _v2255}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2261, px_int(4LL)), _v2265, _v2262}, 3));
         px_srcline(1858);
-        (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2255, _v2257, _v2262, _v2258}, 4));
+        (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2262, _v2264, _v2269, _v2265}, 4));
         px_srcline(1860);
-        px_index_set(px_index(_v2255, px_str("inited")), _v2257, px_int(1LL));
+        px_index_set(px_index(_v2262, px_str("inited")), _v2264, px_int(1LL));
         px_srcline(1861);
         return px_null();
     }
     px_srcline(1862);
-    if (px_is_truthy(px_eq(_v2256, px_str("Assign")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Assign")))) {
         px_srcline(1865);
-        _v2263 = px_index(_v2254, px_int(1LL));
+        _v2270 = px_index(_v2261, px_int(1LL));
         px_srcline(1866);
-        _v2264 = px_index(_v2254, px_int(2LL));
+        _v2271 = px_index(_v2261, px_int(2LL));
         px_srcline(1867);
-        _v2265 = px_index(_v2254, px_int(3LL));
+        _v2272 = px_index(_v2261, px_int(3LL));
         px_srcline(1868);
-        if (px_is_truthy(px_eq(_v2264, px_str("Append")))) {
+        if (px_is_truthy(px_eq(_v2271, px_str("Append")))) {
             px_srcline(1869);
-            _v2266 = px_list_n((LXValue[]){_v2265}, 1);
+            _v2273 = px_list_n((LXValue[]){_v2272}, 1);
             px_srcline(1870);
-            (void)(px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){_v2263, px_str("append"), _v2266, px_neg(px_int(1LL)), _v2255}, 5));
+            (void)(px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){_v2270, px_str("append"), _v2273, px_neg(px_int(1LL)), _v2262}, 5));
             px_srcline(1871);
             return px_null();
         }
         px_srcline(1874);
-        (void)(px_call(px_get_global("cg_sem_assign"), (LXValue[]){_v2263, _v2264, _v2265}, 3));
+        (void)(px_call(px_get_global("cg_sem_assign"), (LXValue[]){_v2270, _v2271, _v2272}, 3));
         px_srcline(1875);
-        _v2267 = px_index(_v2263, px_int(0LL));
+        _v2274 = px_index(_v2270, px_int(0LL));
         px_srcline(1876);
-        if (px_is_truthy(px_eq(_v2267, px_str("Var")))) {
+        if (px_is_truthy(px_eq(_v2274, px_str("Var")))) {
             px_srcline(1877);
-            _v2257 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2263, px_int(1LL))}, 1);
+            _v2264 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2270, px_int(1LL))}, 1);
             px_srcline(1878);
-            if (px_is_truthy(px_method(px_index(_v2255, px_str("smap")), "has", (LXValue[]){_v2257}, 1))) {
+            if (px_is_truthy(px_method(px_index(_v2262, px_str("smap")), "has", (LXValue[]){_v2264}, 1))) {
                 px_srcline(1880);
-                if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2255, _v2257}, 2))) {
+                if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2262, _v2264}, 2))) {
                     px_srcline(1881);
-                    _v2268 = px_index(px_index(_v2255, px_str("smap")), _v2257);
+                    _v2275 = px_index(px_index(_v2262, px_str("smap")), _v2264);
                     px_srcline(1882);
-                    if (px_is_truthy(px_eq(_v2264, px_str("Assign")))) {
+                    if (px_is_truthy(px_eq(_v2271, px_str("Assign")))) {
                         px_srcline(1883);
-                        _v2269 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+                        _v2276 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
                         px_srcline(1884);
-                        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2265, _v2269, _v2255}, 3));
+                        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2272, _v2276, _v2262}, 3));
                         px_srcline(1885);
-                        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("CELLSET"), _v2269, _v2268, px_int(0LL)}, 5));
+                        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("CELLSET"), _v2276, _v2275, px_int(0LL)}, 5));
                         px_srcline(1887);
-                        px_index_set(px_index(_v2255, px_str("inited")), _v2257, px_int(1LL));
+                        px_index_set(px_index(_v2262, px_str("inited")), _v2264, px_int(1LL));
                         px_srcline(1888);
                         return px_null();
                     }
                     px_srcline(1889);
-                    _v2270 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+                    _v2277 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
                     px_srcline(1890);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("CELLGET"), _v2270, _v2268, px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("CELLGET"), _v2277, _v2275, px_int(0LL)}, 5));
                     px_srcline(1892);
-                    (void)(px_call(px_get_global("bc_chk_slot"), (LXValue[]){_v2255, _v2257, _v2270}, 3));
+                    (void)(px_call(px_get_global("bc_chk_slot"), (LXValue[]){_v2262, _v2264, _v2277}, 3));
                     px_srcline(1893);
-                    _v2271 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+                    _v2278 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
                     px_srcline(1894);
-                    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2265, _v2271, _v2255}, 3));
+                    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2272, _v2278, _v2262}, 3));
                     px_srcline(1895);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2264}, 1)}, 1), _v2270, _v2270, _v2271}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_call(px_get_global("bc_binop_op"), (LXValue[]){px_call(px_get_global("bc_assign_op_name"), (LXValue[]){_v2271}, 1)}, 1), _v2277, _v2277, _v2278}, 5));
                     px_srcline(1896);
-                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("CELLSET"), _v2270, _v2268, px_int(0LL)}, 5));
+                    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("CELLSET"), _v2277, _v2275, px_int(0LL)}, 5));
                     px_srcline(1898);
-                    px_index_set(px_index(_v2255, px_str("inited")), _v2257, px_int(1LL));
+                    px_index_set(px_index(_v2262, px_str("inited")), _v2264, px_int(1LL));
                     px_srcline(1899);
                     return px_null();
                 }
                 px_srcline(1900);
-                (void)(px_call(px_get_global("bc_assign_local_slot"), (LXValue[]){px_index(px_index(_v2255, px_str("smap")), _v2257), _v2257, _v2264, _v2265, _v2255}, 5));
+                (void)(px_call(px_get_global("bc_assign_local_slot"), (LXValue[]){px_index(px_index(_v2262, px_str("smap")), _v2264), _v2264, _v2271, _v2272, _v2262}, 5));
                 px_srcline(1902);
-                px_index_set(px_index(_v2255, px_str("inited")), _v2257, px_int(1LL));
+                px_index_set(px_index(_v2262, px_str("inited")), _v2264, px_int(1LL));
                 px_srcline(1903);
                 return px_null();
             }
             px_srcline(1904);
-            if (px_is_truthy(({ LXValue _t2294 = px_not(px_index(_v2255, px_str("is_top"))); px_is_truthy(_t2294) ? px_not(px_call(px_get_global("contains"), (LXValue[]){px_get_global("g_topnames"), _v2257}, 2)) : _t2294; }))) {
+            if (px_is_truthy(({ LXValue _t2301 = px_not(px_index(_v2262, px_str("is_top"))); px_is_truthy(_t2301) ? px_not(px_call(px_get_global("contains"), (LXValue[]){px_get_global("g_topnames"), _v2264}, 2)) : _t2301; }))) {
                 px_srcline(1907);
-                _v2262 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2255, _v2257}, 2);
+                _v2269 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2262, _v2264}, 2);
                 px_srcline(1908);
-                (void)(px_call(px_get_global("bc_assign_local_slot"), (LXValue[]){_v2262, _v2257, _v2264, _v2265, _v2255}, 5));
+                (void)(px_call(px_get_global("bc_assign_local_slot"), (LXValue[]){_v2269, _v2264, _v2271, _v2272, _v2262}, 5));
                 px_srcline(1910);
-                px_index_set(px_index(_v2255, px_str("inited")), _v2257, px_int(1LL));
+                px_index_set(px_index(_v2262, px_str("inited")), _v2264, px_int(1LL));
                 px_srcline(1911);
                 return px_null();
             }
             px_srcline(1913);
-            (void)(px_call(px_get_global("bc_assign_global"), (LXValue[]){_v2257, _v2264, _v2265, _v2255}, 4));
+            (void)(px_call(px_get_global("bc_assign_global"), (LXValue[]){_v2264, _v2271, _v2272, _v2262}, 4));
             px_srcline(1914);
             return px_null();
         }
         px_srcline(1915);
-        if (px_is_truthy(px_eq(_v2267, px_str("Index")))) {
+        if (px_is_truthy(px_eq(_v2274, px_str("Index")))) {
             px_srcline(1916);
-            (void)(px_call(px_get_global("bc_assign_index"), (LXValue[]){_v2263, _v2264, _v2265, _v2255}, 4));
+            (void)(px_call(px_get_global("bc_assign_index"), (LXValue[]){_v2270, _v2271, _v2272, _v2262}, 4));
             px_srcline(1917);
             return px_null();
         }
         px_srcline(1918);
-        if (px_is_truthy(px_eq(_v2267, px_str("Field")))) {
+        if (px_is_truthy(px_eq(_v2274, px_str("Field")))) {
             px_srcline(1919);
-            (void)(px_call(px_get_global("bc_assign_field"), (LXValue[]){_v2263, _v2264, _v2265, _v2255}, 4));
+            (void)(px_call(px_get_global("bc_assign_field"), (LXValue[]){_v2270, _v2271, _v2272, _v2262}, 4));
             px_srcline(1920);
             return px_null();
         }
         px_srcline(1921);
-        (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit_stmt Assign 目标未实现: "), px_call(px_get_global("str"), (LXValue[]){_v2263}, 1))}, 1));
+        (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit_stmt Assign 目标未实现: "), px_call(px_get_global("str"), (LXValue[]){_v2270}, 1))}, 1));
     }
     px_srcline(1922);
-    if (px_is_truthy(px_eq(_v2256, px_str("Return")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Return")))) {
         px_srcline(1923);
-        if (px_is_truthy(px_ne(px_index(_v2254, px_int(1LL)), px_null()))) {
+        if (px_is_truthy(px_ne(px_index(_v2261, px_int(1LL)), px_null()))) {
             px_srcline(1924);
-            _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+            _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
             px_srcline(1925);
-            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2254, px_int(1LL)), _v2258, _v2255}, 3));
+            (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2261, px_int(1LL)), _v2265, _v2262}, 3));
             px_srcline(1926);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("RET"), _v2258, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("RET"), _v2265, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(1927);
             return px_null();
         }
         px_srcline(1928);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("RET0"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("RET0"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(1929);
         return px_null();
     }
     px_srcline(1930);
-    if (px_is_truthy(px_eq(_v2256, px_str("ExprStmt")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("ExprStmt")))) {
         px_srcline(1932);
-        _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+        _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
         px_srcline(1933);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2254, px_int(1LL)), _v2258, _v2255}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2261, px_int(1LL)), _v2265, _v2262}, 3));
         px_srcline(1934);
         return px_null();
     }
     px_srcline(1935);
-    if (px_is_truthy(px_eq(_v2256, px_str("If")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("If")))) {
         px_srcline(1936);
-        (void)(px_call(px_get_global("bc_emit_if"), (LXValue[]){_v2254, _v2255}, 2));
+        (void)(px_call(px_get_global("bc_emit_if"), (LXValue[]){_v2261, _v2262}, 2));
         px_srcline(1937);
         return px_null();
     }
     px_srcline(1938);
-    if (px_is_truthy(px_eq(_v2256, px_str("While")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("While")))) {
         px_srcline(1939);
-        (void)(px_call(px_get_global("bc_emit_while"), (LXValue[]){_v2254, _v2255}, 2));
+        (void)(px_call(px_get_global("bc_emit_while"), (LXValue[]){_v2261, _v2262}, 2));
         px_srcline(1940);
         return px_null();
     }
     px_srcline(1941);
-    if (px_is_truthy(px_eq(_v2256, px_str("For")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("For")))) {
         px_srcline(1942);
-        (void)(px_call(px_get_global("bc_emit_for"), (LXValue[]){_v2254, _v2255}, 2));
+        (void)(px_call(px_get_global("bc_emit_for"), (LXValue[]){_v2261, _v2262}, 2));
         px_srcline(1943);
         return px_null();
     }
     px_srcline(1944);
-    if (px_is_truthy(px_eq(_v2256, px_str("Break")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Break")))) {
         px_srcline(1946);
-        _v2272 = px_index(_v2255, px_str("loops"));
+        _v2279 = px_index(_v2262, px_str("loops"));
         px_srcline(1947);
-        if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2272}, 1), px_int(0LL)))) {
+        if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2279}, 1), px_int(0LL)))) {
             px_srcline(1948);
             (void)(px_call(px_get_global("panic"), (LXValue[]){px_str("bc_emit Break 不在循环内")}, 1));
         }
         px_srcline(1949);
-        _v2273 = px_index(_v2272, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2272}, 1), px_int(1LL)));
+        _v2280 = px_index(_v2279, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2279}, 1), px_int(1LL)));
         px_srcline(1950);
-        _v2274 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2255, px_str("bc"))}, 1);
+        _v2281 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2262, px_str("bc"))}, 1);
         px_srcline(1951);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(1952);
-        (void)(px_method(px_index(_v2273, px_str("breaks")), "append", (LXValue[]){_v2274}, 1));
+        (void)(px_method(px_index(_v2280, px_str("breaks")), "append", (LXValue[]){_v2281}, 1));
         px_srcline(1953);
         return px_null();
     }
     px_srcline(1954);
-    if (px_is_truthy(px_eq(_v2256, px_str("Continue")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Continue")))) {
         px_srcline(1956);
-        _v2272 = px_index(_v2255, px_str("loops"));
+        _v2279 = px_index(_v2262, px_str("loops"));
         px_srcline(1957);
-        if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2272}, 1), px_int(0LL)))) {
+        if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2279}, 1), px_int(0LL)))) {
             px_srcline(1958);
             (void)(px_call(px_get_global("panic"), (LXValue[]){px_str("bc_emit Continue 不在循环内")}, 1));
         }
         px_srcline(1959);
-        _v2273 = px_index(_v2272, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2272}, 1), px_int(1LL)));
+        _v2280 = px_index(_v2279, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2279}, 1), px_int(1LL)));
         px_srcline(1960);
-        _v2274 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2255, px_str("bc"))}, 1);
+        _v2281 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2262, px_str("bc"))}, 1);
         px_srcline(1961);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(1962);
-        (void)(px_method(px_index(_v2273, px_str("conts")), "append", (LXValue[]){_v2274}, 1));
+        (void)(px_method(px_index(_v2280, px_str("conts")), "append", (LXValue[]){_v2281}, 1));
         px_srcline(1963);
         return px_null();
     }
     px_srcline(1964);
-    if (px_is_truthy(px_eq(_v2256, px_str("Empty")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Empty")))) {
         px_srcline(1965);
         return px_null();
     }
     px_srcline(1966);
-    if (px_is_truthy(px_eq(_v2256, px_str("TypeConst")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("TypeConst")))) {
         px_srcline(1968);
         return px_null();
     }
     px_srcline(1969);
-    if (px_is_truthy(px_eq(_v2256, px_str("ChanDecl")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("ChanDecl")))) {
         px_srcline(1971);
-        _v2257 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2254, px_int(1LL))}, 1);
+        _v2264 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2261, px_int(1LL))}, 1);
         px_srcline(1972);
-        _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+        _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
         px_srcline(1973);
-        _v2268 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+        _v2275 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
         px_srcline(1974);
-        _v2275 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("chan")}, 2);
+        _v2282 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("chan")}, 2);
         px_srcline(1975);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("GETG"), _v2268, _v2275, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("GETG"), _v2275, _v2282, px_int(0LL)}, 5));
         px_srcline(1976);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("CALL"), _v2258, _v2268, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("CALL"), _v2265, _v2275, px_int(0LL)}, 5));
         px_srcline(1977);
-        if (px_is_truthy(px_index(_v2255, px_str("is_top")))) {
+        if (px_is_truthy(px_index(_v2262, px_str("is_top")))) {
             px_srcline(1978);
-            _v2259 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2257}, 2);
+            _v2266 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2264}, 2);
             px_srcline(1979);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("SETG"), _v2259, _v2258, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("SETG"), _v2266, _v2265, px_int(0LL)}, 5));
         }
         else {
             px_srcline(1981);
-            _v2262 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2255, _v2257}, 2);
+            _v2269 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2262, _v2264}, 2);
             px_srcline(1982);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("MOV"), _v2262, _v2258, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("MOV"), _v2269, _v2265, px_int(0LL)}, 5));
         }
         px_srcline(1983);
         return px_null();
     }
     px_srcline(1984);
-    if (px_is_truthy(px_eq(_v2256, px_str("Send")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Send")))) {
         px_srcline(1986);
-        _v2276 = px_list_n((LXValue[]){px_index(_v2254, px_int(2LL))}, 1);
+        _v2283 = px_list_n((LXValue[]){px_index(_v2261, px_int(2LL))}, 1);
         px_srcline(1987);
-        (void)(px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){px_index(_v2254, px_int(1LL)), px_str("send"), _v2276, px_neg(px_int(1LL)), _v2255}, 5));
+        (void)(px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){px_index(_v2261, px_int(1LL)), px_str("send"), _v2283, px_neg(px_int(1LL)), _v2262}, 5));
         px_srcline(1988);
         return px_null();
     }
     px_srcline(1989);
-    if (px_is_truthy(px_eq(_v2256, px_str("Recv")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Recv")))) {
         px_srcline(1991);
-        (void)(px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){px_index(_v2254, px_int(1LL)), px_str("recv"), px_list_n((LXValue[]){}, 0), px_neg(px_int(1LL)), _v2255}, 5));
+        (void)(px_call(px_get_global("bc_emit_methodcall"), (LXValue[]){px_index(_v2261, px_int(1LL)), px_str("recv"), px_list_n((LXValue[]){}, 0), px_neg(px_int(1LL)), _v2262}, 5));
         px_srcline(1992);
         return px_null();
     }
     px_srcline(1993);
-    if (px_is_truthy(px_eq(_v2256, px_str("Spawn")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Spawn")))) {
         px_srcline(1996);
-        _v2277 = px_index(_v2254, px_int(1LL));
+        _v2284 = px_index(_v2261, px_int(1LL));
         px_srcline(1997);
-        if (px_is_truthy(({ LXValue _t2295 = px_eq(px_index(_v2277, px_int(0LL)), px_str("Call")); px_is_truthy(_t2295) ? px_eq(px_index(px_index(_v2277, px_int(1LL)), px_int(0LL)), px_str("Var")) : _t2295; }))) {
+        if (px_is_truthy(({ LXValue _t2302 = px_eq(px_index(_v2284, px_int(0LL)), px_str("Call")); px_is_truthy(_t2302) ? px_eq(px_index(px_index(_v2284, px_int(1LL)), px_int(0LL)), px_str("Var")) : _t2302; }))) {
             px_srcline(1998);
-            _v2278 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2277, px_int(1LL)), px_int(1LL))}, 1);
+            _v2285 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2284, px_int(1LL)), px_int(1LL))}, 1);
             px_srcline(1999);
-            _v2279 = px_index(_v2277, px_int(2LL));
+            _v2286 = px_index(_v2284, px_int(2LL));
             px_srcline(2000);
-            _v2258 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+            _v2265 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
             px_srcline(2001);
-            _v2268 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+            _v2275 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
             px_srcline(2002);
-            _v2280 = px_add(px_int(1LL), px_call(px_get_global("len"), (LXValue[]){_v2279}, 1));
+            _v2287 = px_add(px_int(1LL), px_call(px_get_global("len"), (LXValue[]){_v2286}, 1));
             px_srcline(2003);
-            _v2281 = px_add(px_add(_v2268, px_int(1LL)), _v2280);
+            _v2288 = px_add(px_add(_v2275, px_int(1LL)), _v2287);
             px_srcline(2004);
-            while (px_is_truthy(px_lt(px_index(_v2255, px_str("next_slot")), _v2281))) {
+            while (px_is_truthy(px_lt(px_index(_v2262, px_str("next_slot")), _v2288))) {
                 px_srcline(2005);
-                (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1));
+                (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1));
             }
             px_srcline(2006);
-            _v2275 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("spawn")}, 2);
+            _v2282 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("spawn")}, 2);
             px_srcline(2007);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("GETG"), _v2268, _v2275, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("GETG"), _v2275, _v2282, px_int(0LL)}, 5));
             px_srcline(2008);
-            _v2282 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), _v2278}, 5);
+            _v2289 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("str"), px_int(0LL), px_float(0), _v2285}, 5);
             px_srcline(2009);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("LOADK"), px_add(_v2268, px_int(1LL)), _v2282, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("LOADK"), px_add(_v2275, px_int(1LL)), _v2289, px_int(0LL)}, 5));
             px_srcline(2010);
-            _v2283 = px_int(0LL);
+            _v2290 = px_int(0LL);
             px_srcline(2011);
-            while (px_is_truthy(px_lt(_v2283, px_call(px_get_global("len"), (LXValue[]){_v2279}, 1)))) {
+            while (px_is_truthy(px_lt(_v2290, px_call(px_get_global("len"), (LXValue[]){_v2286}, 1)))) {
                 px_srcline(2012);
-                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2279, _v2283), px_add(px_add(_v2268, px_int(2LL)), _v2283), _v2255}, 3));
+                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(_v2286, _v2290), px_add(px_add(_v2275, px_int(2LL)), _v2290), _v2262}, 3));
                 px_srcline(2013);
-                 _v2283 = px_add(_v2283, px_int(1LL));
+                 _v2290 = px_add(_v2290, px_int(1LL));
             }
             px_srcline(2014);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("CALL"), _v2258, _v2268, _v2280}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("CALL"), _v2265, _v2275, _v2287}, 5));
             px_srcline(2015);
             return px_null();
         }
         px_srcline(2020);
-        _v2284 = px_index(_v2254, px_int(2LL));
+        _v2291 = px_index(_v2261, px_int(2LL));
         px_srcline(2021);
-        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(({ LXValue _s238 = px_add(px_add(px_str("错误: "), px_call(px_get_global("str"), (LXValue[]){px_index(_v2284, px_int(0LL))}, 1)), px_str(":")); LXValue _s239 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2284, px_int(1LL))}, 1); px_add(_s238, _s239); }), px_str(": 语义错误 E2011: spawn 只支持「直接函数调用」：spawn f(args)；匿名函数请先绑定命名函数（def work(): ... 然后 spawn work()），多行匿名函数体见 M118"))}, 1));
+        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(({ LXValue _s238 = px_add(px_add(px_str("错误: "), px_call(px_get_global("str"), (LXValue[]){px_index(_v2291, px_int(0LL))}, 1)), px_str(":")); LXValue _s239 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2291, px_int(1LL))}, 1); px_add(_s238, _s239); }), px_str(": 语义错误 E2011: spawn 只支持「直接函数调用」：spawn f(args)；匿名函数请先绑定命名函数（def work(): ... 然后 spawn work()），多行匿名函数体见 M118"))}, 1));
         px_srcline(2022);
         (void)(px_call(px_get_global("exit"), (LXValue[]){px_int(1LL)}, 1));
     }
     px_srcline(2023);
-    if (px_is_truthy(px_eq(_v2256, px_str("Select")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("Select")))) {
         px_srcline(2024);
-        (void)(px_call(px_get_global("bc_emit_select"), (LXValue[]){_v2254, _v2255}, 2));
+        (void)(px_call(px_get_global("bc_emit_select"), (LXValue[]){_v2261, _v2262}, 2));
         px_srcline(2025);
         return px_null();
     }
     px_srcline(2026);
-    if (px_is_truthy(px_eq(_v2256, px_str("FuncDef")))) {
+    if (px_is_truthy(px_eq(_v2263, px_str("FuncDef")))) {
         px_srcline(2031);
-        _v2285 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2254, px_int(1LL))}, 1);
+        _v2292 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2261, px_int(1LL))}, 1);
         px_srcline(2032);
-        if (px_is_truthy(px_index(_v2255, px_str("is_top")))) {
+        if (px_is_truthy(px_index(_v2262, px_str("is_top")))) {
             px_srcline(2037);
-            _v2286 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+            _v2293 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
             px_srcline(2038);
-            (void)(px_call(px_get_global("bc_emit_closure"), (LXValue[]){px_index(_v2254, px_int(2LL)), px_list_n((LXValue[]){px_str("Block"), px_index(_v2254, px_int(4LL))}, 2), _v2286, _v2255}, 4));
+            (void)(px_call(px_get_global("bc_emit_closure"), (LXValue[]){px_index(_v2261, px_int(2LL)), px_list_n((LXValue[]){px_str("Block"), px_index(_v2261, px_int(4LL))}, 2), _v2293, _v2262}, 4));
             px_srcline(2039);
-            _v2287 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2285}, 2);
+            _v2294 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), _v2292}, 2);
             px_srcline(2040);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2255, px_str("SETG"), _v2287, _v2286, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2262, px_str("SETG"), _v2294, _v2293, px_int(0LL)}, 5));
             px_srcline(2041);
             return px_null();
         }
         px_srcline(2042);
-        _v2288 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2255, _v2285}, 2);
+        _v2295 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2262, _v2292}, 2);
         px_srcline(2043);
-        _v2289 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2255}, 1);
+        _v2296 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2262}, 1);
         px_srcline(2044);
-        (void)(px_call(px_get_global("bc_emit_closure"), (LXValue[]){px_index(_v2254, px_int(2LL)), px_list_n((LXValue[]){px_str("Block"), px_index(_v2254, px_int(4LL))}, 2), _v2289, _v2255}, 4));
+        (void)(px_call(px_get_global("bc_emit_closure"), (LXValue[]){px_index(_v2261, px_int(2LL)), px_list_n((LXValue[]){px_str("Block"), px_index(_v2261, px_int(4LL))}, 2), _v2296, _v2262}, 4));
         px_srcline(2045);
-        (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2255, _v2285, _v2288, _v2289}, 4));
+        (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2262, _v2292, _v2295, _v2296}, 4));
         px_srcline(2047);
-        px_index_set(px_index(_v2255, px_str("inited")), _v2285, px_int(1LL));
+        px_index_set(px_index(_v2262, px_str("inited")), _v2292, px_int(1LL));
         px_srcline(2048);
         return px_null();
     }
     px_srcline(2049);
-    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit_stmt 未实现: "), px_call(px_get_global("str"), (LXValue[]){_v2254}, 1))}, 1));
-px_err_2290:
-    if (px_err_2290_proped) return px_err_2290_val;
+    (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit_stmt 未实现: "), px_call(px_get_global("str"), (LXValue[]){_v2261}, 1))}, 1));
+px_err_2297:
+    if (px_err_2297_proped) return px_err_2297_val;
     return px_null();
 }
 
@@ -18732,15 +18762,8 @@ static LXValue fn_bc_emit_select(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_select");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_select", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_select", 2, nargs);
-    LXValue _v2296 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2297 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2298 = px_uninit();
-    LXValue _v2299 = px_uninit();
-    LXValue _v2300 = px_uninit();
-    LXValue _v2301 = px_uninit();
-    LXValue _v2302 = px_uninit();
-    LXValue _v2303 = px_uninit();
-    LXValue _v2304 = px_uninit();
+    LXValue _v2303 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2304 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2305 = px_uninit();
     LXValue _v2306 = px_uninit();
     LXValue _v2307 = px_uninit();
@@ -18760,148 +18783,155 @@ static LXValue fn_bc_emit_select(LXValue* args, int nargs, void* ctx) {
     LXValue _v2321 = px_uninit();
     LXValue _v2322 = px_uninit();
     LXValue _v2323 = px_uninit();
-    LXValue px_err_2324_val = px_null();
-    int px_err_2324_proped = 0;
+    LXValue _v2324 = px_uninit();
+    LXValue _v2325 = px_uninit();
+    LXValue _v2326 = px_uninit();
+    LXValue _v2327 = px_uninit();
+    LXValue _v2328 = px_uninit();
+    LXValue _v2329 = px_uninit();
+    LXValue _v2330 = px_uninit();
+    LXValue px_err_2331_val = px_null();
+    int px_err_2331_proped = 0;
     px_srcline(2057);
-    _v2298 = px_index(_v2296, px_int(1LL));
+    _v2305 = px_index(_v2303, px_int(1LL));
     px_srcline(2058);
-    _v2299 = px_index(_v2296, px_int(2LL));
+    _v2306 = px_index(_v2303, px_int(2LL));
     px_srcline(2059);
-    _v2300 = px_call(px_get_global("len"), (LXValue[]){_v2298}, 1);
+    _v2307 = px_call(px_get_global("len"), (LXValue[]){_v2305}, 1);
     px_srcline(2062);
-    _v2301 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2297}, 1);
+    _v2308 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2304}, 1);
     px_srcline(2064);
-    _v2302 = px_list_n((LXValue[]){}, 0);
+    _v2309 = px_list_n((LXValue[]){}, 0);
     px_srcline(2065);
-    _v2303 = px_int(0LL);
+    _v2310 = px_int(0LL);
     px_srcline(2066);
-    while (px_is_truthy(px_lt(_v2303, _v2300))) {
+    while (px_is_truthy(px_lt(_v2310, _v2307))) {
         px_srcline(2067);
-        _v2304 = px_index(px_index(_v2298, _v2303), px_int(1LL));
+        _v2311 = px_index(px_index(_v2305, _v2310), px_int(1LL));
         px_srcline(2069);
-        if (px_is_truthy(({ LXValue _t2325 = px_ne(px_index(_v2304, px_int(0LL)), px_str("Call")); px_is_truthy(_t2325) ? _t2325 : px_ne(px_index(px_index(_v2304, px_int(1LL)), px_int(0LL)), px_str("Field")); }))) {
+        if (px_is_truthy(({ LXValue _t2332 = px_ne(px_index(_v2311, px_int(0LL)), px_str("Call")); px_is_truthy(_t2332) ? _t2332 : px_ne(px_index(px_index(_v2311, px_int(1LL)), px_int(0LL)), px_str("Field")); }))) {
             px_srcline(2070);
-            (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit select case 仅支持 ch.recv(): "), px_call(px_get_global("str"), (LXValue[]){_v2304}, 1))}, 1));
+            (void)(px_call(px_get_global("panic"), (LXValue[]){px_add(px_str("bc_emit select case 仅支持 ch.recv(): "), px_call(px_get_global("str"), (LXValue[]){_v2311}, 1))}, 1));
         }
         px_srcline(2071);
-        _v2305 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2297}, 1);
+        _v2312 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2304}, 1);
         px_srcline(2072);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2304, px_int(1LL)), px_int(1LL)), _v2305, _v2297}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2311, px_int(1LL)), px_int(1LL)), _v2312, _v2304}, 3));
         px_srcline(2073);
-        (void)(px_method(_v2302, "append", (LXValue[]){_v2305}, 1));
+        (void)(px_method(_v2309, "append", (LXValue[]){_v2312}, 1));
         px_srcline(2074);
-         _v2303 = px_add(_v2303, px_int(1LL));
+         _v2310 = px_add(_v2310, px_int(1LL));
     }
     px_srcline(2075);
-    _v2306 = px_neg(px_int(1LL));
+    _v2313 = px_neg(px_int(1LL));
     px_srcline(2076);
-    if (px_is_truthy(px_eq(_v2299, px_null()))) {
+    if (px_is_truthy(px_eq(_v2306, px_null()))) {
         px_srcline(2077);
-         _v2306 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1);
+         _v2313 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1);
     }
     px_srcline(2078);
-    _v2307 = px_neg(px_int(1LL));
+    _v2314 = px_neg(px_int(1LL));
     px_srcline(2079);
-    _v2308 = px_list_n((LXValue[]){}, 0);
+    _v2315 = px_list_n((LXValue[]){}, 0);
     px_srcline(2080);
-    _v2309 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("chan_try_recv")}, 2);
+    _v2316 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("chan_try_recv")}, 2);
     px_srcline(2081);
-    _v2310 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("null"), px_int(0LL), px_float(0), px_str("")}, 5);
+    _v2317 = px_call(px_get_global("bc_k_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("k_pool")), px_str("null"), px_int(0LL), px_float(0), px_str("")}, 5);
     px_srcline(2082);
-     _v2303 = px_int(0LL);
+     _v2310 = px_int(0LL);
     px_srcline(2083);
-    while (px_is_truthy(px_lt(_v2303, _v2300))) {
+    while (px_is_truthy(px_lt(_v2310, _v2307))) {
         px_srcline(2084);
-        if (px_is_truthy(px_ge(_v2307, px_int(0LL)))) {
+        if (px_is_truthy(px_ge(_v2314, px_int(0LL)))) {
             px_srcline(2085);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2297, _v2307, px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2304, _v2314, px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1)}, 3));
         }
         px_srcline(2087);
-        _v2311 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2297}, 1);
+        _v2318 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2304}, 1);
         px_srcline(2088);
-        _v2312 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2297}, 1);
+        _v2319 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2304}, 1);
         px_srcline(2089);
-        _v2313 = px_add(_v2311, px_int(2LL));
+        _v2320 = px_add(_v2318, px_int(2LL));
         px_srcline(2090);
-        while (px_is_truthy(px_lt(px_index(_v2297, px_str("next_slot")), _v2313))) {
+        while (px_is_truthy(px_lt(px_index(_v2304, px_str("next_slot")), _v2320))) {
             px_srcline(2091);
-            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2297}, 1));
+            (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2304}, 1));
         }
         px_srcline(2092);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("GETG"), _v2311, _v2309, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("GETG"), _v2318, _v2316, px_int(0LL)}, 5));
         px_srcline(2093);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("MOV"), px_add(_v2311, px_int(1LL)), px_index(_v2302, _v2303), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("MOV"), px_add(_v2318, px_int(1LL)), px_index(_v2309, _v2310), px_int(0LL)}, 5));
         px_srcline(2094);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("CALL"), _v2312, _v2311, px_int(1LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("CALL"), _v2319, _v2318, px_int(1LL)}, 5));
         px_srcline(2096);
-        _v2314 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2297}, 1);
+        _v2321 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2304}, 1);
         px_srcline(2097);
-        _v2315 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2297}, 1);
+        _v2322 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2304}, 1);
         px_srcline(2098);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("LOADK"), _v2315, _v2310, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("LOADK"), _v2322, _v2317, px_int(0LL)}, 5));
         px_srcline(2099);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("EQ"), _v2314, _v2312, _v2315}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("EQ"), _v2321, _v2319, _v2322}, 5));
         px_srcline(2100);
-        _v2316 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1);
+        _v2323 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1);
         px_srcline(2101);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("JMPT"), _v2314, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("JMPT"), _v2321, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(2102);
-         _v2307 = _v2316;
+         _v2314 = _v2323;
         px_srcline(2104);
-        _v2317 = px_index(px_index(_v2298, _v2303), px_int(0LL));
+        _v2324 = px_index(px_index(_v2305, _v2310), px_int(0LL));
         px_srcline(2105);
-        if (px_is_truthy(px_ne(_v2317, px_null()))) {
+        if (px_is_truthy(px_ne(_v2324, px_null()))) {
             px_srcline(2106);
-            _v2318 = px_call(px_get_global("rust_unescape"), (LXValue[]){_v2317}, 1);
+            _v2325 = px_call(px_get_global("rust_unescape"), (LXValue[]){_v2324}, 1);
             px_srcline(2107);
-            _v2319 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2297, _v2318}, 2);
+            _v2326 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2304, _v2325}, 2);
             px_srcline(2108);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("MOV"), _v2319, _v2312, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("MOV"), _v2326, _v2319, px_int(0LL)}, 5));
         }
         px_srcline(2109);
-        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){px_index(px_index(_v2298, _v2303), px_int(2LL)), _v2297}, 2));
+        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){px_index(px_index(_v2305, _v2310), px_int(2LL)), _v2304}, 2));
         px_srcline(2110);
-        _v2320 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1);
+        _v2327 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1);
         px_srcline(2111);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(2112);
-        (void)(px_method(_v2308, "append", (LXValue[]){_v2320}, 1));
+        (void)(px_method(_v2315, "append", (LXValue[]){_v2327}, 1));
         px_srcline(2113);
-         _v2303 = px_add(_v2303, px_int(1LL));
+         _v2310 = px_add(_v2310, px_int(1LL));
     }
     px_srcline(2115);
-    if (px_is_truthy(px_ge(_v2307, px_int(0LL)))) {
+    if (px_is_truthy(px_ge(_v2314, px_int(0LL)))) {
         px_srcline(2116);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2297, _v2307, px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1)}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2304, _v2314, px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1)}, 3));
     }
     px_srcline(2117);
-    if (px_is_truthy(px_ne(_v2299, px_null()))) {
+    if (px_is_truthy(px_ne(_v2306, px_null()))) {
         px_srcline(2118);
-        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2299, _v2297}, 2));
+        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2306, _v2304}, 2));
     }
     else {
         px_srcline(2120);
-        _v2321 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1);
+        _v2328 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1);
         px_srcline(2121);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2297, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2304, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(2122);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2297, _v2321, _v2306}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2304, _v2328, _v2313}, 3));
     }
     px_srcline(2123);
-    _v2322 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2297, px_str("bc"))}, 1);
+    _v2329 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2304, px_str("bc"))}, 1);
     px_srcline(2124);
-    _v2323 = px_int(0LL);
+    _v2330 = px_int(0LL);
     px_srcline(2125);
-    while (px_is_truthy(px_lt(_v2323, px_call(px_get_global("len"), (LXValue[]){_v2308}, 1)))) {
+    while (px_is_truthy(px_lt(_v2330, px_call(px_get_global("len"), (LXValue[]){_v2315}, 1)))) {
         px_srcline(2126);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2297, px_index(_v2308, _v2323), _v2322}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2304, px_index(_v2315, _v2330), _v2329}, 3));
         px_srcline(2127);
-         _v2323 = px_add(_v2323, px_int(1LL));
+         _v2330 = px_add(_v2330, px_int(1LL));
     }
     px_srcline(2128);
-    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2297, _v2301}, 2));
-px_err_2324:
-    if (px_err_2324_proped) return px_err_2324_val;
+    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2304, _v2308}, 2));
+px_err_2331:
+    if (px_err_2331_proped) return px_err_2331_val;
     return px_null();
 }
 
@@ -18910,33 +18940,33 @@ static LXValue fn_bc_emit_stmt(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_stmt");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_stmt", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_stmt", 2, nargs);
-    LXValue _v2326 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2327 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2328 = px_uninit();
-    LXValue _v2329 = px_uninit();
-    LXValue px_err_2330_val = px_null();
-    int px_err_2330_proped = 0;
+    LXValue _v2333 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2334 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2335 = px_uninit();
+    LXValue _v2336 = px_uninit();
+    LXValue px_err_2337_val = px_null();
+    int px_err_2337_proped = 0;
     px_srcline(2131);
-    _v2328 = px_int(0LL);
+    _v2335 = px_int(0LL);
     px_srcline(2132);
-    if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){_v2326}, 1), px_int(0LL)))) {
+    if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){_v2333}, 1), px_int(0LL)))) {
         px_srcline(2133);
-        _v2329 = px_index(_v2326, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2326}, 1), px_int(1LL)));
+        _v2336 = px_index(_v2333, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2333}, 1), px_int(1LL)));
         px_srcline(2134);
-        if (px_is_truthy(({ LXValue _t2332 = ({ LXValue _t2331 = px_eq(px_call(px_get_global("type"), (LXValue[]){_v2329}, 1), px_str("list")); px_is_truthy(_t2331) ? px_ge(px_call(px_get_global("len"), (LXValue[]){_v2329}, 1), px_int(1LL)) : _t2331; }); px_is_truthy(_t2332) ? px_eq(px_call(px_get_global("type"), (LXValue[]){px_index(_v2329, px_int(0LL))}, 1), px_str("int")) : _t2332; }))) {
+        if (px_is_truthy(({ LXValue _t2339 = ({ LXValue _t2338 = px_eq(px_call(px_get_global("type"), (LXValue[]){_v2336}, 1), px_str("list")); px_is_truthy(_t2338) ? px_ge(px_call(px_get_global("len"), (LXValue[]){_v2336}, 1), px_int(1LL)) : _t2338; }); px_is_truthy(_t2339) ? px_eq(px_call(px_get_global("type"), (LXValue[]){px_index(_v2336, px_int(0LL))}, 1), px_str("int")) : _t2339; }))) {
             px_srcline(2135);
-             _v2328 = px_index(_v2329, px_int(0LL));
+             _v2335 = px_index(_v2336, px_int(0LL));
         }
     }
     px_srcline(2136);
-    if (px_is_truthy(px_gt(_v2328, px_int(0LL)))) {
+    if (px_is_truthy(px_gt(_v2335, px_int(0LL)))) {
         px_srcline(2137);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2327, px_str("SRCLINE"), px_int(0LL), _v2328, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2334, px_str("SRCLINE"), px_int(0LL), _v2335, px_int(0LL)}, 5));
     }
     px_srcline(2138);
-    (void)(px_call(px_get_global("bc_emit_stmt_inner"), (LXValue[]){_v2326, _v2327}, 2));
-px_err_2330:
-    if (px_err_2330_proped) return px_err_2330_val;
+    (void)(px_call(px_get_global("bc_emit_stmt_inner"), (LXValue[]){_v2333, _v2334}, 2));
+px_err_2337:
+    if (px_err_2337_proped) return px_err_2337_val;
     return px_null();
 }
 
@@ -18945,22 +18975,22 @@ static LXValue fn_bc_emit_stmts(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_stmts");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_stmts", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_stmts", 2, nargs);
-    LXValue _v2333 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2334 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2335 = px_uninit();
-    LXValue px_err_2336_val = px_null();
-    int px_err_2336_proped = 0;
+    LXValue _v2340 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2341 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2342 = px_uninit();
+    LXValue px_err_2343_val = px_null();
+    int px_err_2343_proped = 0;
     px_srcline(2140);
-    _v2335 = px_int(0LL);
+    _v2342 = px_int(0LL);
     px_srcline(2141);
-    while (px_is_truthy(px_lt(_v2335, px_call(px_get_global("len"), (LXValue[]){_v2333}, 1)))) {
+    while (px_is_truthy(px_lt(_v2342, px_call(px_get_global("len"), (LXValue[]){_v2340}, 1)))) {
         px_srcline(2142);
-        (void)(px_call(px_get_global("bc_emit_stmt"), (LXValue[]){px_index(_v2333, _v2335), _v2334}, 2));
+        (void)(px_call(px_get_global("bc_emit_stmt"), (LXValue[]){px_index(_v2340, _v2342), _v2341}, 2));
         px_srcline(2143);
-         _v2335 = px_add(_v2335, px_int(1LL));
+         _v2342 = px_add(_v2342, px_int(1LL));
     }
-px_err_2336:
-    if (px_err_2336_proped) return px_err_2336_val;
+px_err_2343:
+    if (px_err_2343_proped) return px_err_2343_val;
     return px_null();
 }
 
@@ -18969,15 +18999,8 @@ static LXValue fn_bc_emit_if(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_if");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_if", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_if", 2, nargs);
-    LXValue _v2337 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2338 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2339 = px_uninit();
-    LXValue _v2340 = px_uninit();
-    LXValue _v2341 = px_uninit();
-    LXValue _v2342 = px_uninit();
-    LXValue _v2343 = px_uninit();
-    LXValue _v2344 = px_uninit();
-    LXValue _v2345 = px_uninit();
+    LXValue _v2344 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2345 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2346 = px_uninit();
     LXValue _v2347 = px_uninit();
     LXValue _v2348 = px_uninit();
@@ -18985,95 +19008,102 @@ static LXValue fn_bc_emit_if(LXValue* args, int nargs, void* ctx) {
     LXValue _v2350 = px_uninit();
     LXValue _v2351 = px_uninit();
     LXValue _v2352 = px_uninit();
-    LXValue px_err_2353_val = px_null();
-    int px_err_2353_proped = 0;
+    LXValue _v2353 = px_uninit();
+    LXValue _v2354 = px_uninit();
+    LXValue _v2355 = px_uninit();
+    LXValue _v2356 = px_uninit();
+    LXValue _v2357 = px_uninit();
+    LXValue _v2358 = px_uninit();
+    LXValue _v2359 = px_uninit();
+    LXValue px_err_2360_val = px_null();
+    int px_err_2360_proped = 0;
     px_srcline(2149);
-    _v2339 = px_index(_v2337, px_int(1LL));
+    _v2346 = px_index(_v2344, px_int(1LL));
     px_srcline(2150);
-    _v2340 = px_index(_v2337, px_int(2LL));
+    _v2347 = px_index(_v2344, px_int(2LL));
     px_srcline(2151);
-    _v2341 = px_call(px_get_global("len"), (LXValue[]){_v2339}, 1);
+    _v2348 = px_call(px_get_global("len"), (LXValue[]){_v2346}, 1);
     px_srcline(2154);
-    _v2342 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2338}, 1);
+    _v2349 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2345}, 1);
     px_srcline(2155);
-    _v2343 = px_null();
+    _v2350 = px_null();
     px_srcline(2156);
-    _v2344 = px_list_n((LXValue[]){}, 0);
+    _v2351 = px_list_n((LXValue[]){}, 0);
     px_srcline(2157);
-    _v2345 = px_int(0LL);
+    _v2352 = px_int(0LL);
     px_srcline(2158);
-    while (px_is_truthy(px_lt(_v2345, _v2341))) {
+    while (px_is_truthy(px_lt(_v2352, _v2348))) {
         px_srcline(2159);
-        _v2346 = px_index(px_index(_v2339, _v2345), px_int(0LL));
+        _v2353 = px_index(px_index(_v2346, _v2352), px_int(0LL));
         px_srcline(2160);
-        _v2347 = px_index(px_index(_v2339, _v2345), px_int(1LL));
+        _v2354 = px_index(px_index(_v2346, _v2352), px_int(1LL));
         px_srcline(2161);
-        (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2338, _v2342}, 2));
+        (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2345, _v2349}, 2));
         px_srcline(2162);
-        _v2348 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2338}, 1);
+        _v2355 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2345}, 1);
         px_srcline(2163);
-        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2346, _v2348, _v2338}, 3));
+        (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2353, _v2355, _v2345}, 3));
         px_srcline(2164);
-        _v2349 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2338, px_str("bc"))}, 1);
+        _v2356 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2345, px_str("bc"))}, 1);
         px_srcline(2165);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2338, px_str("JMPF"), _v2348, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2345, px_str("JMPF"), _v2355, px_int(0LL), px_int(0LL)}, 5));
         px_srcline(2166);
-        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2347, _v2338}, 2));
+        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2354, _v2345}, 2));
         px_srcline(2167);
-        if (px_is_truthy(px_eq(_v2343, px_null()))) {
+        if (px_is_truthy(px_eq(_v2350, px_null()))) {
             px_srcline(2168);
-             _v2343 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2338}, 1);
+             _v2350 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2345}, 1);
         }
         else {
             px_srcline(2170);
-             _v2343 = px_call(px_get_global("bc_inited_intersect"), (LXValue[]){_v2343, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2338}, 1)}, 2);
+             _v2350 = px_call(px_get_global("bc_inited_intersect"), (LXValue[]){_v2350, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2345}, 1)}, 2);
         }
         px_srcline(2171);
-        if (px_is_truthy(({ LXValue _t2354 = px_lt(_v2345, px_sub(_v2341, px_int(1LL))); px_is_truthy(_t2354) ? _t2354 : px_ne(_v2340, px_null()); }))) {
+        if (px_is_truthy(({ LXValue _t2361 = px_lt(_v2352, px_sub(_v2348, px_int(1LL))); px_is_truthy(_t2361) ? _t2361 : px_ne(_v2347, px_null()); }))) {
             px_srcline(2174);
-            _v2350 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2338, px_str("bc"))}, 1);
+            _v2357 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2345, px_str("bc"))}, 1);
             px_srcline(2175);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2338, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2345, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
             px_srcline(2176);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2338, _v2349, px_call(px_get_global("len"), (LXValue[]){px_index(_v2338, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2345, _v2356, px_call(px_get_global("len"), (LXValue[]){px_index(_v2345, px_str("bc"))}, 1)}, 3));
             px_srcline(2177);
-            (void)(px_method(_v2344, "append", (LXValue[]){_v2350}, 1));
+            (void)(px_method(_v2351, "append", (LXValue[]){_v2357}, 1));
         }
         else {
             px_srcline(2180);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2338, _v2349, px_call(px_get_global("len"), (LXValue[]){px_index(_v2338, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2345, _v2356, px_call(px_get_global("len"), (LXValue[]){px_index(_v2345, px_str("bc"))}, 1)}, 3));
         }
         px_srcline(2181);
-         _v2345 = px_add(_v2345, px_int(1LL));
+         _v2352 = px_add(_v2352, px_int(1LL));
     }
     px_srcline(2182);
-    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2338, _v2342}, 2));
+    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2345, _v2349}, 2));
     px_srcline(2183);
-    if (px_is_truthy(px_ne(_v2340, px_null()))) {
+    if (px_is_truthy(px_ne(_v2347, px_null()))) {
         px_srcline(2184);
-        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2340, _v2338}, 2));
+        (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2347, _v2345}, 2));
         px_srcline(2185);
-         _v2343 = px_call(px_get_global("bc_inited_intersect"), (LXValue[]){_v2343, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2338}, 1)}, 2);
+         _v2350 = px_call(px_get_global("bc_inited_intersect"), (LXValue[]){_v2350, px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2345}, 1)}, 2);
     }
     else {
         px_srcline(2187);
-         _v2343 = px_call(px_get_global("bc_inited_intersect"), (LXValue[]){_v2343, _v2342}, 2);
+         _v2350 = px_call(px_get_global("bc_inited_intersect"), (LXValue[]){_v2350, _v2349}, 2);
     }
     px_srcline(2188);
-    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2338, _v2343}, 2));
+    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2345, _v2350}, 2));
     px_srcline(2189);
-    _v2351 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2338, px_str("bc"))}, 1);
+    _v2358 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2345, px_str("bc"))}, 1);
     px_srcline(2190);
-    _v2352 = px_int(0LL);
+    _v2359 = px_int(0LL);
     px_srcline(2191);
-    while (px_is_truthy(px_lt(_v2352, px_call(px_get_global("len"), (LXValue[]){_v2344}, 1)))) {
+    while (px_is_truthy(px_lt(_v2359, px_call(px_get_global("len"), (LXValue[]){_v2351}, 1)))) {
         px_srcline(2192);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2338, px_index(_v2344, _v2352), _v2351}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2345, px_index(_v2351, _v2359), _v2358}, 3));
         px_srcline(2193);
-         _v2352 = px_add(_v2352, px_int(1LL));
+         _v2359 = px_add(_v2359, px_int(1LL));
     }
-px_err_2353:
-    if (px_err_2353_proped) return px_err_2353_val;
+px_err_2360:
+    if (px_err_2360_proped) return px_err_2360_val;
     return px_null();
 }
 
@@ -19082,80 +19112,80 @@ static LXValue fn_bc_emit_while(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_while");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_while", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_while", 2, nargs);
-    LXValue _v2355 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2356 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2357 = px_uninit();
-    LXValue _v2358 = px_uninit();
-    LXValue _v2359 = px_uninit();
-    LXValue _v2360 = px_uninit();
-    LXValue _v2361 = px_uninit();
-    LXValue _v2362 = px_uninit();
-    LXValue _v2363 = px_uninit();
+    LXValue _v2362 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2363 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2364 = px_uninit();
     LXValue _v2365 = px_uninit();
     LXValue _v2366 = px_uninit();
-    LXValue px_err_2367_val = px_null();
-    int px_err_2367_proped = 0;
+    LXValue _v2367 = px_uninit();
+    LXValue _v2368 = px_uninit();
+    LXValue _v2369 = px_uninit();
+    LXValue _v2370 = px_uninit();
+    LXValue _v2371 = px_uninit();
+    LXValue _v2372 = px_uninit();
+    LXValue _v2373 = px_uninit();
+    LXValue px_err_2374_val = px_null();
+    int px_err_2374_proped = 0;
     px_srcline(2198);
-    _v2357 = px_index(_v2355, px_int(1LL));
+    _v2364 = px_index(_v2362, px_int(1LL));
     px_srcline(2199);
-    _v2358 = px_index(_v2355, px_int(2LL));
+    _v2365 = px_index(_v2362, px_int(2LL));
     px_srcline(2201);
-    _v2359 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2356}, 1);
+    _v2366 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2363}, 1);
     px_srcline(2202);
-    _v2360 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2356, px_str("bc"))}, 1);
+    _v2367 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2363, px_str("bc"))}, 1);
     px_srcline(2203);
-    _v2361 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2356}, 1);
+    _v2368 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2363}, 1);
     px_srcline(2204);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2357, _v2361, _v2356}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2364, _v2368, _v2363}, 3));
     px_srcline(2205);
-    _v2362 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2356, px_str("bc"))}, 1);
+    _v2369 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2363, px_str("bc"))}, 1);
     px_srcline(2206);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2356, px_str("JMPF"), _v2361, px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2363, px_str("JMPF"), _v2368, px_int(0LL), px_int(0LL)}, 5));
     px_srcline(2207);
-    _v2363 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+    _v2370 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
     px_srcline(2208);
-    px_index_set(_v2363, px_str("breaks"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v2370, px_str("breaks"), px_list_n((LXValue[]){}, 0));
     px_srcline(2209);
-    px_index_set(_v2363, px_str("conts"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v2370, px_str("conts"), px_list_n((LXValue[]){}, 0));
     px_srcline(2210);
-    (void)(px_method(px_index(_v2356, px_str("loops")), "push", (LXValue[]){_v2363}, 1));
+    (void)(px_method(px_index(_v2363, px_str("loops")), "push", (LXValue[]){_v2370}, 1));
     px_srcline(2211);
-    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2358, _v2356}, 2));
+    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2365, _v2363}, 2));
     px_srcline(2212);
-    (void)(px_method(px_index(_v2356, px_str("loops")), "pop", (LXValue[]){}, 0));
+    (void)(px_method(px_index(_v2363, px_str("loops")), "pop", (LXValue[]){}, 0));
     px_srcline(2213);
-    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2356, _v2359}, 2));
+    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2363, _v2366}, 2));
     px_srcline(2214);
-    _v2364 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2356, px_str("bc"))}, 1);
+    _v2371 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2363, px_str("bc"))}, 1);
     px_srcline(2215);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2356, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2363, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
     px_srcline(2216);
-    _v2365 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2356, px_str("bc"))}, 1);
+    _v2372 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2363, px_str("bc"))}, 1);
     px_srcline(2217);
-    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2356, _v2364, _v2360}, 3));
+    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2363, _v2371, _v2367}, 3));
     px_srcline(2218);
-    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2356, _v2362, _v2365}, 3));
+    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2363, _v2369, _v2372}, 3));
     px_srcline(2219);
-    _v2366 = px_int(0LL);
+    _v2373 = px_int(0LL);
     px_srcline(2220);
-    while (px_is_truthy(px_lt(_v2366, px_call(px_get_global("len"), (LXValue[]){px_index(_v2363, px_str("breaks"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2373, px_call(px_get_global("len"), (LXValue[]){px_index(_v2370, px_str("breaks"))}, 1)))) {
         px_srcline(2221);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2356, px_index(px_index(_v2363, px_str("breaks")), _v2366), _v2365}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2363, px_index(px_index(_v2370, px_str("breaks")), _v2373), _v2372}, 3));
         px_srcline(2222);
-         _v2366 = px_add(_v2366, px_int(1LL));
+         _v2373 = px_add(_v2373, px_int(1LL));
     }
     px_srcline(2223);
-     _v2366 = px_int(0LL);
+     _v2373 = px_int(0LL);
     px_srcline(2224);
-    while (px_is_truthy(px_lt(_v2366, px_call(px_get_global("len"), (LXValue[]){px_index(_v2363, px_str("conts"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2373, px_call(px_get_global("len"), (LXValue[]){px_index(_v2370, px_str("conts"))}, 1)))) {
         px_srcline(2225);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2356, px_index(px_index(_v2363, px_str("conts")), _v2366), _v2360}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2363, px_index(px_index(_v2370, px_str("conts")), _v2373), _v2367}, 3));
         px_srcline(2226);
-         _v2366 = px_add(_v2366, px_int(1LL));
+         _v2373 = px_add(_v2373, px_int(1LL));
     }
-px_err_2367:
-    if (px_err_2367_proped) return px_err_2367_val;
+px_err_2374:
+    if (px_err_2374_proped) return px_err_2374_val;
     return px_null();
 }
 
@@ -19164,31 +19194,31 @@ static LXValue fn_bc_for_names(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_for_names");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_for_names", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_for_names", 1, nargs);
-    LXValue _v2368 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2369 = px_uninit();
-    LXValue _v2370 = px_uninit();
-    LXValue px_err_2371_val = px_null();
-    int px_err_2371_proped = 0;
+    LXValue _v2375 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2376 = px_uninit();
+    LXValue _v2377 = px_uninit();
+    LXValue px_err_2378_val = px_null();
+    int px_err_2378_proped = 0;
     px_srcline(2235);
-    if (px_is_truthy(px_eq(px_call(px_get_global("type"), (LXValue[]){_v2368}, 1), px_str("string")))) {
+    if (px_is_truthy(px_eq(px_call(px_get_global("type"), (LXValue[]){_v2375}, 1), px_str("string")))) {
         px_srcline(2236);
-        return px_list_n((LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){_v2368}, 1)}, 1);
+        return px_list_n((LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){_v2375}, 1)}, 1);
     }
     px_srcline(2237);
-    _v2369 = px_list_n((LXValue[]){}, 0);
+    _v2376 = px_list_n((LXValue[]){}, 0);
     px_srcline(2238);
-    _v2370 = px_int(0LL);
+    _v2377 = px_int(0LL);
     px_srcline(2239);
-    while (px_is_truthy(px_lt(_v2370, px_call(px_get_global("len"), (LXValue[]){_v2368}, 1)))) {
+    while (px_is_truthy(px_lt(_v2377, px_call(px_get_global("len"), (LXValue[]){_v2375}, 1)))) {
         px_srcline(2240);
-        (void)(px_method(_v2369, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2368, _v2370)}, 1)}, 1));
+        (void)(px_method(_v2376, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2375, _v2377)}, 1)}, 1));
         px_srcline(2241);
-         _v2370 = px_add(_v2370, px_int(1LL));
+         _v2377 = px_add(_v2377, px_int(1LL));
     }
     px_srcline(2242);
-    return _v2369;
-px_err_2371:
-    if (px_err_2371_proped) return px_err_2371_val;
+    return _v2376;
+px_err_2378:
+    if (px_err_2378_proped) return px_err_2378_val;
     return px_null();
 }
 
@@ -19197,15 +19227,8 @@ static LXValue fn_bc_emit_for(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_for");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_for", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_for", 2, nargs);
-    LXValue _v2372 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2373 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2374 = px_uninit();
-    LXValue _v2375 = px_uninit();
-    LXValue _v2376 = px_uninit();
-    LXValue _v2377 = px_uninit();
-    LXValue _v2378 = px_uninit();
-    LXValue _v2379 = px_uninit();
-    LXValue _v2380 = px_uninit();
+    LXValue _v2379 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2380 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2381 = px_uninit();
     LXValue _v2382 = px_uninit();
     LXValue _v2383 = px_uninit();
@@ -19229,213 +19252,220 @@ static LXValue fn_bc_emit_for(LXValue* args, int nargs, void* ctx) {
     LXValue _v2401 = px_uninit();
     LXValue _v2402 = px_uninit();
     LXValue _v2403 = px_uninit();
-    LXValue px_err_2404_val = px_null();
-    int px_err_2404_proped = 0;
+    LXValue _v2404 = px_uninit();
+    LXValue _v2405 = px_uninit();
+    LXValue _v2406 = px_uninit();
+    LXValue _v2407 = px_uninit();
+    LXValue _v2408 = px_uninit();
+    LXValue _v2409 = px_uninit();
+    LXValue _v2410 = px_uninit();
+    LXValue px_err_2411_val = px_null();
+    int px_err_2411_proped = 0;
     px_srcline(2244);
-    _v2374 = px_call(px_get_global("bc_for_names"), (LXValue[]){px_index(_v2372, px_int(1LL))}, 1);
+    _v2381 = px_call(px_get_global("bc_for_names"), (LXValue[]){px_index(_v2379, px_int(1LL))}, 1);
     px_srcline(2245);
-    _v2375 = px_index(_v2372, px_int(2LL));
+    _v2382 = px_index(_v2379, px_int(2LL));
     px_srcline(2246);
-    _v2376 = px_index(_v2372, px_int(3LL));
+    _v2383 = px_index(_v2379, px_int(3LL));
     px_srcline(2255);
-    _v2377 = px_index(_v2373, px_str("is_top"));
+    _v2384 = px_index(_v2380, px_str("is_top"));
     px_srcline(2257);
-    _v2378 = px_list_n((LXValue[]){}, 0);
+    _v2385 = px_list_n((LXValue[]){}, 0);
     px_srcline(2258);
-    _v2379 = px_int(0LL);
+    _v2386 = px_int(0LL);
     px_srcline(2259);
-    while (px_is_truthy(px_lt(_v2379, px_call(px_get_global("len"), (LXValue[]){_v2374}, 1)))) {
+    while (px_is_truthy(px_lt(_v2386, px_call(px_get_global("len"), (LXValue[]){_v2381}, 1)))) {
         px_srcline(2260);
-        _v2380 = px_neg(px_int(1LL));
+        _v2387 = px_neg(px_int(1LL));
         px_srcline(2261);
-        if (px_is_truthy(_v2377)) {
+        if (px_is_truthy(_v2384)) {
             px_srcline(2262);
-             _v2380 = px_neg(px_int(1LL));
+             _v2387 = px_neg(px_int(1LL));
         }
-        else if (px_is_truthy(px_method(px_index(_v2373, px_str("smap")), "has", (LXValue[]){px_index(_v2374, _v2379)}, 1))) {
+        else if (px_is_truthy(px_method(px_index(_v2380, px_str("smap")), "has", (LXValue[]){px_index(_v2381, _v2386)}, 1))) {
             px_srcline(2264);
-             _v2380 = px_index(px_index(_v2373, px_str("smap")), px_index(_v2374, _v2379));
+             _v2387 = px_index(px_index(_v2380, px_str("smap")), px_index(_v2381, _v2386));
         }
         else {
             px_srcline(2266);
-             _v2380 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2373, px_index(_v2374, _v2379)}, 2);
+             _v2387 = px_call(px_get_global("bc_slot"), (LXValue[]){_v2380, px_index(_v2381, _v2386)}, 2);
         }
         px_srcline(2267);
-        (void)(px_method(_v2378, "append", (LXValue[]){_v2380}, 1));
+        (void)(px_method(_v2385, "append", (LXValue[]){_v2387}, 1));
         px_srcline(2268);
-         _v2379 = px_add(_v2379, px_int(1LL));
+         _v2386 = px_add(_v2386, px_int(1LL));
     }
     px_srcline(2270);
-    _v2381 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+    _v2388 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
     px_srcline(2271);
-    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2375, _v2381, _v2373}, 3));
+    (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){_v2382, _v2388, _v2380}, 3));
     px_srcline(2273);
-    _v2382 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+    _v2389 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
     px_srcline(2274);
-    _v2383 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+    _v2390 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
     px_srcline(2275);
-    while (px_is_truthy(px_lt(px_index(_v2373, px_str("next_slot")), px_add(_v2382, px_int(2LL))))) {
+    while (px_is_truthy(px_lt(px_index(_v2380, px_str("next_slot")), px_add(_v2389, px_int(2LL))))) {
         px_srcline(2276);
-        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1));
+        (void)(px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1));
     }
     px_srcline(2277);
-    _v2384 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("__iter_len")}, 2);
+    _v2391 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("__iter_len")}, 2);
     px_srcline(2278);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("GETG"), _v2382, _v2384, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("GETG"), _v2389, _v2391, px_int(0LL)}, 5));
     px_srcline(2279);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("MOV"), px_add(_v2382, px_int(1LL)), _v2381, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("MOV"), px_add(_v2389, px_int(1LL)), _v2388, px_int(0LL)}, 5));
     px_srcline(2280);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("CALL"), _v2383, _v2382, px_int(1LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("CALL"), _v2390, _v2389, px_int(1LL)}, 5));
     px_srcline(2282);
-    _v2385 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+    _v2392 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
     px_srcline(2283);
-    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2373, _v2385, px_int(0LL)}, 3));
+    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2380, _v2392, px_int(0LL)}, 3));
     px_srcline(2284);
-    _v2386 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2373, px_str("bc"))}, 1);
+    _v2393 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2380, px_str("bc"))}, 1);
     px_srcline(2286);
-    _v2387 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+    _v2394 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
     px_srcline(2287);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("LT"), _v2387, _v2385, _v2383}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("LT"), _v2394, _v2392, _v2390}, 5));
     px_srcline(2288);
-    _v2388 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2373, px_str("bc"))}, 1);
+    _v2395 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2380, px_str("bc"))}, 1);
     px_srcline(2289);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("JMPF"), _v2387, px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("JMPF"), _v2394, px_int(0LL), px_int(0LL)}, 5));
     px_srcline(2292);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("ITERLEN"), _v2381, _v2383, px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("ITERLEN"), _v2388, _v2390, px_int(0LL)}, 5));
     px_srcline(2295);
-    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2374}, 1), px_int(1LL)))) {
+    if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v2381}, 1), px_int(1LL)))) {
         px_srcline(2302);
-        if (px_is_truthy(_v2377)) {
+        if (px_is_truthy(_v2384)) {
             px_srcline(2304);
-            _v2389 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+            _v2396 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
             px_srcline(2305);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("ITERAT"), _v2389, _v2381, _v2385}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("ITERAT"), _v2396, _v2388, _v2392}, 5));
             px_srcline(2306);
-            _v2390 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_index(_v2374, px_int(0LL))}, 2);
+            _v2397 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_index(_v2381, px_int(0LL))}, 2);
             px_srcline(2307);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("SETG"), _v2390, _v2389, px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("SETG"), _v2397, _v2396, px_int(0LL)}, 5));
         }
-        else if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2373, px_index(_v2374, px_int(0LL))}, 2))) {
+        else if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2380, px_index(_v2381, px_int(0LL))}, 2))) {
             px_srcline(2309);
-            _v2389 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+            _v2396 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
             px_srcline(2310);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("ITERAT"), _v2389, _v2381, _v2385}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("ITERAT"), _v2396, _v2388, _v2392}, 5));
             px_srcline(2311);
-            (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2373, px_index(_v2374, px_int(0LL)), px_index(_v2378, px_int(0LL)), _v2389}, 4));
+            (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2380, px_index(_v2381, px_int(0LL)), px_index(_v2385, px_int(0LL)), _v2396}, 4));
         }
         else {
             px_srcline(2313);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("ITERAT"), px_index(_v2378, px_int(0LL)), _v2381, _v2385}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("ITERAT"), px_index(_v2385, px_int(0LL)), _v2388, _v2392}, 5));
         }
     }
     else {
         px_srcline(2317);
-        _v2391 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+        _v2398 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
         px_srcline(2318);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("ITERAT"), _v2391, _v2381, _v2385}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("ITERAT"), _v2398, _v2388, _v2392}, 5));
         px_srcline(2319);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("UNPACKCK"), _v2391, px_call(px_get_global("len"), (LXValue[]){_v2374}, 1), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("UNPACKCK"), _v2398, px_call(px_get_global("len"), (LXValue[]){_v2381}, 1), px_int(0LL)}, 5));
         px_srcline(2320);
-        _v2392 = px_int(0LL);
+        _v2399 = px_int(0LL);
         px_srcline(2321);
-        while (px_is_truthy(px_lt(_v2392, px_call(px_get_global("len"), (LXValue[]){_v2374}, 1)))) {
+        while (px_is_truthy(px_lt(_v2399, px_call(px_get_global("len"), (LXValue[]){_v2381}, 1)))) {
             px_srcline(2322);
-            _v2393 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+            _v2400 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
             px_srcline(2323);
-            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2373, _v2393, _v2392}, 3));
+            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2380, _v2400, _v2399}, 3));
             px_srcline(2324);
-            if (px_is_truthy(_v2377)) {
+            if (px_is_truthy(_v2384)) {
                 px_srcline(2326);
-                _v2394 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+                _v2401 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
                 px_srcline(2327);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("INDEX"), _v2394, _v2391, _v2393}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("INDEX"), _v2401, _v2398, _v2400}, 5));
                 px_srcline(2328);
-                _v2395 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_index(_v2374, _v2392)}, 2);
+                _v2402 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_index(_v2381, _v2399)}, 2);
                 px_srcline(2329);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("SETG"), _v2395, _v2394, px_int(0LL)}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("SETG"), _v2402, _v2401, px_int(0LL)}, 5));
             }
-            else if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2373, px_index(_v2374, _v2392)}, 2))) {
+            else if (px_is_truthy(px_call(px_get_global("bc_cell_has"), (LXValue[]){_v2380, px_index(_v2381, _v2399)}, 2))) {
                 px_srcline(2332);
-                _v2394 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+                _v2401 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
                 px_srcline(2333);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("INDEX"), _v2394, _v2391, _v2393}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("INDEX"), _v2401, _v2398, _v2400}, 5));
                 px_srcline(2334);
-                (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2373, px_index(_v2374, _v2392), px_index(_v2378, _v2392), _v2394}, 4));
+                (void)(px_call(px_get_global("bc_store_var"), (LXValue[]){_v2380, px_index(_v2381, _v2399), px_index(_v2385, _v2399), _v2401}, 4));
             }
             else {
                 px_srcline(2336);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("INDEX"), px_index(_v2378, _v2392), _v2391, _v2393}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("INDEX"), px_index(_v2385, _v2399), _v2398, _v2400}, 5));
             }
             px_srcline(2337);
-             _v2392 = px_add(_v2392, px_int(1LL));
+             _v2399 = px_add(_v2399, px_int(1LL));
         }
     }
     px_srcline(2338);
-    _v2396 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+    _v2403 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
     px_srcline(2339);
-    px_index_set(_v2396, px_str("breaks"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v2403, px_str("breaks"), px_list_n((LXValue[]){}, 0));
     px_srcline(2340);
-    px_index_set(_v2396, px_str("conts"), px_list_n((LXValue[]){}, 0));
+    px_index_set(_v2403, px_str("conts"), px_list_n((LXValue[]){}, 0));
     px_srcline(2341);
-    (void)(px_method(px_index(_v2373, px_str("loops")), "push", (LXValue[]){_v2396}, 1));
+    (void)(px_method(px_index(_v2380, px_str("loops")), "push", (LXValue[]){_v2403}, 1));
     px_srcline(2344);
-    _v2397 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2373}, 1);
+    _v2404 = px_call(px_get_global("bc_inited_copy"), (LXValue[]){_v2380}, 1);
     px_srcline(2345);
-    _v2398 = px_int(0LL);
+    _v2405 = px_int(0LL);
     px_srcline(2346);
-    while (px_is_truthy(px_lt(_v2398, px_call(px_get_global("len"), (LXValue[]){_v2374}, 1)))) {
+    while (px_is_truthy(px_lt(_v2405, px_call(px_get_global("len"), (LXValue[]){_v2381}, 1)))) {
         px_srcline(2347);
-        if (px_is_truthy(px_not(_v2377))) {
+        if (px_is_truthy(px_not(_v2384))) {
             px_srcline(2348);
-            px_index_set(px_index(_v2373, px_str("inited")), px_index(_v2374, _v2398), px_int(1LL));
+            px_index_set(px_index(_v2380, px_str("inited")), px_index(_v2381, _v2405), px_int(1LL));
         }
         px_srcline(2349);
-         _v2398 = px_add(_v2398, px_int(1LL));
+         _v2405 = px_add(_v2405, px_int(1LL));
     }
     px_srcline(2350);
-    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2376, _v2373}, 2));
+    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2383, _v2380}, 2));
     px_srcline(2351);
-    (void)(px_method(px_index(_v2373, px_str("loops")), "pop", (LXValue[]){}, 0));
+    (void)(px_method(px_index(_v2380, px_str("loops")), "pop", (LXValue[]){}, 0));
     px_srcline(2352);
-    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2373, _v2397}, 2));
+    (void)(px_call(px_get_global("bc_inited_restore"), (LXValue[]){_v2380, _v2404}, 2));
     px_srcline(2357);
-    _v2399 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2373, px_str("bc"))}, 1);
+    _v2406 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2380, px_str("bc"))}, 1);
     px_srcline(2358);
-    _v2400 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2373}, 1);
+    _v2407 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2380}, 1);
     px_srcline(2359);
-    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2373, _v2400, px_int(1LL)}, 3));
+    (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2380, _v2407, px_int(1LL)}, 3));
     px_srcline(2360);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("ADD"), _v2385, _v2385, _v2400}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("ADD"), _v2392, _v2392, _v2407}, 5));
     px_srcline(2361);
-    _v2401 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2373, px_str("bc"))}, 1);
+    _v2408 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2380, px_str("bc"))}, 1);
     px_srcline(2362);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2373, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2380, px_str("JMP"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
     px_srcline(2363);
-    _v2402 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2373, px_str("bc"))}, 1);
+    _v2409 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2380, px_str("bc"))}, 1);
     px_srcline(2364);
-    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2373, _v2401, _v2386}, 3));
+    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2380, _v2408, _v2393}, 3));
     px_srcline(2365);
-    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2373, _v2388, _v2402}, 3));
+    (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2380, _v2395, _v2409}, 3));
     px_srcline(2366);
-    _v2403 = px_int(0LL);
+    _v2410 = px_int(0LL);
     px_srcline(2367);
-    while (px_is_truthy(px_lt(_v2403, px_call(px_get_global("len"), (LXValue[]){px_index(_v2396, px_str("breaks"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2410, px_call(px_get_global("len"), (LXValue[]){px_index(_v2403, px_str("breaks"))}, 1)))) {
         px_srcline(2368);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2373, px_index(px_index(_v2396, px_str("breaks")), _v2403), _v2402}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2380, px_index(px_index(_v2403, px_str("breaks")), _v2410), _v2409}, 3));
         px_srcline(2369);
-         _v2403 = px_add(_v2403, px_int(1LL));
+         _v2410 = px_add(_v2410, px_int(1LL));
     }
     px_srcline(2370);
-     _v2403 = px_int(0LL);
+     _v2410 = px_int(0LL);
     px_srcline(2371);
-    while (px_is_truthy(px_lt(_v2403, px_call(px_get_global("len"), (LXValue[]){px_index(_v2396, px_str("conts"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2410, px_call(px_get_global("len"), (LXValue[]){px_index(_v2403, px_str("conts"))}, 1)))) {
         px_srcline(2372);
-        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2373, px_index(px_index(_v2396, px_str("conts")), _v2403), _v2399}, 3));
+        (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2380, px_index(px_index(_v2403, px_str("conts")), _v2410), _v2406}, 3));
         px_srcline(2373);
-         _v2403 = px_add(_v2403, px_int(1LL));
+         _v2410 = px_add(_v2410, px_int(1LL));
     }
-px_err_2404:
-    if (px_err_2404_proped) return px_err_2404_val;
+px_err_2411:
+    if (px_err_2411_proped) return px_err_2411_val;
     return px_null();
 }
 
@@ -19444,16 +19474,16 @@ static LXValue fn_bc_emit_func_def(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_func_def");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_func_def", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_func_def", 1, nargs);
-    LXValue _v2405 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2406 = px_uninit();
-    LXValue px_err_2407_val = px_null();
-    int px_err_2407_proped = 0;
+    LXValue _v2412 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2413 = px_uninit();
+    LXValue px_err_2414_val = px_null();
+    int px_err_2414_proped = 0;
     px_srcline(2377);
-    _v2406 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2405, px_int(1LL))}, 1);
+    _v2413 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2412, px_int(1LL))}, 1);
     px_srcline(2378);
-    return px_call(px_get_global("bc_emit_func_body"), (LXValue[]){_v2405, _v2406}, 2);
-px_err_2407:
-    if (px_err_2407_proped) return px_err_2407_val;
+    return px_call(px_get_global("bc_emit_func_body"), (LXValue[]){_v2412, _v2413}, 2);
+px_err_2414:
+    if (px_err_2414_proped) return px_err_2414_val;
     return px_null();
 }
 
@@ -19462,17 +19492,17 @@ static LXValue fn_bc_emit_impl_def(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_impl_def");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_impl_def", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_impl_def", 2, nargs);
-    LXValue _v2408 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2409 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2410 = px_uninit();
-    LXValue px_err_2411_val = px_null();
-    int px_err_2411_proped = 0;
+    LXValue _v2415 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2416 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2417 = px_uninit();
+    LXValue px_err_2418_val = px_null();
+    int px_err_2418_proped = 0;
     px_srcline(2381);
-    _v2410 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2408, px_int(1LL))}, 1);
+    _v2417 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2415, px_int(1LL))}, 1);
     px_srcline(2382);
-    return px_call(px_get_global("bc_emit_func_body"), (LXValue[]){_v2408, px_add(px_add(_v2409, px_str(".")), _v2410)}, 2);
-px_err_2411:
-    if (px_err_2411_proped) return px_err_2411_val;
+    return px_call(px_get_global("bc_emit_func_body"), (LXValue[]){_v2415, px_add(px_add(_v2416, px_str(".")), _v2417)}, 2);
+px_err_2418:
+    if (px_err_2418_proped) return px_err_2418_val;
     return px_null();
 }
 
@@ -19481,131 +19511,131 @@ static LXValue fn_bc_emit_func_body(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_func_body");
     if (nargs < 2) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_func_body", 2, nargs);
     if (nargs > 2) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_func_body", 2, nargs);
-    LXValue _v2412 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2413 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2414 = px_uninit();
-    LXValue _v2415 = px_uninit();
-    LXValue _v2416 = px_uninit();
-    LXValue _v2417 = px_uninit();
-    LXValue _v2418 = px_uninit();
-    LXValue _v2419 = px_uninit();
-    LXValue _v2420 = px_uninit();
+    LXValue _v2419 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2420 = (nargs > 1) ? args[1] : px_null();
     LXValue _v2421 = px_uninit();
     LXValue _v2422 = px_uninit();
     LXValue _v2423 = px_uninit();
     LXValue _v2424 = px_uninit();
-    LXValue px_err_2425_val = px_null();
-    int px_err_2425_proped = 0;
+    LXValue _v2425 = px_uninit();
+    LXValue _v2426 = px_uninit();
+    LXValue _v2427 = px_uninit();
+    LXValue _v2428 = px_uninit();
+    LXValue _v2429 = px_uninit();
+    LXValue _v2430 = px_uninit();
+    LXValue _v2431 = px_uninit();
+    LXValue px_err_2432_val = px_null();
+    int px_err_2432_proped = 0;
     px_srcline(2391);
-    _v2414 = px_call(px_get_global("cg_dict_copy"), (LXValue[]){px_get_global("cg_immutables")}, 1);
+    _v2421 = px_call(px_get_global("cg_dict_copy"), (LXValue[]){px_get_global("cg_immutables")}, 1);
     px_srcline(2392);
-    px_set_global("cg_immutables", px_call(px_get_global("cg_dict_copy"), (LXValue[]){_v2414}, 1));
+    px_set_global("cg_immutables", px_call(px_get_global("cg_dict_copy"), (LXValue[]){_v2421}, 1));
     px_srcline(2393);
-    _v2415 = px_index(_v2412, px_int(2LL));
+    _v2422 = px_index(_v2419, px_int(2LL));
     px_srcline(2398);
-    _v2416 = px_call(px_get_global("len"), (LXValue[]){_v2415}, 1);
+    _v2423 = px_call(px_get_global("len"), (LXValue[]){_v2422}, 1);
     px_srcline(2399);
-    _v2417 = px_int(0LL);
+    _v2424 = px_int(0LL);
     px_srcline(2400);
-    _v2418 = px_int(0LL);
+    _v2425 = px_int(0LL);
     px_srcline(2401);
-    while (px_is_truthy(px_lt(_v2418, px_call(px_get_global("len"), (LXValue[]){_v2415}, 1)))) {
+    while (px_is_truthy(px_lt(_v2425, px_call(px_get_global("len"), (LXValue[]){_v2422}, 1)))) {
         px_srcline(2402);
-        if (px_is_truthy(px_ne(px_index(px_index(_v2415, _v2418), px_int(3LL)), px_null()))) {
+        if (px_is_truthy(px_ne(px_index(px_index(_v2422, _v2425), px_int(3LL)), px_null()))) {
             px_srcline(2403);
-            if (px_is_truthy(px_eq(_v2417, px_int(0LL)))) {
+            if (px_is_truthy(px_eq(_v2424, px_int(0LL)))) {
                 px_srcline(2404);
-                 _v2416 = _v2418;
+                 _v2423 = _v2425;
             }
             px_srcline(2405);
-             _v2417 = px_add(_v2417, px_int(1LL));
+             _v2424 = px_add(_v2424, px_int(1LL));
         }
         px_srcline(2406);
-         _v2418 = px_add(_v2418, px_int(1LL));
+         _v2425 = px_add(_v2425, px_int(1LL));
     }
     px_srcline(2407);
-    _v2419 = px_call(px_get_global("bc_new_func"), (LXValue[]){_v2413, _v2416}, 2);
+    _v2426 = px_call(px_get_global("bc_new_func"), (LXValue[]){_v2420, _v2423}, 2);
     px_srcline(2408);
-    px_index_set(_v2419, px_str("ndefault"), _v2417);
+    px_index_set(_v2426, px_str("ndefault"), _v2424);
     px_srcline(2410);
-     _v2418 = px_int(0LL);
+     _v2425 = px_int(0LL);
     px_srcline(2411);
-    while (px_is_truthy(px_lt(_v2418, px_call(px_get_global("len"), (LXValue[]){_v2415}, 1)))) {
+    while (px_is_truthy(px_lt(_v2425, px_call(px_get_global("len"), (LXValue[]){_v2422}, 1)))) {
         px_srcline(2412);
-        px_index_set(px_index(_v2419, px_str("smap")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2415, _v2418), px_int(1LL))}, 1), _v2418);
+        px_index_set(px_index(_v2426, px_str("smap")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2422, _v2425), px_int(1LL))}, 1), _v2425);
         px_srcline(2414);
-        px_index_set(px_index(_v2419, px_str("inited")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2415, _v2418), px_int(1LL))}, 1), px_int(1LL));
+        px_index_set(px_index(_v2426, px_str("inited")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2422, _v2425), px_int(1LL))}, 1), px_int(1LL));
         px_srcline(2415);
-         _v2418 = px_add(_v2418, px_int(1LL));
+         _v2425 = px_add(_v2425, px_int(1LL));
     }
     px_srcline(2416);
-    if (px_is_truthy(px_lt(px_index(_v2419, px_str("next_slot")), px_call(px_get_global("len"), (LXValue[]){_v2415}, 1)))) {
+    if (px_is_truthy(px_lt(px_index(_v2426, px_str("next_slot")), px_call(px_get_global("len"), (LXValue[]){_v2422}, 1)))) {
         px_srcline(2417);
-        px_index_set(_v2419, px_str("next_slot"), px_call(px_get_global("len"), (LXValue[]){_v2415}, 1));
+        px_index_set(_v2426, px_str("next_slot"), px_call(px_get_global("len"), (LXValue[]){_v2422}, 1));
     }
     px_srcline(2419);
-    _v2420 = px_list_n((LXValue[]){}, 0);
+    _v2427 = px_list_n((LXValue[]){}, 0);
     px_srcline(2420);
-    (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v2412, px_int(4LL)), _v2420}, 2));
+    (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){px_index(_v2419, px_int(4LL)), _v2427}, 2));
     px_srcline(2422);
-    _v2421 = px_list_n((LXValue[]){}, 0);
+    _v2428 = px_list_n((LXValue[]){}, 0);
     px_srcline(2423);
-    (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v2412, px_int(4LL)), _v2421}, 2));
+    (void)(px_call(px_get_global("bc_collect_decl_vars"), (LXValue[]){px_index(_v2419, px_int(4LL)), _v2428}, 2));
     px_srcline(2424);
-    _v2422 = px_int(0LL);
+    _v2429 = px_int(0LL);
     px_srcline(2425);
-    while (px_is_truthy(px_lt(_v2422, px_call(px_get_global("len"), (LXValue[]){_v2420}, 1)))) {
+    while (px_is_truthy(px_lt(_v2429, px_call(px_get_global("len"), (LXValue[]){_v2427}, 1)))) {
         px_srcline(2426);
-        _v2423 = px_index(_v2420, _v2422);
+        _v2430 = px_index(_v2427, _v2429);
         px_srcline(2427);
-        if (px_is_truthy(px_method(px_index(_v2419, px_str("smap")), "has", (LXValue[]){_v2423}, 1))) {
+        if (px_is_truthy(px_method(px_index(_v2426, px_str("smap")), "has", (LXValue[]){_v2430}, 1))) {
             px_srcline(2428);
-             _v2422 = px_add(_v2422, px_int(1LL));
+             _v2429 = px_add(_v2429, px_int(1LL));
             px_srcline(2429);
             continue;
         }
         px_srcline(2434);
-        if (px_is_truthy(({ LXValue _t2426 = px_not(px_call(px_get_global("contains"), (LXValue[]){_v2421, _v2423}, 2)); px_is_truthy(_t2426) ? px_call(px_get_global("contains"), (LXValue[]){px_get_global("g_topnames"), _v2423}, 2) : _t2426; }))) {
+        if (px_is_truthy(({ LXValue _t2433 = px_not(px_call(px_get_global("contains"), (LXValue[]){_v2428, _v2430}, 2)); px_is_truthy(_t2433) ? px_call(px_get_global("contains"), (LXValue[]){px_get_global("g_topnames"), _v2430}, 2) : _t2433; }))) {
             px_srcline(2435);
-             _v2422 = px_add(_v2422, px_int(1LL));
+             _v2429 = px_add(_v2429, px_int(1LL));
             px_srcline(2436);
             continue;
         }
         px_srcline(2437);
-        (void)(px_call(px_get_global("bc_slot"), (LXValue[]){_v2419, _v2423}, 2));
+        (void)(px_call(px_get_global("bc_slot"), (LXValue[]){_v2426, _v2430}, 2));
         px_srcline(2438);
-        (void)(px_method(px_index(_v2419, px_str("hoist_slots")), "push", (LXValue[]){px_index(px_index(_v2419, px_str("smap")), _v2423)}, 1));
+        (void)(px_method(px_index(_v2426, px_str("hoist_slots")), "push", (LXValue[]){px_index(px_index(_v2426, px_str("smap")), _v2430)}, 1));
         px_srcline(2439);
-         _v2422 = px_add(_v2422, px_int(1LL));
+         _v2429 = px_add(_v2429, px_int(1LL));
     }
     px_srcline(2443);
-    _v2424 = px_int(0LL);
+    _v2431 = px_int(0LL);
     px_srcline(2444);
-    while (px_is_truthy(px_lt(_v2424, px_call(px_get_global("len"), (LXValue[]){px_index(_v2419, px_str("hoist_slots"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2431, px_call(px_get_global("len"), (LXValue[]){px_index(_v2426, px_str("hoist_slots"))}, 1)))) {
         px_srcline(2445);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2419, px_str("UNINIT"), px_index(px_index(_v2419, px_str("hoist_slots")), _v2424), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2426, px_str("UNINIT"), px_index(px_index(_v2426, px_str("hoist_slots")), _v2431), px_int(0LL), px_int(0LL)}, 5));
         px_srcline(2446);
-         _v2424 = px_add(_v2424, px_int(1LL));
+         _v2431 = px_add(_v2431, px_int(1LL));
     }
     px_srcline(2451);
-    (void)(px_call(px_get_global("bc_box_frame"), (LXValue[]){_v2419, px_index(_v2412, px_int(4LL))}, 2));
+    (void)(px_call(px_get_global("bc_box_frame"), (LXValue[]){_v2426, px_index(_v2419, px_int(4LL))}, 2));
     px_srcline(2453);
-    if (px_is_truthy(px_gt(_v2417, px_int(0LL)))) {
+    if (px_is_truthy(px_gt(_v2424, px_int(0LL)))) {
         px_srcline(2454);
-        (void)(px_call(px_get_global("bc_emit_default_fill"), (LXValue[]){_v2419, _v2415, _v2416}, 3));
+        (void)(px_call(px_get_global("bc_emit_default_fill"), (LXValue[]){_v2426, _v2422, _v2423}, 3));
     }
     px_srcline(2455);
-    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){px_index(_v2412, px_int(4LL)), _v2419}, 2));
+    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){px_index(_v2419, px_int(4LL)), _v2426}, 2));
     px_srcline(2456);
-    px_set_global("cg_immutables", _v2414);
+    px_set_global("cg_immutables", _v2421);
     px_srcline(2457);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2419, px_str("RET0"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2426, px_str("RET0"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
     px_srcline(2458);
-    px_index_set(_v2419, px_str("nslots"), px_index(_v2419, px_str("next_slot")));
+    px_index_set(_v2426, px_str("nslots"), px_index(_v2426, px_str("next_slot")));
     px_srcline(2459);
-    return _v2419;
-px_err_2425:
-    if (px_err_2425_proped) return px_err_2425_val;
+    return _v2426;
+px_err_2432:
+    if (px_err_2432_proped) return px_err_2432_val;
     return px_null();
 }
 
@@ -19614,60 +19644,60 @@ static LXValue fn_bc_emit_default_fill(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_default_fill");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_default_fill", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_default_fill", 3, nargs);
-    LXValue _v2427 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2428 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2429 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2430 = px_uninit();
-    LXValue _v2431 = px_uninit();
-    LXValue _v2432 = px_uninit();
-    LXValue _v2433 = px_uninit();
-    LXValue _v2434 = px_uninit();
-    LXValue _v2435 = px_uninit();
-    LXValue px_err_2436_val = px_null();
-    int px_err_2436_proped = 0;
+    LXValue _v2434 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2435 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2436 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2437 = px_uninit();
+    LXValue _v2438 = px_uninit();
+    LXValue _v2439 = px_uninit();
+    LXValue _v2440 = px_uninit();
+    LXValue _v2441 = px_uninit();
+    LXValue _v2442 = px_uninit();
+    LXValue px_err_2443_val = px_null();
+    int px_err_2443_proped = 0;
     px_srcline(2465);
-    _v2430 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2427}, 1);
+    _v2437 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2434}, 1);
     px_srcline(2466);
-    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2427, px_str("NARGS"), _v2430, px_int(0LL), px_int(0LL)}, 5));
+    (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2434, px_str("NARGS"), _v2437, px_int(0LL), px_int(0LL)}, 5));
     px_srcline(2467);
-    _v2431 = _v2429;
+    _v2438 = _v2436;
     px_srcline(2468);
-    while (px_is_truthy(px_lt(_v2431, px_call(px_get_global("len"), (LXValue[]){_v2428}, 1)))) {
+    while (px_is_truthy(px_lt(_v2438, px_call(px_get_global("len"), (LXValue[]){_v2435}, 1)))) {
         px_srcline(2469);
-        if (px_is_truthy(px_ne(px_index(px_index(_v2428, _v2431), px_int(3LL)), px_null()))) {
+        if (px_is_truthy(px_ne(px_index(px_index(_v2435, _v2438), px_int(3LL)), px_null()))) {
             px_srcline(2470);
-            _v2432 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2427}, 1);
+            _v2439 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2434}, 1);
             px_srcline(2471);
-            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2427, _v2432, _v2431}, 3));
+            (void)(px_call(px_get_global("bc_emit_int"), (LXValue[]){_v2434, _v2439, _v2438}, 3));
             px_srcline(2472);
-            _v2433 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2427}, 1);
+            _v2440 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2434}, 1);
             px_srcline(2473);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2427, px_str("LT"), _v2433, _v2432, _v2430}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2434, px_str("LT"), _v2440, _v2439, _v2437}, 5));
             px_srcline(2474);
-            _v2434 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2427, px_str("bc"))}, 1);
+            _v2441 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2434, px_str("bc"))}, 1);
             px_srcline(2475);
-            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2427, px_str("JMPT"), _v2433, px_int(0LL), px_int(0LL)}, 5));
+            (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2434, px_str("JMPT"), _v2440, px_int(0LL), px_int(0LL)}, 5));
             px_srcline(2478);
-            if (px_is_truthy(px_method(px_index(_v2427, px_str("cell")), "has", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2428, _v2431), px_int(1LL))}, 1)}, 1))) {
+            if (px_is_truthy(px_method(px_index(_v2434, px_str("cell")), "has", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2435, _v2438), px_int(1LL))}, 1)}, 1))) {
                 px_srcline(2479);
-                _v2435 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2427}, 1);
+                _v2442 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2434}, 1);
                 px_srcline(2480);
-                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2428, _v2431), px_int(3LL)), _v2435, _v2427}, 3));
+                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2435, _v2438), px_int(3LL)), _v2442, _v2434}, 3));
                 px_srcline(2481);
-                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2427, px_str("CELLSET"), _v2435, _v2431, px_int(0LL)}, 5));
+                (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2434, px_str("CELLSET"), _v2442, _v2438, px_int(0LL)}, 5));
             }
             else {
                 px_srcline(2483);
-                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2428, _v2431), px_int(3LL)), _v2431, _v2427}, 3));
+                (void)(px_call(px_get_global("bc_emit_expr"), (LXValue[]){px_index(px_index(_v2435, _v2438), px_int(3LL)), _v2438, _v2434}, 3));
             }
             px_srcline(2484);
-            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2427, _v2434, px_call(px_get_global("len"), (LXValue[]){px_index(_v2427, px_str("bc"))}, 1)}, 3));
+            (void)(px_call(px_get_global("bc_patch_off"), (LXValue[]){_v2434, _v2441, px_call(px_get_global("len"), (LXValue[]){px_index(_v2434, px_str("bc"))}, 1)}, 3));
         }
         px_srcline(2485);
-         _v2431 = px_add(_v2431, px_int(1LL));
+         _v2438 = px_add(_v2438, px_int(1LL));
     }
-px_err_2436:
-    if (px_err_2436_proped) return px_err_2436_val;
+px_err_2443:
+    if (px_err_2443_proped) return px_err_2443_val;
     return px_null();
 }
 
@@ -19676,46 +19706,46 @@ static LXValue fn_bc_emit_func_top(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_func_top");
     if (nargs < 3) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_func_top", 3, nargs);
     if (nargs > 3) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_func_top", 3, nargs);
-    LXValue _v2437 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2438 = (nargs > 1) ? args[1] : px_null();
-    LXValue _v2439 = (nargs > 2) ? args[2] : px_null();
-    LXValue _v2440 = px_uninit();
-    LXValue _v2441 = px_uninit();
-    LXValue _v2442 = px_uninit();
-    LXValue _v2443 = px_uninit();
-    LXValue px_err_2444_val = px_null();
-    int px_err_2444_proped = 0;
+    LXValue _v2444 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2445 = (nargs > 1) ? args[1] : px_null();
+    LXValue _v2446 = (nargs > 2) ? args[2] : px_null();
+    LXValue _v2447 = px_uninit();
+    LXValue _v2448 = px_uninit();
+    LXValue _v2449 = px_uninit();
+    LXValue _v2450 = px_uninit();
+    LXValue px_err_2451_val = px_null();
+    int px_err_2451_proped = 0;
     px_srcline(2490);
-    _v2440 = px_call(px_get_global("bc_new_func"), (LXValue[]){_v2438, px_int(0LL)}, 2);
+    _v2447 = px_call(px_get_global("bc_new_func"), (LXValue[]){_v2445, px_int(0LL)}, 2);
     px_srcline(2491);
-    px_index_set(_v2440, px_str("is_top"), px_bool(true));
+    px_index_set(_v2447, px_str("is_top"), px_bool(true));
     px_srcline(2492);
-    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2437, _v2440}, 2));
+    (void)(px_call(px_get_global("bc_emit_stmts"), (LXValue[]){_v2444, _v2447}, 2));
     px_srcline(2493);
-    if (px_is_truthy(_v2439)) {
+    if (px_is_truthy(_v2446)) {
         px_srcline(2494);
-        _v2441 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2440}, 1);
+        _v2448 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2447}, 1);
         px_srcline(2495);
-        _v2442 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("main")}, 2);
+        _v2449 = px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(px_get_global("g_bcm"), px_str("globals")), px_str("main")}, 2);
         px_srcline(2496);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2440, px_str("GETG"), _v2441, _v2442, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2447, px_str("GETG"), _v2448, _v2449, px_int(0LL)}, 5));
         px_srcline(2497);
-        _v2443 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2440}, 1);
+        _v2450 = px_call(px_get_global("bc_tmp"), (LXValue[]){_v2447}, 1);
         px_srcline(2498);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2440, px_str("CALL"), _v2443, _v2441, px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2447, px_str("CALL"), _v2450, _v2448, px_int(0LL)}, 5));
         px_srcline(2499);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2440, px_str("RET"), _v2443, px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2447, px_str("RET"), _v2450, px_int(0LL), px_int(0LL)}, 5));
     }
     else {
         px_srcline(2501);
-        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2440, px_str("HALT"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
+        (void)(px_call(px_get_global("bc_emit_inst"), (LXValue[]){_v2447, px_str("HALT"), px_int(0LL), px_int(0LL), px_int(0LL)}, 5));
     }
     px_srcline(2502);
-    px_index_set(_v2440, px_str("nslots"), px_index(_v2440, px_str("next_slot")));
+    px_index_set(_v2447, px_str("nslots"), px_index(_v2447, px_str("next_slot")));
     px_srcline(2503);
-    return _v2440;
-px_err_2444:
-    if (px_err_2444_proped) return px_err_2444_val;
+    return _v2447;
+px_err_2451:
+    if (px_err_2451_proped) return px_err_2451_val;
     return px_null();
 }
 
@@ -19724,14 +19754,7 @@ static LXValue fn_bc_emit_program(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_emit_program");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_program", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_program", 1, nargs);
-    LXValue _v2445 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2446 = px_uninit();
-    LXValue _v2447 = px_uninit();
-    LXValue _v2448 = px_uninit();
-    LXValue _v2449 = px_uninit();
-    LXValue _v2450 = px_uninit();
-    LXValue _v2451 = px_uninit();
-    LXValue _v2452 = px_uninit();
+    LXValue _v2452 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2453 = px_uninit();
     LXValue _v2454 = px_uninit();
     LXValue _v2455 = px_uninit();
@@ -19748,99 +19771,110 @@ static LXValue fn_bc_emit_program(LXValue* args, int nargs, void* ctx) {
     LXValue _v2466 = px_uninit();
     LXValue _v2467 = px_uninit();
     LXValue _v2468 = px_uninit();
-    LXValue px_err_2469_val = px_null();
-    int px_err_2469_proped = 0;
+    LXValue _v2469 = px_uninit();
+    LXValue _v2470 = px_uninit();
+    LXValue _v2471 = px_uninit();
+    LXValue _v2472 = px_uninit();
+    LXValue _v2473 = px_uninit();
+    LXValue _v2474 = px_uninit();
+    LXValue _v2475 = px_uninit();
+    LXValue _v2476 = px_uninit();
+    LXValue _v2477 = px_uninit();
+    LXValue _v2478 = px_uninit();
+    LXValue _v2479 = px_uninit();
+    LXValue px_err_2480_val = px_null();
+    int px_err_2480_proped = 0;
     px_srcline(2507);
-    _v2446 = px_index(_v2445, px_int(1LL));
+    _v2453 = px_index(_v2452, px_int(1LL));
     px_srcline(2508);
-    _v2447 = px_call(px_get_global("bc_new_module"), (LXValue[]){px_str("<module>")}, 1);
+    _v2454 = px_call(px_get_global("bc_new_module"), (LXValue[]){px_str("<module>")}, 1);
     px_srcline(2509);
-    px_set_global("g_bcm", _v2447);
+    px_set_global("g_bcm", _v2454);
     px_srcline(2512);
-    _v2448 = px_int(0LL);
+    _v2455 = px_int(0LL);
     px_srcline(2513);
-    while (px_is_truthy(px_lt(_v2448, px_call(px_get_global("len"), (LXValue[]){_v2446}, 1)))) {
+    while (px_is_truthy(px_lt(_v2455, px_call(px_get_global("len"), (LXValue[]){_v2453}, 1)))) {
         px_srcline(2514);
-        _v2449 = px_index(_v2446, _v2448);
+        _v2456 = px_index(_v2453, _v2455);
         px_srcline(2515);
-        _v2450 = px_index(_v2449, px_int(0LL));
+        _v2457 = px_index(_v2456, px_int(0LL));
         px_srcline(2516);
-        if (px_is_truthy(px_eq(_v2450, px_str("StructDef")))) {
+        if (px_is_truthy(px_eq(_v2457, px_str("StructDef")))) {
             px_srcline(2517);
-            _v2451 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+            _v2458 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
             px_srcline(2518);
-            px_index_set(_v2451, px_str("name"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(1LL))}, 1));
+            px_index_set(_v2458, px_str("name"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(1LL))}, 1));
             px_srcline(2519);
-            _v2452 = px_list_n((LXValue[]){}, 0);
+            _v2459 = px_list_n((LXValue[]){}, 0);
             px_srcline(2520);
-            _v2453 = px_int(0LL);
+            _v2460 = px_int(0LL);
             px_srcline(2521);
-            while (px_is_truthy(px_lt(_v2453, px_call(px_get_global("len"), (LXValue[]){px_index(_v2449, px_int(2LL))}, 1)))) {
+            while (px_is_truthy(px_lt(_v2460, px_call(px_get_global("len"), (LXValue[]){px_index(_v2456, px_int(2LL))}, 1)))) {
                 px_srcline(2522);
-                (void)(px_method(_v2452, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v2449, px_int(2LL)), _v2453), px_int(1LL))}, 1)}, 1));
+                (void)(px_method(_v2459, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(px_index(_v2456, px_int(2LL)), _v2460), px_int(1LL))}, 1)}, 1));
                 px_srcline(2523);
-                 _v2453 = px_add(_v2453, px_int(1LL));
+                 _v2460 = px_add(_v2460, px_int(1LL));
             }
             px_srcline(2524);
-            px_index_set(_v2451, px_str("fnames"), _v2452);
+            px_index_set(_v2458, px_str("fnames"), _v2459);
             px_srcline(2525);
-            (void)(px_method(px_index(_v2447, px_str("structs")), "push", (LXValue[]){_v2451}, 1));
+            (void)(px_method(px_index(_v2454, px_str("structs")), "push", (LXValue[]){_v2458}, 1));
         }
-        else if (px_is_truthy(px_eq(_v2450, px_str("EnumDef")))) {
+        else if (px_is_truthy(px_eq(_v2457, px_str("EnumDef")))) {
             px_srcline(2527);
-            _v2454 = px_list_n((LXValue[]){}, 0);
+            _v2461 = px_list_n((LXValue[]){}, 0);
             px_srcline(2528);
-            _v2455 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
+            _v2462 = px_call(px_get_global("bc_new_dict"), (LXValue[]){}, 0);
             px_srcline(2529);
-            _v2456 = px_int(0LL);
+            _v2463 = px_int(0LL);
             px_srcline(2530);
-            while (px_is_truthy(px_lt(_v2456, px_call(px_get_global("len"), (LXValue[]){px_index(_v2449, px_int(2LL))}, 1)))) {
+            while (px_is_truthy(px_lt(_v2463, px_call(px_get_global("len"), (LXValue[]){px_index(_v2456, px_int(2LL))}, 1)))) {
                 px_srcline(2531);
-                _v2457 = px_index(px_index(_v2449, px_int(2LL)), _v2456);
+                _v2464 = px_index(px_index(_v2456, px_int(2LL)), _v2463);
                 px_srcline(2532);
-                _v2458 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2457, px_int(1LL))}, 1);
+                _v2465 = px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2464, px_int(1LL))}, 1);
                 px_srcline(2533);
-                (void)(px_method(_v2454, "append", (LXValue[]){_v2458}, 1));
+                (void)(px_method(_v2461, "append", (LXValue[]){_v2465}, 1));
                 px_srcline(2535);
-                _v2459 = px_list_n((LXValue[]){}, 0);
+                _v2466 = px_list_n((LXValue[]){}, 0);
                 px_srcline(2536);
-                if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){_v2457}, 1), px_int(2LL)))) {
+                if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){_v2464}, 1), px_int(2LL)))) {
                     px_srcline(2537);
-                    _v2460 = px_int(0LL);
+                    _v2467 = px_int(0LL);
                     px_srcline(2538);
-                    while (px_is_truthy(px_lt(_v2460, px_call(px_get_global("len"), (LXValue[]){px_index(_v2457, px_int(2LL))}, 1)))) {
+                    while (px_is_truthy(px_lt(_v2467, px_call(px_get_global("len"), (LXValue[]){px_index(_v2464, px_int(2LL))}, 1)))) {
                         px_srcline(2539);
-                        _v2461 = px_index(px_index(_v2457, px_int(2LL)), _v2460);
+                        _v2468 = px_index(px_index(_v2464, px_int(2LL)), _v2467);
                         px_srcline(2540);
-                        if (px_is_truthy(px_eq(px_index(_v2461, px_int(0LL)), px_str("EnumField")))) {
+                        if (px_is_truthy(px_eq(px_index(_v2468, px_int(0LL)), px_str("EnumField")))) {
                             px_srcline(2541);
-                            (void)(px_method(_v2459, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2461, px_int(1LL))}, 1)}, 1));
+                            (void)(px_method(_v2466, "append", (LXValue[]){px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2468, px_int(1LL))}, 1)}, 1));
                         }
                         else {
                             px_srcline(2543);
-                            (void)(px_method(_v2459, "append", (LXValue[]){px_call(px_get_global("str"), (LXValue[]){_v2460}, 1)}, 1));
+                            (void)(px_method(_v2466, "append", (LXValue[]){px_call(px_get_global("str"), (LXValue[]){_v2467}, 1)}, 1));
                         }
                         px_srcline(2544);
-                         _v2460 = px_add(_v2460, px_int(1LL));
+                         _v2467 = px_add(_v2467, px_int(1LL));
                     }
                 }
                 px_srcline(2545);
-                px_index_set(_v2455, _v2458, _v2459);
+                px_index_set(_v2462, _v2465, _v2466);
                 px_srcline(2546);
-                 _v2456 = px_add(_v2456, px_int(1LL));
+                 _v2463 = px_add(_v2463, px_int(1LL));
             }
             px_srcline(2547);
-            px_index_set(px_index(_v2447, px_str("enums")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(1LL))}, 1), _v2454);
+            px_index_set(px_index(_v2454, px_str("enums")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(1LL))}, 1), _v2461);
             px_srcline(2548);
-            px_index_set(px_index(_v2447, px_str("enum_fields")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(1LL))}, 1), _v2455);
+            px_index_set(px_index(_v2454, px_str("enum_fields")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(1LL))}, 1), _v2462);
         }
         px_srcline(2549);
-         _v2448 = px_add(_v2448, px_int(1LL));
+         _v2455 = px_add(_v2455, px_int(1LL));
     }
     px_srcline(2550);
-    (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){_v2446}, 1));
+    (void)(px_call(px_get_global("bc_collect_consts"), (LXValue[]){_v2453}, 1));
     px_srcline(2551);
-    _v2462 = px_call(px_get_global("bc_collect_impl_list"), (LXValue[]){_v2446}, 1);
+    _v2469 = px_call(px_get_global("bc_collect_impl_list"), (LXValue[]){_v2453}, 1);
     px_srcline(2558);
     px_set_global("cg_structs", px_call(px_get_global("cg_new_dict"), (LXValue[]){}, 0));
     px_srcline(2559);
@@ -19864,115 +19898,141 @@ static LXValue fn_bc_emit_program(LXValue* args, int nargs, void* ctx) {
     px_srcline(2568);
     px_set_global("cg_globals", px_list_n((LXValue[]){}, 0));
     px_srcline(2570);
-     _v2448 = px_int(0LL);
+     _v2455 = px_int(0LL);
     px_srcline(2571);
-    while (px_is_truthy(px_lt(_v2448, px_call(px_get_global("len"), (LXValue[]){_v2446}, 1)))) {
+    while (px_is_truthy(px_lt(_v2455, px_call(px_get_global("len"), (LXValue[]){_v2453}, 1)))) {
         px_srcline(2572);
-        _v2449 = px_index(_v2446, _v2448);
+        _v2456 = px_index(_v2453, _v2455);
         px_srcline(2573);
-        _v2450 = px_index(_v2449, px_int(0LL));
+        _v2457 = px_index(_v2456, px_int(0LL));
         px_srcline(2574);
-        if (px_is_truthy(px_eq(_v2450, px_str("FuncDef")))) {
+        if (px_is_truthy(px_eq(_v2457, px_str("FuncDef")))) {
             px_srcline(2575);
-            (void)(px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(_v2447, px_str("globals")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(1LL))}, 1)}, 2));
+            (void)(px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(_v2454, px_str("globals")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(1LL))}, 1)}, 2));
         }
-        else if (px_is_truthy(px_eq(_v2450, px_str("ExternDef")))) {
+        else if (px_is_truthy(px_eq(_v2457, px_str("ExternDef")))) {
             px_srcline(2582);
-            px_index_set(px_get_global("cg_ffi"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(1LL))}, 1), px_index(_v2449, px_int(2LL)));
+            px_index_set(px_get_global("cg_ffi"), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(1LL))}, 1), px_index(_v2456, px_int(2LL)));
         }
-        else if (px_is_truthy(px_eq(_v2450, px_str("VarDecl")))) {
+        else if (px_is_truthy(px_eq(_v2457, px_str("VarDecl")))) {
             px_srcline(2584);
-            (void)(px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(_v2447, px_str("globals")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(2LL))}, 1)}, 2));
+            (void)(px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(_v2454, px_str("globals")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(2LL))}, 1)}, 2));
         }
-        else if (px_is_truthy(px_eq(_v2450, px_str("Assign")))) {
+        else if (px_is_truthy(px_eq(_v2457, px_str("Assign")))) {
             px_srcline(2586);
-            _v2463 = px_index(_v2449, px_int(1LL));
+            _v2470 = px_index(_v2456, px_int(1LL));
             px_srcline(2587);
-            if (px_is_truthy(px_eq(px_index(_v2463, px_int(0LL)), px_str("Var")))) {
+            if (px_is_truthy(px_eq(px_index(_v2470, px_int(0LL)), px_str("Var")))) {
                 px_srcline(2588);
-                (void)(px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(_v2447, px_str("globals")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2463, px_int(1LL))}, 1)}, 2));
+                (void)(px_call(px_get_global("bc_g_add"), (LXValue[]){px_index(_v2454, px_str("globals")), px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2470, px_int(1LL))}, 1)}, 2));
             }
         }
         px_srcline(2589);
-         _v2448 = px_add(_v2448, px_int(1LL));
+         _v2455 = px_add(_v2455, px_int(1LL));
     }
     px_srcline(2595);
     px_set_global("g_topnames", px_list_n((LXValue[]){}, 0));
     px_srcline(2596);
-    (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){_v2446, px_get_global("g_topnames")}, 2));
+    (void)(px_call(px_get_global("bc_collect_hoist"), (LXValue[]){_v2453, px_get_global("g_topnames")}, 2));
     px_srcline(2599);
-     _v2448 = px_int(0LL);
+     _v2455 = px_int(0LL);
     px_srcline(2600);
-    while (px_is_truthy(px_lt(_v2448, px_call(px_get_global("len"), (LXValue[]){_v2462}, 1)))) {
+    while (px_is_truthy(px_lt(_v2455, px_call(px_get_global("len"), (LXValue[]){_v2469}, 1)))) {
         px_srcline(2601);
-        _v2464 = px_index(_v2462, _v2448);
+        _v2471 = px_index(_v2469, _v2455);
         px_srcline(2602);
-        _v2465 = px_call(px_get_global("bc_emit_impl_def"), (LXValue[]){px_index(_v2464, px_int(1LL)), px_index(_v2464, px_int(0LL))}, 2);
+        _v2472 = px_call(px_get_global("bc_emit_impl_def"), (LXValue[]){px_index(_v2471, px_int(1LL)), px_index(_v2471, px_int(0LL))}, 2);
         px_srcline(2603);
-        (void)(px_method(px_index(_v2447, px_str("funcs")), "push", (LXValue[]){_v2465}, 1));
+        (void)(px_method(px_index(_v2454, px_str("funcs")), "push", (LXValue[]){_v2472}, 1));
         px_srcline(2604);
-         _v2448 = px_add(_v2448, px_int(1LL));
+         _v2455 = px_add(_v2455, px_int(1LL));
     }
     px_srcline(2605);
-     _v2448 = px_int(0LL);
+     _v2455 = px_int(0LL);
     px_srcline(2606);
-    while (px_is_truthy(px_lt(_v2448, px_call(px_get_global("len"), (LXValue[]){_v2446}, 1)))) {
+    while (px_is_truthy(px_lt(_v2455, px_call(px_get_global("len"), (LXValue[]){_v2453}, 1)))) {
         px_srcline(2607);
-        _v2449 = px_index(_v2446, _v2448);
+        _v2456 = px_index(_v2453, _v2455);
         px_srcline(2608);
-        if (px_is_truthy(px_eq(px_index(_v2449, px_int(0LL)), px_str("FuncDef")))) {
+        if (px_is_truthy(px_eq(px_index(_v2456, px_int(0LL)), px_str("FuncDef")))) {
             px_srcline(2609);
-            _v2465 = px_call(px_get_global("bc_emit_func_def"), (LXValue[]){_v2449}, 1);
+            _v2472 = px_call(px_get_global("bc_emit_func_def"), (LXValue[]){_v2456}, 1);
             px_srcline(2610);
-            (void)(px_method(px_index(_v2447, px_str("funcs")), "push", (LXValue[]){_v2465}, 1));
+            (void)(px_method(px_index(_v2454, px_str("funcs")), "push", (LXValue[]){_v2472}, 1));
         }
         px_srcline(2611);
-         _v2448 = px_add(_v2448, px_int(1LL));
+         _v2455 = px_add(_v2455, px_int(1LL));
     }
     px_srcline(2613);
-    _v2466 = px_list_n((LXValue[]){}, 0);
+    _v2473 = px_list_n((LXValue[]){}, 0);
     px_srcline(2614);
-     _v2448 = px_int(0LL);
+     _v2455 = px_int(0LL);
     px_srcline(2615);
-    while (px_is_truthy(px_lt(_v2448, px_call(px_get_global("len"), (LXValue[]){_v2446}, 1)))) {
+    while (px_is_truthy(px_lt(_v2455, px_call(px_get_global("len"), (LXValue[]){_v2453}, 1)))) {
         px_srcline(2616);
-        _v2449 = px_index(_v2446, _v2448);
+        _v2456 = px_index(_v2453, _v2455);
         px_srcline(2617);
-        _v2450 = px_index(_v2449, px_int(0LL));
+        _v2457 = px_index(_v2456, px_int(0LL));
         px_srcline(2618);
-        if (px_is_truthy(({ LXValue _t2476 = ({ LXValue _t2475 = ({ LXValue _t2474 = ({ LXValue _t2473 = ({ LXValue _t2472 = ({ LXValue _t2471 = ({ LXValue _t2470 = px_ne(_v2450, px_str("FuncDef")); px_is_truthy(_t2470) ? px_ne(_v2450, px_str("StructDef")) : _t2470; }); px_is_truthy(_t2471) ? px_ne(_v2450, px_str("EnumDef")) : _t2471; }); px_is_truthy(_t2472) ? px_ne(_v2450, px_str("TraitDef")) : _t2472; }); px_is_truthy(_t2473) ? px_ne(_v2450, px_str("ImplDef")) : _t2473; }); px_is_truthy(_t2474) ? px_ne(_v2450, px_str("Import")) : _t2474; }); px_is_truthy(_t2475) ? px_ne(_v2450, px_str("ExternDef")) : _t2475; }); px_is_truthy(_t2476) ? px_ne(_v2450, px_str("TypeConst")) : _t2476; }))) {
+        if (px_is_truthy(({ LXValue _t2487 = ({ LXValue _t2486 = ({ LXValue _t2485 = ({ LXValue _t2484 = ({ LXValue _t2483 = ({ LXValue _t2482 = ({ LXValue _t2481 = px_ne(_v2457, px_str("FuncDef")); px_is_truthy(_t2481) ? px_ne(_v2457, px_str("StructDef")) : _t2481; }); px_is_truthy(_t2482) ? px_ne(_v2457, px_str("EnumDef")) : _t2482; }); px_is_truthy(_t2483) ? px_ne(_v2457, px_str("TraitDef")) : _t2483; }); px_is_truthy(_t2484) ? px_ne(_v2457, px_str("ImplDef")) : _t2484; }); px_is_truthy(_t2485) ? px_ne(_v2457, px_str("Import")) : _t2485; }); px_is_truthy(_t2486) ? px_ne(_v2457, px_str("ExternDef")) : _t2486; }); px_is_truthy(_t2487) ? px_ne(_v2457, px_str("TypeConst")) : _t2487; }))) {
             px_srcline(2619);
-            (void)(px_method(_v2466, "append", (LXValue[]){_v2449}, 1));
+            (void)(px_method(_v2473, "append", (LXValue[]){_v2456}, 1));
         }
         px_srcline(2620);
-         _v2448 = px_add(_v2448, px_int(1LL));
+         _v2455 = px_add(_v2455, px_int(1LL));
     }
     px_srcline(2622);
-    _v2467 = px_bool(false);
+    _v2474 = px_bool(false);
     px_srcline(2623);
-     _v2448 = px_int(0LL);
+     _v2455 = px_int(0LL);
     px_srcline(2624);
-    while (px_is_truthy(px_lt(_v2448, px_call(px_get_global("len"), (LXValue[]){_v2446}, 1)))) {
+    while (px_is_truthy(px_lt(_v2455, px_call(px_get_global("len"), (LXValue[]){_v2453}, 1)))) {
         px_srcline(2625);
-        _v2449 = px_index(_v2446, _v2448);
+        _v2456 = px_index(_v2453, _v2455);
         px_srcline(2626);
-        if (px_is_truthy(({ LXValue _t2477 = px_eq(px_index(_v2449, px_int(0LL)), px_str("FuncDef")); px_is_truthy(_t2477) ? px_eq(px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2449, px_int(1LL))}, 1), px_str("main")) : _t2477; }))) {
+        if (px_is_truthy(({ LXValue _t2488 = px_eq(px_index(_v2456, px_int(0LL)), px_str("FuncDef")); px_is_truthy(_t2488) ? px_eq(px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(_v2456, px_int(1LL))}, 1), px_str("main")) : _t2488; }))) {
             px_srcline(2627);
-             _v2467 = px_bool(true);
+             _v2474 = px_bool(true);
         }
         px_srcline(2628);
-         _v2448 = px_add(_v2448, px_int(1LL));
+         _v2455 = px_add(_v2455, px_int(1LL));
     }
-    px_srcline(2629);
-    _v2468 = px_call(px_get_global("bc_emit_func_top"), (LXValue[]){_v2466, px_str("<top>"), _v2467}, 3);
     px_srcline(2630);
-    (void)(px_method(px_index(_v2447, px_str("funcs")), "push", (LXValue[]){_v2468}, 1));
+    _v2475 = px_bool(false);
     px_srcline(2631);
-    px_index_set(_v2447, px_str("top"), px_sub(px_call(px_get_global("len"), (LXValue[]){px_index(_v2447, px_str("funcs"))}, 1), px_int(1LL)));
+    _v2476 = px_int(0LL);
     px_srcline(2632);
-    return _v2447;
-px_err_2469:
-    if (px_err_2469_proped) return px_err_2469_val;
+    while (px_is_truthy(px_lt(_v2476, px_call(px_get_global("len"), (LXValue[]){_v2453}, 1)))) {
+        px_srcline(2633);
+        _v2477 = px_index(_v2453, _v2476);
+        px_srcline(2634);
+        if (px_is_truthy(px_eq(px_index(_v2477, px_int(0LL)), px_str("ExprStmt")))) {
+            px_srcline(2635);
+            _v2478 = px_index(_v2477, px_int(1LL));
+            px_srcline(2636);
+            if (px_is_truthy(({ LXValue _t2490 = ({ LXValue _t2489 = px_eq(px_index(_v2478, px_int(0LL)), px_str("Call")); px_is_truthy(_t2489) ? px_eq(px_index(px_index(_v2478, px_int(1LL)), px_int(0LL)), px_str("Var")) : _t2489; }); px_is_truthy(_t2490) ? px_eq(px_call(px_get_global("rust_unescape"), (LXValue[]){px_index(px_index(_v2478, px_int(1LL)), px_int(1LL))}, 1), px_str("main")) : _t2490; }))) {
+                px_srcline(2637);
+                 _v2475 = px_bool(true);
+            }
+        }
+        px_srcline(2638);
+         _v2476 = px_add(_v2476, px_int(1LL));
+    }
+    px_srcline(2639);
+    if (px_is_truthy(({ LXValue _t2491 = _v2474; px_is_truthy(_t2491) ? _v2475 : _t2491; }))) {
+        px_srcline(2640);
+         _v2474 = px_bool(false);
+    }
+    px_srcline(2641);
+    _v2479 = px_call(px_get_global("bc_emit_func_top"), (LXValue[]){_v2473, px_str("<top>"), _v2474}, 3);
+    px_srcline(2642);
+    (void)(px_method(px_index(_v2454, px_str("funcs")), "push", (LXValue[]){_v2479}, 1));
+    px_srcline(2643);
+    px_index_set(_v2454, px_str("top"), px_sub(px_call(px_get_global("len"), (LXValue[]){px_index(_v2454, px_str("funcs"))}, 1), px_int(1LL)));
+    px_srcline(2644);
+    return _v2454;
+px_err_2480:
+    if (px_err_2480_proped) return px_err_2480_val;
     return px_null();
 }
 
@@ -19981,119 +20041,7 @@ static LXValue fn_bc_dump_module(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_dump_module");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_dump_module", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_dump_module", 1, nargs);
-    LXValue _v2478 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2479 = px_uninit();
-    LXValue _v2480 = px_uninit();
-    LXValue _v2481 = px_uninit();
-    LXValue _v2482 = px_uninit();
-    LXValue _v2483 = px_uninit();
-    LXValue _v2484 = px_uninit();
-    LXValue _v2485 = px_uninit();
-    LXValue _v2486 = px_uninit();
-    LXValue _v2487 = px_uninit();
-    LXValue px_err_2488_val = px_null();
-    int px_err_2488_proped = 0;
-    px_srcline(2635);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("# BCModule "), px_index(_v2478, px_str("name")))}, 1));
-    px_srcline(2636);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("# K "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2478, px_str("k_pool"))}, 1)}, 1))}, 1));
-    px_srcline(2637);
-    _v2479 = px_int(0LL);
-    px_srcline(2638);
-    while (px_is_truthy(px_lt(_v2479, px_call(px_get_global("len"), (LXValue[]){px_index(_v2478, px_str("k_pool"))}, 1)))) {
-        px_srcline(2639);
-        _v2480 = px_index(px_index(_v2478, px_str("k_pool")), _v2479);
-        px_srcline(2640);
-        if (px_is_truthy(px_eq(px_index(_v2480, px_str("kind")), px_str("int")))) {
-            px_srcline(2641);
-            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s240 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2479}, 1)), px_str(" int ")); LXValue _s241 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2480, px_str("i"))}, 1); px_add(_s240, _s241); })}, 1));
-        }
-        else if (px_is_truthy(px_eq(px_index(_v2480, px_str("kind")), px_str("float")))) {
-            px_srcline(2643);
-            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s242 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2479}, 1)), px_str(" float ")); LXValue _s243 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2480, px_str("f"))}, 1); px_add(_s242, _s243); })}, 1));
-        }
-        else if (px_is_truthy(px_eq(px_index(_v2480, px_str("kind")), px_str("str")))) {
-            px_srcline(2645);
-            (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s244 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2479}, 1)), px_str(" str \"")); LXValue _s245 = px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2480, px_str("s"))}, 1); px_add(_s244, _s245); }), px_str("\""))}, 1));
-        }
-        else if (px_is_truthy(px_eq(px_index(_v2480, px_str("kind")), px_str("bool")))) {
-            px_srcline(2647);
-            _v2481 = px_str("false");
-            px_srcline(2648);
-            if (px_is_truthy(px_ne(px_index(_v2480, px_str("i")), px_int(0LL)))) {
-                px_srcline(2649);
-                 _v2481 = px_str("true");
-            }
-            px_srcline(2650);
-            (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2479}, 1)), px_str(" bool ")), _v2481)}, 1));
-        }
-        else if (px_is_truthy(px_eq(px_index(_v2480, px_str("kind")), px_str("func")))) {
-            px_srcline(2652);
-            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s246 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2479}, 1)), px_str(" func ")); LXValue _s247 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2480, px_str("i"))}, 1); px_add(_s246, _s247); })}, 1));
-        }
-        else {
-            px_srcline(2654);
-            (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2479}, 1)), px_str(" null"))}, 1));
-        }
-        px_srcline(2655);
-         _v2479 = px_add(_v2479, px_int(1LL));
-    }
-    px_srcline(2656);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("# G "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2478, px_str("globals"))}, 1)}, 1))}, 1));
-    px_srcline(2657);
-    _v2482 = px_int(0LL);
-    px_srcline(2658);
-    while (px_is_truthy(px_lt(_v2482, px_call(px_get_global("len"), (LXValue[]){px_index(_v2478, px_str("globals"))}, 1)))) {
-        px_srcline(2659);
-        (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("G "), px_call(px_get_global("str"), (LXValue[]){_v2482}, 1)), px_str(" ")), px_index(px_index(_v2478, px_str("globals")), _v2482))}, 1));
-        px_srcline(2660);
-         _v2482 = px_add(_v2482, px_int(1LL));
-    }
-    px_srcline(2661);
-    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s248 = px_add(px_add(px_str("# funcs "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2478, px_str("funcs"))}, 1)}, 1)), px_str(" top=")); LXValue _s249 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2478, px_str("top"))}, 1); px_add(_s248, _s249); })}, 1));
-    px_srcline(2662);
-    _v2483 = px_int(0LL);
-    px_srcline(2663);
-    while (px_is_truthy(px_lt(_v2483, px_call(px_get_global("len"), (LXValue[]){px_index(_v2478, px_str("funcs"))}, 1)))) {
-        px_srcline(2664);
-        _v2484 = px_index(px_index(_v2478, px_str("funcs")), _v2483);
-        px_srcline(2665);
-        _v2485 = px_str("");
-        px_srcline(2666);
-        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2484, px_str("upnames"))}, 1), px_int(0LL)))) {
-            px_srcline(2667);
-             _v2485 = px_add(({ LXValue _s250 = px_add(px_add(px_str(" up="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2484, px_str("upnames"))}, 1)}, 1)), px_str("[")); LXValue _s251 = px_call(px_get_global("join"), (LXValue[]){px_str(","), px_index(_v2484, px_str("upnames"))}, 2); px_add(_s250, _s251); }), px_str("]"));
-        }
-        px_srcline(2668);
-        (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s254 = px_add(({ LXValue _s252 = px_add(px_add(px_add(px_add(px_str("== func "), px_index(_v2484, px_str("name"))), px_str(" arity=")), px_call(px_get_global("str"), (LXValue[]){px_index(_v2484, px_str("arity"))}, 1)), px_str(" ndefault=")); LXValue _s253 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2484, px_str("ndefault"))}, 1); px_add(_s252, _s253); }), px_str(" nslots=")); LXValue _s255 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2484, px_str("nslots"))}, 1); px_add(_s254, _s255); }), _v2485)}, 1));
-        px_srcline(2669);
-        _v2486 = px_int(0LL);
-        px_srcline(2670);
-        while (px_is_truthy(px_lt(_v2486, px_call(px_get_global("len"), (LXValue[]){px_index(_v2484, px_str("bc"))}, 1)))) {
-            px_srcline(2671);
-            _v2487 = px_index(px_index(_v2484, px_str("bc")), _v2486);
-            px_srcline(2672);
-            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s260 = px_add(({ LXValue _s258 = px_add(({ LXValue _s256 = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v2486}, 1), px_str(":")), px_index(_v2487, px_int(0LL))), px_str(" ")); LXValue _s257 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2487, px_int(2LL))}, 1); px_add(_s256, _s257); }), px_str(" ")); LXValue _s259 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2487, px_int(3LL))}, 1); px_add(_s258, _s259); }), px_str(" ")); LXValue _s261 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2487, px_int(4LL))}, 1); px_add(_s260, _s261); })}, 1));
-            px_srcline(2673);
-             _v2486 = px_add(_v2486, px_int(1LL));
-        }
-        px_srcline(2674);
-         _v2483 = px_add(_v2483, px_int(1LL));
-    }
-px_err_2488:
-    if (px_err_2488_proped) return px_err_2488_val;
-    return px_null();
-}
-
-static LXValue fn_bc_emit_c_program(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    px_srcfunc("bc_emit_c_program");
-    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_c_program", 1, nargs);
-    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_c_program", 1, nargs);
-    LXValue _v2489 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2490 = px_uninit();
-    LXValue _v2491 = px_uninit();
-    LXValue _v2492 = px_uninit();
+    LXValue _v2492 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2493 = px_uninit();
     LXValue _v2494 = px_uninit();
     LXValue _v2495 = px_uninit();
@@ -20103,277 +20051,389 @@ static LXValue fn_bc_emit_c_program(LXValue* args, int nargs, void* ctx) {
     LXValue _v2499 = px_uninit();
     LXValue _v2500 = px_uninit();
     LXValue _v2501 = px_uninit();
-    LXValue _v2502 = px_uninit();
-    LXValue _v2503 = px_uninit();
+    LXValue px_err_2502_val = px_null();
+    int px_err_2502_proped = 0;
+    px_srcline(2647);
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("# BCModule "), px_index(_v2492, px_str("name")))}, 1));
+    px_srcline(2648);
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("# K "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2492, px_str("k_pool"))}, 1)}, 1))}, 1));
+    px_srcline(2649);
+    _v2493 = px_int(0LL);
+    px_srcline(2650);
+    while (px_is_truthy(px_lt(_v2493, px_call(px_get_global("len"), (LXValue[]){px_index(_v2492, px_str("k_pool"))}, 1)))) {
+        px_srcline(2651);
+        _v2494 = px_index(px_index(_v2492, px_str("k_pool")), _v2493);
+        px_srcline(2652);
+        if (px_is_truthy(px_eq(px_index(_v2494, px_str("kind")), px_str("int")))) {
+            px_srcline(2653);
+            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s240 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2493}, 1)), px_str(" int ")); LXValue _s241 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2494, px_str("i"))}, 1); px_add(_s240, _s241); })}, 1));
+        }
+        else if (px_is_truthy(px_eq(px_index(_v2494, px_str("kind")), px_str("float")))) {
+            px_srcline(2655);
+            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s242 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2493}, 1)), px_str(" float ")); LXValue _s243 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2494, px_str("f"))}, 1); px_add(_s242, _s243); })}, 1));
+        }
+        else if (px_is_truthy(px_eq(px_index(_v2494, px_str("kind")), px_str("str")))) {
+            px_srcline(2657);
+            (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s244 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2493}, 1)), px_str(" str \"")); LXValue _s245 = px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2494, px_str("s"))}, 1); px_add(_s244, _s245); }), px_str("\""))}, 1));
+        }
+        else if (px_is_truthy(px_eq(px_index(_v2494, px_str("kind")), px_str("bool")))) {
+            px_srcline(2659);
+            _v2495 = px_str("false");
+            px_srcline(2660);
+            if (px_is_truthy(px_ne(px_index(_v2494, px_str("i")), px_int(0LL)))) {
+                px_srcline(2661);
+                 _v2495 = px_str("true");
+            }
+            px_srcline(2662);
+            (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2493}, 1)), px_str(" bool ")), _v2495)}, 1));
+        }
+        else if (px_is_truthy(px_eq(px_index(_v2494, px_str("kind")), px_str("func")))) {
+            px_srcline(2664);
+            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s246 = px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2493}, 1)), px_str(" func ")); LXValue _s247 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2494, px_str("i"))}, 1); px_add(_s246, _s247); })}, 1));
+        }
+        else {
+            px_srcline(2666);
+            (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str("K "), px_call(px_get_global("str"), (LXValue[]){_v2493}, 1)), px_str(" null"))}, 1));
+        }
+        px_srcline(2667);
+         _v2493 = px_add(_v2493, px_int(1LL));
+    }
+    px_srcline(2668);
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("# G "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2492, px_str("globals"))}, 1)}, 1))}, 1));
+    px_srcline(2669);
+    _v2496 = px_int(0LL);
+    px_srcline(2670);
+    while (px_is_truthy(px_lt(_v2496, px_call(px_get_global("len"), (LXValue[]){px_index(_v2492, px_str("globals"))}, 1)))) {
+        px_srcline(2671);
+        (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("G "), px_call(px_get_global("str"), (LXValue[]){_v2496}, 1)), px_str(" ")), px_index(px_index(_v2492, px_str("globals")), _v2496))}, 1));
+        px_srcline(2672);
+         _v2496 = px_add(_v2496, px_int(1LL));
+    }
+    px_srcline(2673);
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s248 = px_add(px_add(px_str("# funcs "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2492, px_str("funcs"))}, 1)}, 1)), px_str(" top=")); LXValue _s249 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2492, px_str("top"))}, 1); px_add(_s248, _s249); })}, 1));
+    px_srcline(2674);
+    _v2497 = px_int(0LL);
+    px_srcline(2675);
+    while (px_is_truthy(px_lt(_v2497, px_call(px_get_global("len"), (LXValue[]){px_index(_v2492, px_str("funcs"))}, 1)))) {
+        px_srcline(2676);
+        _v2498 = px_index(px_index(_v2492, px_str("funcs")), _v2497);
+        px_srcline(2677);
+        _v2499 = px_str("");
+        px_srcline(2678);
+        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2498, px_str("upnames"))}, 1), px_int(0LL)))) {
+            px_srcline(2679);
+             _v2499 = px_add(({ LXValue _s250 = px_add(px_add(px_str(" up="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2498, px_str("upnames"))}, 1)}, 1)), px_str("[")); LXValue _s251 = px_call(px_get_global("join"), (LXValue[]){px_str(","), px_index(_v2498, px_str("upnames"))}, 2); px_add(_s250, _s251); }), px_str("]"));
+        }
+        px_srcline(2680);
+        (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s254 = px_add(({ LXValue _s252 = px_add(px_add(px_add(px_add(px_str("== func "), px_index(_v2498, px_str("name"))), px_str(" arity=")), px_call(px_get_global("str"), (LXValue[]){px_index(_v2498, px_str("arity"))}, 1)), px_str(" ndefault=")); LXValue _s253 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2498, px_str("ndefault"))}, 1); px_add(_s252, _s253); }), px_str(" nslots=")); LXValue _s255 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2498, px_str("nslots"))}, 1); px_add(_s254, _s255); }), _v2499)}, 1));
+        px_srcline(2681);
+        _v2500 = px_int(0LL);
+        px_srcline(2682);
+        while (px_is_truthy(px_lt(_v2500, px_call(px_get_global("len"), (LXValue[]){px_index(_v2498, px_str("bc"))}, 1)))) {
+            px_srcline(2683);
+            _v2501 = px_index(px_index(_v2498, px_str("bc")), _v2500);
+            px_srcline(2684);
+            (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s260 = px_add(({ LXValue _s258 = px_add(({ LXValue _s256 = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v2500}, 1), px_str(":")), px_index(_v2501, px_int(0LL))), px_str(" ")); LXValue _s257 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2501, px_int(2LL))}, 1); px_add(_s256, _s257); }), px_str(" ")); LXValue _s259 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2501, px_int(3LL))}, 1); px_add(_s258, _s259); }), px_str(" ")); LXValue _s261 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2501, px_int(4LL))}, 1); px_add(_s260, _s261); })}, 1));
+            px_srcline(2685);
+             _v2500 = px_add(_v2500, px_int(1LL));
+        }
+        px_srcline(2686);
+         _v2497 = px_add(_v2497, px_int(1LL));
+    }
+px_err_2502:
+    if (px_err_2502_proped) return px_err_2502_val;
+    return px_null();
+}
+
+static LXValue fn_bc_emit_c_program(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    px_srcfunc("bc_emit_c_program");
+    if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_emit_c_program", 1, nargs);
+    if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_emit_c_program", 1, nargs);
+    LXValue _v2503 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2504 = px_uninit();
     LXValue _v2505 = px_uninit();
     LXValue _v2506 = px_uninit();
-    LXValue px_err_2507_val = px_null();
-    int px_err_2507_proped = 0;
-    px_srcline(2681);
-    _v2490 = px_call(px_get_global("bc_emit_program"), (LXValue[]){_v2489}, 1);
-    px_srcline(2686);
-    _v2491 = px_list_n((LXValue[]){px_str("/* 由 bc_emit.px (M89-S3) 自动生成 — 字节码模块（VM 执行） */\n")}, 1);
-    px_srcline(2687);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("#include \"runtime.h\"\n#include \"vm.h\"\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n")}, 1));
-    px_srcline(2688);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const PxBCModule s_mod;\n\n")}, 1));
-    px_srcline(2690);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const PxK s_K[] = {\n")}, 1));
-    px_srcline(2691);
-    _v2492 = px_int(0LL);
-    px_srcline(2692);
-    while (px_is_truthy(px_lt(_v2492, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("k_pool"))}, 1)))) {
-        px_srcline(2693);
-        _v2493 = px_index(px_index(_v2490, px_str("k_pool")), _v2492);
-        px_srcline(2694);
-        if (px_is_truthy(px_eq(px_index(_v2493, px_str("kind")), px_str("int")))) {
-            px_srcline(2695);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_INT, "), px_call(px_get_global("str"), (LXValue[]){px_index(_v2493, px_str("i"))}, 1)), px_str(", 0, NULL},\n"))}, 1));
+    LXValue _v2507 = px_uninit();
+    LXValue _v2508 = px_uninit();
+    LXValue _v2509 = px_uninit();
+    LXValue _v2510 = px_uninit();
+    LXValue _v2511 = px_uninit();
+    LXValue _v2512 = px_uninit();
+    LXValue _v2513 = px_uninit();
+    LXValue _v2514 = px_uninit();
+    LXValue _v2515 = px_uninit();
+    LXValue _v2516 = px_uninit();
+    LXValue _v2517 = px_uninit();
+    LXValue _v2518 = px_uninit();
+    LXValue _v2519 = px_uninit();
+    LXValue _v2520 = px_uninit();
+    LXValue px_err_2521_val = px_null();
+    int px_err_2521_proped = 0;
+    px_srcline(2693);
+    _v2504 = px_call(px_get_global("bc_emit_program"), (LXValue[]){_v2503}, 1);
+    px_srcline(2698);
+    _v2505 = px_list_n((LXValue[]){px_str("/* 由 bc_emit.px (M89-S3) 自动生成 — 字节码模块（VM 执行） */\n")}, 1);
+    px_srcline(2699);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("#include \"runtime.h\"\n#include \"vm.h\"\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n")}, 1));
+    px_srcline(2700);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const PxBCModule s_mod;\n\n")}, 1));
+    px_srcline(2702);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const PxK s_K[] = {\n")}, 1));
+    px_srcline(2703);
+    _v2506 = px_int(0LL);
+    px_srcline(2704);
+    while (px_is_truthy(px_lt(_v2506, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("k_pool"))}, 1)))) {
+        px_srcline(2705);
+        _v2507 = px_index(px_index(_v2504, px_str("k_pool")), _v2506);
+        px_srcline(2706);
+        if (px_is_truthy(px_eq(px_index(_v2507, px_str("kind")), px_str("int")))) {
+            px_srcline(2707);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_INT, "), px_call(px_get_global("str"), (LXValue[]){px_index(_v2507, px_str("i"))}, 1)), px_str(", 0, NULL},\n"))}, 1));
         }
-        else if (px_is_truthy(px_eq(px_index(_v2493, px_str("kind")), px_str("float")))) {
-            px_srcline(2697);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_FLT, 0, "), px_call(px_get_global("cg_fmt_float"), (LXValue[]){px_index(_v2493, px_str("f"))}, 1)), px_str(", NULL},\n"))}, 1));
+        else if (px_is_truthy(px_eq(px_index(_v2507, px_str("kind")), px_str("float")))) {
+            px_srcline(2709);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_FLT, 0, "), px_call(px_get_global("cg_fmt_float"), (LXValue[]){px_index(_v2507, px_str("f"))}, 1)), px_str(", NULL},\n"))}, 1));
         }
-        else if (px_is_truthy(px_eq(px_index(_v2493, px_str("kind")), px_str("str")))) {
-            px_srcline(2700);
-            if (px_is_truthy(px_call(px_get_global("cg_has_nul"), (LXValue[]){px_index(_v2493, px_str("s"))}, 1))) {
-                px_srcline(2701);
-                (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    PXK_STR_LIT(\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2493, px_str("s"))}, 1)), px_str("\"),\n"))}, 1));
+        else if (px_is_truthy(px_eq(px_index(_v2507, px_str("kind")), px_str("str")))) {
+            px_srcline(2712);
+            if (px_is_truthy(px_call(px_get_global("cg_has_nul"), (LXValue[]){px_index(_v2507, px_str("s"))}, 1))) {
+                px_srcline(2713);
+                (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    PXK_STR_LIT(\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2507, px_str("s"))}, 1)), px_str("\"),\n"))}, 1));
             }
             else {
-                px_srcline(2703);
-                (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_STR, 0, 0, \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2493, px_str("s"))}, 1)), px_str("\"},\n"))}, 1));
+                px_srcline(2715);
+                (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_STR, 0, 0, \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2507, px_str("s"))}, 1)), px_str("\"},\n"))}, 1));
             }
         }
-        else if (px_is_truthy(px_eq(px_index(_v2493, px_str("kind")), px_str("bool")))) {
-            px_srcline(2705);
-            _v2494 = px_str("0");
-            px_srcline(2706);
-            if (px_is_truthy(px_ne(px_index(_v2493, px_str("i")), px_int(0LL)))) {
-                px_srcline(2707);
-                 _v2494 = px_str("1");
+        else if (px_is_truthy(px_eq(px_index(_v2507, px_str("kind")), px_str("bool")))) {
+            px_srcline(2717);
+            _v2508 = px_str("0");
+            px_srcline(2718);
+            if (px_is_truthy(px_ne(px_index(_v2507, px_str("i")), px_int(0LL)))) {
+                px_srcline(2719);
+                 _v2508 = px_str("1");
             }
-            px_srcline(2708);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_BOOL, "), _v2494), px_str(", 0, NULL},\n"))}, 1));
+            px_srcline(2720);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_BOOL, "), _v2508), px_str(", 0, NULL},\n"))}, 1));
         }
-        else if (px_is_truthy(px_eq(px_index(_v2493, px_str("kind")), px_str("func")))) {
-            px_srcline(2710);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_FUNC, "), px_call(px_get_global("str"), (LXValue[]){px_index(_v2493, px_str("i"))}, 1)), px_str(", 0, NULL},\n"))}, 1));
+        else if (px_is_truthy(px_eq(px_index(_v2507, px_str("kind")), px_str("func")))) {
+            px_srcline(2722);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    {PXK_FUNC, "), px_call(px_get_global("str"), (LXValue[]){px_index(_v2507, px_str("i"))}, 1)), px_str(", 0, NULL},\n"))}, 1));
         }
         else {
-            px_srcline(2712);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_str("    {PXK_NULL, 0, 0, NULL},\n")}, 1));
+            px_srcline(2724);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_str("    {PXK_NULL, 0, 0, NULL},\n")}, 1));
         }
-        px_srcline(2713);
-         _v2492 = px_add(_v2492, px_int(1LL));
+        px_srcline(2725);
+         _v2506 = px_add(_v2506, px_int(1LL));
     }
-    px_srcline(2714);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n\n")}, 1));
-    px_srcline(2716);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const char* s_N[] = {\n")}, 1));
-    px_srcline(2717);
-    _v2495 = px_int(0LL);
-    px_srcline(2718);
-    while (px_is_truthy(px_lt(_v2495, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("n_pool"))}, 1)))) {
-        px_srcline(2719);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2490, px_str("n_pool")), _v2495)}, 1)), px_str("\",\n"))}, 1));
-        px_srcline(2720);
-         _v2495 = px_add(_v2495, px_int(1LL));
-    }
-    px_srcline(2721);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n\n")}, 1));
-    px_srcline(2723);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const char* s_G[] = {\n")}, 1));
-    px_srcline(2724);
-    _v2496 = px_int(0LL);
-    px_srcline(2725);
-    while (px_is_truthy(px_lt(_v2496, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("globals"))}, 1)))) {
-        px_srcline(2726);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2490, px_str("globals")), _v2496)}, 1)), px_str("\",\n"))}, 1));
-        px_srcline(2727);
-         _v2496 = px_add(_v2496, px_int(1LL));
-    }
+    px_srcline(2726);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n\n")}, 1));
     px_srcline(2728);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const char* s_N[] = {\n")}, 1));
+    px_srcline(2729);
+    _v2509 = px_int(0LL);
     px_srcline(2730);
-    _v2497 = px_int(0LL);
-    px_srcline(2731);
-    while (px_is_truthy(px_lt(_v2497, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("structs"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2509, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("n_pool"))}, 1)))) {
+        px_srcline(2731);
+        (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2504, px_str("n_pool")), _v2509)}, 1)), px_str("\",\n"))}, 1));
         px_srcline(2732);
-        _v2498 = px_index(px_index(_v2490, px_str("structs")), _v2497);
-        px_srcline(2733);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("static const char* s_st_"), px_call(px_get_global("str"), (LXValue[]){_v2497}, 1)), px_str("[] = {\n"))}, 1));
-        px_srcline(2734);
-        _v2499 = px_int(0LL);
-        px_srcline(2735);
-        while (px_is_truthy(px_lt(_v2499, px_call(px_get_global("len"), (LXValue[]){px_index(_v2498, px_str("fnames"))}, 1)))) {
-            px_srcline(2736);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2498, px_str("fnames")), _v2499)}, 1)), px_str("\",\n"))}, 1));
-            px_srcline(2737);
-             _v2499 = px_add(_v2499, px_int(1LL));
-        }
+         _v2509 = px_add(_v2509, px_int(1LL));
+    }
+    px_srcline(2733);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n\n")}, 1));
+    px_srcline(2735);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const char* s_G[] = {\n")}, 1));
+    px_srcline(2736);
+    _v2510 = px_int(0LL);
+    px_srcline(2737);
+    while (px_is_truthy(px_lt(_v2510, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("globals"))}, 1)))) {
         px_srcline(2738);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n")}, 1));
+        (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2504, px_str("globals")), _v2510)}, 1)), px_str("\",\n"))}, 1));
         px_srcline(2739);
-         _v2497 = px_add(_v2497, px_int(1LL));
+         _v2510 = px_add(_v2510, px_int(1LL));
     }
     px_srcline(2740);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const PxStructDef s_structs[] = {\n")}, 1));
-    px_srcline(2741);
-     _v2497 = px_int(0LL);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n\n")}, 1));
     px_srcline(2742);
-    while (px_is_truthy(px_lt(_v2497, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("structs"))}, 1)))) {
-        px_srcline(2743);
-        _v2498 = px_index(px_index(_v2490, px_str("structs")), _v2497);
+    _v2511 = px_int(0LL);
+    px_srcline(2743);
+    while (px_is_truthy(px_lt(_v2511, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("structs"))}, 1)))) {
         px_srcline(2744);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_add(({ LXValue _s264 = px_add(({ LXValue _s262 = px_add(px_add(px_str("    {\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2498, px_str("name"))}, 1)), px_str("\", s_st_")); LXValue _s263 = px_call(px_get_global("str"), (LXValue[]){_v2497}, 1); px_add(_s262, _s263); }), px_str(", ")); LXValue _s265 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2498, px_str("fnames"))}, 1)}, 1); px_add(_s264, _s265); }), px_str("},\n"))}, 1));
+        _v2512 = px_index(px_index(_v2504, px_str("structs")), _v2511);
         px_srcline(2745);
-         _v2497 = px_add(_v2497, px_int(1LL));
-    }
-    px_srcline(2746);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n\n")}, 1));
-    px_srcline(2748);
-    _v2500 = px_int(0LL);
-    px_srcline(2749);
-    while (px_is_truthy(px_lt(_v2500, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("funcs"))}, 1)))) {
+        (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("static const char* s_st_"), px_call(px_get_global("str"), (LXValue[]){_v2511}, 1)), px_str("[] = {\n"))}, 1));
+        px_srcline(2746);
+        _v2513 = px_int(0LL);
+        px_srcline(2747);
+        while (px_is_truthy(px_lt(_v2513, px_call(px_get_global("len"), (LXValue[]){px_index(_v2512, px_str("fnames"))}, 1)))) {
+            px_srcline(2748);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    \""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2512, px_str("fnames")), _v2513)}, 1)), px_str("\",\n"))}, 1));
+            px_srcline(2749);
+             _v2513 = px_add(_v2513, px_int(1LL));
+        }
         px_srcline(2750);
-        _v2501 = px_index(px_index(_v2490, px_str("funcs")), _v2500);
+        (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n")}, 1));
         px_srcline(2751);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("static const PxInst s_bc_"), px_call(px_get_global("str"), (LXValue[]){_v2500}, 1)), px_str("[] = {\n"))}, 1));
-        px_srcline(2752);
-        _v2502 = px_int(0LL);
-        px_srcline(2753);
-        while (px_is_truthy(px_lt(_v2502, px_call(px_get_global("len"), (LXValue[]){px_index(_v2501, px_str("bc"))}, 1)))) {
-            px_srcline(2754);
-            _v2503 = px_index(px_index(_v2501, px_str("bc")), _v2502);
-            px_srcline(2760);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_call(px_get_global("join"), (LXValue[]){px_str(""), ({ LXValue _s266 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2503, px_int(1LL))}, 1); LXValue _s267 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2503, px_int(2LL))}, 1); LXValue _s268 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2503, px_int(3LL))}, 1); LXValue _s269 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2503, px_int(4LL))}, 1); px_list_n((LXValue[]){px_str("    {PXOP_"), px_index(_v2503, px_int(0LL)), px_str(", "), _s266, px_str(", "), _s267, px_str(", "), _s268, px_str(", "), _s269, px_str("},\n")}, 11); })}, 2)}, 1));
-            px_srcline(2761);
-             _v2502 = px_add(_v2502, px_int(1LL));
-        }
+         _v2511 = px_add(_v2511, px_int(1LL));
+    }
+    px_srcline(2752);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const PxStructDef s_structs[] = {\n")}, 1));
+    px_srcline(2753);
+     _v2511 = px_int(0LL);
+    px_srcline(2754);
+    while (px_is_truthy(px_lt(_v2511, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("structs"))}, 1)))) {
+        px_srcline(2755);
+        _v2512 = px_index(px_index(_v2504, px_str("structs")), _v2511);
+        px_srcline(2756);
+        (void)(px_method(_v2505, "push", (LXValue[]){px_add(({ LXValue _s264 = px_add(({ LXValue _s262 = px_add(px_add(px_str("    {\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2512, px_str("name"))}, 1)), px_str("\", s_st_")); LXValue _s263 = px_call(px_get_global("str"), (LXValue[]){_v2511}, 1); px_add(_s262, _s263); }), px_str(", ")); LXValue _s265 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2512, px_str("fnames"))}, 1)}, 1); px_add(_s264, _s265); }), px_str("},\n"))}, 1));
+        px_srcline(2757);
+         _v2511 = px_add(_v2511, px_int(1LL));
+    }
+    px_srcline(2758);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n\n")}, 1));
+    px_srcline(2760);
+    _v2514 = px_int(0LL);
+    px_srcline(2761);
+    while (px_is_truthy(px_lt(_v2514, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("funcs"))}, 1)))) {
         px_srcline(2762);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n")}, 1));
+        _v2515 = px_index(px_index(_v2504, px_str("funcs")), _v2514);
         px_srcline(2763);
-         _v2500 = px_add(_v2500, px_int(1LL));
-    }
-    px_srcline(2764);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("\n")}, 1));
-    px_srcline(2766);
-     _v2500 = px_int(0LL);
-    px_srcline(2767);
-    while (px_is_truthy(px_lt(_v2500, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("funcs"))}, 1)))) {
-        px_srcline(2768);
-        _v2501 = px_index(px_index(_v2490, px_str("funcs")), _v2500);
-        px_srcline(2769);
-        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2501, px_str("upnames"))}, 1), px_int(0LL)))) {
-            px_srcline(2770);
-            _v2504 = px_list_n((LXValue[]){}, 0);
-            px_srcline(2771);
-            _v2505 = px_int(0LL);
+        (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("static const PxInst s_bc_"), px_call(px_get_global("str"), (LXValue[]){_v2514}, 1)), px_str("[] = {\n"))}, 1));
+        px_srcline(2764);
+        _v2516 = px_int(0LL);
+        px_srcline(2765);
+        while (px_is_truthy(px_lt(_v2516, px_call(px_get_global("len"), (LXValue[]){px_index(_v2515, px_str("bc"))}, 1)))) {
+            px_srcline(2766);
+            _v2517 = px_index(px_index(_v2515, px_str("bc")), _v2516);
             px_srcline(2772);
-            while (px_is_truthy(px_lt(_v2505, px_call(px_get_global("len"), (LXValue[]){px_index(_v2501, px_str("upnames"))}, 1)))) {
-                px_srcline(2773);
-                (void)(px_method(_v2504, "push", (LXValue[]){px_add(px_add(px_str("\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2501, px_str("upnames")), _v2505)}, 1)), px_str("\""))}, 1));
-                px_srcline(2774);
-                 _v2505 = px_add(_v2505, px_int(1LL));
-            }
-            px_srcline(2775);
-            (void)(px_method(_v2491, "push", (LXValue[]){px_add(({ LXValue _s270 = px_add(px_add(px_str("static const char* s_up_"), px_call(px_get_global("str"), (LXValue[]){_v2500}, 1)), px_str("[] = {")); LXValue _s271 = px_call(px_get_global("join"), (LXValue[]){px_str(", "), _v2504}, 2); px_add(_s270, _s271); }), px_str("};\n"))}, 1));
+            (void)(px_method(_v2505, "push", (LXValue[]){px_call(px_get_global("join"), (LXValue[]){px_str(""), ({ LXValue _s266 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2517, px_int(1LL))}, 1); LXValue _s267 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2517, px_int(2LL))}, 1); LXValue _s268 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2517, px_int(3LL))}, 1); LXValue _s269 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2517, px_int(4LL))}, 1); px_list_n((LXValue[]){px_str("    {PXOP_"), px_index(_v2517, px_int(0LL)), px_str(", "), _s266, px_str(", "), _s267, px_str(", "), _s268, px_str(", "), _s269, px_str("},\n")}, 11); })}, 2)}, 1));
+            px_srcline(2773);
+             _v2516 = px_add(_v2516, px_int(1LL));
         }
-        px_srcline(2776);
-         _v2500 = px_add(_v2500, px_int(1LL));
+        px_srcline(2774);
+        (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n")}, 1));
+        px_srcline(2775);
+         _v2514 = px_add(_v2514, px_int(1LL));
     }
+    px_srcline(2776);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("\n")}, 1));
     px_srcline(2778);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const PxVMFunc s_funcs[] = {\n")}, 1));
+     _v2514 = px_int(0LL);
     px_srcline(2779);
-     _v2500 = px_int(0LL);
-    px_srcline(2780);
-    while (px_is_truthy(px_lt(_v2500, px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("funcs"))}, 1)))) {
+    while (px_is_truthy(px_lt(_v2514, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("funcs"))}, 1)))) {
+        px_srcline(2780);
+        _v2515 = px_index(px_index(_v2504, px_str("funcs")), _v2514);
         px_srcline(2781);
-        _v2501 = px_index(px_index(_v2490, px_str("funcs")), _v2500);
-        px_srcline(2782);
-        _v2506 = px_str(".upvals=NULL");
-        px_srcline(2783);
-        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2501, px_str("upnames"))}, 1), px_int(0LL)))) {
+        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2515, px_str("upnames"))}, 1), px_int(0LL)))) {
+            px_srcline(2782);
+            _v2518 = px_list_n((LXValue[]){}, 0);
+            px_srcline(2783);
+            _v2519 = px_int(0LL);
             px_srcline(2784);
-             _v2506 = ({ LXValue _s272 = px_add(px_add(px_str(".upvals=s_up_"), px_call(px_get_global("str"), (LXValue[]){_v2500}, 1)), px_str(", .nup=")); LXValue _s273 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2501, px_str("upnames"))}, 1)}, 1); px_add(_s272, _s273); });
+            while (px_is_truthy(px_lt(_v2519, px_call(px_get_global("len"), (LXValue[]){px_index(_v2515, px_str("upnames"))}, 1)))) {
+                px_srcline(2785);
+                (void)(px_method(_v2518, "push", (LXValue[]){px_add(px_add(px_str("\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(px_index(_v2515, px_str("upnames")), _v2519)}, 1)), px_str("\""))}, 1));
+                px_srcline(2786);
+                 _v2519 = px_add(_v2519, px_int(1LL));
+            }
+            px_srcline(2787);
+            (void)(px_method(_v2505, "push", (LXValue[]){px_add(({ LXValue _s270 = px_add(px_add(px_str("static const char* s_up_"), px_call(px_get_global("str"), (LXValue[]){_v2514}, 1)), px_str("[] = {")); LXValue _s271 = px_call(px_get_global("join"), (LXValue[]){px_str(", "), _v2518}, 2); px_add(_s270, _s271); }), px_str("};\n"))}, 1));
         }
-        px_srcline(2785);
-        (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_add(({ LXValue _s282 = px_add(({ LXValue _s280 = px_add(({ LXValue _s278 = px_add(({ LXValue _s276 = px_add(({ LXValue _s274 = px_add(px_add(px_str("    {.name=\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2501, px_str("name"))}, 1)), px_str("\", .arity=")); LXValue _s275 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2501, px_str("arity"))}, 1); px_add(_s274, _s275); }), px_str(", .ndefault=")); LXValue _s277 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2501, px_str("ndefault"))}, 1); px_add(_s276, _s277); }), px_str(", .nslots=")); LXValue _s279 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2501, px_str("nslots"))}, 1); px_add(_s278, _s279); }), px_str(", .bc=s_bc_")); LXValue _s281 = px_call(px_get_global("str"), (LXValue[]){_v2500}, 1); px_add(_s280, _s281); }), px_str(", .nbc=")); LXValue _s283 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2501, px_str("bc"))}, 1)}, 1); px_add(_s282, _s283); }), px_str(", .mod=&s_mod, ")), _v2506), px_str("},\n"))}, 1));
-        px_srcline(2786);
-         _v2500 = px_add(_v2500, px_int(1LL));
+        px_srcline(2788);
+         _v2514 = px_add(_v2514, px_int(1LL));
     }
-    px_srcline(2787);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n\n")}, 1));
-    px_srcline(2789);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("static const PxBCModule s_mod = {\n")}, 1));
     px_srcline(2790);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_add(({ LXValue _s284 = px_add(px_add(px_str("    .name=\"<module>\", .K=s_K, .nK="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("k_pool"))}, 1)}, 1)), px_str(", .N=s_N, .nN=")); LXValue _s285 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("n_pool"))}, 1)}, 1); px_add(_s284, _s285); }), px_str(",\n"))}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const PxVMFunc s_funcs[] = {\n")}, 1));
     px_srcline(2791);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_add(({ LXValue _s288 = px_add(({ LXValue _s286 = px_add(px_add(px_str("    .G=s_G, .nG="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("globals"))}, 1)}, 1)), px_str(", .funcs=s_funcs, .nfuncs=")); LXValue _s287 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("funcs"))}, 1)}, 1); px_add(_s286, _s287); }), px_str(", .top_idx=")); LXValue _s289 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2490, px_str("top"))}, 1); px_add(_s288, _s289); }), px_str(",\n"))}, 1));
+     _v2514 = px_int(0LL);
     px_srcline(2792);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_add(px_add(px_str("    .structs=s_structs, .nstructs="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2490, px_str("structs"))}, 1)}, 1)), px_str(",\n"))}, 1));
-    px_srcline(2793);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("};\n\n")}, 1));
-    px_srcline(2795);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("int main(int argc, char** argv) {\n")}, 1));
-    px_srcline(2796);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    px_args_init(argc, argv);\n")}, 1));
-    px_srcline(2797);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    px_register_builtins();\n")}, 1));
-    px_srcline(2798);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    px_gc_set_precise(1);   // M92-S2d：VM 轨产物默认 precise 精确根面（退役保守栈扫描；C 轨逃生舱产物不插此调用 → conservative）\n")}, 1));
+    while (px_is_truthy(px_lt(_v2514, px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("funcs"))}, 1)))) {
+        px_srcline(2793);
+        _v2515 = px_index(px_index(_v2504, px_str("funcs")), _v2514);
+        px_srcline(2794);
+        _v2520 = px_str(".upvals=NULL");
+        px_srcline(2795);
+        if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){px_index(_v2515, px_str("upnames"))}, 1), px_int(0LL)))) {
+            px_srcline(2796);
+             _v2520 = ({ LXValue _s272 = px_add(px_add(px_str(".upvals=s_up_"), px_call(px_get_global("str"), (LXValue[]){_v2514}, 1)), px_str(", .nup=")); LXValue _s273 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2515, px_str("upnames"))}, 1)}, 1); px_add(_s272, _s273); });
+        }
+        px_srcline(2797);
+        (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_add(({ LXValue _s282 = px_add(({ LXValue _s280 = px_add(({ LXValue _s278 = px_add(({ LXValue _s276 = px_add(({ LXValue _s274 = px_add(px_add(px_str("    {.name=\""), px_call(px_get_global("cg_escape_str"), (LXValue[]){px_index(_v2515, px_str("name"))}, 1)), px_str("\", .arity=")); LXValue _s275 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2515, px_str("arity"))}, 1); px_add(_s274, _s275); }), px_str(", .ndefault=")); LXValue _s277 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2515, px_str("ndefault"))}, 1); px_add(_s276, _s277); }), px_str(", .nslots=")); LXValue _s279 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2515, px_str("nslots"))}, 1); px_add(_s278, _s279); }), px_str(", .bc=s_bc_")); LXValue _s281 = px_call(px_get_global("str"), (LXValue[]){_v2514}, 1); px_add(_s280, _s281); }), px_str(", .nbc=")); LXValue _s283 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2515, px_str("bc"))}, 1)}, 1); px_add(_s282, _s283); }), px_str(", .mod=&s_mod, ")), _v2520), px_str("},\n"))}, 1));
+        px_srcline(2798);
+         _v2514 = px_add(_v2514, px_int(1LL));
+    }
     px_srcline(2799);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n")}, 1));
-    px_srcline(2800);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    int _code = 0;\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n\n")}, 1));
     px_srcline(2801);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    if (px_is_result(_r)) {\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("static const PxBCModule s_mod = {\n")}, 1));
     px_srcline(2802);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        if (!px_result_ok(_r)) {\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_add(({ LXValue _s284 = px_add(px_add(px_str("    .name=\"<module>\", .K=s_K, .nK="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("k_pool"))}, 1)}, 1)), px_str(", .N=s_N, .nN=")); LXValue _s285 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("n_pool"))}, 1)}, 1); px_add(_s284, _s285); }), px_str(",\n"))}, 1));
     px_srcline(2803);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("            fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_add(({ LXValue _s288 = px_add(({ LXValue _s286 = px_add(px_add(px_str("    .G=s_G, .nG="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("globals"))}, 1)}, 1)), px_str(", .funcs=s_funcs, .nfuncs=")); LXValue _s287 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("funcs"))}, 1)}, 1); px_add(_s286, _s287); }), px_str(", .top_idx=")); LXValue _s289 = px_call(px_get_global("str"), (LXValue[]){px_index(_v2504, px_str("top"))}, 1); px_add(_s288, _s289); }), px_str(",\n"))}, 1));
     px_srcline(2804);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("            _code = 1;\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_add(px_add(px_str("    .structs=s_structs, .nstructs="), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2504, px_str("structs"))}, 1)}, 1)), px_str(",\n"))}, 1));
     px_srcline(2805);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        } else {\n")}, 1));
-    px_srcline(2806);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("            LXValue _uv = px_result_unwrap(_r);\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("};\n\n")}, 1));
     px_srcline(2807);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("            if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("int main(int argc, char** argv) {\n")}, 1));
     px_srcline(2808);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        }\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    px_args_init(argc, argv);\n")}, 1));
     px_srcline(2809);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    } else if (_r.type == PX_INT) {\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    px_register_builtins();\n")}, 1));
     px_srcline(2810);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        _code = (int)_r.as.i;\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    px_gc_set_precise(1);   // M92-S2d：VM 轨产物默认 precise 精确根面（退役保守栈扫描；C 轨逃生舱产物不插此调用 → conservative）\n")}, 1));
     px_srcline(2811);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    }\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n")}, 1));
     px_srcline(2812);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    if (getenv(\"PX_BC_DUMP\")) {\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    int _code = 0;\n")}, 1));
     px_srcline(2813);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        int _i;\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    if (px_is_result(_r)) {\n")}, 1));
     px_srcline(2814);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        for (_i = 0; _i < (int)s_mod.nG; _i++) {\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        if (!px_result_ok(_r)) {\n")}, 1));
     px_srcline(2815);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("            LXValue _v = px_get_global(s_mod.G[_i]);\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("            fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n")}, 1));
     px_srcline(2816);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("            if (_v.type != PX_FUNC && _v.type != PX_NATIVE)\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("            _code = 1;\n")}, 1));
     px_srcline(2817);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        } else {\n")}, 1));
     px_srcline(2818);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("        }\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("            LXValue _uv = px_result_unwrap(_r);\n")}, 1));
     px_srcline(2819);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    }\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("            if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n")}, 1));
     px_srcline(2820);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("    return px_exit_code_final(_code);   // M120（qg-issue 76 E1）：协程隔离错误 → 退出码非 0\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        }\n")}, 1));
     px_srcline(2821);
-    (void)(px_method(_v2491, "push", (LXValue[]){px_str("}\n")}, 1));
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    } else if (_r.type == PX_INT) {\n")}, 1));
     px_srcline(2822);
-    return px_call(px_get_global("join"), (LXValue[]){px_str(""), _v2491}, 2);
-px_err_2507:
-    if (px_err_2507_proped) return px_err_2507_val;
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        _code = (int)_r.as.i;\n")}, 1));
+    px_srcline(2823);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    }\n")}, 1));
+    px_srcline(2824);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    if (getenv(\"PX_BC_DUMP\")) {\n")}, 1));
+    px_srcline(2825);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        int _i;\n")}, 1));
+    px_srcline(2826);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        for (_i = 0; _i < (int)s_mod.nG; _i++) {\n")}, 1));
+    px_srcline(2827);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("            LXValue _v = px_get_global(s_mod.G[_i]);\n")}, 1));
+    px_srcline(2828);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("            if (_v.type != PX_FUNC && _v.type != PX_NATIVE)\n")}, 1));
+    px_srcline(2829);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n")}, 1));
+    px_srcline(2830);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("        }\n")}, 1));
+    px_srcline(2831);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    }\n")}, 1));
+    px_srcline(2832);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("    return px_exit_code_final(_code);   // M120（qg-issue 76 E1）：协程隔离错误 → 退出码非 0\n")}, 1));
+    px_srcline(2833);
+    (void)(px_method(_v2505, "push", (LXValue[]){px_str("}\n")}, 1));
+    px_srcline(2834);
+    return px_call(px_get_global("join"), (LXValue[]){px_str(""), _v2505}, 2);
+px_err_2521:
+    if (px_err_2521_proped) return px_err_2521_val;
     return px_null();
 }
 
@@ -20382,39 +20442,39 @@ static LXValue fn_bc_basename(LXValue* args, int nargs, void* ctx) {
     px_srcfunc("bc_basename");
     if (nargs < 1) px_error("R1005: 调用 %s 参数不足: 需 %d 给 %d", "bc_basename", 1, nargs);
     if (nargs > 1) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "bc_basename", 1, nargs);
-    LXValue _v2508 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2509 = px_uninit();
-    LXValue _v2510 = px_uninit();
-    LXValue px_err_2511_val = px_null();
-    int px_err_2511_proped = 0;
+    LXValue _v2522 = (nargs > 0) ? args[0] : px_null();
+    LXValue _v2523 = px_uninit();
+    LXValue _v2524 = px_uninit();
+    LXValue px_err_2525_val = px_null();
+    int px_err_2525_proped = 0;
     px_srcline(75);
-    _v2509 = px_sub(px_call(px_get_global("len"), (LXValue[]){_v2508}, 1), px_int(1LL));
+    _v2523 = px_sub(px_call(px_get_global("len"), (LXValue[]){_v2522}, 1), px_int(1LL));
     px_srcline(76);
-    while (px_is_truthy(px_ge(_v2509, px_int(0LL)))) {
+    while (px_is_truthy(px_ge(_v2523, px_int(0LL)))) {
         px_srcline(77);
-        if (px_is_truthy(px_eq(px_index(_v2508, _v2509), px_str("/")))) {
+        if (px_is_truthy(px_eq(px_index(_v2522, _v2523), px_str("/")))) {
             px_srcline(78);
-            _v2510 = px_slice(_v2508, px_add(_v2509, px_int(1LL)), px_call(px_get_global("len"), (LXValue[]){_v2508}, 1), px_null());
+            _v2524 = px_slice(_v2522, px_add(_v2523, px_int(1LL)), px_call(px_get_global("len"), (LXValue[]){_v2522}, 1), px_null());
             px_srcline(79);
-            if (px_is_truthy(({ LXValue _t2512 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2510}, 1), px_int(3LL)); px_is_truthy(_t2512) ? px_eq(({ LXValue _s290 = px_sub(px_call(px_get_global("len"), (LXValue[]){_v2510}, 1), px_int(3LL)); LXValue _s291 = px_call(px_get_global("len"), (LXValue[]){_v2510}, 1); px_slice(_v2510, _s290, _s291, px_null()); }), px_str(".px")) : _t2512; }))) {
+            if (px_is_truthy(({ LXValue _t2526 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2524}, 1), px_int(3LL)); px_is_truthy(_t2526) ? px_eq(({ LXValue _s290 = px_sub(px_call(px_get_global("len"), (LXValue[]){_v2524}, 1), px_int(3LL)); LXValue _s291 = px_call(px_get_global("len"), (LXValue[]){_v2524}, 1); px_slice(_v2524, _s290, _s291, px_null()); }), px_str(".px")) : _t2526; }))) {
                 px_srcline(80);
-                return px_slice(_v2510, px_int(0LL), px_sub(px_call(px_get_global("len"), (LXValue[]){_v2510}, 1), px_int(3LL)), px_null());
+                return px_slice(_v2524, px_int(0LL), px_sub(px_call(px_get_global("len"), (LXValue[]){_v2524}, 1), px_int(3LL)), px_null());
             }
             px_srcline(81);
-            return _v2510;
+            return _v2524;
         }
         px_srcline(82);
-         _v2509 = px_sub(_v2509, px_int(1LL));
+         _v2523 = px_sub(_v2523, px_int(1LL));
     }
     px_srcline(83);
-    if (px_is_truthy(({ LXValue _t2513 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2508}, 1), px_int(3LL)); px_is_truthy(_t2513) ? px_eq(({ LXValue _s292 = px_sub(px_call(px_get_global("len"), (LXValue[]){_v2508}, 1), px_int(3LL)); LXValue _s293 = px_call(px_get_global("len"), (LXValue[]){_v2508}, 1); px_slice(_v2508, _s292, _s293, px_null()); }), px_str(".px")) : _t2513; }))) {
+    if (px_is_truthy(({ LXValue _t2527 = px_gt(px_call(px_get_global("len"), (LXValue[]){_v2522}, 1), px_int(3LL)); px_is_truthy(_t2527) ? px_eq(({ LXValue _s292 = px_sub(px_call(px_get_global("len"), (LXValue[]){_v2522}, 1), px_int(3LL)); LXValue _s293 = px_call(px_get_global("len"), (LXValue[]){_v2522}, 1); px_slice(_v2522, _s292, _s293, px_null()); }), px_str(".px")) : _t2527; }))) {
         px_srcline(84);
-        return px_slice(_v2508, px_int(0LL), px_sub(px_call(px_get_global("len"), (LXValue[]){_v2508}, 1), px_int(3LL)), px_null());
+        return px_slice(_v2522, px_int(0LL), px_sub(px_call(px_get_global("len"), (LXValue[]){_v2522}, 1), px_int(3LL)), px_null());
     }
     px_srcline(85);
-    return _v2508;
-px_err_2511:
-    if (px_err_2511_proped) return px_err_2511_val;
+    return _v2522;
+px_err_2525:
+    if (px_err_2525_proped) return px_err_2525_val;
     return px_null();
 }
 
@@ -20422,94 +20482,94 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
     if (nargs > 0) px_error("R1005: 调用 %s 参数过多: 最多 %d 给 %d", "main", 0, nargs);
-    LXValue _v2514 = px_uninit();
-    LXValue _v2515 = px_uninit();
-    LXValue _v2516 = px_uninit();
-    LXValue _v2517 = px_uninit();
-    LXValue _v2518 = px_uninit();
-    LXValue _v2519 = px_uninit();
-    LXValue _v2520 = px_uninit();
-    LXValue _v2521 = px_uninit();
-    LXValue _v2522 = px_uninit();
-    LXValue _v2523 = px_uninit();
-    LXValue _v2524 = px_uninit();
-    LXValue px_err_2525_val = px_null();
-    int px_err_2525_proped = 0;
+    LXValue _v2528 = px_uninit();
+    LXValue _v2529 = px_uninit();
+    LXValue _v2530 = px_uninit();
+    LXValue _v2531 = px_uninit();
+    LXValue _v2532 = px_uninit();
+    LXValue _v2533 = px_uninit();
+    LXValue _v2534 = px_uninit();
+    LXValue _v2535 = px_uninit();
+    LXValue _v2536 = px_uninit();
+    LXValue _v2537 = px_uninit();
+    LXValue _v2538 = px_uninit();
+    LXValue px_err_2539_val = px_null();
+    int px_err_2539_proped = 0;
     px_srcline(88);
-    _v2514 = px_call(px_get_global("args"), (LXValue[]){}, 0);
+    _v2528 = px_call(px_get_global("args"), (LXValue[]){}, 0);
     px_srcline(90);
-    if (px_is_truthy(({ LXValue _t2527 = px_eq(px_call(px_get_global("len"), (LXValue[]){_v2514}, 1), px_int(2LL)); px_is_truthy(_t2527) ? ({ LXValue _t2526 = px_eq(px_index(_v2514, px_int(1LL)), px_str("--version")); px_is_truthy(_t2526) ? _t2526 : px_eq(px_index(_v2514, px_int(1LL)), px_str("-v")); }) : _t2527; }))) {
+    if (px_is_truthy(({ LXValue _t2541 = px_eq(px_call(px_get_global("len"), (LXValue[]){_v2528}, 1), px_int(2LL)); px_is_truthy(_t2541) ? ({ LXValue _t2540 = px_eq(px_index(_v2528, px_int(1LL)), px_str("--version")); px_is_truthy(_t2540) ? _t2540 : px_eq(px_index(_v2528, px_int(1LL)), px_str("-v")); }) : _t2541; }))) {
         px_srcline(91);
         (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_add(px_str("pxc "), px_get_global("PXC_VER")), px_str(" (普贤 PuXian · selfhosted ")), px_get_global("PXC_MS")), px_str(")"))}, 1));
         px_srcline(92);
         return px_int(0LL);
     }
     px_srcline(95);
-    _v2515 = px_bool(false);
+    _v2529 = px_bool(false);
     px_srcline(96);
-    _v2516 = px_bool(false);
+    _v2530 = px_bool(false);
     px_srcline(97);
-    _v2517 = px_int(1LL);
+    _v2531 = px_int(1LL);
     px_srcline(98);
-    while (px_is_truthy(px_lt(_v2517, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2514}, 1), px_int(1LL))))) {
+    while (px_is_truthy(px_lt(_v2531, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2528}, 1), px_int(1LL))))) {
         px_srcline(99);
-        if (px_is_truthy(({ LXValue _t2528 = px_eq(px_index(_v2514, _v2517), px_str("bc")); px_is_truthy(_t2528) ? _t2528 : px_eq(px_index(_v2514, _v2517), px_str("--emit-c")); }))) {
+        if (px_is_truthy(({ LXValue _t2542 = px_eq(px_index(_v2528, _v2531), px_str("bc")); px_is_truthy(_t2542) ? _t2542 : px_eq(px_index(_v2528, _v2531), px_str("--emit-c")); }))) {
             px_srcline(100);
-             _v2515 = px_bool(true);
+             _v2529 = px_bool(true);
         }
         px_srcline(101);
-        if (px_is_truthy(px_eq(px_index(_v2514, _v2517), px_str("--emit-c")))) {
+        if (px_is_truthy(px_eq(px_index(_v2528, _v2531), px_str("--emit-c")))) {
             px_srcline(102);
-             _v2516 = px_bool(true);
+             _v2530 = px_bool(true);
         }
         px_srcline(103);
-         _v2517 = px_add(_v2517, px_int(1LL));
+         _v2531 = px_add(_v2531, px_int(1LL));
     }
     px_srcline(105);
-    _v2518 = px_index(_v2514, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2514}, 1), px_int(1LL)));
+    _v2532 = px_index(_v2528, px_sub(px_call(px_get_global("len"), (LXValue[]){_v2528}, 1), px_int(1LL)));
     px_srcline(106);
-    _v2519 = px_call(px_get_global("cg_dirname"), (LXValue[]){_v2518}, 1);
+    _v2533 = px_call(px_get_global("cg_dirname"), (LXValue[]){_v2532}, 1);
     px_srcline(107);
-    px_set_global("p_toks", px_call(px_get_global("lex_tokens"), (LXValue[]){px_call(px_get_global("read_file"), (LXValue[]){_v2518}, 1)}, 1));
+    px_set_global("p_toks", px_call(px_get_global("lex_tokens"), (LXValue[]){px_call(px_get_global("read_file"), (LXValue[]){_v2532}, 1)}, 1));
     px_srcline(108);
     px_set_global("p_pos", px_int(0LL));
     px_srcline(109);
     px_set_global("p_brack", px_int(0LL));
     px_srcline(110);
-    _v2520 = px_call(px_get_global("parse_program"), (LXValue[]){}, 0);
+    _v2534 = px_call(px_get_global("parse_program"), (LXValue[]){}, 0);
     px_srcline(111);
-    _v2521 = px_call(px_get_global("cg_resolve_modules"), (LXValue[]){_v2520, _v2519}, 2);
+    _v2535 = px_call(px_get_global("cg_resolve_modules"), (LXValue[]){_v2534, _v2533}, 2);
     px_srcline(112);
-    if (px_is_truthy(_v2515)) {
+    if (px_is_truthy(_v2529)) {
         px_srcline(113);
-        if (px_is_truthy(_v2516)) {
+        if (px_is_truthy(_v2530)) {
             px_srcline(114);
-            (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("bc_emit_c_program"), (LXValue[]){_v2521}, 1)}, 1));
+            (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("bc_emit_c_program"), (LXValue[]){_v2535}, 1)}, 1));
             px_srcline(115);
             return px_int(0LL);
         }
         px_srcline(116);
-        _v2522 = px_call(px_get_global("bc_emit_program"), (LXValue[]){_v2521}, 1);
+        _v2536 = px_call(px_get_global("bc_emit_program"), (LXValue[]){_v2535}, 1);
         px_srcline(117);
-        px_index_set(_v2522, px_str("name"), px_call(px_get_global("bc_basename"), (LXValue[]){_v2518}, 1));
+        px_index_set(_v2536, px_str("name"), px_call(px_get_global("bc_basename"), (LXValue[]){_v2532}, 1));
         px_srcline(118);
-        (void)(px_call(px_get_global("bc_dump_module"), (LXValue[]){_v2522}, 1));
+        (void)(px_call(px_get_global("bc_dump_module"), (LXValue[]){_v2536}, 1));
         px_srcline(119);
         return px_int(0LL);
     }
     px_srcline(120);
-    _v2523 = px_call(px_get_global("cg_generate"), (LXValue[]){_v2521}, 1);
+    _v2537 = px_call(px_get_global("cg_generate"), (LXValue[]){_v2535}, 1);
     px_srcline(122);
-    _v2524 = px_call(px_get_global("len"), (LXValue[]){_v2523}, 1);
+    _v2538 = px_call(px_get_global("len"), (LXValue[]){_v2537}, 1);
     px_srcline(123);
-    if (px_is_truthy(({ LXValue _t2529 = px_gt(_v2524, px_int(0LL)); px_is_truthy(_t2529) ? px_eq(px_index(_v2523, px_sub(_v2524, px_int(1LL))), px_str("\n")) : _t2529; }))) {
+    if (px_is_truthy(({ LXValue _t2543 = px_gt(_v2538, px_int(0LL)); px_is_truthy(_t2543) ? px_eq(px_index(_v2537, px_sub(_v2538, px_int(1LL))), px_str("\n")) : _t2543; }))) {
         px_srcline(124);
-         _v2523 = px_slice(_v2523, px_int(0LL), px_sub(_v2524, px_int(1LL)), px_null());
+         _v2537 = px_slice(_v2537, px_int(0LL), px_sub(_v2538, px_int(1LL)), px_null());
     }
     px_srcline(125);
-    (void)(px_call(px_get_global("print"), (LXValue[]){_v2523}, 1));
-px_err_2525:
-    if (px_err_2525_proped) return px_err_2525_val;
+    (void)(px_call(px_get_global("print"), (LXValue[]){_v2537}, 1));
+px_err_2539:
+    if (px_err_2539_proped) return px_err_2539_val;
     return px_null();
 }
 
