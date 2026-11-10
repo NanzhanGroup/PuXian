@@ -1705,6 +1705,19 @@ jobs:
           bash examples/m384_px_defects/verify.sh > /tmp/v_pxdefects.log 2>&1 || { echo "❌ m384_px_defects 门失败（运行时/词法缺陷回归）"; tail -40 /tmp/v_pxdefects.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_pxdefects.log | tail -8
           echo "✅ m384_px_defects（空输入不崩 + 严格 base64 + JSON 转义 + 词法转义 + fd 直写）PASS"
+      - name: m386_px_semantics（N2 三条 · M386 · 缺陷 691/692/693）
+        # 判据：[1][2][3] 解释轨/VM 轨/C 轨「显式 main 只跑一次」（修前两条轨都跑两遍）
+        #       + 负控「不显式调用仍自动跑一次」（自动入口的糖不许被整个删掉）
+        #       · [4] 顶层其它语句仍执行 · [5] strict 族合法侧与旧函数逐字节一致（含空体/bytes）
+        #       · [6] 4 类非法入参各 R1002 + 负控「sha256(null) == sha256("null") 冻结」（M233 契约）
+        #       · [7] hmac 两参各拒 null · [8] file_size_opt 存在/缺失/目录 + 负控「旧 file_size 仍抛错」
+        #       · [9s] 三名册三处登记 + 三轨检测都在场（防止只修一条轨）。
+        #   ⚠ 本门依赖**已重烘**的入库件（runtime + selfhost 改动必须先 --rebake-all）。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m386_px_semantics/verify.sh > /tmp/v_pxsem.log 2>&1 || { echo "❌ m386_px_semantics 门失败（main 双跑 / 哈希 strict / file_size_opt 回归）"; tail -40 /tmp/v_pxsem.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_pxsem.log | tail -8
+          echo "✅ m386_px_semantics（三轨 main 单跑 + 哈希 strict 族 + file_size_opt）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

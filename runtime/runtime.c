@@ -8607,6 +8607,20 @@ static LXValue bi_file_size(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)st.st_size);
 }
 
+// file_size_opt(path) → int|null（M386 / PX-031）：失败返回 null，**不抛错**。
+//   为什么不改 file_size：它「失败即 px_error」是既定契约（语言无 try/catch 时，
+//   抛错至少不会静默）；真正的缺口是「探路场景没法降级」——先 exists() 再 file_size()
+//   中间有 TOCTOU 窗口（文件可能正好被删）。同族先例：file_stat 返回 null、read_file_opt。
+//   ⇒ 新变体对齐 file_stat 语义，旧函数一字不动。
+static LXValue bi_file_size_opt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: file_size_opt 需要一个路径参数");
+    const char* path = args[0].as.obj->as.str.data;
+    struct stat st;
+    if (stat(path, &st) != 0) return px_null();
+    return px_int((int64_t)st.st_size);
+}
+
 // fsync_file(path) → null：将文件数据刷入磁盘（WAL 落盘保证）
 static LXValue bi_fsync_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -9702,6 +9716,20 @@ static LXValue bi_bit_length(LXValue* args, int nargs, void* ctx) {
     return px_int(bits);
 }
 
+// M386（PX-007 / 缺陷 691）：哈希族的 *_strict 变体 —— **只收 str|bytes**。
+//   为什么不改旧函数：M129/M233 定过「任意值 → 其 str() 形态 → 哈希」的契约，
+//   并且被 examples/m233_text_cstr 断言保护（sha256(int/list/dict/null) 全部有 cases）。
+//   但签名场景里「无请求体」极易写成 sha256(body)（body==null）⇒ 静默签的是字面 "null"
+//   四字符，症状是「有体的 POST 全正常、无体的 GET/DELETE 401」，排查会先怀疑私钥。
+//   ⇒ 沿用 M384 对 base64 的同一手法：旧函数一字不动，新增严格变体给安全敏感路径用。
+static const char* px_hash_arg_strict(LXValue v, const char* fname, const char* pname, int* out_len) {
+    if (v.type != PX_STR && v.type != PX_BYTES)
+        px_error("R1002: %s 的 %s 需要字符串或 bytes，实际是 %s（无内容请传 \"\"，不要传 null）",
+                 fname, pname, px_type_name(v));
+    *out_len = v.as.obj->as.str.len;
+    return v.as.obj->as.str.data;
+}
+
 // sha256(data) → 64 字符小写 hex 字符串（mbedtls 实现，与解释器一致）
 // M84-S2（Issue 21）：bdata/blen 二进制安全——接受 str|bytes|数值，bytes 与含 NUL 载荷
 // 完整哈希（不再被 strlen 截断）；纯 ASCII str 输出与旧版逐字节一致（零回归）。
@@ -9713,6 +9741,20 @@ static LXValue bi_sha256(LXValue* args, int nargs, void* ctx) {
     unsigned char digest[32];
     if (mbedtls_sha256((const unsigned char*)data, (size_t)len, digest, 0) != 0)
         px_error("sha256 计算失败");
+    char hex[65];
+    bytes_to_hex(digest, 32, hex);
+    return px_str(hex);
+}
+
+// sha256_strict(data) → 64 字符小写 hex（M386：只收 str|bytes，其余 R1002）
+static LXValue bi_sha256_strict(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: sha256_strict 需要一个参数");
+    int len = 0;
+    const char* data = px_hash_arg_strict(args[0], "sha256_strict", "data", &len);
+    unsigned char digest[32];
+    if (mbedtls_sha256((const unsigned char*)data, (size_t)len, digest, 0) != 0)
+        px_error("sha256_strict 计算失败");
     char hex[65];
     bytes_to_hex(digest, 32, hex);
     return px_str(hex);
@@ -9737,6 +9779,20 @@ static LXValue bi_hmac_sha256(LXValue* args, int nargs, void* ctx) {
     return px_str(hex);
 }
 
+
+// hmac_sha256_strict(key, msg) → 64 字符小写 hex（M386：两参都只收 str|bytes）
+static LXValue bi_hmac_sha256_strict(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: hmac_sha256_strict 需要 (key, msg) 参数");
+    int kl = 0, ml = 0;
+    const char* kd = px_hash_arg_strict(args[0], "hmac_sha256_strict", "key", &kl);
+    const char* md = px_hash_arg_strict(args[1], "hmac_sha256_strict", "msg", &ml);
+    unsigned char digest[32];
+    px_hmac_sha256((const unsigned char*)kd, kl, (const unsigned char*)md, ml, digest);
+    char hex[65];
+    bytes_to_hex(digest, 32, hex);
+    return px_str(hex);
+}
 
 // hmac_sha1(key, msg) → 40 字符小写 hex（HMAC-SHA1）
 // hmac_sha1_bytes(key, msg) → 20 字节
@@ -12944,6 +13000,7 @@ void px_register_builtins(void) {
     px_set_global("read_at", px_native("read_at", bi_read_at));
     px_set_global("write_at", px_native("write_at", bi_write_at));
     px_set_global("file_size", px_native("file_size", bi_file_size));
+    px_set_global("file_size_opt", px_native("file_size_opt", bi_file_size_opt));   // M386（PX-031）
     // M129（qg-issue 87 缺陷 44）：is_dir(path) → bool —— Go `fi.IsDir()` 的等价物。
     //   背景：native 表有 exists/file_size/list_dir，但**没有**「路径是不是目录」的判定。
     //   `exists()` 对目录返回 **true**（与文件不可区分）；`file_size()` 对目录返回目录项
@@ -12984,6 +13041,7 @@ void px_register_builtins(void) {
     px_set_global("fd_wait", px_native("fd_wait", bi_fd_wait));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
+    px_set_global("sha256_strict", px_native("sha256_strict", bi_sha256_strict));   // M386（缺陷 691）
     // M188（PX-DEF-026/016/012/017）：SHA1 族 + 三件安全替代
     px_set_global("sha1", px_native("sha1", bi_sha1));
     px_set_global("sha1_bytes", px_native("sha1_bytes", bi_sha1_bytes));
@@ -12992,6 +13050,7 @@ void px_register_builtins(void) {
     px_set_global("byte", px_native("byte", bi_byte));
     px_set_global("str_index_of", px_native("str_index_of", bi_str_index_of));   // M188：方法面 .find 的同一实现
     px_set_global("hmac_sha256", px_native("hmac_sha256", bi_hmac_sha256));  // M84-S2 (Issue 21 GAP-HMAC-1)
+    px_set_global("hmac_sha256_strict", px_native("hmac_sha256_strict", bi_hmac_sha256_strict));  // M386（缺陷 691）
     px_set_global("hmac_sha1", px_native("hmac_sha1", bi_hmac_sha1));                 // M202 (PX-DEF-033)
     px_set_global("hmac_sha1_bytes", px_native("hmac_sha1_bytes", bi_hmac_sha1_bytes)); // M202 (PX-DEF-033)
     px_set_global("dns_lookup", px_native("dns_lookup", bi_dns_lookup));     // M84-S3 (Issue 22 GAP-DNS-1)

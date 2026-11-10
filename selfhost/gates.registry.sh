@@ -1970,3 +1970,19 @@ run m376_sigterm_drain bash examples/m376_sigterm_drain/verify.sh
 #     PX-024 /dev/stdout fd 直写（负控：普通路径 O_TRUNC 语义不许被改）+ 静态分支在场。
 #   ⚠ 本门与 runtime/*.c 强相关 ⇒ 改 runtime 后**必须先 --rebake-all 重烘 14 件**，否则测的是旧运行时（假红）。
 run m384_px_defects bash examples/m384_px_defects/verify.sh
+
+# ── M386 · N2：三条「会改可观测行为」的收口（PX-007 / PX-013 / PX-031）──────────
+#   口径（用户 2026-11-10 10:36 令「自主决策/自主立项/自主推进」）：**有契约保护的不动，
+#   加安全变体；无契约保护的直接修**。
+#     PX-013（缺陷 692）def main() + 顶层显式 main() ⇒ 跑两遍 ⇒ **直接修**
+#       （无用例保护双跑；L009 警告自己就写着"副作用全部翻倍"）。三条轨（解释/C/VM）同改。
+#     PX-007（缺陷 691）sha256(null) == sha256("null") ⇒ **旧函数不动**（M129/M233 契约，
+#       examples/m233_text_cstr 系统断言），新增 sha256_strict / hmac_sha256_strict。
+#     PX-031（缺陷 693）file_size 失败即 px_error ⇒ **旧函数不动**（无 try/catch 时抛错不静默），
+#       新增 file_size_opt（失败 null，对齐 file_stat）。
+#   判据：三轨各「显式 main 只跑一次」+ 负控「不显式调用仍自动跑一次」（糖不许被删）·
+#     strict 族合法侧与旧函数逐字节一致 + 4 类非法入参各 R1002 +
+#     负控「sha256(null) 旧语义冻结」· file_size_opt 正常/缺失/目录 + 负控「旧 file_size 仍抛错」·
+#     静态：三名册三处登记 + 三轨检测都在场（防止只修一条轨）。
+#   ⚠ 改 runtime/*.c + selfhost/*.px ⇒ 必须先 --rebake-all 重烘 14 件，否则门测的是旧件（假红）。
+run m386_px_semantics bash examples/m386_px_semantics/verify.sh

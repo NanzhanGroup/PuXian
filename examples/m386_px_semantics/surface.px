@@ -1,0 +1,25 @@
+# M386 · 「安全变体」三件最小冒烟（**提交入库** · 两个用途）
+# ------------------------------------------------------------
+# ① 可手工跑：`./bootstrap/pxi examples/m386_px_semantics/surface.px`
+# ② ⭐ 让 `selfhost/check_native_coverage.py` 的语料面看见三个新 native
+#    （本门对拍用例由 verify.sh 运行期生成到 /tmp，仓库里没有 .px 痕迹；
+#     台账消费面只扫 `.px` ⇒ 不提交本文件，新 native 会被记成「新增未覆盖」）。
+#    同 examples/m384_px_defects/surface.px 的约定。
+#
+# 真值：
+#   sha256_strict("abc")      == sha256("abc")           （合法侧逐字节一致）
+#   sha256_strict(bytes(""))  == sha256("")              （空体合法，不等于 "null"）
+#   hmac_sha256_strict("k","m") == hmac_sha256("k","m")
+#   file_size_opt(<存在的文件>) → int ≥ 0
+#   file_size_opt(<不存在>)     → null（**不抛错**，对齐 file_stat）
+#   sha256(null)              == sha256("null")          （M233 旧契约冻结，不许被顺手改）
+def surface():
+    var r = []
+    r.append(sha256_strict("abc") == sha256("abc"))
+    r.append(sha256_strict(bytes("")) == sha256(""))
+    r.append(hmac_sha256_strict("k", "m") == hmac_sha256("k", "m"))
+    r.append(sha256(null) == sha256("null"))
+    r.append(file_size_opt("/etc/hostname") != null)
+    r.append(file_size_opt("/nonexistent_zzz_404") == null)
+    print(json_stringify(r))
+surface()

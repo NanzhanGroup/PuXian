@@ -1,4 +1,4 @@
-examples/issue28_b1/b1_daemon.px src=7ff7446cdeacc5c5 rc=0 out=1418aa5969a13bbeaf7cb0762c123107 err=e3b0c44298fc1c14
+examples/issue28_b1/b1_daemon.px src=7ff7446cdeacc5c5 rc=0 out=3b106b790589048825b451fbacb60c16 err=e3b0c44298fc1c14
 examples/issue28_b2/mini.px src=2ce907a7cfd031cd rc=0 out=4abfbbe81d41987b170e05792d9ee0c8 err=e3b0c44298fc1c14
 examples/issue28_b2/wave.px src=3fceaae2d4f387db rc=0 out=1f6c8e06b2c61473627b9671f96e35d9 err=e3b0c44298fc1c14
 examples/issue28_b2/wave_small.px src=10de1ba20bf26433 rc=0 out=43596d8bedebcb98e3f6f7eb9b6b393a err=e3b0c44298fc1c14
@@ -34,13 +34,13 @@ examples/m126_signal_isolate/sig_isolate.px src=8dc13e53a5af41a7 rc=0 out=b44f12
 examples/m127_unwind_lock/unwind_lock.px src=164b114a731a2d0f rc=0 out=ad81fde8a63c122fbbedaa1327d34141 err=e3b0c44298fc1c14
 examples/m128_unlock_grow/unlock_grow.px src=7c2c1483719946a7 rc=0 out=f0c37d291059c1f4c7cbb38f6ae393cc err=e3b0c44298fc1c14
 examples/m130_flock_chmod/flock_chmod.px src=60af0f3c24eed94f rc=0 out=5c61d9d919be9cb353d203814ebe8243 err=e3b0c44298fc1c14
-examples/m131_http_stream_post/stream_post.px src=d9e8ba5ff1cbb78d rc=0 out=88cabb0a2eb44b4c3fbb33e55205a387 err=e3b0c44298fc1c14
+examples/m131_http_stream_post/stream_post.px src=d9e8ba5ff1cbb78d rc=0 out=d4197914a4ee4a8b32823adfdeaebbdd err=e3b0c44298fc1c14
 examples/m132_sse_chunked/proxy.px src=e8ba77f5028de7d7 rc=0 out=15c78c0c490fe441274bde24195cf2f8 err=e3b0c44298fc1c14
 examples/m132_sse_chunked/sse_chunked.px src=0a544a85793ba67d rc=0 out=cabf24c6f8972e869ab53ee69d8e748a err=e3b0c44298fc1c14
 examples/m133_http_unix_timeout/http_unix_timeout.px src=1015f378d6bf9220 rc=0 out=b6fb7ab729b38a4575615eafb3633ff6 err=e3b0c44298fc1c14
 examples/m134_gc_obj_roots/gc_obj_roots.px src=7cf5c2ac3c912e3f rc=0 out=7e4f7e77c1cf526bd4f111caba004ec6 err=e3b0c44298fc1c14
 examples/m136_go_json_fidelity/fidelity.px src=e40208c7f5d69c12 rc=0 out=f93e23ab73a28940b282bb1ca591ab69 err=e3b0c44298fc1c14
-examples/m137_sse_connect_ex/sse_connect_ex.px src=920035bd7c9d0eab rc=0 out=f10066e59be11df133256783f21bb906 err=e3b0c44298fc1c14
+examples/m137_sse_connect_ex/sse_connect_ex.px src=920035bd7c9d0eab rc=0 out=bc508862a5ed2d6026c61c0ecc29e262 err=e3b0c44298fc1c14
 examples/m138_regex_go_parity/parity.px src=af34e7922797b187 rc=0 out=bf4cc99b1a683f33a2d8ed75519a09ed err=e3b0c44298fc1c14
 examples/m139_bare_ident_stmt/bad_ident.px src=0d27759bba6f0a45 rc=1 out=e3b0c44298fc1c149afbf4c8996fb924 err=c028c0aca0c491c5
 examples/m139_bare_ident_stmt/bad_indent.px src=f6d70d76443e969c rc=1 out=e3b0c44298fc1c149afbf4c8996fb924 err=5e9034acac30427a
@@ -240,9 +240,9 @@ examples/m231_op_matrix/drv.px src=cdab51d235c66f97 rc=0 out=b4a3a1807a43ede0574
 examples/m232_truthiness/drv.px src=21eca09432dac53c rc=0 out=9f8fcf845c71e584d9710f5b6aade6c1 err=e3b0c44298fc1c14
 examples/m233_text_cstr/drv.px src=20f3c1e13bfb1aa7 rc=0 out=69bdeb5f923d2fdf730d194f186660e3 err=e3b0c44298fc1c14
 examples/m234_bytes_family/drv.px src=1e391fd51537ce54 rc=0 out=e5e0e70833c004b152398a998283c4ca err=e3b0c44298fc1c14
-examples/m235_ws_conn_uaf/ws_meta_probe.px src=e259bbf27f3ac335 rc=0 out=ae686227cc4053f5417693e220706a7d err=e3b0c44298fc1c14
-examples/m235_ws_conn_uaf/ws_relay_repro.px src=f41cf8d1a4efecac rc=0 out=0aee10c14ec0d3b9f02bf837954b2e22 err=e3b0c44298fc1c14
-examples/m235_ws_conn_uaf/ws_uaf_repro.px src=eb6562a710f553ef rc=0 out=b72103560f212b77cb5429f87c43a94f err=e3b0c44298fc1c14
+examples/m235_ws_conn_uaf/ws_meta_probe.px src=e259bbf27f3ac335 rc=0 out=7e187f0bc71eb6250b2f06e7cc0fdd4b err=e3b0c44298fc1c14
+examples/m235_ws_conn_uaf/ws_relay_repro.px src=f41cf8d1a4efecac rc=0 out=4fbdcecc04a01c315954d4a4f60157be err=e3b0c44298fc1c14
+examples/m235_ws_conn_uaf/ws_uaf_repro.px src=eb6562a710f553ef rc=0 out=e05cc2bf361ed60d45c4f84bad824e87 err=e3b0c44298fc1c14
 examples/m236_ws_stream/cli.px src=7f895cc61443187a rc=0 out=4e9e84d5a65f32f997ff507dbe7f8190 err=e3b0c44298fc1c14
 examples/m236_ws_stream/rej_conflict.px src=ed930f80ca1b4bb8 rc=0 out=bd0975b80769bb161f16834174631613 err=e3b0c44298fc1c14
 examples/m236_ws_stream/rej_headers.px src=cc88bc62fb1b09d2 rc=0 out=2d6657913d5d2b9c132b184a517d76bb err=e3b0c44298fc1c14
@@ -328,6 +328,7 @@ examples/m375_ws_connect_timeout/cli.px src=5f1e13036c309709 rc=0 out=483f2a6043
 examples/m376_sigterm_drain/probe.px src=f89036f4d0479957 rc=0 out=fc6a5441b7cf6e39b2bbd745f6a72bce err=e3b0c44298fc1c14
 examples/m376_sigterm_drain/srv.px src=60a29eedda2d6ac7 rc=0 out=a7a10d6f5540ce11da0d8ea906832877 err=e3b0c44298fc1c14
 examples/m384_px_defects/surface.px src=1f5fe5b1fa90354a rc=0 out=3f165c12f1a88dcc80858cf858cf23f9 err=e3b0c44298fc1c14
+examples/m386_px_semantics/surface.px src=12622b67cb0862e7 rc=0 out=543667dce38de934dcf030bf2e57efc0 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -455,7 +456,7 @@ examples/m90_s1/cmpsem.px src=d266163f874b1d34 rc=0 out=2c81285a7ad3a41f13f9c579
 examples/m90_s1/default_args.px src=cee6d50c4d440539 rc=0 out=510ae31fe13bd0f1b59e8e4c9a88dad7 err=e3b0c44298fc1c14
 examples/m90_s1/seg11.px src=4eccc2432bf1b53b rc=0 out=6e86c36f562d8cdbd646f4f2b56f3274 err=e3b0c44298fc1c14
 examples/m90_s1/t1_bc.px src=d00540972a24afca rc=0 out=5166a66b29533e1ff327e67980d35c2a err=e3b0c44298fc1c14
-examples/m91_s1/hello_m91.px src=0651965044798407 rc=0 out=ed6df0d4ac1b64315150d866ca56fbff err=e3b0c44298fc1c14
+examples/m91_s1/hello_m91.px src=0651965044798407 rc=0 out=bad952961d5f0458cc27dd413e309ba3 err=e3b0c44298fc1c14
 examples/m92_precise/precise_stress.px src=d825b23b263dd0d6 rc=0 out=9861b74d4c69b2c3b4d991b7bb4f3f46 err=e3b0c44298fc1c14
 examples/m92_precise/precise_stress2.px src=9a3026d2e1af7bd7 rc=0 out=c788d68c25e0403743eb9843d2856487 err=e3b0c44298fc1c14
 examples/m92_precise/s2c_pxserve.px src=2a4ecb51f56ab628 rc=0 out=5767b45cea83e936aa916a7f668d6a4d err=e3b0c44298fc1c14
@@ -481,10 +482,10 @@ examples/m96_s3/m96_err.px src=5d93c27b6e96b460 rc=0 out=9e7a46383753943e7cbe397
 examples/m96_s3/m96_gc.px src=3f680589f93a566a rc=0 out=33cfd9171f5e0510a0f1ae2173b155e8 err=e3b0c44298fc1c14
 examples/m96_s3/m96_net_cmp.px src=972a6678e6794366 rc=0 out=a6437ff54c72d227d48705bd34f3024b err=e3b0c44298fc1c14
 examples/m96_s3/m96_s3_daemon.px src=a2ab7f803642778c rc=0 out=47d5730fa142be801a569af1d4ea623b err=e3b0c44298fc1c14
-examples/m97_s2/m97_s2_client.px src=afa10621f42c9d3b rc=0 out=53cd450be29fce7c899a55156f3daaf5 err=e3b0c44298fc1c14
-examples/m97_s2/m97_s2_upstream.px src=2eee8ce0fe75643c rc=0 out=10b289a3eb773e548f480b4c6ebbb4dd err=e3b0c44298fc1c14
-examples/m97_s2b/m97_s2b_client.px src=1ffa92ab44972c28 rc=0 out=07d930f0867976fce776f8fb846aff2d err=e3b0c44298fc1c14
-examples/m97_s2b/m97_s2b_upstream.px src=3e6dbc91c5d2a05b rc=0 out=75393feddd861e2221b06c5b5468b8ea err=e3b0c44298fc1c14
+examples/m97_s2/m97_s2_client.px src=afa10621f42c9d3b rc=0 out=ad52c5fd0707e86352e26bff323ff6c1 err=e3b0c44298fc1c14
+examples/m97_s2/m97_s2_upstream.px src=2eee8ce0fe75643c rc=0 out=69dd1cf834b55cd8e13bb61f38c106b0 err=e3b0c44298fc1c14
+examples/m97_s2b/m97_s2b_client.px src=1ffa92ab44972c28 rc=0 out=d7da8200170d9002e54ce18a06f9fc31 err=e3b0c44298fc1c14
+examples/m97_s2b/m97_s2b_upstream.px src=3e6dbc91c5d2a05b rc=0 out=e0e7a16ab210d2a95f2f6ab5df3f3b51 err=e3b0c44298fc1c14
 examples/m97_s3/m97_s3_daemon.px src=633127c937de3e04 rc=0 out=7b55179a9dc0ab4e174e52ccde84ee8d err=e3b0c44298fc1c14
 examples/m98_s2/m98_s2_daemon.px src=21967ed732a7da10 rc=0 out=38c99b0f6b3c637a0c249fa9bf859013 err=e3b0c44298fc1c14
 examples/m99_s2/m99_s2_daemon.px src=9cd76d1c297e0c18 rc=0 out=e5efb124436039eb7db30fc470d3ad8e err=e3b0c44298fc1c14

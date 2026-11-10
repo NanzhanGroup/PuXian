@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 397,
+ "count": 400,
  "names": [
   "Err",
   "Ok",
@@ -88,6 +88,7 @@
   "fd_wait",
   "ffi_call",
   "file_size",
+  "file_size_opt",
   "file_stat",
   "filter",
   "flatten",
@@ -150,6 +151,7 @@
   "hmac_sha1",
   "hmac_sha1_bytes",
   "hmac_sha256",
+  "hmac_sha256_strict",
   "hostname",
   "http_conn_alive",
   "http_get",
@@ -312,6 +314,7 @@
   "sha1_bytes",
   "sha256",
   "sha256_bytes",
+  "sha256_strict",
   "signal",
   "sin",
   "sleep",

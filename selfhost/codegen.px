@@ -1025,6 +1025,20 @@ def cg_generate(prog):
             has_main = true
             break
         mi3 += 1
+    # M386（PX-013）：顶层**显式调用** main() 的时刻不再自动调 —— 修前脚本跑两遍
+    #   （副作用全部翻倍：日志重复、文件写两次、订单提交两次；px run 与 px build 同病）。
+    #   「有 FuncDef main 就自动调」是糖，糖不该在用户已经手写调用时再加一次。
+    var expl_main = false
+    var ei4 = 0
+    while ei4 < len(items):
+        let est4 = items[ei4]
+        if est4[0] == "ExprStmt":
+            let eex4 = est4[1]
+            if eex4[0] == "Call" and eex4[1][0] == "Var" and rust_unescape(eex4[1][1]) == "main":
+                expl_main = true
+        ei4 += 1
+    if has_main and expl_main:
+        has_main = false
     if has_main:
         let cname = "fn_main"
         out += "    { LXValue _r = " + cname + "(NULL, 0, NULL); int _code = 0;\n"

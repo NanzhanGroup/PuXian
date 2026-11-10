@@ -2626,6 +2626,18 @@ def bc_emit_program(prog):
         if st[0] == "FuncDef" and rust_unescape(st[1]) == "main":
             has_main = true
         i += 1
+    # M386（PX-013）：顶层显式调用 main() ⇒ 不再自动 call（修前 VM 轨同样跑两遍）
+    var expl_main = false
+    var ei5 = 0
+    while ei5 < len(items):
+        let est5 = items[ei5]
+        if est5[0] == "ExprStmt":
+            let eex5 = est5[1]
+            if eex5[0] == "Call" and eex5[1][0] == "Var" and rust_unescape(eex5[1][1]) == "main":
+                expl_main = true
+        ei5 += 1
+    if has_main and expl_main:
+        has_main = false
     let top = bc_emit_func_top(top_stmts, "<top>", has_main)
     m["funcs"].push(top)
     m["top"] = len(m["funcs"]) - 1
