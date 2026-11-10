@@ -148,7 +148,7 @@ done
 if grep -q 'gh_write PATCH' "$ROOT/packaging/latest_guard.sh"; then ok "C6b 写操作走 gh_write（不降级匿名）"; else ng "C6b PATCH 未走 gh_write"; fi
 
 printf '\n【C7】令牌本体不出现在输出里\n'
-TOK="github_pat_C7_SECRET_abcdef123456"
+TOK="github_pat_""C7_SECRET_abcdef123456"   # 夹具运行时拼装（源码不出现连续凭据形状，见 check_no_secrets.sh 卫生规则）
 ( export GH_API="$BASE" GH_TOKEN="$TOK"
   . "$GHGET"; gh_get "/repos/X/Y/releases/latest" "$TMP/c7.json" >/dev/null 2>&1; gh_auth_state ) > "$TMP/c7.out" 2>&1
 chkn "C7 输出不含令牌本体" "$(cat "$TMP/c7.out")" "$TOK"
