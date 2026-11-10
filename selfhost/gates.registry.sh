@@ -1998,3 +1998,15 @@ run m386_px_semantics bash examples/m386_px_semantics/verify.sh
 #   负控 4 条（本病症真实形状）：只跑第一个文件 / 删 is_dir 分支 / 空目录当干净 / 静默跳过悬空链接。
 #   注：本门从源码构建被测 pxlint（build 4.5s × 5），测的是源码而非入库件。
 run m387_lint_dir bash examples/m387_lint_dir/verify.sh
+# ── m388_publish_chain（M388 · 缺陷 698/703）────────────────────────────────
+#   发布链的「静默 / 重复」判据。病根全部出自 2026-11-10 实测：
+#     698-② 通知正文把 tag sha 打成字面 $TAGSHA（用户手机看到的就是这串字符）
+#     698-③ make_tag 的 hook 发一条 + publish 脚本再发一条 ⇒ 一次发布两条通知
+#     703    抢不到锁 exit 0 静默 ⇒ 孤儿锁时永远不发布且无人知道
+#   判据：G1 通知正文只从参数取 sha · G2 hook 置空在 make_tag 之前（单出口）
+#     · G3 所有 sleep 带 9>&-（子进程不继承锁 fd = 703 的根因）
+#     · G4 孤儿判定排除自身 pid（不自欺）· G5 抢锁失败区分孤儿（exit 3）
+#     · G6 子自测 26 条（C1..C10 / N1..N2 / P1..P2）
+#   负控（子自测内）：回退 703 修法 ⇒ C1 红；回退 sha 展开 ⇒ C7 红。
+#   注：本门只测仓库内 packaging/ 那份唯一实现，不碰 /data/autodrive 部署副本。
+run m388_publish_chain bash examples/m388_publish_chain/verify.sh

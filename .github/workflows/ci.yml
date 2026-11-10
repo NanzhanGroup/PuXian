@@ -1730,6 +1730,19 @@ jobs:
           bash examples/m387_lint_dir/verify.sh > /tmp/v_lintdir.log 2>&1 || { echo "❌ m387_lint_dir 门失败（目录模式假绿回归）"; tail -40 /tmp/v_lintdir.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_lintdir.log | tail -8
           echo "✅ m387_lint_dir（目录并集/空目标/遍历口径/静默跳过 全判据）PASS"
+      - name: m388_publish_chain（发布链静默/重复 · M388 · 缺陷 698/703）
+        # 判据：G1 通知正文只从参数取 sha（不许字面 $TAGSHA）
+        #   · G2 make_tag 的 hook 在调用前置 /bin/true（发布链单出口，防一次发布两条通知）
+        #   · G3 所有 sleep 带 9>&-（子进程继承锁 fd 是缺陷 703「孤儿锁」的根因）
+        #   · G4 孤儿判定排除自身 pid（脚本自己 exec 9> 打开锁会被 fuser 列出 ⇒ 不自欺）
+        #   · G5 抢锁失败必须区分「同脚本在跑」与「孤儿」（后者 exit 3 + p1）
+        #   · G6 子自测 26 条（含负控：回退 703 修法 ⇒ C1 红；回退 sha 展开 ⇒ C7 红）
+        #   ⚠ 锁与输出全改到 mktemp 目录（DY_PUBLISH_LOCK_DIR / DY_PUBLISH_OUT），不碰系统 /var/lock
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m388_publish_chain/verify.sh > /tmp/v_pubchain.log 2>&1 || { echo "❌ m388_publish_chain 门失败（发布链静默/重复回归）"; tail -40 /tmp/v_pubchain.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^OK  ' /tmp/v_pubchain.log | tail -10
+          echo "✅ m388_publish_chain（sha 展开 / 单出口 / 锁 fd / 孤儿判定 / 26 条子自测）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

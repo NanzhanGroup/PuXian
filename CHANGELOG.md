@@ -1,3 +1,130 @@
+## M388：发布链「静默 / 重复」清零 —— 七份复制脚本收成一份 + 一扇新门（缺陷 698/703）
+
+> **一句话**：m380 / m381b / m382 / m383 / m384 / m386 / m387 每轮复制一份
+> `publish_on_green.sh` 再改，缺陷就跟着复制 —— 699（超时窗口）、703（抢锁静默）、
+> 704（令牌 401）是同一个位置重犯三次。本轮收成唯一实现，并把「坏了却不报错」
+> 这一类在发布轨上的四个出口逐个补上判据。
+
+### 一 缺陷 698-②：通知正文里的 tag sha 是字面量
+
+```
+20:37:10 用户手机收到「PuXian v0.2.387 已打 tag（镜像同步中）」
+         正文尾部一行是  tag v0.2.387 → $TAGSHA
+         不是 5e1a1d3 —— 用户看到的就是这六七个字符本身
+```
+
+病根：heredoc 里写成 `tag v0.2.387 → \$TAGSHA`，反斜杠让变量在**写入时**就停止展开。
+修法：正文拼装抽成 `packaging/publish_notify_body.sh`（27 行），sha 只能从 `$2` 来 ——
+结构上不可能再写成字面量。空 sha 直接 rc=2（空 sha 会被下游读成「tag 没落地」）。
+
+### 二 缺陷 698-③：一次发布发两条用户通知
+
+```
+20:37:07 DEV-PUSH-OK「PuXian v0.2.387 已发布」（来源 make_tag）
+20:37:10 DEV-PUSH-OK「PuXian v0.2.387 已打 tag（镜像同步中）」（来源 publish 脚本）
+```
+
+病根：`make_tag.sh` 自带通知 hook（`notify_release.sh`，幂等键是 tag+状态），
+发布脚本又发一条，两者 title 不同 ⇒ hook 内的幂等挡不住。
+修法：发布链只留**一个出口** —— 调 make_tag 之前把 `PX_RELEASE_NOTIFY_HOOK` 指向
+`/bin/true`（可执行、零副作用），tag 核实之后由发布脚本发唯一一条（信息更全，
+带观察器状态）。判据 G2 检查「置空」发生在「调用」之前。
+
+### 三 缺陷 703：抢不到锁 exit 0 = 静默失效
+
+```
+19:04 我 pkill 上一轮 publish 的父进程，它派生的 sleep 子进程继承了 fd 9
+      ⇒ 孤儿锁被一直持有 ⇒ 新 publish 每轮只写一行「SKIP 已有发布进程持锁」然后 exit 0
+      ⇒ 不挂 p1、不算失败 ⇒ 判绿了也不会发布，而日志看起来「正常」
+```
+
+病根三层：
+1. `flock -n 9 || exit 0` 把「真有人在跑」与「孤儿锁」混成一件事；
+2. 子进程继承锁 fd（bash 的 fd 默认跨 fork 传递）；
+3. 判定「持锁者是不是发布进程」时，**把自己也算成了发布进程** —— 脚本在
+   `flock` 失败前已经 `exec 9>` 打开锁文件，`fuser` 必然列出自己，而自己的
+   cmdline 天然含 `publish_on_green` ⇒ 永远判「有人正常持锁」⇒ 孤儿永远发现不了。
+
+修法三条一起：
+- 所有 `sleep` 带 `9>&-`（子进程不再继承锁 fd，根上断掉孤儿）；
+- 抢锁失败时遍历 `fuser` 的全部 pid，**排除自身 `$$`**，任一为同脚本才算正常；
+- 判定为孤儿 ⇒ `WARN-LOCK-ORPHAN` + p1 叫人 + `exit 3`（区别于正常跳过的 rc=0）。
+
+### 四 缺陷 706：idle 判据把观察器当「有实活在跑」
+
+```
+实测  m387-release-watch.service 命中 ^m[0-9]+ ⇒ is_busy=1
+      ⇒ 它活着（最长 60min）期间自驱永不唤醒 —— 又一个静音源
+```
+
+修法：新增 `is_watcher_unit()` —— `*release-watch*` / `*watcher*` / `*observer*` /
+`*-watch.service` 不算实活（这类单元的职责就是「等别人」，不编译、不推代码）。
+负控三条防误伤（`m388-chain` / `m384-publish` / `chain-shard` 必须仍算实活）。
+
+### 五 七份复制脚本收成一份
+
+新 `packaging/publish_on_green.sh`（236 行）参数化：`--ms / --stamp / --notify /
+--repo / --mirror-url / --no-push / --dry-run`。五道自锁（不绿 / 树脏 / head 变 /
+落后 / 抢不到锁）+ 退出码语义固定（0 已发布 / 1 判红 / 2 前置不满足 / 3 孤儿锁）。
+测试缝：`DY_PUBLISH_LOCK_DIR` / `DY_PUBLISH_AD` / `DY_PUBLISH_OUT` /
+`DY_NOTIFY_BIN` —— 门在临时目录里跑，不碰系统 `/var/lock` 与 `/data`。
+
+### 六 新门 m388_publish_chain
+
+```
+G1  通知正文只从参数取 sha（实现面无 TAGSHA 字面量）
+G1b publish_on_green.sh 无 \$TAGSHA 字面量
+G2  make_tag 的 hook 在调用前置 /bin/true（单出口，防双发）
+G3  所有 sleep 带 9>&-（子进程不继承锁 fd）
+G4  孤儿判定排除自身 pid（不自欺）
+G5  抢锁失败区分「同脚本在跑」与「孤儿」（后者 exit 3）
+G6  子自测 26 条（C1..C10 / N1..N2 / P1..P2）
+```
+
+子自测全部离线（假 git 仓库 + 假裸远端 + 假 dy-notify），负控两条：
+回退 703 的修法 ⇒ C1 红；回退 sha 展开 ⇒ C7 红。
+另有前提自证两条：假仓库 `ls-remote` 真的通、假 dy-notify 真的被调用过
+（否则「没 p1」全是查空文件得出的假绿）。
+
+**G1 首轮真的红了** —— 判据把注释里描述病根的 `\$TAGSHA` 也算违规。判据应当落在
+实现面：改为只看非注释行（CRITERIA ⑥：注释里的代码也算代码，但注释**描述**缺陷
+不等于又犯了缺陷 —— 这条界线要靠判据明确，不能靠人眼看）。
+
+### 七 本轮自测抓出的两个自有错误
+
+```
+① 孤儿判定把自身算作「正常持锁」（第三节第 3 层）—— 判据自己把自己骗过
+   自测第一次跑：C1 期望 rc=3 实得 0，N1 负控「成立」其实是同一个假绿
+② 自测脚手架自己犯了缺陷 696 的同一个坑：
+   $(grep -c x f || echo 0) ⇒ 无匹配时得 "0\n0" ⇒ 字符串比较永远不等
+   已统一走 cnt()（grep -c | head -1）
+```
+
+第 ② 条比第 ① 条更值得记：696 是我今天上午刚修的缺陷，晚上写自测时又抄了同一个形状。
+**判据的缺陷会自我复制，除非把它做成函数。**
+
+### 八 验收
+
+```
+bash examples/m388_publish_chain/verify.sh   ⇒ M388-VERIFY-OK（6 组 + 26 子自测）
+/usr/local/sbin/dy-ops-watch.sh --selftest   ⇒ SELFTEST ok=48 ng=0（原 41 + 新增 7）
+selfhost/rebake_bin.sh --check-all           ⇒ 14/14（改了 5 个 .px 的版本串 ⇒ 必须重烘）
+bootstrap_prove / bootstrap_prove_bc         ⇒ 绿（重烘之后复核，缺陷 695 的顺序）
+```
+
+### 九 版本 bump 漏了一个锚点，被 check_version_drift 当场抓住
+
+```
+bump 时改了 5 个 .px（compiler / interp / pxlsp / pxmcp / pxfmt），**漏了 tools/px**
+  ⇒ check_version_drift E1 立刻红：tools/pxfmt.px = 0.2.388（基准 0.2.387）
+  ⇒ 基准正是 tools/px 的 SELFHOST_VER，它还停在 0.2.387
+补上后：7 个锚点全 0.2.388 · 与 tag v0.2.387 差 1（≤1 允许）· VERSION-DRIFT=OK
+```
+
+这条不是「又犯了一个错」，是**门正常工作**：E1 的职责就是「7 个锚点必须同一句话」。
+值得记的是它的成本 —— 30 秒发现，而漏在发布包里的后果是「源码自跑报一个版本、
+发布包报另一个」，两个数对外并存（这正是 M368 立这道门的原因）。
+
 ## M387：`px lint <dir>` 假绿 —— 目录模式按契约重写 + 一扇新门（缺陷 700）
 
 > **一句话**：`px lint .` 一直返回「0 错误」并且 rc=0，**不管目录里有多少坏文件** ——
