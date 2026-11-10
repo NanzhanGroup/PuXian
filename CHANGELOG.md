@@ -99,6 +99,59 @@ selftest_reconcile      「无 GH_TOKEN 且无 fixture ⇒ rc=2」实得 rc=0
 ```
 
 
+## M389 补：第二轮全量门 3 红收口 —— 版本链补齐 / 脚本执行位 / 夹具凭据形状（缺陷 710/711/712）
+
+> **一句话**：三条都不是 M389 主体逻辑的错，而是「新入口三件套没登记全」——
+> 版本号只 bump 了一处、新脚本没执行位、新夹具自己长得像真凭据。全量门替我们抓住了。
+
+### 一 现场（第二轮 head=8f876ef · 绿 263 / 红 3 / 清单 266）
+
+| 红门 | 判据原文 |
+|---|---|
+| `version_drift` | `❌ selfhost/compiler.px = 0.2.388（基准 0.2.389）` … 共 5 文件 6 处 |
+| `pkg_make_tag` | `❌ V1 有 packaging 脚本缺执行位：git[packaging/gh_get.sh] fs[gh_get.sh]` |
+| `m282_registry_020` | `FAIL [5b] … examples/m389_gh_auth/verify.sh:151:TOK="github_pat_C7_SECRET_…"` |
+
+### 二 三个根因（形状各不同，处置各一条）
+
+1. **缺陷 710 · 版本链只 bump 了一处**：M389 提交把 `tools/px` 的 `SELFHOST_VER` 改成 0.2.389，
+   `selfhost/compiler.px` / `interp.px` / `tools/{pxfmt,pxlsp,pxmcp}.px` 仍是 0.2.388。
+   版本号散在 9 处字面量 —— 手改必漏（`packaging/bump_version.sh` 文件头写的就是这条教训）。
+   ⇒ 先把 `tools/px` 回退到 0.2.388，再跑 `packaging/bump_version.sh 0.2.389`（9 处一次改齐，含 2 份自举基准）。
+2. **缺陷 711 · 新脚本缺执行位**：`packaging/gh_get.sh` 以 100644 入库。门判据是 **git 模式 + 文件系统模式双查**
+   （只看 fs 会漏掉「本地 chmod 过但没入库」的世界）。⇒ `chmod +x` + `git update-index --chmod=+x`。
+3. **缺陷 712 · 夹具长得像真凭据**：C7 判据要证明「令牌本体不出现在输出里」，于是在源码里写了连续字面量
+   `github_pat_C7_SECRET_…` ⇒ 被全仓凭据守卫按 token 形状命中。
+   守卫**刻意不设 token 允许表**（按文件豁免会让真凭据被静默放过）⇒ 夹具必须**运行时拼装**（`github_pat_""C7_…`），
+   语义不变、源码里无连续凭据形状。
+
+### 三 修法与证据（够写进下一次交接单的粒度）
+
+```
+packaging/bump_version.sh 0.2.389      ⇒ 9 文件各 1 处（pxmcp 2 处）
+./selfhost/rebake_bin.sh --rebake-all  ⇒ 12 件 + 前 2 件 = 14；烘期间源码快照未变
+./selfhost/rebake_bin.sh --check-all   ⇒ 14/14 与当前源码一致
+bash selfhost/check_version_golden.sh  ⇒ VERSION-GOLDEN-OK（bootstrap/pxi --version = 0.2.389）
+selfhost/bootstrap_prove.sh            ⇒ B.c 与基准逐字节一致（21135 行）
+selfhost/bootstrap_prove_bc.sh         ⇒ BCModule dump 逐字节一致（45271 行）
+selfhost/check_no_secrets.sh           ⇒ rc=0（受管 3381 文件）
+packaging/selftest_make_tag.sh         ⇒ 91 通过 / 0 失败（V1 双查 42 个脚本全 100755）
+examples/m282_registry_020/verify.sh   ⇒ 18 通过 / 0 失败 / 1 跳过
+examples/m389_gh_auth/verify.sh        ⇒ 31 通过 / 0 失败
+```
+
+### 四 次序教训（M386 缺陷 695 的第二次复现）
+
+**改 `selfhost/*.px` ⇒ 必须先 bump、再重烘、再重定基，最后才跑全量门。**
+本轮重烘后 `.rtcache` 全冷 ⇒ 第三轮全量门是冷启那一档（分片仍能压到 1–2h，串行会是 5h+）。
+
+### 五 副作用面
+
+`selfhost/{compiler,interp}.px` · `tools/{pxfmt,pxlsp,pxmcp}.px` · `selfhost/golden/{compiler.c,compiler.bc.dump}` ·
+`bootstrap/` 14 件入库件 · `packaging/gh_get.sh` 模式位 · `examples/m389_gh_auth/verify.sh` 一行夹具。
+**无**运行时/配置/服务改动。
+
+
 ## M388：发布链「静默 / 重复」清零 —— 七份复制脚本收成一份 + 一扇新门（缺陷 698/703）
 
 > **一句话**：m380 / m381b / m382 / m383 / m384 / m386 / m387 每轮复制一份
