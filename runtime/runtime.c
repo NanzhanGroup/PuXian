@@ -9754,7 +9754,7 @@ static LXValue bi_sha256_strict(LXValue* args, int nargs, void* ctx) {
     const char* data = px_hash_arg_strict(args[0], "sha256_strict", "data", &len);
     unsigned char digest[32];
     if (mbedtls_sha256((const unsigned char*)data, (size_t)len, digest, 0) != 0)
-        px_error("sha256_strict 计算失败");
+        px_error("sha256 计算失败（sha256_strict）");   // 域前缀命中 docs/ERROR_CODES.md §3 E7
     char hex[65];
     bytes_to_hex(digest, 32, hex);
     return px_str(hex);

@@ -75,7 +75,30 @@ check_root() {  # 退出码 0=绿 1=红
             if [ -z "$tp" ]; then bad "tag '$tg' 解析不出版本号"; else
                 d=$(( p - tp )); [ "$d" -lt 0 ] && d=$(( -d ))
                 if [ "$d" -le 1 ]; then ok "源码 $base ⇄ 最新 tag $tg（差 $d ≤ 1）"
-                else bad "源码 $base ⇄ 最新 tag $tg（差 $d > 1）⇒ 版本链已漂，跑 packaging/bump_version.sh"; fi
+                else
+                    # M386（缺陷 694）：允许「合并发版」—— 判据贴**契约**而不是贴数字：
+                    #   真正的契约是「每一个未发版的里程碑都必须登记」，不是「差必须 ≤1」。
+                    #   修前形态：M385 只有 CHANGELOG 改动（重烘 70 分钟不划算）⇒ 并入 v0.2.386，
+                    #   源码 0.2.386 ⇄ tag v0.2.384 差 2 ⇒ 门红 ⇒ **发布轨被自己的门锁死**
+                    #   （门绿才能发，而发之前 tag 必然落后）。这是判据与流程互锁，不是漂移。
+                    #   登记制：selfhost/golden/version_skips.txt 每行「<里程碑号> <原因>」。
+                    #   负控：没登记而差 2 ⇒ 照样红（N5）；登记数不够 ⇒ 红。
+                    local skipped=0 mid
+                    if [ -f "$root/selfhost/golden/version_skips.txt" ]; then
+                        mid=$(( tp + 1 ))
+                        while [ "$mid" -lt "$p" ]; do
+                            if grep -qE "^[[:space:]]*${mid}([[:space:]]|$)" "$root/selfhost/golden/version_skips.txt" 2>/dev/null; then
+                                skipped=$(( skipped + 1 ))
+                            fi
+                            mid=$(( mid + 1 ))
+                        done
+                    fi
+                    if [ "$(( d - 1 ))" -le "$skipped" ]; then
+                        ok "源码 $base ⇄ 最新 tag $tg（差 $d；其中 $skipped 个里程碑已登记「并入后版」）"
+                    else
+                        bad "源码 $base ⇄ 最新 tag $tg（差 $d > 1 + 已登记 $skipped）⇒ 版本链已漂，跑 packaging/bump_version.sh 或登记 selfhost/golden/version_skips.txt"
+                    fi
+                fi
             fi
         fi
     fi
@@ -140,9 +163,23 @@ selftest() {
         s_ok "N4 SKIP（明示「没有验到」）"
     else s_bad "N4 期望 SKIP，实得 $(printf '%s' "$out" | tail -1)"; fi
 
+    echo "【T2】正控：源码 0.2.369 · tag v0.2.367（差 2）但 368 已登记并入 ⇒ 必须绿"
+    mkfix "$T/t2" 0.2.369
+    mkdir -p "$T/t2/selfhost/golden"
+    printf '368 M368 未单独发版，并入后版（自测夹具）\n' > "$T/t2/selfhost/golden/version_skips.txt"
+    PASS=0; FAIL=0; out="$( run_q "$T/t2" v0.2.367 )" || true
+    if grep -q 'VERSION-DRIFT=OK' <<< "$out"; then s_ok "T2 绿（登记制放行合并发版）"
+    else s_bad "T2 应绿实红：$(printf '%s' "$out" | tail -1)"; fi
+
+    echo "【N5】负控：源码 0.2.369 · tag v0.2.367（差 2）且 368 **未登记** ⇒ 必须红"
+    mkfix "$T/n5" 0.2.369
+    PASS=0; FAIL=0; out="$( run_q "$T/n5" v0.2.367 )" || true
+    if grep -q 'VERSION-DRIFT=RED' <<< "$out"; then s_ok "N5 红（未登记不得放行 —— 登记制有牙）"
+    else s_bad "N5 应红实绿 ⇒ 登记制无鉴别力"; fi
+
     echo
-    if [ "$SBAD" -eq 0 ] && [ "$SOK" -eq 5 ]; then
-        echo "VERSION-DRIFT-SELFTEST=OK（$SOK 条：1 正控 + 3 负控 + 1 SKIP）"; exit 0
+    if [ "$SBAD" -eq 0 ] && [ "$SOK" -eq 7 ]; then
+        echo "VERSION-DRIFT-SELFTEST=OK（$SOK 条：2 正控 + 4 负控 + 1 SKIP）"; exit 0
     fi
     echo "VERSION-DRIFT-SELFTEST=RED（ok=$SOK bad=$SBAD）"; exit 1
 }
