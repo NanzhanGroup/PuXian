@@ -1718,6 +1718,18 @@ jobs:
           bash examples/m386_px_semantics/verify.sh > /tmp/v_pxsem.log 2>&1 || { echo "❌ m386_px_semantics 门失败（main 双跑 / 哈希 strict / file_size_opt 回归）"; tail -40 /tmp/v_pxsem.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_pxsem.log | tail -8
           echo "✅ m386_px_semantics（三轨 main 单跑 + 哈希 strict 族 + file_size_opt）PASS"
+      - name: m387_lint_dir（px lint 目录模式 · M387 · 缺陷 700）
+        # 判据：C1 目录诊断集合 == 逐文件并集（不是"看着像"）· C2 rc 与有无错误一致
+        #   · C3「0 个 .px」与「0 个错误」可区分（空目标不算干净）· C4 单文件输出逐字节不变
+        #   · C5 --json 条数/全路径 · C6 .git 跳过而隐藏目录照扫 · C7 悬空链接不许静默跳过
+        #   · C8 --strict 对目录警告生效 · C9 硬词法错误不被吞 · C10 100 文件 < 60s
+        # 负控 4 条（真实病症形状）：只跑第一个文件 / 删 is_dir 分支 / 空目录当干净 / 静默跳过悬空链接
+        #   ⚠ 本门自己构建被测 pxlint（`px build tools/pxlint.px`），所以不依赖仓库里烘好的 bootstrap
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m387_lint_dir/verify.sh > /tmp/v_lintdir.log 2>&1 || { echo "❌ m387_lint_dir 门失败（目录模式假绿回归）"; tail -40 /tmp/v_lintdir.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_lintdir.log | tail -8
+          echo "✅ m387_lint_dir（目录并集/空目标/遍历口径/静默跳过 全判据）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

@@ -1986,3 +1986,15 @@ run m384_px_defects bash examples/m384_px_defects/verify.sh
 #     静态：三名册三处登记 + 三轨检测都在场（防止只修一条轨）。
 #   ⚠ 改 runtime/*.c + selfhost/*.px ⇒ 必须先 --rebake-all 重烘 14 件，否则门测的是旧件（假红）。
 run m386_px_semantics bash examples/m386_px_semantics/verify.sh
+
+# ── M387 · 缺陷 700：`px lint <dir>` 假绿（晨曦 2026-11-10 11:21 报的 P0）────────────
+#   病根三段：① tools/pxlint.px 没有「输入是目录」分支 ② read_file(目录) 静默返回空串
+#   ③ file_size(目录) 反而返回 48 ⇒ 空 token 流 → 空程序 → 0 诊断 → exit(0)。
+#   **假绿是常规形态**，崩溃（size_t 下溢）只是偶发形态 —— 崩溃至少 rc≠0 会被发现。
+#   判据（贴契约）：C1 目录诊断集合 == 逐文件并集 · C2 rc 与有无错误一致 ·
+#     C3「0 个 .px」与「0 个错误」可区分 · C4 单文件输出逐字节不变 ·
+#     C5 json 条数与全路径 · C6 .git 跳过/隐藏目录照扫 · C7 读不到不静默 ·
+#     C8 --strict 对目录警告生效 · C9 硬词法错误不被吞 · C10 100 文件 < 60s。
+#   负控 4 条（本病症真实形状）：只跑第一个文件 / 删 is_dir 分支 / 空目录当干净 / 静默跳过悬空链接。
+#   注：本门从源码构建被测 pxlint（build 4.5s × 5），测的是源码而非入库件。
+run m387_lint_dir bash examples/m387_lint_dir/verify.sh

@@ -89,7 +89,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.386"
+SELFHOST_VER="0.2.387"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -193,8 +193,11 @@ px $RELEASE_VER
   px parse <file.px>                         语法分析并打印 AST（调试）
   px fmt <file.px> [-w] [--check] [--diff]   代码格式化（M64a 自举；默认 stdout，
                                               -w 写回 / --check 仅检查 / --diff 打印差异）
-  px lint <file.px> [--json] [--strict]      静态检查 L001-L008（M64b 自举；有错退出 1，
+  px lint <file.px|dir> [--json] [--strict]  静态检查 L001-L008（M64b 自举；有错退出 1，
                                               --strict 时警告也退出 1 / --json 机器可读）
+                                              目录模式（M387）：递归扫 .px（跳过 .git，
+                                              隐藏目录照扫），诊断 == 逐文件并集；
+                                              空目录/无 .px ⇒ 退出 1（空目标不算干净）
   px doc <file.px> [--output out.md]         从 ## 文档注释生成 Markdown（M64c 自举；
                                               默认 stdout，--output 写文件）
   px test <file.px> [filter] [--list]        运行顶层 def test_xxx() 测试（M64c 自举；

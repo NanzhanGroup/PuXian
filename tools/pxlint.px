@@ -172,12 +172,14 @@ def lx_collect_import_names(items, known, file):
                 ci += 1
         i += 1
 # ---------- 主流程 ----------
-def lx_run(file, jmode, strict):
-    if not exists(file):
-        let emsg = "pxlint: 无法读取文件 '" + file + "'"
-        print_err(emsg)
-        exit(1)
+def lx_diags_of(file):
+    # M387（缺陷 700）：把「算诊断」抽成唯一实现 —— 单文件路径与目录路径共用它，
+    # 这样「目录模式并集 == 逐文件并集」不是靠两份代码"看着一样"，而是同一份代码。
+    # 读空但 stat size>0 ⇒ 读失败（目录 / 权限 / 竞态），必须出声，不许当干净文件放过。
     let src = read_file(file)
+    let st = file_stat(file)
+    if st != null and st["size"] > 0 and len(src) == 0:
+        return [null, "pxlint: 无法读取文件 '" + file + "'（stat size=" + str(st["size"]) + " 但读到 0 字节）"]
     p_toks = lex_tokens(src)
     p_pos = 0
     let ast = parse_program()
@@ -192,6 +194,18 @@ def lx_run(file, jmode, strict):
     lx_collect_import_names(items, known, file)
     let diags = []
     lc_check_program(items, src, known, diags)
+    return [diags, ""]
+
+def lx_run(file, jmode, strict):
+    if not exists(file):
+        let emsg = "pxlint: 无法读取文件 '" + file + "'"
+        print_err(emsg)
+        exit(1)
+    let r = lx_diags_of(file)
+    if r[0] == null:
+        print_err(r[1])
+        exit(1)
+    let diags = r[0]
     var errs = 0
     var warns = 0
     if jmode:
@@ -234,6 +248,107 @@ def lx_run(file, jmode, strict):
     if strict and warns > 0:
         exit(1)
     exit(0)
+# ---------- M387（缺陷 700）：目录模式 ----------
+# 病根：`px lint <dir>` 把目录当文件喂给 lx_run ⇒ read_file(目录) 静默返回空串
+#   ⇒ 空 token 流 ⇒ 空程序 ⇒ 0 诊断 ⇒ exit(0)。「假绿」是常规形态，崩溃只是偶发形态
+#   （同一函数族的 size_t 下溢）。判据贴契约写：
+#     C1 目录模式输出的诊断集合 == 对目录下每个 .px 单文件跑 lint 的并集（保序按路径排序）
+#     C4 「0 个 .px」与「0 个错误」必须可区分（空目标不算干净 ⇒ rc≠0）
+#     N3 读不到（悬空链接 / 权限 / stat 为 null）一律计错误并出声，不许静默跳过
+def lx_walk_px(root):
+    let files = []
+    let ferrs = []
+    let dirs = [root]
+    var di = 0
+    while di < len(dirs):
+        let d = dirs[di]
+        di += 1
+        let r = list_dir_opt(d)
+        if r.is_err():
+            ferrs.append("pxlint: 无法读取目录 '" + d + "'")
+            continue
+        let entries = r.unwrap()
+        var i = 0
+        while i < len(entries):
+            let name = entries[i]
+            i += 1
+            if name == "" or name == "." or name == "..":
+                continue
+            let full = d + "/" + name
+            if is_dir(full):
+                # 只跳 .git（VCS 内部）；隐藏目录照进 —— 否则「藏在 .foo/ 里的坏文件」又是假绿
+                if name != ".git":
+                    dirs.append(full)
+                continue
+            let st = file_stat(full)
+            if st == null:
+                ferrs.append("pxlint: 无法读取条目 '" + full + "'（stat 返回 null，悬空链接或权限不足）")
+                continue
+            if ends_with(name, ".px"):
+                files.append(full)
+    return [sorted(files), ferrs]
+
+def lx_run_dir(dir, jmode, strict):
+    let w = lx_walk_px(dir)
+    let files = w[0]
+    let ferrs = w[1]
+    let all_diags = []
+    var errs = 0
+    var warns = 0
+    var nfiles = 0
+    var ei = 0
+    while ei < len(ferrs):
+        print_err(ferrs[ei])
+        errs += 1
+        ei += 1
+    var fi = 0
+    while fi < len(files):
+        let f = files[fi]
+        fi += 1
+        let r = lx_diags_of(f)
+        if r[0] == null:
+            print_err(r[1])
+            errs += 1
+            continue
+        let diags = r[0]
+        nfiles += 1
+        var dj = 0
+        while dj < len(diags):
+            let d = diags[dj]
+            dj += 1
+            var lv = "W"
+            if d[1] == "E":
+                lv = "E"
+            if jmode:
+                var jlv = "warning"
+                if d[1] == "E":
+                    jlv = "error"
+                let jo = {"file": f}
+                jo["line"] = d[2]
+                jo["col"] = d[3]
+                jo["level"] = jlv
+                jo["code"] = d[0]
+                jo["message"] = d[4]
+                all_diags.append(jo)
+            else:
+                print(f + ":" + str(d[2]) + ":" + str(d[3]) + ": " + lv + " " + d[0] + ": " + d[4])
+            if d[1] == "E":
+                errs += 1
+            else:
+                warns += 1
+    if jmode:
+        print(json_stringify(all_diags))
+    else:
+        print(dir + ": " + str(nfiles) + " 个 .px 文件, " + str(errs) + " 错误, " + str(warns) + " 警告")
+    if nfiles == 0:
+        print_err(dir + ": 未找到 .px 文件（空目标不算干净）")
+        exit(1)
+    if errs > 0:
+        exit(1)
+    if strict and warns > 0:
+        exit(1)
+    exit(0)
+
 # M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
 def cli_out(s, to_err):
     if to_err:
@@ -242,7 +357,7 @@ def cli_out(s, to_err):
         print(s)
 def usage(to_err):
     cli_out("pxlint —— PuXian 静态检查器（自举，M64b）", to_err)
-    cli_out("用法: pxlint <file.px> [--json] [--strict] [--version|-v] [-h]", to_err)
+    cli_out("用法: pxlint <file.px|dir> [--json] [--strict] [--version|-v] [-h]", to_err)
 def main():
     let as_ = args()
     var file = ""
@@ -272,4 +387,7 @@ def main():
     if file == "":
         usage(true)
         exit(1)
+    # M387（缺陷 700）：目录模式 —— 先判类型再决定路径，绝不再把目录当文件读
+    if is_dir(file):
+        lx_run_dir(file, jmode, strict)
     lx_run(file, jmode, strict)
