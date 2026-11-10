@@ -15,6 +15,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 PUB="$ROOT/packaging/publish_on_green.sh"
 BODY="$ROOT/packaging/publish_notify_body.sh"
+# 门级互斥锁（M276 · 缺陷 499-b：每个门都必须 source；只读门同样会被并发打桩的中间态污染）
+. "$ROOT/selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 FAIL=0
 ok()  { printf 'OK   %-3s %s\n' "$1" "$2"; }
 no()  { printf 'FAIL %-3s %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
@@ -29,7 +31,7 @@ done
 # ── G1 通知正文不许再把 sha 写成字面量（698-②） ───────────────────────────
 # 只查非注释行（CRITERIA ⑥：注释里的代码也算代码；但这里是注释在**描述缺陷**，
 # 不是实现。判据必须落在实现面上，否则会把「写清楚病根」判成「又犯了这个病」。）
-if grep -v '^[[:space:]]*#' "$BODY" 2>/dev/null | grep -q 'TAGSHA'; then
+if grep -q 'TAGSHA' <(grep -v '^[[:space:]]*#' "$BODY" 2>/dev/null); then
     no G1 "publish_notify_body.sh 实现里出现 TAGSHA —— sha 必须只从参数 \$2 来"
 else
     ok G1 "通知正文只从参数取 sha（实现面无 TAGSHA）"
@@ -75,7 +77,7 @@ fi
 ST="$HERE/selftest.sh"
 if [ -x "$ST" ]; then
     OUT="$(bash "$ST" 2>&1)"; SRC=$?
-    if printf '%s' "$OUT" | grep -q 'PUBLISH-SELFTEST-OK' && [ "$SRC" -eq 0 ]; then
+    if grep -q 'PUBLISH-SELFTEST-OK' <<< "$OUT" && [ "$SRC" -eq 0 ]; then
         ok G6 "$(printf '%s' "$OUT" | grep 'PUBLISH-SELFTEST-OK' | tail -1)"
     else
         no G6 "子自测未通过（rc=$SRC）：$(printf '%s' "$OUT" | grep 'FAIL' | head -5 | tr '\n' ' ')"

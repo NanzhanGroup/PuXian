@@ -15,7 +15,7 @@
 #   --ms        里程碑号（决定 tag v0.2.<ms>、默认 STAMP、锁、日志）
 #   --stamp     门链 STAMP 文件（默认 /data/autodrive/M<ms>-GATE-DONE）
 #   --notify    用户通知正文文件（纯文本；**不含** tag sha，由本脚本尾部追加）
-#   --repo      仓库（默认 /data/code/puxian）
+#   --repo      仓库（默认按脚本位置推导；部署副本无 --repo/PX_REPO ⇒ rc=2）
 #
 # 输出：/data/autodrive/m<ms>-publish.log（纯文本时间线）
 #
@@ -24,7 +24,13 @@
 # ============================================================================
 set -uo pipefail
 
-MS=""; STAMP=""; NOTIFY=""; REPO=/data/code/puxian
+MS=""; STAMP=""; NOTIFY=""
+# 仓库根：按脚本位置推导（缺陷 300：本机绿 / CI 红 / 分片档污染被测树）
+#   仓库内 packaging/ ⇒ 上一级即仓库根；部署副本（如 /data/autodrive）推导不出来 ⇒ 必须 --repo 或 PX_REPO
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REPO=""
+if [ -f "$SELF_DIR/../selfhost/gates.registry.sh" ]; then REPO="$(cd "$SELF_DIR/.." && pwd)"; fi
+REPO="${PX_REPO:-$REPO}"
 MIRROR_URL=""; DO_PUSH=1; DRY=0
 
 while [ $# -gt 0 ]; do
@@ -42,6 +48,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$MS" ] || { echo "--ms 必填" >&2; exit 2; }
 case "$MS" in ''|*[!0-9]*) echo "--ms 必须是纯数字：$MS" >&2; exit 2 ;; esac
+[ -n "$REPO" ] || { echo "--repo 必填（脚本不在仓库内，无法推导），或用 PX_REPO 指定" >&2; exit 2; }
 
 AD="${DY_PUBLISH_AD:-/data/autodrive}"
 STAMP="${STAMP:-$AD/M${MS}-GATE-DONE}"

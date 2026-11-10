@@ -154,7 +154,7 @@ cp "$PUB" "$NEG"
 # N1 回退缺陷 703 的修法（孤儿锁也 exit 0）
 sed -i 's/^        exit 3$/        exit 0/' "$NEG"
 # 只查**非注释行** —— 注释里写着「并 exit 3」的说明文字不算实现（否则假红）
-if grep -v '^[[:space:]]*#' "$NEG" | grep -q 'exit 3'; then
+if grep -q 'exit 3' <(grep -v '^[[:space:]]*#' "$NEG"); then
     no N3-pre "负控未生效：回退后非注释行仍存在 exit 3（sed 未命中）"
 else
     ok N3-pre "负控 N1 扰动已生效（实现的 exit 3 被改成 exit 0）"
