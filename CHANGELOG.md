@@ -125,6 +125,33 @@ bump 时改了 5 个 .px（compiler / interp / pxlsp / pxmcp / pxfmt），**漏�
 值得记的是它的成本 —— 30 秒发现，而漏在发布包里的后果是「源码自跑报一个版本、
 发布包报另一个」，两个数对外并存（这正是 M368 立这道门的原因）。
 
+### 十 第二轮 4 红：全是我本轮新加件的形状，不是回归（缺陷 708）
+
+```
+21:06 起第一轮（8f3be0f）→ 22:39 判红：绿 261 / 红 4
+  红门  check_gate_paths · gate_lock_guard · m276_gate_lock · pkg_pipe_grep
+  共性  4 门都在扫「门自己该怎么写」—— 红因是本轮新加的两个件不合既有门规，
+        不是老代码回归（单门复核全绿，见下）
+① publish_on_green.sh:27 写死 REPO=/data/code/puxian
+   ⇒ 改按脚本位置推导（在 packaging/ 下 ⇒ 上一级即仓库根）；部署副本推导不出
+     ⇒ --repo / PX_REPO 必填且 rc=2（响亮，不许安静地用一个默认值 —— 与本节主题同一条纪律）
+② examples/m388_publish_chain/verify.sh 未 source selfhost/gate_lock.sh（J1 全量口径）⇒ 补
+③ 新门里 3 处「生产者 | grep -q」在 pipefail 下会假否定 ⇒ 全改 here-string / 进程替换
+单门复核（22:43）：m388_publish_chain OK（26/26 子自测）· check_gate_paths OK（598 件）
+                 gate_lock_guard OK（250/250）· pkg_pipe_grep OK（残留 8 ≤ 基线）
+```
+
+**编号更正**：这一次收口的提交（`8efb929`）信息里把这批记为「缺陷 707」，与队列里 20:57
+实测的「通知假报成功」重号。统一为 —— **707 = 通知假报成功**（`release-watch` 的
+`notify_ok()` 无条件 `say "USER-NOTIFIED"`，而 20:57:16 `dy-notify` 实返 rc=1
+`deviceoffline`，日志同时印出 `USER-NOTIFY-FAIL` 与 `USER-NOTIFIED`）；**708 = 本轮 4 红
+（新件不合既有门规）**。707 修在仓库外脚本、下轮写成门判据，不在本里程碑发布面内。
+
+值得记的是「**新门第一轮必红**」已经是第三次：M386 的 `version_drift` 互锁（门要绿才能发版，
+而发版前 tag 必然落后 ⇒ 永远红）、M387 的发射冻结钩子（我把 7 个 `.px` 样本放进仓库 ⇒ 被迫重定基）、
+M388 的这 4 门。三次红的都不是被测代码，而是**判据自己的形状**。⇒ 新门落地前应先跑一遍
+「它会不会被环境/自己绊倒」，而不是等全量链 95 分钟之后告诉你。
+
 ## M387：`px lint <dir>` 假绿 —— 目录模式按契约重写 + 一扇新门（缺陷 700）
 
 > **一句话**：`px lint .` 一直返回「0 错误」并且 rc=0，**不管目录里有多少坏文件** ——
