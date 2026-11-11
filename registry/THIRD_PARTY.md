@@ -68,7 +68,7 @@
 | datastruct | 0.2.0 | 1 | `5ad33efa19e4e121` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | dateperiod | 0.1.0 | 1 | `fb58f1a467d7abbd` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） | 补丁：`dateperiod.patch` |
 | dateperiod | 0.2.0 | 1 | `6aa1172283e6b6a9` | **双轨 PASS**（本地 0.2.0 · 用例 `dateperiod2_test` 解释轨+编译轨全通过） | 本地修（晨曦 2026-11-09 送包，**非上游照搬**，M382） |  |
-| datetime | 0.1.0 | 1 | `476b0beb9d487eb5` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
+| datetime | 0.1.0 | 1 | `97cf5f4cc722d69c` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） | 补丁：`datetime.patch` |
 | datetime | 0.2.0 | 1 | `d367f3b196deab15` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | dbal | 0.1.0 | 1 | `cc9633b61eb1ac2d` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | dbal | 0.2.0 | 1 | `990906f15dbd31a8` | **双轨 PASS**（本地 0.2.0 · 用例 `dbal2_test` 解释轨+编译轨全通过） | 本地修（晨曦 2026-11-09 送包，**非上游照搬**，M382） |  |
@@ -298,7 +298,7 @@
 | totp | 0.2.0 | 1 | `8a872a8465ba07bb` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | trie | 0.1.0 | 1 | `30a321588395a6f7` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | trie | 0.2.0 | 1 | `89fa4859f80dd8ff` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
-| tzmini | 0.1.0 | 1 | `63cba2e6f43108ca` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
+| tzmini | 0.1.0 | 1 | `193f89a3bcf5a5cc` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） | 补丁：`tzmini.patch` |
 | tzmini | 0.2.0 | 1 | `89f92de563694652` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | ulid | 0.1.0 | 1 | `f4d1d459cecf4075` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |
 | ulid | 0.2.0 | 1 | `5e111a77c92d1130` | **双轨 PASS**（上游用例回归 · 逐条结果与 XFAIL 登记见 `docs/UPSTREAM_020_DEFECTS.md`） | 已存在（内容一致） |  |

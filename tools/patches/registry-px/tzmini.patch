@@ -1,0 +1,19 @@
+# ============================================================
+# 本地补丁：registry/tzmini/0.1.0/tzmini.px
+# ------------------------------------------------------------
+# 为什么有这个补丁（M390 · 2026-11-11）—— 缺陷 717（PX-033）连带：
+#   tz_format 先把 utc_sec 加上目标区偏移得到 local_sec，再调 time_format；
+#   M390 起 time_format 省略 tz 默认**本地时区** ⇒ 本机偏移又叠一次（Asia/Shanghai 0 秒显示成 16:00）。
+# 补丁内容：tz_format 的 time_format 调用显式传 "UTC"（local_sec 已含目标区偏移）。
+# 撤销条件：上游 tzmini 修好后删本补丁并重跑导入器。
+# ============================================================
+--- tzmini.px
++++ tzmini.px
+@@ -157,4 +157,6 @@
+     var c = tz_convert(zone, utc_sec)
+     if c.is_err():
+         return Err(str(c.err()))
+-    return Ok(time_format(c.unwrap()["local_sec"], fmt))
++    # M390：time_format 省略 tz 已改为**本地时区** ⇒ 这里 local_sec 已加过目标区偏移，
++    #   必须显式 "UTC" 才不再叠一次本机偏移（修前 tz_format("Asia/Shanghai",0,…) 给出 16:00）。
++    return Ok(time_format(c.unwrap()["local_sec"], fmt, "UTC"))
