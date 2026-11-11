@@ -1768,6 +1768,23 @@ jobs:
           bash examples/m390_px_semantics/verify.sh > /tmp/v_pxsem.log 2>&1 || { echo "❌ m390_px_semantics 门失败（字符串/正则/JSON 语义回归）"; tail -40 /tmp/v_pxsem.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅ ' /tmp/v_pxsem.log | tail -6
           echo "✅ m390_px_semantics（NUL 统一 / 惰性量词 / 严格 JSON / Unicode / 九件原语 / 时区）PASS"
+      - name: m390_px_semantics（运行时字符串/正则/JSON 语义收口 · M390 · 缺陷 713–729）
+        # 判据六组（A NUL 统一 · B 正则惰性量词 · C 严格 JSON · D Unicode 表 ·
+        #   E 九件新原语 · F 时区三态）+ G 组前提自证（9 个新名必须在 native_symbols 里，
+        #   否则「E 组全过」可能只是跑在旧 runtime 上）。
+        # 差分负控：split 退回 strlen / lazy 位清零 / json 词法校验摘掉 ⇒ 对应用例必红。
+        if: ${{ !cancelled() }}
+        run: |
+          bash examples/m390_px_semantics/verify.sh > /tmp/v_pxsem.log 2>&1 || { echo "❌ m390_px_semantics 门失败（字符串/正则/JSON 语义回归）"; tail -40 /tmp/v_pxsem.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅ ' /tmp/v_pxsem.log | tail -6
+          echo "✅ m390_px_semantics（NUL 统一 / 惰性量词 / 严格 JSON / Unicode / 九件原语 / 时区）PASS"
+
+      - name: m391_parser_features（parser 三件：三元 / 链式折行 / 模块限定访问 · M391 · 缺陷 733–736）
+        if: always()
+        run: |
+          set +e
+          bash examples/m391_parser_features/verify.sh > /tmp/v_pfeat.log 2>&1 || { echo "❌ m391_parser_features 门失败（parser 语法回归）"; tail -40 /tmp/v_pfeat.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m391_parser_features（三元 / 链式折行 / 模块限定访问）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

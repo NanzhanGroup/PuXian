@@ -31,6 +31,8 @@ var p_toks = []
 var p_pos = 0
 var p_brack = 0  # M119：括号深度（parse 前重置）
 var cg_closures = ""
+# M391 · PX-029：模块别名 → 值级导出名集合（主文件声明，cg_module.px 引用）
+var cg_ns = {"_": 0}
 var cg_structs = {"_": 0}
 var cg_enums = {"_": 0}
 var cg_enum_fields = {"_": 0}  # M372：枚举变体字段名表

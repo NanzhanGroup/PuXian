@@ -48,6 +48,8 @@ var p_toks = []
 var p_pos = 0
 var p_brack = 0  # M119：括号深度（parse 前重置）
 var loaded = {"_": 0}
+# M391 · PX-029：模块别名 → 值级导出名集合（主文件声明，cg_module.px 引用）
+var cg_ns = {"_": 0}
 # ---------- interp 全局状态 ----------
 var g_globals = null
 var g_structs = it_new_dict()
@@ -144,7 +146,7 @@ def i_run_program(prog):
 # ---------- 入口 ----------
 # 版本：与 tools/pxc（SELFHOST_VER/SELFHOST_MILESTONE）保持一致。
 # 发布包版本号由 tools/make_release.sh 按 tag 派生（见其"版本来源"段）。
-let PXI_VER = "0.2.390"
+let PXI_VER = "0.2.391"
 let PXI_MS = "M-B9a"
 def main():
     let a = args()

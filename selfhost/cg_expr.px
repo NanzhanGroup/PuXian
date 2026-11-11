@@ -462,6 +462,10 @@ def cg_gen_expr(expr):
     if ty == "Field":
         let obj = expr[1]
         let fname = rust_unescape(expr[2])
+        # M391 · PX-029：模块限定访问 `helper.addk` → 全局 addk（px_get_global 直取，不受局部遮蔽）
+        if obj[0] == "Var":
+            if cg_ns_has(rust_unescape(obj[1]), fname):
+                return "px_get_global(\"" + fname + "\")"
         # M44：简化枚举 type X const 访问 LogLevel.Info → 绑定值（常量内联）
         if obj[0] == "Var":
             let oname = rust_unescape(obj[1])
@@ -512,6 +516,11 @@ def cg_gen_expr(expr):
         let sj = cg_seq_join([expr[1], expr[2], expr[3], expr[4]], [o, s, e, k])  # M165（缺陷 178）
         return cg_seq_wrap(sj[0], "px_slice(" + sj[1][0] + ", " + sj[1][1] + ", " + sj[1][2] + ", " + sj[1][3] + ")")
     if ty == "Call":
+        # M391 · PX-029：模块限定调用 `helper.addk(1)` 先归一成 Var 调用再分派
+        #   （否则会走「方法调用」路径去求值 helper 这个不存在的全局）。
+        if expr[1][0] == "Field" and expr[1][1][0] == "Var":
+            if cg_ns_has(rust_unescape(expr[1][1][1]), rust_unescape(expr[1][2])):
+                return cg_gen_expr(["Call", ["Var", expr[1][2], expr[1][3]], expr[2], expr[3]])
         let callee = expr[1]
         let args = expr[2]
         # M365：命名参数（仅结构体构造）—— 装配与报文走 argmap.px（三轨同一份）。

@@ -2029,3 +2029,9 @@ run m389_gh_auth bash examples/m389_gh_auth/verify.sh
 #   + G 组前提自证（链的必须是当前 runtime，9 个新名须全在 native_symbols 里）。
 #   差分负控：split 退回 strlen / lazy 位清零 / json 词法校验摘掉 ⇒ 对应用例必红。
 run m390_px_semantics bash examples/m390_px_semantics/verify.sh
+# ── m391_parser_features（M391 · 缺陷 733–736）──────────────────────────────
+#   parser 三件：三元 `c ? a : b` · 行首 `.` 链式续行 · import 模块裸赋值 + 限定访问
+#   （`helper.addk(1)` / `helper.K`，且**局部同名不得劫持**）。
+#   判据四组 A/B/C + D 三条负控（`f()?` 仍是 Try · `f()? - 1` 不是三元 ·
+#   未导入别名不得被当成模块）+ P 前提自证（v0.2.390 编译器必须拒绝本用例语法）。
+run m391_parser_features bash examples/m391_parser_features/verify.sh

@@ -170,9 +170,24 @@ def cg_is_definition(st):
         # import 不执行模块顶层语句；VarDecl 合并后由主程序顶层执行初始化（px_set_global 注册全局）。
         # 主文件若已有同名顶层声明，模块定义插前、主文件后执行 → 用户值覆盖模块默认（沿用"用户优先"）。
         return true
+    if ty == "Assign":
+        # M391 · PX-028：模块顶层**裸赋值**（`G = 9`，无 let/var）也要导出。
+        #   修前被本函数判为「非定义」⇒ 语句整条丢弃 ⇒ 模块内的函数读同模块裸赋值变量
+        #   得到 R1001 未定义（实测：helper.px 里 `G = 9`，addg() 读 G 崩；同文件的 `let K = 5` 正常）。
+        #   主文件顶层裸赋值本来就能注册全局（codegen: px_set_global），
+        #   ⇒ 这里只是让 import 路径与主文件路径同口径（不是新增语义）。
+        #   ⚠️ 只导出顶层裸赋值；op 非 "Assign" 的复合赋值（G += 1）不导出（对未定义变量本就会报 R1001）。
+        return st[2] == "Assign"
     return false
 # 定义名（impl 用 "impl::类型::trait" 近似键）
 def cg_def_name(st):
+    if st[0] == "Assign":
+        # M391 · PX-028：裸赋值以「被赋值的简单变量名」为导出名 ——
+        #   使 `from m import G` 的选择性导入也能正确取舍（修前 Assignment 无名 ⇒ 一律整条合并）。
+        let tgt = st[1]
+        if tgt[0] == "Var":
+            return rust_unescape(tgt[1])
+        return null
     let ty = st[0]
     if ty == "FuncDef" or ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ExternDef":
         return rust_unescape(st[1])
@@ -254,6 +269,8 @@ def cg_load_module(module, names, base_dir, out, std_defined):
         jj += 1
     # 提取定义类语句（选择性导入只保留列出的名字）
     let selective = len(names) > 0
+    # M391 · PX-029：本模块**值级**导出名表（供 `别名.名字` 限定访问）
+    let exp = []
     var ki = 0
     while ki < len(sprog[1]):
         let st = sprog[1][ki]
@@ -280,10 +297,46 @@ def cg_load_module(module, names, base_dir, out, std_defined):
                     continue
                 std_defined[name] = true
             out.append(st)
+            # M391 · PX-029：只把**值级**名字登记进命名空间表。
+            #   类型级定义（struct/enum/trait/impl）**不登记** —— 它们不是运行期全局值，
+            #   登记了会让 `m.类型名` 被误改写成 px_get_global("类型名")（取到 null）。
+            if st[0] == "FuncDef" or st[0] == "ExternDef" or st[0] == "VarDecl" or st[0] == "Assign":
+                exp.append(name)
         ki += 1
+    # M391 · PX-029：登记「模块别名 → 值级导出名集合」。
+    #   修前 import 只有一种语义：所有名字**扁平**合并进全局 ⇒ 两个模块同名函数无法区分，
+    #   也无法写 `helper.addk(1)` 这种限定写法（报 px_field 取不到）。
+    #   本轮只加「限定访问」这一条**纯增益**路径：扁平名照旧可用（不改既有代码语义）。
+    let alias = cg_module_alias(module)
+    if len(alias) > 0 and len(exp) > 0:
+        let nsd = cg_new_dict()
+        var ei2 = 0
+        while ei2 < len(exp):
+            nsd[exp[ei2]] = true
+            ei2 += 1
+        cg_ns[alias] = nsd
+# M391 · PX-029：模块别名 —— 取模块路径最后一段并去掉 .px 后缀（`import "a/helper.px"` → helper）。
+def cg_module_alias(module):
+    if len(module) == 0:
+        return ""
+    let last = module[len(module) - 1]
+    let parts = last.split("/")
+    var base = parts[len(parts) - 1]
+    if len(base) > 3 and base[len(base) - 3:len(base)] == ".px":
+        base = base[0:len(base) - 3]
+    return base
+# M391 · PX-029：`别名.名字` 是否是该模块的值级导出
+def cg_ns_has(alias, name):
+    if not cg_ns.has(alias):
+        return false
+    return cg_ns[alias].has(name)
 # 解析并合并程序的所有 import（返回新 Program）
 def cg_resolve_modules(prog, base_dir):
     let items = prog[1]
+    # M391 · PX-029：每次解析一门程序前清空模块别名表 ——
+    #   pxls / pxtest 会在**同一个进程**里编译多份文件，残留别名会把上一份的导出名
+    #   带进下一份（`x.f` 被误判为模块成员）。
+    cg_ns = cg_new_dict()
     if len(items) == 0:
         return prog
     let extra = []

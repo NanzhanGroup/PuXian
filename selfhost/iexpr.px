@@ -72,6 +72,18 @@ def i_eval_expr(node, env):
         # M44：简化枚举 type X const 访问 LogLevel.Info → 绑定值
         if node[1][0] == "Var":
             let oname = rust_unescape(node[1][1])
+            # M391 · PX-029：模块限定访问 `helper.addk` → 全局 addk（**只查全局**，
+            #   不穿局部环境 ⇒ 局部同名变量不得劫持模块成员访问）
+            let qname = rust_unescape(node[2])
+            if cg_ns_has(oname, qname):
+                let gv = env_get(g_globals, qname)
+                # env_get 的返回形态：命中 {found:true, value:…}（本层已声明未执行时**多一个** unbound:true）
+                # ⇒ 不能无条件读 gv["unbound"]（缺键会报 R1008，M391 实测踩到）
+                if not gv["found"]:
+                    return Err(i_r1001(qname, node[3]))
+                if gv.has("unbound") and gv["unbound"]:
+                    return Err(i_r1001(qname, node[3]))
+                return Ok(gv["value"])
             if g_const_enums.has(oname):
                 let fname = rust_unescape(node[2])
                 if g_const_enums[oname].has(fname):
@@ -130,6 +142,13 @@ def i_eval_expr(node, env):
             sp = null
         return i_slice(or_.unwrap(), st, en, sp, node[5])
     if ty == "Call":
+        # M391 · PX-029：模块限定调用 `helper.addk(1)` —— 与直接调用全局 addk 等价。
+        #   在 Call 入口把 callee 归一成 Var 再分派，避免污染各条调用分派路径
+        #   （方法调用 / struct 构造 / 枚举构造 / 命名参数 各一支）。
+        let ncal = node[1]
+        if ncal[0] == "Field" and ncal[1][0] == "Var":
+            if cg_ns_has(rust_unescape(ncal[1][1]), rust_unescape(ncal[2])):
+                return i_eval_call(["Call", ["Var", ncal[2], ncal[3]], node[2], node[3]], env)
         return i_eval_call(node, env)
     if ty == "Unary":
         let r = i_eval_expr(node[2], env)

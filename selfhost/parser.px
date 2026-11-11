@@ -232,6 +232,51 @@ def chk_op(k):
         p_pos = i
         return true
     return false
+# ---------- M391 · PX-027：三元表达式 `cond ? a : b` ----------
+#   复用既有 IfExpr 节点（三轨 iexpr/cg_expr/bc_emit 与 astdump 的 LAYOUT 均已支持）
+#   ⇒ 本特性**只动 parser**，不改 AST、不改三轨、不改 runtime。
+#   二义性：`?` 既是 Try 后缀（`f()?`）又是三元起点 —— 判据见 p_qmark_is_ternary。
+def p_expr_starter(kind):
+    if kind == "整数" or kind == "浮点" or kind == "字符串" or kind == "标识符":
+        return true
+    if kind == "(" or kind == "[" or kind == "{":
+        return true
+    if kind == "-" or kind == "!":
+        return true
+    return kind in START_KW
+let START_KW = {"fn": true, "if": true, "match": true, "not": true, "true": true,
+                "false": true, "null": true, "None": true, "self": true, "spawn": true}
+# p_pos 处是 `?`：决定它是「三元起点」还是「Try 后缀」。
+#   条件：① 紧跟的 token 能起一个表达式（否则 `f()?` + 换行/`+` 等一定是 Try）
+#        ② 同层（不计 ()[]{} 深度）在语句结束前能扫到 `:`（否则 `x? - 1` 这类必须是 Try）
+#   两条同时成立才判三元；判错的两种形态都会被 ② 拦掉（Try 的后续 token 里
+#   不可能出现同层 `:`，除 slice/dict —— 它们都在括号内，被深度跳过）。
+def p_qmark_is_ternary():
+    var i = p_pos + 1
+    # 括号内允许 `?` 后折行
+    while i < len(p_toks) and p_toks[i][0] == "换行":
+        i += 1
+    if i >= len(p_toks):
+        return false
+    if not p_expr_starter(p_toks[i][0]):
+        return false
+    var d = 0
+    var j = i
+    while j < len(p_toks):
+        let k = p_toks[j][0]
+        if k == "(" or k == "[" or k == "{":
+            d += 1
+        elif k == ")" or k == "]" or k == "}":
+            if d == 0:
+                return false
+            d -= 1
+        elif d == 0:
+            if k == ":":
+                return true
+            if k == "换行" or k == "缩进" or k == "去缩进" or k == "EOF" or k == ",":
+                return false
+        j += 1
+    return false
 def node_pos(node):
     return node[len(node) - 1]
 def qstr(s):
@@ -804,7 +849,23 @@ def parse_params():
     return params
 # ---------- 表达式（Pratt 解析） ----------
 def parse_expr():
-    return parse_pipe()
+    return parse_ternary()
+# M391 · PX-027：三元 `cond ? a : b`（最低优先级，右结合）
+def parse_ternary():
+    let cond = parse_pipe()
+    if not chk("?"):
+        return cond
+    let pos = ppos()
+    adv()
+    skip_expr_ws()
+    let then_v = parse_ternary()
+    skip_expr_ws()
+    if not chk(":"):
+        perr("E2001", "三元表达式缺少 ':'（写法 cond ? a : b），这里得到 " + pk_display())
+    adv()
+    skip_expr_ws()
+    let else_v = parse_ternary()
+    return ["IfExpr", cond, then_v, else_v, pos]
 def parse_pipe():
     var left = parse_null_coalesce()
     while chk_op("|>"):
@@ -1037,6 +1098,10 @@ def parse_postfix():
             adv()
             expr = ["ForceUnwrap", expr, pos]
         elif k == "?":
+            # M391 · PX-027：先判二义 —— 是三元（`c ? a : b`）就**不**吞成 Try，
+            #   交给 parse_ternary（在 parse_expr 顶层处理）。
+            if p_qmark_is_ternary():
+                break
             let pos = ppos()
             adv()
             expr = ["Try", expr, pos]

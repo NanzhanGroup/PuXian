@@ -163,6 +163,15 @@ def handle_line_start():
         if g_indent_stack[len(g_indent_stack) - 1] != indent:
             err("E2002", "缩进不一致：当前缩进 " + str(indent) + " 与上层缩进不匹配")
     g_at_line_start = false
+# M391 · PX-027：当前 g_pos 处是 "\n"，判断**下一行首个非空字符**是否为 `.`（链式续行）。
+#   只看紧邻的下一行（跳过其前导空格/制表符）；遇到空行/注释行一律判否（保守）。
+def next_line_starts_with_dot():
+    var i = g_pos + 1
+    while i < g_len and (g_src[i] == " " or g_src[i] == "\t"):
+        i += 1
+    if i >= g_len:
+        return false
+    return g_src[i] == "."
 # ---------- 注释 ----------
 def skip_comment():
     # M154（第 36 轮 · 分配率第二刀）：注释体 `text += advance()` 逐字符追加 ⇒ 分配数 =
@@ -811,6 +820,15 @@ def next_token():
         #   会破坏 token 流 golden（实测 s15_multiline：16:11/17:11/18:11/23:17/24:17
         #   五处「换行」被吞）。续行只对**语句层**（括号外）有意义。
         if g_bracket_depth == 0 and is_cont_op(g_last_kind):
+            advance()
+            return true
+        # M391 · PX-027：**行首 `.` 链式续行**（括号外）。
+        #   修前 `let r = s` 换行 `.to_upper()` ⇒ 报「E2001 意外的 token: 缩进」
+        #   （lexer 把续行当成新语句的缩进块，parser 在 `.` 处无法接续）。
+        #   判据：括号外 + 下一非空行首字符是 `.` ⇒ 本换行不产「换行」token、
+        #   不置 g_at_line_start（缩进按普通空白吃掉，不压缩进栈）。
+        #   ⚠️ `.` 不能作为语句开头 ⇒ 与语句分隔无歧义（`..`/`...` 不存在于本语言）。
+        if g_bracket_depth == 0 and next_line_starts_with_dot():
             advance()
             return true
         let nl_line = g_line

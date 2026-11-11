@@ -773,6 +773,14 @@ def bc_emit_expr(expr, dst, func):
         let obj0 = expr[1]
         if obj0[0] == "Var":
             let oname = rust_unescape(obj0[1])
+            # M391 · PX-029：模块限定访问 `helper.addk` → GETG（直取全局，不查局部槽）
+            if cg_ns_has(oname, fname):
+                var dq = dst
+                if dq < 0:
+                    dq = bc_tmp(func)
+                let gq = bc_g_add(g_bcm["globals"], fname)
+                bc_emit_inst(func, "GETG", dq, gq, 0)
+                return dq
             let ce = bc_const_find(oname, fname)
             if ce != null:
                 var d = dst
@@ -825,6 +833,10 @@ def bc_emit_expr(expr, dst, func):
     if ty == "Call":
         # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）/
         # B2 struct/enum 构造（callee Var 为类型名 → NEWSTRUCT/NEWENUM）
+        # M391 · PX-029：先把「模块限定调用」`helper.addk(1)` 归一成 Var 调用再分派。
+        if expr[1][0] == "Field" and expr[1][1][0] == "Var":
+            if cg_ns_has(rust_unescape(expr[1][1][1]), rust_unescape(expr[1][2])):
+                return bc_emit_expr(["Call", ["Var", expr[1][2], expr[1][3]], expr[2], expr[3]], dst, func)
         let callee = expr[1]
         # M365：命名参数（仅结构体构造）—— 装配与报文走 argmap.px（三轨同一份）。
         #   与 bc_emit_struct_new 的差别只有一处：**先按书写顺序求值到临时槽，
