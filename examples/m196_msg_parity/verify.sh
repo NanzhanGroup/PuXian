@@ -113,9 +113,27 @@ s7; rc=$?
 #   （M196 时 180 ⇒ M197 补了 3 条 os_* arity 文案后是 183）。判据改成「**下限** + 不一致 0」。
 chk "[1] [S7] 全绿（可比 ≥180 · 不一致 0）" "[ \$rc = 0 ] && grep -q '当前不一致 0' '$W/s7.log' && grep -oE '可比函数 [0-9]+' '$W/s7.log' | awk '{exit !(\$2 >= 180)}'"
 chk "[1] 基线已清空 ⇒ 硬判据（任何新增立即判红）" "grep -q '基线函数 0 · 新增 0/0' '$W/s7.log'"
-chk "[1] FMT_OK 两条带理由（range / atan2）且真跑过" "grep -q 'FMT_OK' '$ROOT/examples/m196_msg_parity/scan_msgs.py' && grep -c 'why' '$ROOT/examples/m196_msg_parity/scan_msgs.py' | grep -q '^2$'"
+# ⚠️ M390 补3（判据自修 · 缺陷 731 形状）：原写法把计数放进 `$(...)`，
+#   而 `$(...)` 里的 '$ROOT/...' 是**单引号字面量** ⇒ grep 找不到文件、`[` 收到空串
+#   （line 45: integer expression expected）⇒ 本判据**恒红**，与源码状态无关。
+#   改法：判据逻辑放进函数，由 python 解析 FMT_OK 的**键集**与「每条一个 why」——
+#   仍要求「每条带理由」，且比数 'why' 出现次数更难被顺手绕过。
+fmt_ok_ok() {
+    python3 - "$ROOT/examples/m196_msg_parity/scan_msgs.py" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^FMT_OK = \{(.*?)^\}", s, re.S | re.M)
+if not m:
+    sys.exit(1)
+body = m.group(1)
+keys = set(re.findall(r'^    "([a-z0-9_]+)": \{', body, re.M))
+whys = body.count('"why"')
+sys.exit(0 if keys == {"range", "atan2", "bytes_find"} and whys == len(keys) else 1)
+PYEOF
+}
+chk "[1] FMT_OK 三条（range / atan2 / bytes_find）各带理由且真跑过" "fmt_ok_ok"
 
-echo "=== [2] 动态判据：12 个错例 × 三轨（同码 + 同文）==="
+echo "=== [2] 动态判据：13 个错例 × 三轨（同码 + 同文）==="
 while IFS=$'\t' read -r b ec eb; do
     [ -n "$b" ] || continue
     run3 "$b"

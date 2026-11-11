@@ -11,3 +11,4 @@ m10_range_start_float	R1002	range 的 start 需要整数，实际是 float
 m11_atan2_type	R1002	atan2 参数必须是数字，实际是 string
 m12_http_unix_arity	R1002	http_unix 需要 (socket_path, url_path, method[, body[, headers[, opts]]]]) 参数
 m13_gen_next_arity	R1002	gen_next 需要 1 个参数
+m14_bytes_find_start_type	R1002	bytes_find 的 start 需要整数，实际是 float

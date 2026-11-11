@@ -1,0 +1,2 @@
+print("before")
+print(bytes_find(bytes("abc"), bytes("b"), 1.5))

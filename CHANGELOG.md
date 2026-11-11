@@ -1,4 +1,4 @@
-## M390：把外部提的 36 条运行时缺陷「按机制」修一遍 —— 字符串语义收口 + 六件新原语（缺陷 713–729）
+## M390：把外部提的 36 条运行时缺陷「按机制」修一遍 —— 字符串语义收口 + 六件新原语（缺陷 713–731 · 含候选 732）
 
 > **一句话**：清歌 34 条 + 晨曦 11 条里，**本轮修 17 条**（含 2 条最危险的静默错）。
 > 修法按**机制**归并，不按条目打补丁：一条 `px_memmem`（字节长 + memchr）同时治了
@@ -50,6 +50,26 @@ m294      NC-E2 前提：硬编码 fd 7/8/9 在分片装置里已被父 shell �
       · 豁免 26/26 · 多形参守卫 155 · 棘轮表空）
 ```
 重烘：14/14 件源码链一致（`rebake_bin.sh --check-all` ✅）。
+
+### M390 补3：定向复跑 13 门（红 11→0）+ m196 判据自修
+
+> 装置：`run_gates.sh --only m191,m192,m193,m194,m195,m196,m197,m199,m228,m250,m294,m390_px_semantics,upstream_tests`
+> 结果：**12 门绿**（m196 首跑仍红 ⇒ 见下）；upstream_tests 564 通过 / 0 失败（补2 的 A 类真回归确认收口）
+
+```
+m196 仍红 —— 不是源码，是**判据自己**：
+  /tmp/gate_m196_msg_parity.log:6
+  grep: $ROOT/examples/m196_msg_parity/scan_msgs.py: No such file or directory
+  verify.sh: line 45: [: : integer expression expected
+根因：补 bytes_find 时把计数写进 `$(...)`，而 `$(...)` 内的 '$ROOT/…' 是单引号**字面量**，
+      不展开 ⇒ grep 找不到文件、`[` 收到空串 ⇒ 该判据**恒红**（与源码状态无关）
+修法：判据逻辑收进函数 fmt_ok_ok（python 解析 FMT_OK 的**键集** + 「每条一个 why」），
+      比数 'why' 出现次数更难被顺手绕过；负控：删 bytes_find 一条 ⇒ rc=1（正控 rc=0）
+复跑：M196-VERIFY-OK 通过 33 · 失败 0（含 4 道负控）
+```
+
+**同类登记**：`$(...)` 内的单引号不展开 —— 与缺陷 677（`-task-done` 只清一半）同属「看着做了、其实没做」。
+判据必须有一条**正控**（当前源码下必绿）才能证明它不是恒红/恒绿。
 
 ### 一 缺陷 713（清歌 PX-006 · 晨曦 CX-04/CX-05）：字符串内建遇 NUL 截断
 
@@ -211,6 +231,41 @@ tooling：px build 的 rtcache 源清单是**白名单**（tools/px rt_src_files
       另：工具层报超时不等于子进程没起 —— 起后台任务后应 ps 验证，而不是假设成功/失败。
 ```
 
+
+### 十三 判据自己恒红：`$(...)` 里的单引号字面量（缺陷 731）
+
+```
+现场  m196 [1] 判据在补 bytes_find 之后恒红，日志两行：
+        grep: $ROOT/examples/m196_msg_parity/scan_msgs.py: No such file or directory
+        verify.sh: line 45: [: : integer expression expected
+病根  chk 的判据串是这样写的：
+        chk "..." "grep -q FMT_OK '$ROOT/…/scan_msgs.py' && grep -c why '$ROOT/…' | grep -q '^2$'"
+      chk 内部走 eval，但中层的 $(...) 已被**外层的 shell** 先展开过一次：
+      单引号在 $(...) 内不阻止展开，'$ROOT/…' 成了字面量 ⇒ grep 找不到文件、[ 收到空串
+      ⇒ 这条判据与源码状态**完全无关**地恒红（m196 的「红」一度被当成三轨分叉去查）
+修法  fmt_ok_ok() 函数：python 解析 FMT_OK 的**键集** {range, atan2, bytes_find}
+      + 每条必须带一个 why ⇒ 比数 'why' 出现次数更难被顺手绕过
+复跑  M196-VERIFY-OK 通过 33 · 失败 0（含 4 道负控，源逐字节还原）· M197 通过 28 · 失败 0
+正控  当前源码下必绿 —— 这一条是本次加的硬要求：
+      判据只有「负控会红」不够，还必须有「当前状态会绿」，
+      否则恒红与恒绿两个方向都能骗过整套自证
+教训  与缺陷 730（夹具被别人的进程换掉）同族：**判据的输入与判据自身，都必须由判据独占**。
+      本轮五次红（696 / 708 / 731 / m199 锚点失效 / FMT_OK 计数）四次红在判据侧 ——
+      改实现时要同步问一句：有没有哪条判据的**写法前提**被我改掉了。
+
+附：提交时又撞到同一族问题的第三种形态（记缺陷候选 732）
+```
+提交被 check_emitc_hook.sh 拦下：新增 examples/m196_msg_parity/probe/m14_bytes_find_start_type.px
+两条出路都走不通：
+  ① bash selfhost/emitc_freeze.sh --freeze → 报「518 个文件已重定基」，但 golden **零变化**
+  ② bash selfhost/emitc_freeze.sh --check  → 「518 个文件逐字节一致」（确无发射回归）
+根因：hook 用 emitc_freeze.sh 里的 glob（examples/*/probe/*.px）判「是否动了冻结集」，
+      而 freeze 的**实际收录清单**不含这个新文件（518 未变）⇒ 两个集合定义不一致
+      ⇒ 任何「新增探针用例」都无法通过正常路径提交，只能靠 PX_SKIP_FREEZE_HOOK=1 留痕
+处置：本轮走留痕跳过（hook 自测 A5 明确保留这个出口），缺陷 732 入 NEXT-QUEUE
+      —— 要修的是「hook 的判据集合必须由 freeze 的清单派生」，不是放宽 hook
+```
+```
 
 ## M389：取数失败不再冒充「没有数据」—— GitHub 取数收成唯一实现 + 一扇新门（缺陷 709）
 
