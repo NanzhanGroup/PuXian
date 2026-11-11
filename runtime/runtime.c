@@ -4674,6 +4674,30 @@ int px_exit_code_final(int code) {
     return code;
 }
 
+// ==================== M392（PX-025）：try/catch 帧栈 ====================
+// 语义：t_try_top 非空时，px_error **不打印、不退出**，把消息存进 t_try_msg 后 longjmp 回该帧。
+//   优先级（见 px_error 内）：① json_opt（更内层的窄语义）② try 帧 ③ g_err_jmp（协程隔离）④ exit。
+// ⚠️ 帧对象由**生成代码**持有（栈上 PxTryFrame，PX_TRY_BEGIN 是宏）——本段只登记/弹栈，不分配。
+// ⚠️ **弹帧先于 longjmp**：跳出后 g_try_top 已指向外层，handler 里再出错会正确落到外层帧；
+//    若先跳后弹，handler 自身抛错会跳回**同一个**已恢复的 jmp_buf ⇒ 死循环。
+// ⚠️ GC 根水位**本版不接**：px_root_iso_mark_deep 是单槽（t_iso_roots），嵌套 try 会互相覆盖，
+//    按帧存值需要新接口。三轨接通那轮再补，此处不装半对的保护（假安全比没有更坏）。
+static __thread PxTryFrame* t_try_top = NULL;
+static __thread char t_try_msg[512];
+
+void px_try_push(PxTryFrame* f) {
+    f->prev = t_try_top;
+    t_try_top = f;
+}
+
+void px_try_pop(void) {
+    if (t_try_top) t_try_top = t_try_top->prev;
+    t_try_msg[0] = '\0';   // 出帧即清：避免 handler 里取到上一层帧的残留消息
+}
+
+const char* px_try_msg(void) { return t_try_msg; }
+int px_try_active(void) { return t_try_top != NULL; }
+
 void px_error(const char* fmt, ...) {
     // M129（缺陷 38）：json_parse_opt 的局部捕获点在最优先位置 —— 期间任何 px_error
     //   都变成 Err(msg) 返回给调用方，既不打印也不退出（等价 Go 的 error 返回）。
@@ -4684,6 +4708,18 @@ void px_error(const char* fmt, ...) {
         vsnprintf(g_json_opt_msg, sizeof(g_json_opt_msg), fmt, cap);
         va_end(cap);
         longjmp(g_json_opt_jb, 1);
+    }
+    // M392（PX-025）：try 帧 —— 用户层捕获点。**不打印**（被捕获 = 已被处理，不是事故）。
+    //   ⚠️ 必须在 fflush/打印**之前**（同 json_opt 的理由：否则 stderr 被污染，且部分 IO 已发生）。
+    //   ⚠️ 先弹帧再 longjmp：handler 里再抛错要落到外层帧，不能跳回同一个 jmp_buf（死循环）。
+    if (t_try_top != NULL) {
+        va_list cap;
+        va_start(cap, fmt);
+        vsnprintf(t_try_msg, sizeof(t_try_msg), fmt, cap);
+        va_end(cap);
+        PxTryFrame* tf = t_try_top;
+        t_try_top = tf->prev;
+        longjmp(tf->jb, 1);
     }
     // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
     fflush(stdout);

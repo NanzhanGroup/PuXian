@@ -5,6 +5,17 @@
 # 全局变量/函数命名：cg_ 前缀避免与主文件/parser 冲突。
 # ============================================================
 # ---------- 语句生成 ----------
+# M392（PX-025）：退出路径弹帧 —— try 帧是**栈上的 jmp_buf**，从 body 里 return/break/continue
+#   直接跳走而不弹帧 ⇒ g_try_top 指向已退出的栈帧（之后任一 px_error 都会跳进去 = UB）。
+#   编译期展开成 cur-to 个 px_try_pop()，不引入运行期循环（生成文本对既有源码零差异：
+#   无 try 时 cur == to ⇒ 空串）。
+def cg_try_pops_from(cur, to):
+    var s = ""
+    var i = to
+    while i < cur:
+        s += "px_try_pop(); "
+        i += 1
+    return s
 def cg_gen_stmt_inner(stmt, indent):
     let pad = cg_pad(indent)
     let ty = stmt[0]
@@ -161,16 +172,65 @@ def cg_gen_stmt_inner(stmt, indent):
             acc = cg_inited_intersect(acc, entry)
         cg_inited_restore(acc)
         return s
+    if ty == "TryCatch":
+        # M392（PX-025）：["TryCatch", body, name, handler, pos]
+        #   生成形态（catch 变量按块作用域登记，出块恢复）：
+        #     { PxTryFrame _pfN;
+        #       if (PX_TRY_BEGIN(_pfN) == 0) { <body>; px_try_pop(); }
+        #       else { LXValue _vM = px_str(px_try_msg()); <handler> } }
+        #   ⚠️ setjmp 必须**展开在本函数帧内** ⇒ 用宏 PX_TRY_BEGIN，绝不包成 helper。
+        #   ⚠️ 已知限制（记录在案）：longjmp 后非 volatile 局部变量的值在 C 标准里不确定；
+        #      gcc 对 returns_twice 函数会把局部溢出到栈，实测可用。门 T2/T4 覆盖该形态。
+        let fid = cg_uid()
+        let fvar = "_pf" + str(fid)
+        let entry = cg_inited_copy()
+        var s = pad + "{\n"
+        s += pad + "    PxTryFrame " + fvar + ";\n"
+        s += pad + "    if (PX_TRY_BEGIN(" + fvar + ") == 0) {\n"
+        cg_try_depth += 1
+        var tbi = 0
+        while tbi < len(stmt[1]):
+            s += cg_gen_stmt(stmt[1][tbi], indent + 2)
+            tbi += 1
+        cg_try_depth -= 1
+        s += pad + "        px_try_pop();\n"
+        s += pad + "    } else {\n"
+        var cname = null
+        var oldv = null
+        var had_old = false
+        if stmt[2] != null:
+            cname = rust_unescape(stmt[2])
+            if cg_vars.has(cname):
+                oldv = cg_vars[cname]
+                had_old = true
+            let cv = cg_new_var(cname)
+            s += pad + "        LXValue " + cv + " = px_str(px_try_msg());\n"
+            cg_inited_add(cname)
+        var thi = 0
+        while thi < len(stmt[3]):
+            s += cg_gen_stmt(stmt[3][thi], indent + 2)
+            thi += 1
+        if stmt[2] != null:
+            if had_old:
+                cg_vars[cname] = oldv
+            else:
+                cg_vars.remove(cname)
+        cg_inited_restore(entry)
+        s += pad + "    }\n"
+        s += pad + "}\n"
+        return s
     if ty == "While":
         # M181（缺陷 193）：循环体可能**一次都不执行** ⇒ 之后回退入口集（保守）
         let wentry = cg_inited_copy()
         let c = cg_gen_expr(stmt[1])
         var s = pad + "while (px_is_truthy(" + c + ")) {\n"
         let body = stmt[2]
+        cg_loop_try.push(cg_try_depth)  # M392：循环入口 try 深度（break/continue 弹到这一层）
         var bi = 0
         while bi < len(body):
             s += cg_gen_stmt(body[bi], indent + 1)
             bi += 1
+        cg_loop_try.pop()
         s += pad + "}\n"
         cg_inited_restore(wentry)
         return s
@@ -259,21 +319,30 @@ def cg_gen_stmt_inner(stmt, indent):
                 cg_inited_add(names[qn])
                 qn += 1
         var bi = 0
+        cg_loop_try.push(cg_try_depth)  # M392：同 while（break/continue 弹到循环入口那一层）
         while bi < len(body):
             s += cg_gen_stmt(body[bi], indent + 1)
             bi += 1
+        cg_loop_try.pop()
         s += pad + "}\n"
         cg_inited_restore(fentry)
         return s
     if ty == "Return":
+        let pops = cg_try_pops_from(cg_try_depth, 0)
         if stmt[1] != null:
             let e = cg_gen_expr(stmt[1])
-            return pad + "return " + e + ";\n"
-        return pad + "return px_null();\n"
+            return pad + pops + "return " + e + ";\n"
+        return pad + pops + "return px_null();\n"
     if ty == "Break":
-        return pad + "break;\n"
+        var bto = 0
+        if len(cg_loop_try) > 0:
+            bto = cg_loop_try[len(cg_loop_try) - 1]
+        return pad + cg_try_pops_from(cg_try_depth, bto) + "break;\n"
     if ty == "Continue":
-        return pad + "continue;\n"
+        var cto = 0
+        if len(cg_loop_try) > 0:
+            cto = cg_loop_try[len(cg_loop_try) - 1]
+        return pad + cg_try_pops_from(cg_try_depth, cto) + "continue;\n"
     if ty == "Empty":
         return ""
     if ty == "ChanDecl":

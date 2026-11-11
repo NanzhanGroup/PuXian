@@ -27,7 +27,7 @@ var g_last_kind = ""
 var g_count = 0
 var g_pending = []  # 插值产生的中间 token：[kind, val, line, col]
 # ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern", "try": "try", "catch": "catch"}
 # ---------- 续行运算符表（Go 自动分号插入规则的等价物） ----------
 # Go 规定：仅当行尾 token 是「标识符 / 字面量 / break·continue·fallthrough·return /
 #   ++ -- / ) ] }」时才插入分号。等价地：**行尾是运算符 ⇒ 表达式继续**。

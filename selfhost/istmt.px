@@ -102,6 +102,45 @@ def i_exec_stmt(stmt, env):
         let r = i_exec_while(stmt, env)
         g_loop_depth -= 1
         return r
+    if ty == "TryCatch":
+        # M392（PX-025）：["TryCatch", body, name, handler, pos]
+        #   解释轨的错误形态本来就是 Err 返回值 ⇒ 天然可捕获，零运行时改动。
+        #   body 的 return/break/continue（__flow__）**不**被 try 截获：原样上抛。
+        var ti = 0
+        var caught = false
+        var errv = null
+        while ti < len(stmt[1]):
+            let tr = i_exec_stmt(stmt[1][ti], env)
+            if tr.is_err():
+                caught = true
+                errv = tr.err()
+                break
+            let tv = tr.unwrap()
+            if type(tv) == "dict" and tv.has("__flow__"):
+                return Ok(tv)
+            ti += 1
+        if not caught:
+            return Ok(null)
+        if stmt[2] != null:
+            # M392：catch 变量的**三轨统一口径** = "R码: 消息"（C/VM 轨的 px_try_msg 就是这个形态，
+            #   见 runtime.c 的 px_error 捕获分支）。解释轨的错误值是 dict（i_err），
+            #   这里拼成同一文本 —— 否则同一份源码三轨打出三种 e。
+            # ⚠️ 变量名不能叫 ev：i_exec_stmt 的 Match 分支已用 `let ev`（C 轨 cg_vars 是**函数级**
+            #   作用域，块不新建）⇒ 同名再 `var ev` 会被判「对不可变变量赋值」E3002（M392 重烘实测）。
+            var ecap = errv
+            if type(ecap) == "dict" and ecap.has("__err__"):
+                ecap = ecap["__err__"] + ": " + ecap["msg"]
+            env_define(env, rust_unescape(stmt[2]), ecap)
+        var hi = 0
+        while hi < len(stmt[3]):
+            let hr = i_exec_stmt(stmt[3][hi], env)
+            if hr.is_err():
+                return Err(hr.err())
+            let hv2 = hr.unwrap()
+            if type(hv2) == "dict" and hv2.has("__flow__"):
+                return Ok(hv2)
+            hi += 1
+        return Ok(null)
     if ty == "Return":
         var v = null
         if stmt[1] != null:

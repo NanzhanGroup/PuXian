@@ -252,6 +252,7 @@ def bc_new_func(name, arity):
     func["next_slot"] = arity
     func["is_top"] = false
     func["loops"] = []  # A3：循环上下文栈 [{breaks:[idx],conts:[idx]}]
+    func["try_depth"] = 0  # M392（PX-025）：当前函数内 try 嵌套深度（退出路径发 TRYEXIT）
     # M160（缺陷 159）：闭包捕获（upvalue cell）——
     #   upnames = 本函数从**定义它的外层帧**捕获的名字（顺序即捕获序，帧入口按
     #     槽 nparams+i 从闭包 env 取 cell 填入）；
@@ -381,6 +382,14 @@ def bc_emit_inst(func, op, a, b, c):
 #   bc[idx] 从 idx 跳到 target → off = target - (idx+1)
 def bc_patch_off(func, idx, target):
     func["bc"][idx][3] = target - (idx + 1)
+# M392（PX-025）：退出路径弹 try 帧 —— 编译期展开成 (try_depth - to) 条 TRYEXIT。
+#   ⚠️ **不改 func["try_depth"]**：这是控制流出口（RET/JMP），后面不会回到此处继续生成；
+#   编译期状态仍表示「本段代码处于 try 内」（同 cg_try_pops_from 的口径）。
+def bc_try_exits(func, to):
+    var i = to
+    while i < func["try_depth"]:
+        bc_emit_inst(func, "TRYEXIT", 0, 0, 0)
+        i += 1
 # ---------- hoist 局部收集（对齐 cg_collect_hoist_vars：函数级作用域） ----------
 def bc_collect_hoist(stmts, out):
     var i = 0
@@ -413,6 +422,10 @@ def bc_collect_hoist(stmts, out):
                 bc_collect_hoist(st[2], out)
         elif ty == "While":
             bc_collect_hoist(st[2], out)
+        elif ty == "TryCatch":
+            # M392（PX-025）：body 与 handler 同属本帧（catch 变量由 bc_slot 单独占槽）
+            bc_collect_hoist(st[1], out)
+            bc_collect_hoist(st[3], out)
         elif ty == "For":
             # B1：for 循环变量（Python 语义：循环后保留最后值）+ 遍历 body
             #   M167：多变量解包 —— 每个名字都要占槽（单变量仍是字符串）
@@ -471,6 +484,9 @@ def bc_collect_decl_vars(stmts, out):
             bc_collect_decl_vars(st[3], out)
         elif ty == "While":
             bc_collect_decl_vars(st[2], out)
+        elif ty == "TryCatch":
+            bc_collect_decl_vars(st[1], out)
+            bc_collect_decl_vars(st[3], out)
         i += 1
 # 发 null 常量到 dst 槽（LOADK nullK；K 去重）
 def bc_emit_null(func, dst):
@@ -1932,6 +1948,8 @@ def bc_emit_stmt_inner(stmt, func):
             return
         panic("bc_emit_stmt Assign 目标未实现: " + str(tgt))
     if ty == "Return":
+        # M392（PX-025）：退出路径先弹本帧所有 try 帧（RET 后帧消亡，残留 = 悬垂 jmp_buf）
+        bc_try_exits(func, 0)
         if stmt[1] != null:
             let t = bc_tmp(func)
             bc_emit_expr(stmt[1], t, func)
@@ -1950,6 +1968,9 @@ def bc_emit_stmt_inner(stmt, func):
     if ty == "While":
         bc_emit_while(stmt, func)
         return
+    if ty == "TryCatch":
+        bc_emit_try(stmt, func)
+        return
     if ty == "For":
         bc_emit_for(stmt, func)
         return
@@ -1959,6 +1980,7 @@ def bc_emit_stmt_inner(stmt, func):
         if len(loops) == 0:
             panic("bc_emit Break 不在循环内")
         let ctx = loops[len(loops) - 1]
+        bc_try_exits(func, ctx["try_depth"])  # M392：跨出 try 块前弹帧
         let j = len(func["bc"])
         bc_emit_inst(func, "JMP", 0, 0, 0)
         ctx["breaks"].append(j)
@@ -1969,6 +1991,7 @@ def bc_emit_stmt_inner(stmt, func):
         if len(loops) == 0:
             panic("bc_emit Continue 不在循环内")
         let ctx = loops[len(loops) - 1]
+        bc_try_exits(func, ctx["try_depth"])  # M392：跨出 try 块前弹帧
         let j = len(func["bc"])
         bc_emit_inst(func, "JMP", 0, 0, 0)
         ctx["conts"].append(j)
@@ -2219,6 +2242,7 @@ def bc_emit_while(stmt, func):
     let ctx = bc_new_dict()
     ctx["breaks"] = []
     ctx["conts"] = []
+    ctx["try_depth"] = func["try_depth"]  # M392：break/continue 弹到循环入口那一层
     func["loops"].push(ctx)
     bc_emit_stmts(body, func)
     func["loops"].pop()
@@ -2236,6 +2260,29 @@ def bc_emit_while(stmt, func):
     while bi < len(ctx["conts"]):
         bc_patch_off(func, ctx["conts"][bi], loop_start)
         bi += 1
+# M392（PX-025）：try/catch —— 布局（TRYENTER 的 b 字段 = catch 起点，由 bc_patch_off 回填）：
+#   TRYENTER(name_slot, →catch)
+#   <body>  TRYEXIT  JMP →end
+#   catch:  <handler>            ← VM 的 TRYENTER 落点：弹帧 + 恢复 pc 到此处 +
+#   end:                          若 name_slot != 65535 则写 slots[name_slot]=px_str(msg)
+#   ⚠️ name_slot = 65535（PX_TRY_NO_NAME）表示 `catch:` 不绑定错误值。
+def bc_emit_try(stmt, func):
+    var nslot = 65535
+    if stmt[2] != null:
+        nslot = bc_slot(func, rust_unescape(stmt[2]))
+    let jenter = len(func["bc"])
+    bc_emit_inst(func, "TRYENTER", nslot, 0, 0)
+    func["try_depth"] = func["try_depth"] + 1
+    bc_emit_stmts(stmt[1], func)
+    func["try_depth"] = func["try_depth"] - 1
+    bc_emit_inst(func, "TRYEXIT", 0, 0, 0)
+    let jend = len(func["bc"])
+    bc_emit_inst(func, "JMP", 0, 0, 0)
+    let hstart = len(func["bc"])
+    bc_patch_off(func, jenter, hstart)
+    bc_emit_stmts(stmt[3], func)
+    let hend = len(func["bc"])
+    bc_patch_off(func, jend, hend)
 # B1: For —— 索引迭代（对齐 codegen cg For：i in 0..len(iter)，v=iter[i]）
 # 展开：iter→槽 its → n = CALL len(its) → ctr=0 →
 #       loop: cond(ctr<n) JMPF end → v=INDEX(its,ctr) → body →
@@ -2350,6 +2397,7 @@ def bc_emit_for(stmt, func):
     let ctx = bc_new_dict()
     ctx["breaks"] = []
     ctx["conts"] = []
+    ctx["try_depth"] = func["try_depth"]  # M392：break/continue 弹到循环入口那一层
     func["loops"].push(ctx)
     # M181（缺陷 193）：循环体内**循环变量必已初始化**（体首就写它）；循环**之后**回退
     #   入口集（可能 0 次迭代 ⇒ 循环变量不算已初始化，与解释轨一致：空迭代后读 ⇒ R1001）。

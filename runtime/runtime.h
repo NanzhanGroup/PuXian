@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <signal.h>      // M93-S2: sigset_t（协程 worker GC 信号屏蔽导出 API 参数）
+#include <setjmp.h>      // M392（PX-025）：PxTryFrame 内嵌 jmp_buf（try/catch 帧栈，跨 TU 声明）
 #include <sys/types.h>   // ssize_t（PxConn 读写返回）
 #include <poll.h>        // M256：px_io_poll 的 struct pollfd（IO 原语声明，跨 TU）
 #include <sys/epoll.h>   // M256：px_io_epoll_wait 的 struct epoll_event
@@ -959,3 +960,32 @@ int px_gc_contains(LXObject* o);
 LXValue px_match_fail(LXValue subj);
 // 元组模式的结构判据：tuple 或 list 且长度恰为 n（对齐解释轨 i_match_pattern 的 PatTuple 分支）。
 int px_match_tuple(LXValue v, int n);
+
+// ==================== M392（PX-025）：try/catch 的运行时帧栈 ====================
+// 病灶：px_error 在 C 轨是「打印 + exit」⇒ 任何运行时错误都直接杀进程，用户代码无法兜。
+//   本段提供**唯一的捕获机制**：px_error 在 g_try_top 非空时存消息 + longjmp 回最内层帧。
+//
+// ⚠️ 三条硬约束（写在这里是因为它们违反后不会编译报错，只会偶发段错误）：
+//   ① setjmp 必须展开在**生成代码的帧内**（PX_TRY_BEGIN 是宏）—— 藏进普通函数再返回 = UB。
+//   ② 帧是**栈上的 jmp_buf**：body 里 return/break 跳走前必须弹帧（cg_stmt 按 try_depth 发
+//      px_try_pop）—— 否则 g_try_top 指向已退出的栈帧，之后任一 px_error 都会跳进去。
+//   ③ longjmp 跳过 GC 的 px_root 登记 ⇒ push/pop 两侧各做一次
+//      px_root_iso_mark_deep / px_root_restore_iso（与 px_native_call_capture 同范式）。
+// ⚠️ 本段位于 `#endif // PX_RUNTIME_H` 之后（与 M239 段同处）⇒ 函数声明重复无碍，
+//   但 **typedef 重复定义会报 conflicting types**（runtime_h3.c 会两次 include 本头）。
+//   故 typedef 单独加一层 guard（M392 首跑实测：runtime 预编译缓存建立失败就是这个）。
+#ifndef PX_TRYFRAME_DEFINED
+#define PX_TRYFRAME_DEFINED
+typedef struct PxTryFrame {
+    jmp_buf jb;                  // 捕获点（栈上，随帧消亡）
+    struct PxTryFrame* prev;     // 外层帧（NULL = 无外层）
+} PxTryFrame;
+#endif
+
+void px_try_push(PxTryFrame* f);   // 压帧（GC 根水位本版不接，见 runtime.c 同段注释）
+void px_try_pop(void);             // 弹帧 + 恢复 GC 根水位（空栈时是空操作）
+const char* px_try_msg(void);      // 最近一次被捕获的错误文本（catch 的 e 取此值）
+int  px_try_active(void);          // 是否处于某个 try 帧内
+
+// 捕获点展开（宏，保证 setjmp 在调用者帧）：返回 0 = try 体入口，非 0 = 从 px_error 跳回。
+#define PX_TRY_BEGIN(f) (px_try_push(&(f)), setjmp((f).jb))

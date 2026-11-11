@@ -1,3 +1,93 @@
+## M392：try/catch —— 运行期错误模型（PX-025，缺陷 738–740）
+
+> **一句话**：清歌 PX-025 落地，**三轨同轮**（解释轨 Err 返回值 / C 轨 setjmp / VM 轨 TRYENTER+TRYEXIT）。
+> 这是本仓第一次让**用户代码能兜住运行时错误** —— 此前 `px_error` 在 C/VM 轨一律「打印 + exit」，
+> 用户只能「崩得更漂亮」。唯一会炸进程的地方不是语法，是**退出路径**（见第三节）。
+
+### 一 语法与 AST
+
+```
+写法   try:
+           <body>
+       catch e:          # e 可省：catch:
+           <handler>
+AST    ["TryCatch", body, name, handler, pos]   name = rust 字符串或 null
+LAYOUT 已登记（astdump 依赖）；parse_try() 要求 catch 紧跟且同列（E2001 否则）
+```
+
+### 二 三轨怎么捕获（同一份源码，三条不同机制）
+
+| 轨 | 错误形态 | 捕获手段 | 本轮改动 |
+|---|---|---|---|
+| 解释 pxi | `Err(...)` **返回值**传播 | 直接判返回值，**零运行时改动** | `istmt.px` 新增 TryCatch 分支 |
+| C pxc | `px_error()` = 打印 + exit | `setjmp`，且**必须展开在生成代码帧内**（宏 `PX_TRY_BEGIN`，不能包 helper） | `cg_stmt.px` + `runtime.c/h` 帧栈（60 行） |
+| VM pxc_vm | `px_error()`（dispatch 循环里） | `TRYENTER/TRYEXIT` + 保存/恢复 `pc`、丢弃压深帧 | `bc_emit.px` + `vm.c/vm.h` |
+
+`px_error` 的捕获优先级（顺序固定）：
+```
+① g_json_opt_active → longjmp g_json_opt_jb   （既有：json_parse_opt 的窄语义）
+② t_try_top != NULL → 存 msg + **先弹帧**再 longjmp   ← M392 新增
+③ g_err_jmp_set     → 协程隔离点（既有）
+④ 都没有            → 打印 + exit（既有）
+```
+**先弹帧再 longjmp** 是必须的：handler 里再抛错要落到外层帧，跳回同一个 jmp_buf 就是死循环（判据 T7 钉它）。
+
+### 三 ★退出路径（缺陷 739）—— 本轮唯一会炸进程的地方
+
+```
+帧 = 栈上的 jmp_buf。try 体里 return/break/continue 直接跳走而不弹帧
+  ⇒ t_try_top 指向**已退出的栈帧** ⇒ 之后任意一次 px_error 都 longjmp 进去 = UB
+C 轨   cg_stmt 维护 cg_try_depth / cg_loop_try：
+         Return            → 发 try_depth 个 px_try_pop()
+         Break/Continue    → 弹到**所属循环入口**记的深度（cg_loop_try 栈顶）
+         函数/闭包体生成前  → 深度清零（否则外层的深度会被算进内层 Return）
+VM 轨  bc_emit 同一套（func["try_depth"] + loops ctx["try_depth"]），发 TRYEXIT
+       另加**最后一道保险**：vm_frame_pop 按 PxFrame.try_base 清理本帧残留 try 帧
+判据   N1：函数内 try + return，之后再触发一次运行时错误 ⇒ 不许段错误（rc≠139）、必须正常报 R 码
+```
+
+### 四 catch 变量的三轨统一口径（缺陷 740）
+
+```
+解释轨的错误值是 dict（{"__err__","msg","line","col"}），C/VM 轨的 px_try_msg 是一行文本
+  ⇒ 直接绑 dict 会让同一份源码三轨打出三种 e
+口径   e = "<R码>: <消息>"    例：R1001: 未定义变量: 'x'
+      解释轨：e["__err__"] + ": " + e["msg"]（与 runtime 的 px_error 格式串逐字一致）
+      C/VM  ：px_try_msg() 原样
+判据   X1：interp / VM / C 三轨跑同一份主用例（T1–T8）⇒ 输出**逐字节一致**
+```
+
+### 五 已知限制（诚实边界，不是「以后再说」）
+
+1. **GC 根水位未接**：`px_root_iso_mark_deep` 是单槽（`t_iso_roots`），嵌套 try 会互相覆盖；
+   按帧存值需要新接口。此处**明确空着**，不装「看起来保护了、嵌套时全错」的版本
+   （注释写在 runtime.c 同段与 runtime.h 声明旁）。
+2. **longjmp 跨 C 栈帧**会跳过多层 native 调用的清理（malloc 等）—— 与既有 `g_err_jmp` /
+   `json_opt` 同一取舍；C 轨与 VM 轨一致，不是本轮新引入。
+3. C 标准对 setjmp 后非 volatile 局部变量的值不保证；gcc 对 `returns_twice` 函数会溢出到栈，
+   实测可用（判据 T1/T4 覆盖该形态）。
+
+### 六 判据（`examples/m392_try_catch/verify.sh`，已登记 registry）
+
+```
+T1 捕到 R1001 且取到消息文本      T5 循环内捕到后 break 生效
+T2 正常路径不进 handler           T6 跨函数帧（深层抛、外层捕 ⇒ VM 丢帧）
+T3 嵌套内层先捕、捕后继续执行      T7 catch 内再抛错被外层捕（不死循环）
+T4 catch 里 return 正常返回       T8 无名 catch（丢弃错误值）
+N1 退出路径：try 内 return 后再出错 ⇒ 不段错误（rc≠139）、正常报 R1001、前两行正确
+N2 未捕获错误仍响亮（rc≠0 + stderr 带 R 码 + 之前的输出还在）
+X1 interp / VM / C 三轨输出逐字节一致
+P  前提自证：上一版 tag（v0.2.391）的编译器必须拒绝本用例
+```
+
+### 七 代价
+
+```
+改动面  runtime.c +36 · runtime.h +25 · vm.h +27 · vm.c +52
+        parser.px +28 · istmt.px +30 · cg_stmt.px +58 · codegen.px +22 · cg_expr.px +8 · bc_emit.px +38
+重烘    动 runtime + parser ⇒ 14 件入库件全部重烘 + .rtcache 冷（全量门一轮 2–2.5h）
+```
+
 ## M391：parser 三件 —— 三元表达式 · 链式折行 · 模块裸赋值/限定访问（缺陷 733–736）
 
 > **一句话**：清歌 PX-027 / PX-028 / PX-029 落地；**PX-025 try/catch 单独一轮**（理由见第五节，

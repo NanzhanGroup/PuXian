@@ -20,7 +20,7 @@ var g_at_line_start = true
 var g_toks = []
 var g_count = 0
 var g_pending = []
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern", "try": "try", "catch": "catch"}
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
 let LAYOUT = {
     "Program": ["Program", [["items", "l"]]],
@@ -30,6 +30,7 @@ let LAYOUT = {
     "If": ["If", [["branches", "lt2b"], ["else_branch", "ol"], ["pos", "p"]]],
     "For": ["For", [["var", "vs"], ["iterable", "n"], ["body", "l"], ["pos", "p"]]],
     "While": ["While", [["cond", "n"], ["body", "l"], ["pos", "p"]]],
+    "TryCatch": ["TryCatch", [["body", "l"], ["name", "os"], ["handler", "l"], ["pos", "p"]]],
     "Return": ["Return", [["value", "o"], ["pos", "p"]]],
     "Break": ["Break", [["pos", "p"]]],
     "Continue": ["Continue", [["pos", "p"]]],
@@ -165,7 +166,7 @@ def expect_ident(what):
         return v
     perr("E2001", "期望" + what + "，实际得到 " + pk_display())
 def is_name_kind(k):
-    let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture", "extern"]
+    let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture", "extern", "try", "catch"]
     var i = 0
     while i < len(ns):
         if ns[i] == k:
@@ -314,6 +315,8 @@ def parse_stmt():
         return parse_for()
     if k == "while":
         return parse_while()
+    if k == "try":
+        return parse_try()
     if k == "def":
         return parse_func_def()
     if k == "extern":
@@ -507,6 +510,28 @@ def parse_while():
     expect("换行", "换行")
     var body = parse_block_ctxt(hcol)
     return ["While", cond, body, pos]
+# M392（PX-025）：try/catch —— `try:` 块 + `catch [e]:` 块（catch 必须紧跟，且同列）。
+#   AST：["TryCatch", body, name, handler, pos]（name 为 rust 字符串或 null = 不绑定错误值）
+#   三轨语义：body 内**运行时错误**转 handler；正常走完不进 handler；
+#   body 内的 return/break/continue 仍按原语义**向外传播**（不被 try 截获，见 cg_stmt / istmt / bc_emit）。
+def parse_try():
+    let pos = ppos()
+    let hcol = pcol()
+    adv()
+    expect(":", "':'")
+    expect("换行", "换行")
+    let body = parse_block_ctxt(hcol)
+    if not chk("catch"):
+        perr("E2001", "try 之后必须紧跟 catch（第 " + str(pos[0]) + " 行的 try 块）")
+    adv()
+    var name = null
+    if chk("标识符"):
+        name = qstr(pv())
+        adv()
+    expect(":", "':'")
+    expect("换行", "换行")
+    let handler = parse_block_ctxt(hcol)
+    return ["TryCatch", body, name, handler, pos]
 # M129（qg-issue 87 缺陷 3）：块解析的**上下文感知**版本。
 #   缩进令牌存在 ⇒ 与 parse_block 完全等价（零行为变化）。
 #   缩进令牌缺失且处于**括号内匿名函数体** ⇒ 按**列**定块界：

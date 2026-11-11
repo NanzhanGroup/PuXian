@@ -28,7 +28,7 @@ var g_at_line_start = true
 var g_toks = []
 var g_count = 0
 var g_pending = []
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern", "try": "try", "catch": "catch"}
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
 var p_toks = []
 var p_pos = 0
@@ -110,6 +110,12 @@ def cg_tmp():
 #   （同 M165 cg_seq_uid / M166 cg_iter_len_tmp / M167 cg_unpack_tmp 的手法）。
 var cg_match_uid = 0
 var cg_match_decls = []
+# M392（PX-025）：try/catch 的**退出路径**计数 —— 帧是栈上的 jmp_buf，
+#   body 里 return/break/continue 直接跳走而不弹帧 ⇒ g_try_top 指向已退出的栈帧。
+#   cg_try_depth = 当前函数内 try 嵌套深度；cg_loop_try = 循环入口的深度快照栈
+#   （Break/Continue 弹到所属循环那一层，Return 弹到 0）。函数体生成前必须清零（见 cg_gen_func_named）。
+var cg_try_depth = 0
+var cg_loop_try = []
 def cg_iter_len_tmp():
     # M166（缺陷 176）：迭代长度快照的**专用计数器** —— 与 cg_tmp() 的 `_tN` 分开编号，
     #   使「迭代长度校验」之外的发射文本**一字不变**（否则每个 for 都会顶掉后续 _tN 编号，
@@ -700,6 +706,10 @@ def cg_collect_hoist_vars(stmts, out):
             cg_collect_hoist_vars(st[3], out)
         elif ty == "While":
             cg_collect_hoist_vars(st[2], out)
+        elif ty == "TryCatch":
+            # M392（PX-025）：body 与 handler 同属本帧（catch 变量本身就地声明，不提升）
+            cg_collect_hoist_vars(st[1], out)
+            cg_collect_hoist_vars(st[3], out)
         i += 1
 # ---------- M169（缺陷 181）：**声明式**绑定收集 ----------
 # 与 cg_collect_hoist_vars（含 Assign 目标）的唯一区别 = 「帧内绑定归属」判据：
@@ -745,6 +755,9 @@ def cg_collect_decl_vars(stmts, out):
             cg_collect_decl_vars(st[3], out)
         elif ty == "While":
             cg_collect_decl_vars(st[2], out)
+        elif ty == "TryCatch":
+            cg_collect_decl_vars(st[1], out)
+            cg_collect_decl_vars(st[3], out)
         i += 1
 # ---------- 函数生成 ----------
 def cg_gen_func(f):
@@ -765,6 +778,12 @@ def cg_gen_func_named(f, cname):
     cg_topbody = false
     # M181（缺陷 193）：函数体是新帧 —— 初始化集清空（形参在下面逐个登记）
     let saved_inited = cg_inited_copy()
+    # M392（PX-025）：try 深度也是**帧内状态** —— 进入新函数帧必须清零，
+    #   否则外层（生成期）某段 try 的深度会被算进本函数的 Return 弹帧次数（多弹 = 提前拆外层帧）。
+    let saved_try_depth = cg_try_depth
+    let saved_loop_try = cg_loop_try
+    cg_try_depth = 0
+    cg_loop_try = []
     cg_inited = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
@@ -880,6 +899,8 @@ def cg_gen_func_named(f, cname):
     cg_immutables = saved_imm
     cg_topbody = saved_top  # M169（缺陷 181）：还原模块体标志
     cg_inited = saved_inited  # M181（缺陷 193）：还原外层帧的初始化集
+    cg_try_depth = saved_try_depth  # M392：还原外层（生成期）try 深度
+    cg_loop_try = saved_loop_try
     return s
 # ---------- generate 主流程 ----------
 def cg_generate(prog):

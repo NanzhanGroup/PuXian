@@ -213,6 +213,11 @@ def cg_gen_closure(params, body, dispname):
     #   （初始化单调 ⇒ 创建点已初始化则调用点必已初始化；反之不播种 ⇒ 体内读到哨兵即 R1001）
     let saved_inited2 = cg_inited_copy()
     let outer_inited2 = cg_inited_copy()
+    # M392（PX-025）：闭包体同样是新帧 —— try 深度清零（同 cg_gen_func_named）
+    let saved_try_depth2 = cg_try_depth
+    let saved_loop_try2 = cg_loop_try
+    cg_try_depth = 0
+    cg_loop_try = []
     cg_inited = cg_new_dict()
     # M169（缺陷 181）：闭包体不是模块体 —— 体里的绑定按帧（函数级）作用域处理
     let saved_top2 = cg_topbody
@@ -312,6 +317,8 @@ def cg_gen_closure(params, body, dispname):
     cg_cells = saved_cells
     cg_topbody = saved_top2
     cg_inited = saved_inited2
+    cg_try_depth = saved_try_depth2
+    cg_loop_try = saved_loop_try2
     # M129b（缺陷 54）：**无捕获**的闭包沿用 `px_func(..., NULL)` —— 不必建 env、
     #   不必让 ctx 指向自身 env 字段（省一次字段写 + 与既有 golden 形式一致：
     #   仅"确有捕获"的闭包才需要 px_func_env 携带 upvalue cell）。

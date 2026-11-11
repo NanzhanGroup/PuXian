@@ -110,6 +110,7 @@ const char* px_op_name(int op) {
         [PXOP_TAILCALL] = "TAILCALL", [PXOP_RET] = "RET", [PXOP_RET0] = "RET0",
         [PXOP_JMP] = "JMP", [PXOP_JMPT] = "JMPT", [PXOP_JMPF] = "JMPF",
         [PXOP_TRY] = "TRY", [PXOP_FORCE] = "FORCE", [PXOP_SRCLINE] = "SRCLINE",
+        [PXOP_TRYENTER] = "TRYENTER", [PXOP_TRYEXIT] = "TRYEXIT",   // M392（PX-025）
         [PXOP_HALT] = "HALT",
         [PXOP_NEWGEN] = "NEWGEN", [PXOP_SPAWN] = "SPAWN",
         [PXOP_ENUMVAR] = "ENUMVAR",
@@ -198,6 +199,7 @@ void px_vm_state_init(PxVmState* st) {
     if (!st) return;
     if (st->cap < 16) st->cap = 16;
     if (!st->frames) st->frames = (PxFrame*)calloc((size_t)st->cap, sizeof(PxFrame));
+    st->ntry = 0;   // M392（PX-025）：try 栈从空开始（协程状态显式初始化时同样清零）
 }
 
 PxVmState* px_vm_state(void) {
@@ -258,6 +260,7 @@ static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
     fr->unlock_kind = 0;        // M93-S3：with 展开后置解锁（帧复用清零）
     fr->unlock_obj = px_null();
     fr->env = px_null();        // M160：普通帧无捕获环境（帧复用清零）
+    fr->try_base = st->ntry;    // M392（PX-025）：本帧 try 基线（帧弹时清到此处）
     __sync_synchronize();     // 帧字段写完成后再发布 nframes（弱序架构显式屏障）
     st->nframes = idx + 1;
     return fr;
@@ -317,7 +320,12 @@ static PxFrame* vm_frame_push_clo(PxVmState* st, const PxVMFunc* f,
 //   解锁在 slots free 前做（unlock 只拿锁对象锁，不触 slots；顺序无关紧要但保持清晰）。
 static void vm_frame_pop(PxVmState* st) {
     if (st->nframes <= 0) return;
-    PxFrame* fr = &st->frames[--st->nframes];
+    PxFrame* fr = &st->frames[st->nframes - 1];
+    // M392（PX-025）：本帧内未弹的 try 帧一并弹出 —— bc 已按 try_depth 发 TRYEXIT 时是空操作；
+    //   走到这里还有残留（异常路径 / 生成端漏项）就是**最后一道保险**：
+    //   绝不让 g_try_top 指向已退出的栈帧（那之后任一 px_error 都是 UB）。
+    while (st->ntry > fr->try_base) { st->ntry--; px_try_pop(); }
+    st->nframes--;
     if (fr->unlock_kind && fr->unlock_obj.type != PX_NULL) {
         if (fr->unlock_kind == 1) {
             if (fr->unlock_obj.type == PX_MUTEX) px_mutex_unlock(fr->unlock_obj);
@@ -524,6 +532,9 @@ static int vm_coro_method(PxVmState* st, PxFrame* fr, LXValue ov, const char* mn
 static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) {
     LXValue ret = px_null();
     int done = 0;
+    // M392（PX-025）：TRYENTER 的 setjmp 会 longjmp 回来 —— C 标准只保证 volatile 局部变量的值，
+    //   故所有「跳回后要用」的状态一律走 st（堆/线程局部），且这里留一个 volatile 视图访问它。
+    PxVmState* volatile vst = st;
     PxFrame* fr = &st->frames[st->nframes - 1];
     static __thread unsigned long vm_tick = 0;   // M94-S2：抢占节流计数（每 4096 条查一次）
 
@@ -1167,6 +1178,40 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             break;
         case PXOP_JMPF:
             if (!vm_truthy(slots[in.a])) fr->pc += (int)(int16_t)in.b;
+            break;
+        // M392（PX-025）：try 入口 —— setjmp **必须**在本函数帧内（包成 helper 再返回 = UB）。
+        //   longjmp 回来时 px_error 已弹掉链表顶（= 本帧），这里只做四件事：
+        //     ① 计数对齐（ntry 减回 ti） ② 丢弃更深帧（错误可能发生在 CALL 压深的帧里）
+        //     ③ pc 指回 catch 起点（TRYENTER 记的是「下一条」） ④ 写 catch 变量
+        //   ⚠️ 恢复分支不复用任何局部变量（longjmp 后非 volatile 的值不确定），全从 st 取。
+        //   ⚠️ 跨 C 栈帧 longjmp 会跳过多层 native 调用的清理（与 C 轨同一取舍）。
+        case PXOP_TRYENTER: {
+            if (vst->ntry >= PX_MAX_TRYS)
+                px_error("R9002: try 嵌套过深（上限 %d 层）", PX_MAX_TRYS);
+            PxVmTry* tv = &vst->trys[vst->ntry];
+            tv->name_slot = in.a;
+            // ⚠️ 此时 fr->pc 已自增（指向 TRYENTER 的下一条）⇒ 目标 = (pc) + off
+            //   （bc_patch_off 的 off 口径是「相对下一条」）。M392 首跑实测：
+            //   若直接记下一条，longjmp 会**重新执行 try 体**（同一句未定义变量再报一次，
+            //   gdb 里表现为 px_error 在同一 PC 命中两次）—— 不是没捕获，是捕到了错的地方。
+            tv->saved_pc = vst->frames[vst->nframes - 1].pc + (int)(int16_t)in.b;
+            tv->saved_nframes = vst->nframes;
+            vst->ntry++;
+            px_try_push(&tv->tf);
+            if (setjmp(tv->tf.jb) != 0) {
+                int ti = vst->ntry - 1;
+                PxVmTry* tv2 = &vst->trys[ti];
+                vst->ntry = ti;
+                while (vst->nframes > tv2->saved_nframes) vm_frame_pop(vst);
+                PxFrame* rfr = &vst->frames[vst->nframes - 1];
+                rfr->pc = tv2->saved_pc;
+                if (tv2->name_slot != PX_TRY_NO_NAME && (int)tv2->name_slot < rfr->nslots)
+                    rfr->slots[tv2->name_slot] = px_str(px_try_msg());
+            }
+            break;
+        }
+        case PXOP_TRYEXIT:
+            if (vst->ntry > 0) { vst->ntry--; px_try_pop(); }
             break;
         default:
             // A1 起逐批实现；错误现场含函数名/行号/op 名，对齐 px_error 语义

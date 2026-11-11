@@ -2035,3 +2035,9 @@ run m390_px_semantics bash examples/m390_px_semantics/verify.sh
 #   判据四组 A/B/C + D 三条负控（`f()?` 仍是 Try · `f()? - 1` 不是三元 ·
 #   未导入别名不得被当成模块）+ P 前提自证（v0.2.390 编译器必须拒绝本用例语法）。
 run m391_parser_features bash examples/m391_parser_features/verify.sh
+# ── m392_try_catch（M392 · PX-025）─────────────────────────────────────────
+#   try/catch 三轨同轮落地（解释轨 Err 返回值 / C 轨 setjmp / VM 轨 TRYENTER+TRYEXIT）。
+#   判据：T1–T8 语义（捕获·正常路径·嵌套·catch 内 return/break·跨函数帧·handler 再抛·无名 catch）
+#   + N1/N2 负控（退出路径不段错误 · 未捕获错误仍响亮）+ X1 三轨逐字节一致
+#   + P 前提自证（v0.2.391 编译器必须拒绝本用例语法）。
+run m392_try_catch bash examples/m392_try_catch/verify.sh

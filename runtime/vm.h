@@ -179,7 +179,12 @@ typedef struct {
 #define PXOP_ENUMP 74      // a=dst, b=enum 源槽, c=载荷槽（px_enum_payload 语义：新值，源值不变）
 #define PXOP_MATCHENUMP 75 // a=dst(bool), b=subject 槽, c=期望载荷项数（px_match_enum_payload）
 #define PXOP_ENUMIS 76     // a=dst(bool), b=subject 槽, c=N["Type.Variant"]（px_enum_is）
-#define PXM_MAX      77    // = 最大操作码 + 1（px_op_name 的名字表按 PXM_MAX 定长）
+// M392（PX-025）：try/catch —— 与 C 轨同一套 PxTryFrame（runtime.h），本轨只多存恢复点。
+#define PXOP_TRYENTER 77   // a=名字槽（65535=不绑定）, b=off16（catch 起点）；setjmp 在 vm_run_loop 帧内
+#define PXOP_TRYEXIT  78   // 弹本帧最内层 try 帧（无操作若空）
+#define PX_TRY_NO_NAME 65535
+#define PX_MAX_TRYS   64   // 嵌套上限（超过 ⇒ R9002 响亮报错，不静默）
+#define PXM_MAX      79    // = 最大操作码 + 1（px_op_name 的名字表按 PXM_MAX 定长；M392 起 78=TRYEXIT）
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
@@ -265,7 +270,18 @@ typedef struct {
     LXValue         env;
     int             unlock_kind;
     LXValue         unlock_obj;  // 锁对象（GC 标记根：帧弹前保活锁对象，防 fn 内 GC 误回收）
+    int             try_base;    // M392（PX-025）：本帧进入时的 try 栈深度（帧弹按此清残留）
 } PxFrame;
+
+// M392（PX-025）：VM 的 try 帧 = runtime 的 PxTryFrame + 本轨恢复点。
+//   longjmp 回来时帧栈可能已被压深（错误发生在更深层调用里）⇒ 丢弃到 saved_nframes，
+//   再把 pc 指回 catch 起点（TRYENTER 记的是「下一条」，即 catch 的第一条指令）。
+typedef struct {
+    PxTryFrame      tf;            // prev 链 + jmp_buf（px_try_push/px_error 共用）
+    int             saved_pc;
+    int             saved_nframes;
+    unsigned short  name_slot;     // PX_TRY_NO_NAME = 不绑定
+} PxVmTry;
 
 typedef struct {
     PxFrame* frames;           // 帧栈（动态增长）
@@ -275,6 +291,8 @@ typedef struct {
                                //   worker 观察后复位；恢复运行前须为 0）
     LXValue  ret_val;          // M95-S2：协程顶层返回值（px_vm_run_coro/px_vm_resume
                                //   跑完 return 0 时存，供 coro 完成回调取；GC 标记补标）
+    PxVmTry  trys[PX_MAX_TRYS];// M392（PX-025）：每状态独立 try 栈（协程各自一份）
+    int      ntry;
 } PxVmState;
 
 // ==================== API ====================
