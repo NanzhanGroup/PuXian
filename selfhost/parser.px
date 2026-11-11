@@ -253,10 +253,20 @@ let START_KW = {"fn": true, "if": true, "match": true, "not": true, "true": true
 #   不可能出现同层 `:`，除 slice/dict —— 它们都在括号内，被深度跳过）。
 def p_qmark_is_ternary():
     var i = p_pos + 1
-    # 括号内允许 `?` 后折行
-    while i < len(p_toks) and p_toks[i][0] == "换行":
-        i += 1
+    # ⚠️ 只在**括号内**允许 `?` 后折行（M119 的续行语义）；
+    #   括号外 `expr?` 换行后是**下一条语句**，绝不能把下一行的 token 当成三元分支。
+    #   实测（M391 首跑 m187 红）：registry/mongodb 里
+    #       var first = o_cmd(conn, cmd)?
+    #       if not first.has("cursor"):
+    #           return Ok([])
+    #   修前为无条件跳换行 ⇒ 三元判据看到下一行的 `if`（START_KW）与块内 `:` ⇒ 误判三元
+    #   ⇒ 整段被当表达式吃掉，报「279:9 意外的 token: 缩进」。
+    if p_brack > 0:
+        while i < len(p_toks) and p_toks[i][0] == "换行":
+            i += 1
     if i >= len(p_toks):
+        return false
+    if p_toks[i][0] == "换行" or p_toks[i][0] == "去缩进" or p_toks[i][0] == "缩进" or p_toks[i][0] == "EOF":
         return false
     if not p_expr_starter(p_toks[i][0]):
         return false

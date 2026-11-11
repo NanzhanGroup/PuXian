@@ -113,6 +113,31 @@ else
     ok "D3 未导入别名报错（不静默）"
 fi
 
+# ── D4 负控（m187 首跑抓到的真形态）：`expr?` 换行后接**缩进块** ──────────────
+#   registry/mongodb 的实际写法：
+#      var first = o_cmd(conn, cmd)?
+#      if not first.has("cursor"):
+#          return Ok([])
+#   修前三元判据会跳过换行、把下一行 `if …:` 当成 then 分支 ⇒ 报「意外的 token: 缩进」。
+cat > "$TMP/d4.px" <<'PXEOF'
+def f(ok):
+    if ok:
+        return Ok(1)
+    return Err("no")
+def g():
+    var v = f(true)?
+    if v > 0:
+        return v
+    return 0
+print("D4 " + str(g()))
+PXEOF
+if "$PX" run "$TMP/d4.px" > "$TMP/d4.out" 2> "$TMP/d4.err"; then
+    if grep -qx 'D4 1' "$TMP/d4.out"; then ok "D4 expr? 换行 + 缩进块（不误判三元）"
+    else bad "D4 结果异常：$(head -2 "$TMP/d4.out" | tr '\n' ' ')"; fi
+else
+    bad "D4 编译/运行失败：$(head -2 "$TMP/d4.err" | tr '\n' ' ')"
+fi
+
 # ── 前提自证 P：旧编译器必须拒绝本用例语法（证明用例真的测到了新语法）─────
 #   基线件从 git 标签取（v0.2.390 是 M391 之前的最后一版），不额外入库大文件。
 #   取不到标签 ⇒ 明确 skip，不假装测过（CRITERIA：负控必须有前提自证）。
