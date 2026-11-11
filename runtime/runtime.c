@@ -10039,7 +10039,7 @@ static LXValue bi_sha256_raw(LXValue* args, int nargs, void* ctx) {
     const char* data = px_hash_arg_strict(args[0], "sha256_raw", "data", &len);
     unsigned char digest[32];
     if (mbedtls_sha256((const unsigned char*)data, (size_t)len, digest, 0) != 0)
-        px_error("sha256_raw 计算失败");
+        px_error("sha256 计算失败（sha256_raw）");   // 域前缀命中 docs/ERROR_CODES.md §3 E7（M390：修前写成 sha256_raw 前缀，不在闭集内 —— m191/m192/m193 三门同报）
     return px_bytes_len((const char*)digest, 32);
 }
 

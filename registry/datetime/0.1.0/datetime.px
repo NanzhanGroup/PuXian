@@ -17,6 +17,8 @@
 #   dt_iso_parse(s)          → Ok(Unix 秒) | Err（ISO8601：Z / ±HH:MM / ±HHMM / 纯日期 / 小数秒）
 #   dt_humane(now_sec, then_sec) → "3 分钟前 / 2 小时后 / 刚刚"（中文相对时间）
 # 说明：dt_format 底层 time_format 输出 UTC；本地时间直接用 dt_now()。
+#   ⚠️ M390 起 time_format/time_parse 省略 tz 的默认是**本地时区**（缺陷 717 / PX-033）
+#   ⇒ 本库四处调用都**显式传 "UTC"**，契约不变（上游 datetime_test 以已知秒看守）。
 #   未考虑夏令时（中国无 DST；跨国场景注意）。
 # ============================================================
 
@@ -31,11 +33,13 @@ def dt_now_sec():
 
 # 解析 → Unix 秒（wall clock）
 def dt_parse(s, fmt=DT_FMT):
-    return time_parse(s, fmt)
+    # M390：time_parse/time_format 省略 tz 已改为**本地时区**；本库契约是 UTC（见文件头）
+    #   ⇒ 四个调用点显式 "UTC"，否则上游 datetime_test 的已知秒整体偏移一个本机时区。
+    return time_parse(s, fmt, "UTC")
 
 # 格式化（UTC）
 def dt_format(sec, fmt=DT_FMT):
-    return time_format(int(sec), fmt)
+    return time_format(int(sec), fmt, "UTC")
 
 def dt_add(sec, delta_sec):
     return sec + delta_sec
@@ -107,14 +111,14 @@ def dt_iso_parse(s):
         if dot > tidx:
             t = t[0:dot]
         t = t[0:tidx] + " " + t[tidx + 1:len(t)]
-    var sec = time_parse(t, "%Y-%m-%d %H:%M:%S")
+    var sec = time_parse(t, "%Y-%m-%d %H:%M:%S", "UTC")
     if sec == null:
         return Err("datetime: 无法解析 ISO 时间: " + s)
     return Ok(sec - off_sec)
 
 # Unix 秒 → ISO8601（UTC，Z 后缀）
 def dt_iso_format(sec):
-    return time_format(int(sec), "%Y-%m-%dT%H:%M:%SZ")
+    return time_format(int(sec), "%Y-%m-%dT%H:%M:%SZ", "UTC")
 
 # 相对时间（中文）：then 相对 now；60 秒内为"刚刚"
 def dt_humane(now_sec, then_sec):

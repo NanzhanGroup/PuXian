@@ -1,0 +1,46 @@
+# ============================================================
+# M390 · native 面**入库冒烟**（native 覆盖面台账的消费面）
+# ------------------------------------------------------------
+# 为什么要有这个文件（M250 口径，见 selfhost/check_native_coverage.py 注释）：
+#   台账**只扫 `.px` 源文件**；而本门主语料（verify.sh 里的 surface.px）是**运行期生成**到
+#   /tmp 的 ⇒ 台账看不见 ⇒ 判据③「新增未覆盖不许扩大」把 M390 的 11 个新 native 全判红
+#   （10-11 08:30 全量门实测：chdir/getcwd/hkdf_sha256/hmac_sha256_raw/int_ceil/int_floor/
+#    list_remove_at/os_spawn_capture_sep/read_chunk_str/readlink/sha256_raw）。
+#   ⇒ 约定：运行期生成的语料，另提交一份 `.px` 冒烟。
+# 本文件由 verify.sh 的 [H] 段**真实执行**（不是死文本）：11 个 native 各合法调用一次 + 语义断言。
+# 用法：px run examples/m390_px_semantics/surface.px
+# ============================================================
+# ---- 路径原语（PX-020）----
+var cwd = getcwd()
+assert(len(cwd) > 0, "getcwd 应返回非空路径")
+assert(chdir(cwd) == true, "chdir 到当前目录应成功")
+var lnk = readlink("/proc/self/exe")
+assert(lnk != null, "readlink(/proc/self/exe) 应返回目标")
+assert(len(lnk) > 0, "readlink 目标不应为空")
+# ---- 流式读字符串（PX-028）----
+var sp = "/tmp/m390_native_smoke.txt"
+var fw = open(sp, "w")
+write(fw, "abcdefgh")
+close(fw)
+var fr = open(sp, "r")
+var chunk = read_chunk_str(fr, 4)
+close(fr)
+assert(chunk == "abcd", "read_chunk_str 应读到前 4 字节，实际 " + str(chunk))
+# ---- 摘要原语（PX-026）----
+var d0 = sha256_raw("")
+assert(len(d0) == 32, "sha256_raw 返回 32 字节")
+assert(bytes_to_hex(d0) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256_raw 空体摘要")
+var mac = hmac_sha256_raw("k", "m")
+assert(len(mac) == 32, "hmac_sha256_raw 返回 32 字节")
+var okm = hkdf_sha256(hex_to_bytes("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), hex_to_bytes("000102030405060708090a0b0c"), hex_to_bytes("f0f1f2f3f4f5f6f7f8f9"), 42)
+assert(bytes_to_hex(okm) == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865", "hkdf_sha256 = RFC 5869 Test Case 1")
+# ---- 取整三向 / 列表删除（PX-022）----
+assert(int_floor(-7.9) == -8, "int_floor(-7.9) = -8")
+assert(int_ceil(-7.9) == -7, "int_ceil(-7.9) = -7")
+assert(str(list_remove_at([1, 2, 3, 4], 1)) == "[1, 3, 4]", "list_remove_at 返回新 list")
+# ---- 分离 stderr 的子进程捕获（PX-030）----
+var r = os_spawn_capture_sep("sh", ["-c", "printf o; printf e 1>&2"])
+assert(r.get("rc") == 0, "spawn_capture_sep rc=0")
+assert(r.get("stdout") == "o", "stdout 分离，实际 " + str(r.get("stdout")))
+assert(r.get("stderr") == "e", "stderr 分离，实际 " + str(r.get("stderr")))
+print("M390-NATIVE-SMOKE-OK 11")

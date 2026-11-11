@@ -170,10 +170,17 @@ PY
     restore_all; snapshot
     python3 - <<'PY'
 s = open('runtime/runtime.c', encoding='utf-8').read()
-old = '    if (nargs >= 2 && args[1].type != PX_STR) px_error("R1002: split 参数需要 string");\n    const char* s = args[0].as.obj->as.str.data;\n    const char* sep = (nargs >= 2) ? args[1].as.obj->as.str.data : " ";'
-new = '    const char* s = args[0].as.obj->as.str.data;\n    const char* sep = (nargs >= 2 && args[1].type == PX_STR) ? args[1].as.obj->as.str.data : " ";'
-assert s.count(old) == 1
-open('runtime/runtime.c', 'w', encoding='utf-8').write(s.replace(old, new))
+# M390：split 的实现体在 PX-006 里改过（strlen → 显式字节长、分隔符带 sep_len）
+#   ⇒ 旧打桩锚点（`sep = (nargs >= 2) ? … : " "`）已不存在，负控会以 AssertionError 失效
+#   （实测形态：Traceback 后跟「FAIL [5A]」—— 是**负控没打成**，不是判据发现分叉）。
+#   锚点随实现更新，负控语义不变：把「非字符串第 2 参响亮报错」退回「三元兜底静默」。
+g_old = '    if (nargs >= 2 && args[1].type != PX_STR) px_error("R1002: split 参数需要 string");\n'
+t_old = '    if (nargs >= 2) { sep = args[1].as.obj->as.str.data; sep_len = args[1].as.obj->as.str.len; }'
+t_new = '    if (nargs >= 2 && args[1].type == PX_STR) { sep = args[1].as.obj->as.str.data; sep_len = args[1].as.obj->as.str.len; }'
+assert s.count(g_old) == 1, '负控锚点 g_old 未命中（split 实现又变了？）'
+assert s.count(t_old) == 1, '负控锚点 t_old 未命中（split 实现又变了？）'
+s = s.replace(g_old, '').replace(t_old, t_new)
+open('runtime/runtime.c', 'w', encoding='utf-8').write(s)
 PY
     build_drv c >/dev/null 2>&1; tracks; rc=$?
     chk "[5A] split 退回三元兜底 ⇒ [2] 判红（解释轨响亮 · 编译轨静默 = 分叉）" \

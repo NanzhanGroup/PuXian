@@ -13,8 +13,10 @@
 # 判据：
 #   [1] 静态：解析器两分支（`in` / `not in`，后者**必须吃掉两个 token**）·
 #       三轨映射（cg_expr→px_in/px_not_in · bc_emit→IN/NOTIN · ival→i_membership）·
-#       runtime 的**单份判定核心**（`px_membership_probe` 7 个引用点 · `px_memmem(` 只在
-#       probe 里被调 ⇒ 三个门不再各写一遍扫描）· 声明与 opcode · 规模锚点
+#       runtime 的**单份判定核心**（`px_membership_probe` 7 个引用点 · `px_memmem` **定义唯一**
+#       ⇒ 三个门不再各写一遍扫描。⚠️ M390 起 px_memmem 被 split/replace/bytes_find 复用
+#       （调用点变 6 处），故判据由「只在 probe 内被调」改为「签名恰 2 处 = 声明+定义」；
+#       这不是放宽：同一原语被多点复用是好事，重复*定义*才是真回归）· 声明与 opcode · 规模锚点
 #   [2] 构建三轨驱动器（81 例聚合 · 一次编译覆盖全量）
 #   [3] 动态：81 例 × 4 门 × 3 轨 = 972 次执行 ⇒ 跨轨 0 · 跨门 0 ·
 #       **与 Python 独立真值一致** · H3 词条归属 0 违规 · RCODE 双向精确相等
@@ -57,7 +59,7 @@ chk "runtime.h: px_in / px_not_in 声明"           "has runtime/runtime.h 'LXVa
 chk "vm.h: PXOP_IN / PXOP_NOTIN / PXM_MAX ≥ 70"     "has runtime/vm.h '#define PXOP_IN      68' && has runtime/vm.h '#define PXOP_NOTIN   69' && [ \"\$(awk '/PXM_MAX/{print \$3}' runtime/vm.h)\" -ge 70 ]"
 chk "vm.c: 指令名 + 两个 dispatch 分支"            "has runtime/vm.c '[PXOP_IN] = \"IN\", [PXOP_NOTIN] = \"NOTIN\",' && has runtime/vm.c 'slots[in.a] = px_not_in(slots[in.b], slots[in.c]);'"
 chk "runtime: 判定核心单份（probe 恰 7 个调用/定义点）" "[ \"\$(cnt runtime/runtime.c 'px_membership_probe(')\" = 7 ]"
-chk "runtime: px_memmem( 只在 probe 内被调（2 处=定义+调用）" "[ \"\$(cnt runtime/runtime.c 'px_memmem(')\" = 2 ]"
+chk "runtime: px_memmem 定义唯一（签名 2 处 = 前向声明 + 定义；M390 起被 split/replace/bytes_find 复用 ⇒ 不再要求只在 probe 内）" "[ \"\$(cnt runtime/runtime.c 'static const char* px_memmem(const char* hay, int hl, const char* ned, int nl)')\" = 2 ]"
 chk "runtime: 运算符门措辞带用户拼写"              "has runtime/runtime.c '%s 运算符左操作数需要 string，实际是 %s'"
 chk "规模锚点：例数 ≥ 70"                          "[ \"\$(cnt $D/cases.tsv '')\" -ge 70 ]"
 chk "负控锚点自证（唯一性）"                       "NEGCTL --selftest >/dev/null"

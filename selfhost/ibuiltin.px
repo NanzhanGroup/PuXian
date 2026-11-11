@@ -815,9 +815,21 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("hex_to_bytes 需要一个参数", pos))
         return Ok(hex_to_bytes(args[0]))
     if name == "bytes_find":
-        # bytes_find(b, sub) → int|null（子串下标；sub 可 bytes/str）
-        if len(args) != 2:
-            return Err(i_r1002("bytes_find 需要 (bytes, sub) 参数", pos))
+        # bytes_find(b, sub[, start]) → int|null（子串下标；sub 可 bytes/str）
+        # M390（晨曦 CX-02）：与原生侧同步补第 3 参 start —— 修前只有 2 参，
+        #   C 轨能「从上次位置继续找」、解释/VM 轨不能（三轨分叉；m196/m197 当场判红）。
+        if len(args) != 2 and len(args) != 3:
+            return Err(i_r1002("bytes_find 需要 (bytes, sub[, start]) 参数", pos))
+        if i_type_name(args[0]) != "bytes":
+            return Err(i_r1002("bytes_find 需要 bytes，实际是 " + i_type_name(args[0]), pos))
+        if len(args) == 3:
+            if i_type_name(args[2]) != "int":
+                return Err(i_r1002("bytes_find 的 start 需要整数，实际是 " + i_type_name(args[2]), pos))
+            let bfst = int(args[2])
+            let bflen = bytes_len(args[0])
+            if bfst < 0 or bfst > bflen:
+                return Err(i_r1002("bytes_find 的 start 需要在 0..bytes_len 之间", pos))
+            return Ok(bytes_find(args[0], args[1], bfst))
         return Ok(bytes_find(args[0], args[1]))
     if name == "bytes_base64":
         # bytes_base64(b) → str（base64）

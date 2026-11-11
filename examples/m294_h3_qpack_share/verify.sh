@@ -552,7 +552,14 @@ else
 
   echo "  ── NC-E2：**额外继承 3 个 fd** 起同一个 listener ⇒ 绝对数变大、判据必须仍绿（这才是治假红的那条）"
   srv_stop
-  exec 7<>"$W/ncE2_fd7" 8<>"$W/ncE2_fd8" 9<>"$W/ncE2_fd9" 2>/dev/null || true
+  # M390 修（10-11 10:07 全量门实测）：原硬编码 7/8/9 —— 分片装置里这三个号可能已被父 shell 占用
+  #   ⇒ `exec` 静默失败、只继承到 2 个 ⇒ 前提判红（base=8，原基线 6）。改为**动态挑空闲号**，
+  #   记下真正开成的号，收尾逐个释放（不猜哪个成功）。前提判据本身不变（仍要 +3）。
+  E2FDS=""; E2N=0
+  for _n in 71 72 73 74 75 76 77 78; do
+    [ "$E2N" -ge 3 ] && break
+    if eval "exec $_n<>\"$W/ncE2_fd$_n\"" 2>/dev/null; then E2FDS="$E2FDS $_n"; E2N=$((E2N + 1)); fi
+  done
   if srv_start ncE2; then
     E2BASE="$(num "$(ls "/proc/$SRV_PID/fd" 2>/dev/null | wc -l)")"
     if [ "$E2BASE" -ge $((BASE_FD + 3)) ]; then
@@ -571,7 +578,7 @@ else
   else
     bad "NC-E2 服务未就绪"
   fi
-  exec 7>&- 8>&- 9>&- 2>/dev/null || true
+  for _n in $E2FDS; do eval "exec $_n>&-" 2>/dev/null || true; done
 
   echo "  ── NC-E3：kill -9 listener（**真实链路**，不是回放）⇒ listener 契约必须判红"
   if srv_start ncE3; then

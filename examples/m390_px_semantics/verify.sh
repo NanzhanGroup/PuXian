@@ -134,6 +134,17 @@ fi
 # G：前提自证 —— 链的必须是当前 runtime（9 个新名全在）
 expect G1 "truetruetruetruetruetruetruetruetrue" "native_symbols 含本轮 9 个新名（前提自证）"
 
+# H：入库冒烟（**覆盖面台账的消费面**）
+#   M250 台账只扫 `.px` 源文件，本门主语料是运行期生成到 /tmp 的 ⇒ 台账看不见 ⇒
+#   M390 的 11 个新 native 全被判「新增未覆盖」（10-11 08:30 全量门实测）。
+#   ⇒ 另提交 surface.px 并在本段**真实执行**（11 个 native 各合法调用一次），不留死文本。
+if outsm="$("$PX" run "$ROOT/examples/m390_px_semantics/surface.px" 2>&1)"; then
+  case "$outsm" in *M390-NATIVE-SMOKE-OK*) ok "H1 入库冒烟 surface.px 通过（11 个新 native 各调一次）" ;;
+    *) bad "H1 入库冒烟未打印 OK 标记：$outsm" ;; esac
+else
+  bad "H1 入库冒烟 surface.px 失败：$(printf '%s' "$outsm" | tail -3)"
+fi
+
 echo
 echo "M390 判据：$pass 过 / $fail 红"
 [ "$fail" -eq 0 ] || exit 1
