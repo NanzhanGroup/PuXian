@@ -245,7 +245,7 @@ def p_expr_starter(kind):
         return true
     return kind in START_KW
 let START_KW = {"fn": true, "if": true, "match": true, "not": true, "true": true,
-                "false": true, "null": true, "None": true, "self": true, "spawn": true}
+    "false": true, "null": true, "None": true, "self": true, "spawn": true}
 # p_pos 处是 `?`：决定它是「三元起点」还是「Try 后缀」。
 #   条件：① 紧跟的 token 能起一个表达式（否则 `f()?` + 换行/`+` 等一定是 Try）
 #        ② 同层（不计 ()[]{} 深度）在语句结束前能扫到 `:`（否则 `x? - 1` 这类必须是 Try）
