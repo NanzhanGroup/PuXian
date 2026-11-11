@@ -1,3 +1,82 @@
+## M393：发布链与观测点（缺陷 741–744）
+
+> **一句话**：本轮**不改语言本体**，只修「我自己每发布一次都要付的那笔税」——
+> 起链漏伴生单元、判红没人叫、判绿不自动升级、设备离线通知永久丢失。
+> 四件都在**唯一出口**处修，每件带可重跑的自测。
+
+### 一 起链收成一个入口（缺陷 742 · M390/M392 两次实测的同一根因）
+
+```
+病史① 2026-11-11 13:49 起 M390 r4：手敲 systemd-run 只复制了主链那一条，
+       red-guard / postupgrade 没起 ⇒ 判红没人叫、判绿不会自动升级
+病史② 2026-11-12 01:31 M392 r2 判绿：postupgrade 在 r1 判红时已 SKIP 退出、
+       **没跟着重启** ⇒ 自动 dnf 升级从未触发，06:27 才人工补
+修法   packaging/chain/launch_release_chain.sh —— 起主链 + 两个伴生单元，
+       起完 sleep 后逐个 systemctl is-active 自检，缺一条 ⇒ rc=3 + p1 点名
+自测   10/10（P1 正控三单元齐 · N1 缺 postupgrade · N2 缺主链 · N3 树脏不起单元 · N4 缺参数
+       + 前提自证「systemd-run 真被调用 3 次」）
+```
+
+### 二 两个伴生单元从「手敲 inline」变成「有脚本、有自测」
+
+```
+packaging/chain/release_red_guard.sh        判红/链消失/超时 ⇒ p1 叫醒；GREEN 静默（不重复推用户）
+   判据 A STAMP 有但不含 CHAIN-VERDICT=GREEN ⇒ 判红
+        B STAMP 无 + 主链单元非 active 连续 2 轮 ⇒ 链消失无裁决
+        C 超 --max-hours ⇒ 超时
+   自测 11/11（P1 GREEN 不叫人 · N1 NO-GO 叫人 · N2 链消失 · N3 超时 · N4 缺参数
+              + 前提自证假 notify 真被调用）
+
+packaging/chain/release_postupgrade.sh      判绿 + 镜像齐 ⇒ dnf upgrade + 自验 rpm/px
+   ① 采信 STAMP 的判据用 **mtime 容差 300s**（严格 mtime ≥ 启动时间在秒级精度下会把同一秒
+     起单元判成「旧 STAMP」⇒ 等满 6h 都不升级；自测首跑就是这样卡死 124s）
+   ② 镜像 version.json == v0.2.<ms> 才升级（不抢在镜像前 dnf）
+   ③ 幂等：已是目标版直接 rc=0
+   ④ 升级后自验 rpm -q 与 px --version ——「dnf 说成功」不等于升上了
+   自测 7/7（P1 · N1 旧 STAMP 不采信 · N2 镜像滞后 · N3 缺参数 + 前提自证）
+   自测暴露的第二个真 bug：PU_MIRROR_CMD 被直接 "$VAR" 执行 ⇒ 当成文件名 ⇒ 取不到版本 ⇒ 空等
+```
+
+### 三 提交前门档补两门（缺陷 743）
+
+```
+M392 首跑 3 红里有 2 红是「版本字面量漂移 / 自举基准未重定基」，
+却要等全量链跑到第 92 分钟才出现（version_drift / version_golden 各是几秒的门）。
+修法   packaging/release_preflight.sh 的 --gates 档加入 version_drift version_golden
+       清单 8 门 → 10 门；自测改为按 ${#PRECHECK_GATES[@]} 动态取台账行数（写死 8 会假红）
+       自测 17/17
+顺带   该脚本首次入仓（packaging/release_preflight.sh），/data/autodrive 处为同步副本
+```
+
+### 四 设备离线不再丢用户通知（缺陷 741 · M392 通知永久丢失）
+
+```
+病史   M392 01:31:08 判绿通知投递失败（deviceoffline）→ 3 次 / 60min → 02:08:45 GIVEUP 归档
+       用户 06:26 来问才知道发布成功
+根因   不是「没重试」，是**把设备离线当成投递失败**：离线时用户根本收不到，谈不上叮扰；
+       60min 上限意味着「只要用户睡一觉，这条通知就没了」
+修法   dy-notify v3.1 离线单独一档：
+         · OFFLINE 不增重投次数（DY_USER_RETRY_MAX_OFFLINE）
+         · TTL 1440min（DY_USER_RETRY_TTL_OFFLINE_MIN），不是 60min
+         · last 写 0 ⇒ 下轮 esc 巡检即重试 = **上线即投**
+         · 离线时不再逐条记 DEV-PUSH-OFFLINE（降噪，只在首次记一条）
+         · 非离线失败（UNCONFIRMED / AUTHFAIL）仍按 v2.9 的 3 次 / 60min（原口径不变）
+       pending 文件 TRY 行加第 4 字段 = 失败类型（- / OFFLINE / UNCONFIRMED / AUTHFAIL / OTHER）
+自测   dy_notify_offline_selftest.sh 12/12
+       假 unix socket 回 deviceoffline ⇒ 5 轮重投后条目仍在、tries=0、kind=OFFLINE、last=0
+       切应答 ok:true ⇒ 首轮即送达并清条目
+       N1 非离线仍按 3 次弃 · N2 离线 TTL 到点仍会弃（不是永久堆积）
+       既有 dy_notify_dedupe_selftest 16/16 复跑通过（缺陷 737 的去重没被改坏）
+```
+
+### 五 未做（进 M394 候选）
+
+```
+· KEYWORDS 表 12 份副本 → 抽取共享模块（结构缺陷，M392 实测靠一次编译失败暴露）
+· PX-009 list 引用语义 · PX-015 dict 换哈希表（用户 2026-11-11 08:19 已同意，M392 被 try/catch 顶掉）
+· publish_on_green 的 watcher 路径：m<ms>-release-watch.sh 不再逐轮复制（M392 记 WARN 观察器不存在）
+```
+
 ## M392：try/catch —— 运行期错误模型（PX-025，缺陷 738–740）
 
 > **一句话**：清歌 PX-025 落地，**三轨同轮**（解释轨 Err 返回值 / C 轨 setjmp / VM 轨 TRYENTER+TRYEXIT）。
