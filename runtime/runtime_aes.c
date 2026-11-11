@@ -149,10 +149,15 @@ LXValue bi_aes_decrypt(LXValue* args, int nargs, void* ctx) {
 // aes_gcm_encrypt(data, key, iv) → hex（密文 + 16 字节 tag）
 LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("R1002: aes_gcm_encrypt 需要 3 个参数: (data, key, iv)");
+    // M390（清歌 PX-018）：第 4 参 **可选 AAD**（AEAD 额外认证数据）。
+    //   修前没有 AAD 通道 ⇒ 需要 AAD 的协议（领证信封头 / TLS 记录头）只能自写 CTR+GHASH。
+    //   参数序保持 (data, key, iv) 不变（既有契约），只追加可选参数 —— 2/3 参调用零影响。
+    if (nargs != 3 && nargs != 4) px_error("R1002: aes_gcm_encrypt 需要 (data, key, iv[, aad]) 参数");
     const char* data = vstr(args[0]); int dlen = vstrlen(args[0]);
     const char* key = vstr(args[1]); int klen = vstrlen(args[1]);
     const char* iv = vstr(args[2]); int ivlen = vstrlen(args[2]);
+    const unsigned char* aad = NULL; int aadlen = 0;
+    if (nargs == 4) { aad = (const unsigned char*)vstr(args[3]); aadlen = vstrlen(args[3]); }
     if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* ct = (unsigned char*)malloc(dlen + 1);
@@ -164,7 +169,7 @@ LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx) {
         px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, dlen,
-                                       (const unsigned char*)iv, ivlen, NULL, 0,
+                                       (const unsigned char*)iv, ivlen, aad, (size_t)aadlen,
                                        (const unsigned char*)data, ct, 16, tag);
     mbedtls_gcm_free(&gcm);
     if (rc != 0) { free(ct); px_error("aes GCM 加密失败"); }
@@ -179,10 +184,13 @@ LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx) {
 // aes_gcm_decrypt(hex, key, iv) → str 或 null（tag 校验失败 → null）
 LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("R1002: aes_gcm_decrypt 需要 3 个参数: (hex, key, iv)");
+    // M390（清歌 PX-018）：可选第 4 参 AAD（与 encrypt 对称）
+    if (nargs != 3 && nargs != 4) px_error("R1002: aes_gcm_decrypt 需要 (hex, key, iv[, aad]) 参数");
     const char* hs = vstr(args[0]); int hlen = vstrlen(args[0]);
     const char* key = vstr(args[1]); int klen = vstrlen(args[1]);
     const char* iv = vstr(args[2]); int ivlen = vstrlen(args[2]);
+    const unsigned char* aad = NULL; int aadlen = 0;
+    if (nargs == 4) { aad = (const unsigned char*)vstr(args[3]); aadlen = vstrlen(args[3]); }
     if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* all = (unsigned char*)malloc(hlen / 2 + 1);
@@ -201,7 +209,7 @@ LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx) {
     }
     // mbedtls 3.x：auth_decrypt 签名为 (ctx, len, iv, iv_len, add, add_len, tag, tag_len, input, output)
     int rc = mbedtls_gcm_auth_decrypt(&gcm, ctlen,
-                                      (const unsigned char*)iv, ivlen, NULL, 0,
+                                      (const unsigned char*)iv, ivlen, aad, (size_t)aadlen,
                                       all + ctlen, 16, all, out);
     mbedtls_gcm_free(&gcm);
     free(all);
@@ -227,11 +235,14 @@ static const char* vbytes(LXValue v, int* len) {
 // crypto/aes-gcm 标准（C||T 拼接、12 字节 nonce、32 字节 key）字节兼容。
 LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("R1002: aes_gcm_encrypt_bytes 需要 3 个参数: (data, key, iv)");
+    if (nargs != 3 && nargs != 4) px_error("R1002: aes_gcm_encrypt_bytes 需要 (data, key, iv[, aad]) 参数");
     int dlen = 0, klen = 0, ivlen = 0;
     const char* data = vbytes(args[0], &dlen);
     const char* key = vbytes(args[1], &klen);
     const char* iv = vbytes(args[2], &ivlen);
+    // M390（清歌 PX-018）：可选第 4 参 AAD
+    const unsigned char* aad = NULL; int aadlen = 0;
+    if (nargs == 4) aad = (const unsigned char*)vbytes(args[3], &aadlen);
     if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* ct = (unsigned char*)malloc(dlen + 16);
@@ -244,7 +255,7 @@ LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
         px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, (size_t)dlen,
-                                       (const unsigned char*)iv, (size_t)ivlen, NULL, 0,
+                                       (const unsigned char*)iv, (size_t)ivlen, aad, (size_t)aadlen,
                                        (const unsigned char*)data, ct, 16, tag);
     mbedtls_gcm_free(&gcm);
     if (rc != 0) { free(ct); px_error("aes GCM 加密失败"); }
@@ -263,11 +274,13 @@ LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
 // aes_is_utf8 校验致非 UTF-8 永远返 null 的根因修复）。
 LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("R1002: aes_gcm_decrypt_bytes 需要 3 个参数: (ct, key, iv)");
+    if (nargs != 3 && nargs != 4) px_error("R1002: aes_gcm_decrypt_bytes 需要 (ct, key, iv[, aad]) 参数");
     int ctlen = 0, klen = 0, ivlen = 0;
     const char* ct = vbytes(args[0], &ctlen);
     const char* key = vbytes(args[1], &klen);
     const char* iv = vbytes(args[2], &ivlen);
+    const unsigned char* aad = NULL; int aadlen = 0;
+    if (nargs == 4) aad = (const unsigned char*)vbytes(args[3], &aadlen);
     if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     // M253（缺陷 444）：同 A-1 —— 密文可为 0 字节（空明文），只需 ≥16 字节 tag。
@@ -282,7 +295,7 @@ LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
         px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_gcm_auth_decrypt(&gcm, (size_t)n,
-                                      (const unsigned char*)iv, (size_t)ivlen, NULL, 0,
+                                      (const unsigned char*)iv, (size_t)ivlen, aad, (size_t)aadlen,
                                       (const unsigned char*)ct + n, 16, (const unsigned char*)ct, out);
     mbedtls_gcm_free(&gcm);
     if (rc != 0) { free(out); return px_null(); }  // tag 校验失败

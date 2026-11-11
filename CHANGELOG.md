@@ -1,3 +1,172 @@
+## M390：把外部提的 36 条运行时缺陷「按机制」修一遍 —— 字符串语义收口 + 六件新原语（缺陷 713–729）
+
+> **一句话**：清歌 34 条 + 晨曦 11 条里，**本轮修 17 条**（含 2 条最危险的静默错）。
+> 修法按**机制**归并，不按条目打补丁：一条 `px_memmem`（字节长 + memchr）同时治了
+> split / replace / starts_with / ends_with 四处 NUL 截断与 replace 的 O(n²)；
+> 一张由 Go unicode 包**逐码位生成**的表同时治了 trim / to_upper / to_lower。
+> **未修的都写清了理由**（见第九节），不是忘了。
+
+### 一 缺陷 713（清歌 PX-006 · 晨曦 CX-04/CX-05）：字符串内建遇 NUL 截断
+
+```
+修前：len(read_file("/tmp/nul.txt")) = 6   而   len(split(s,"\n")) = 1
+      —— 同一份值上「字符数」有两套语义：len() 按 str.len，split/replace/trim 按 strlen
+后果：wst-search 在 /data/code 上少报 8 个命中；7.7MB 可执行文件被当成 1 行
+修法：split / replace / starts_with / ends_with / trim / to_upper / to_lower 全部改**显式字节长**
+      （`o->as.str.len`），分隔符查找走 `px_memmem(hay,hl,needle,nl)`
+实测：len=6 · split(s,"\n")=3 段 · split 结果 [a\0b, c, ] · contains NUL = true · replace 长度 7
+```
+
+### 二 缺陷 714（清歌 PX-004 · 晨曦三.1）：正则惰性量词静默失效
+
+```
+修前：regex_match("a.*?b","axxbxxb") = false、regex_find_all("a.*?c","xabcx") = []
+      —— 不报错、不崩，只是**结果不对**（晨曦的围栏解析因此自写 1000 行引擎）
+根因：解析器把 `?` 当普通量词的后缀丢掉（`.*?` ≡ `.*`），匹配器又恒按「次数多在前」
+修法：RNode 增 `lazy` 位（`*?` `+?` `??` `{n,m}?` 解析期置位）；
+      单字节原子快路径与通用 BFS 排序**双向可切**（贪心=level 降序 / 惰性=level 升序）
+实测：m1 true · f1 "axxb"（最短）· find_all ["abc"] · replace("<(.*?)>","<a><b>") = [a][b]
+```
+
+### 三 缺陷 715（清歌 PX-010）：json_parse 过于宽松
+
+```
+修前：json_parse("{\"a\":1}x") = {a:1}（尾随垃圾被吃）· json_parse("{\"a\":01}") = {a:1}
+修法：① 数字先按 RFC 8259 做**词法严校**（禁前导零/`1.`/`.5`/`+1`），再交 strtoll/strtod；
+      ② 顶层值解析完后 json_ws 再看一眼 —— 非结尾 ⇒ `json: 顶层值之后存在尾随内容（严格模式）`
+实测：两条畸形输入 → json_parse_opt 返回 Err；`{"a":1}` 正常
+```
+
+### 四 缺陷 716（清歌 PX-032）：trim / to_upper / to_lower 只处理 ASCII
+
+```
+修前：len(trim(chr(160)+"x"+chr(160))) = 3 · to_upper("äöü") = "äöü" · to_upper("привет") = 原样
+修法：新增 runtime/runtime_unicode_tbl.h —— 由 **Go unicode 包逐码位生成**
+      （PX_U_CASE 2989 项 = {cp, ToUpper, ToLower}；PX_U_SPACE 25 项 = unicode.IsSpace）
+      UTF-8 解码/编码走 px_utf8_step 同源判定（畸形字节各成一步，绝不吞字节）
+scope：**简单映射**（不含 ß→SS 这类全长展开），文档已写死边界
+实测：trim(U+00A0)=1 · trim(U+3000)=1 · to_upper("äöü")="ÄÖÜ" · to_upper("привет")="ПРИВЕТ"
+```
+
+### 五 缺陷 717（清歌 PX-033）：time_format 省略 tz 恒按 UTC
+
+```
+修前：time_format(0,"%Y-%m-%d %H:%M") = "1970-01-01 00:00"（CST 机器上少 8 小时）
+修法：省略 tz ⇒ **本地时区**（与 Go time.Now().Format 一致）；显式传 "UTC" 或 **null** 可回 UTC
+      time_parse 同步（两处同一口径，避免「格式化/解析」不对称）
+实测：无 tz = 08:00 · "UTC" = 00:00
+```
+
+### 六 缺陷 718/719（清歌 PX-034 / PX-019）：hex 再 hex、以及没有 HKDF
+
+```
+sha256_raw / hmac_sha256_raw → **原始 32 字节**（旧 hex 变体一字不动，M129/M233 契约保留）
+hkdf_sha256(ikm, salt, info, outlen) → bytes（RFC 5869：extract + expand，salt 空走 32 个 0x00）
+实测：hkdf 对 **RFC 5869 Test Case 1** 逐字节吻合
+      3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865
+```
+
+### 七 缺陷 720/721/722/723/724/725/726/727/728：九件原语与边界
+
+```
+720 PX-018 aes_gcm_encrypt/decrypt（含 _bytes 两版）**第 4 参可选 AAD**；参数序不变
+        实测：带 aad 加密 → 同 aad 解出 "hello"，换 aad → null
+721 PX-020 新增 getcwd() / chdir(p) / readlink(p)（进程级状态，文档写明只在 CLI 用）
+722 PX-023 file_stat 增 is_symlink / link_target（is_dir/size 仍**跟随**，契约不动）
+723 PX-022 新增 list_remove_at(l, i) → **新 list**（i 可为负，越界 R1003）
+724 CX-01 新增 read_chunk_str(fd, n) → string（一次分配，不再 read→bytes_to_str 多拷一遍）
+725 CX-02 bytes_find(b, sub[, start])（第 3 参 + px_memmem 改 memchr 加速）
+726 CX-04 replace 单遍重建 + 显式长度（修前 strcat 每轮全量 strlen ⇒ O(n²)，实测 267 KB/s）
+727 CX-09 read(fd, 0) → 空 bytes（修前整进程抛 R1002）
+728 PX-030 新增 os_spawn_capture_sep → {rc, stdout, stderr}（合并版契约不动）
+729 PX-008 新增 int_floor / int_ceil / trunc（**不改 int()**：它向零截断与 Go/C 一致，
+        仓内大量调用点依赖；清歌原文即允许「提供 floor / trunc 两个显式函数」）
+```
+
+### 八 判据（本轮新门 m390_px_semantics）
+
+```
+A 组 NUL 统一     len/split/contains/replace/trim/to_upper 六种内建对含 NUL 的值逐条断言
+B 组 惰性量词     match/find/find_all/replace 四族 × 贪心对照（同一条正则两种量词结果必须不同）
+C 组 严格 JSON    尾随垃圾 / 前导零 / `1.` / `.5` / `+1` 五条负控 + 合法输入正控
+D 组 Unicode      U+00A0 / U+3000 / 拉丁扩展 / 希腊 / 西里尔 + ASCII 回归
+E 组 新原语       sha256_raw 32B · hkdf RFC5869 向量 · aad 通过/失败 · list_remove_at · bytes_find start
+F 组 时区         无 tz = 本地 · "UTC" = UTC · null = UTC（三态互不相同）
+负控：把 split 退回 strlen / 把 lazy 位清零 / 把 json 词法校验摘掉 ⇒ 对应用例必须红
+```
+
+### 九 未修的 19 条（写清理由，不是遗漏）
+
+```
+PX-009 list 引用语义      改=改变全部既有代码语义，须单独一轮 + 全仓回归
+PX-015 dict O(n²)         dict 底层换哈希表要动 GC 记账与拷贝语义，单独一轮（晨曦已用 list+二分绕开）
+PX-021 bytes 不能 +      需同时改三轨（interp/VM/C）的运算符语义，单独一轮
+PX-025 无 try/catch      语言特性，涉及 parser+三轨+错误传播模型，单独一轮
+PX-027 三元表达式         同上（parser 三轨）
+PX-029 import 命名空间    同上
+PX-028 模块级裸赋值       parser 语义（现落到运行期 R1001）
+PX-016 解释轨慢           提示类，非缺陷本体：建议文档化（本轮已写进 docs/STRING_SEMANTICS.md）
+PX-026 保留字文档         本轮**已补文档**（docs/STRING_SEMANTICS.md §3）
+PX-012 args() 含 argv[0]  本轮**只补文档**：改语义会让仓内 10+ 个工具的 `a[1:]` 全部错位 ⇒ 破坏性变更
+CX-03 regex_find_all 9MB  未复现（需造 9MB 样本，本轮链时间不够）⇒ 保持登记
+CX-08 read_at 每次重开    未改（改法要动 fd 生命周期，风险 > 收益）
+CX-10 read(目录) 返 -1    保留（-1 是 read 的既有错误通道，改 Err 会破所有 `== -1` 判据）⇒ 文档化
+CX-05/06/07 文档          **已补**（docs/STRING_SEMANTICS.md）
+uppx 两条硬伤              脚本不在本仓库（发布站侧），另行处理
+```
+
+### 十 顺带修的一处**自己的**缺陷
+
+```
+tooling：px build 的 rtcache 源清单是**白名单**（tools/px rt_src_files），
+        新增头文件 runtime_unicode_tbl.h 时不加进去 ⇒ 缓存目录里 include 失败，
+        报「runtime 预编译缓存建立失败」而不是「找不到头文件」—— 又一次「测量失败长得像别的东西」。
+        已把新头加入清单，并在本节留档。
+```
+### 十一 新门第一版自己两处错（判据的缺陷，记在此处留案）
+
+```
+① verify.sh 第 C7 行写了  string + bool：
+     print("C7 " + json_parse_opt("not json").is_err())
+   ⇒ 运行时 R1002 中断，**程序在第 7 行就死了**
+   ⇒ D1–D3 / E1–E10 / F1 / G1 全部得到「实得 []」= **17 条假红**
+   识别方法：E1 期望 sha256("")=e3b0c442… 本身就是对的 —— 红的是「没跑到」，不是「答案错」
+   修：改成可拼接的字符串（is_err() ? "1" : "0"），并把 print 拆成独立行
+
+② E8 期望值写错：写 "-8,0,-7"，实际 "-8,-7,-7"
+   floor(-7.9) = -8 · ceil(-7.9) = -7 · trunc(-7.9) = -7
+   ⇒ **实现是对的，判据是错的**。若当时为了「让门变绿」去改实现，就正好改坏
+   修：只改判据，并把三条的数学定义写进注释（避免下次又凭直觉填期望值）
+
+教训（与 M388 的 4 红、M386 的 version_drift 互锁同形，本轮是第 3 次）：
+  新门落地时红的第一现场**多半是门自己**。先证明「判据能跑到它该跑的那一行」，
+  再讨论被测代码对错 —— 否则 17 条假红会把真缺陷埋掉。
+```
+
+
+### 十二 又一例「判据被别人的文件骗过」：门夹具不隔离（缺陷 730）
+
+```
+现场（08:24–08:30）  我用 setsid nohup pxdbg 起 bootstrap_prove + engine_parity，
+                     工具层回 WaitDelay expired（**但子进程实际活着**）；
+                     08:27 我又起了第二份 ⇒ 两个 engine_parity 并发
+病根  engine_parity.sh 里 WORK=/tmp/px_engine_parity 是**固定路径且无锁**，
+      c.out/c.err/d.out/d.err 每轮覆盖 ⇒ 两个实例互相把对方的现场删改
+现象  负例 通过 12 / 失败 18（另一次 10/20），红因清一色「基准轨 stderr 未含 golden 正文」，
+      而同一条 case 手动跑：grep_rc=0 · 首行完全等于 golden
+      ⇒ 判据没坏，是它读的那份文件被另一个进程换掉了
+叠加  两个进程还追加写同一 /tmp/m390_parity.log ⇒ 输出交错，
+      日志里出现半截行（默认轨 stderr=[错误: 编译��）—— **证据链本身被破坏**
+复核  清空 /tmp/px_engine_parity + 单实例重跑：
+      负例 通过 30 · 失败 0 · 正例 通过 6 · 失败 0 · ✅ 引擎一致性门通过（RC=0）
+修法  夹具必须唯一化：WORK=$(mktemp -d)（或 flock 独占），日志一实例一份；
+      本轮不在此门内改动（已发布树不动），记缺陷 730 + 入 NEXT-QUEUE
+教训  这是「假前提」第二例（M389 §五是宿主机上的令牌，本处是固定临时目录）。
+      **判据的输入必须由判据自己独占**，否则绿红都是别人的。
+      另：工具层报超时不等于子进程没起 —— 起后台任务后应 ps 验证，而不是假设成功/失败。
+```
+
+
 ## M389：取数失败不再冒充「没有数据」—— GitHub 取数收成唯一实现 + 一扇新门（缺陷 709）
 
 > **一句话**：令牌过期本身不致命，致命的是它让「读不到」长得和「没发布」一模一样。

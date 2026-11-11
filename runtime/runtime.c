@@ -590,6 +590,7 @@ static LXValue bi_os_random_hex(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_file_sha256(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_spawn_capture_sep(LXValue* args, int nargs, void* ctx);   // M390 / PX-030
 static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx); // M66
@@ -7429,6 +7430,74 @@ static LXValue bi_float(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// M390（清歌 PX-008）：显式的**取整方向**三件套 —— int_floor / int_ceil / trunc。
+//   为什么不动 `int()`：它现在是「向零截断」，与 Go/C/SQL 一致，而且仓内大量代码依赖它；
+//   改成 floor 属于**静默改变既有语义**（负值场景会静默变号）。清歌的建议原文就给了
+//   两条路 ——「改 int()」或「提供 floor / trunc 两个显式函数」，这里选后者：
+//   调用点写 `int_floor(x)` 就没歧义，老的 `int(x)` 仍然可读可查。
+static int64_t px_num_to_i64_arg(LXValue a, const char* what) {
+    if (a.type == PX_INT) return a.as.i;
+    if (a.type == PX_FLOAT) return px_f2i(a.as.f, what);
+    if (a.type == PX_BOOL) return a.as.b ? 1 : 0;
+    if (a.type == PX_STR) {
+        double d = 0;
+        if (px_str_to_f64(a.as.obj->as.str.data, a.as.obj->as.str.len, &d)) return px_f2i(d, what);
+        px_error("R1002: 无法将 '%s' 转为数字（%s）", a.as.obj->as.str.data, what);
+    }
+    px_error("R1002: %s 不支持类型 %s", what, px_type_name(a));
+    return 0;
+}
+
+static LXValue bi_int_floor(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: int_floor 需要一个参数");
+    LXValue a = args[0];
+    if (a.type == PX_INT) return a;
+    if (a.type == PX_FLOAT) return px_int(px_f2i(floor(a.as.f), "int_floor()"));
+    return px_int(px_num_to_i64_arg(a, "int_floor()"));
+}
+
+static LXValue bi_int_ceil(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: int_ceil 需要一个参数");
+    LXValue a = args[0];
+    if (a.type == PX_INT) return a;
+    if (a.type == PX_FLOAT) return px_int(px_f2i(ceil(a.as.f), "int_ceil()"));
+    return px_int(px_num_to_i64_arg(a, "int_ceil()"));
+}
+
+static LXValue bi_trunc(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: trunc 需要一个参数");
+    LXValue a = args[0];
+    if (a.type == PX_INT) return a;
+    if (a.type == PX_FLOAT) return px_int(px_f2i(trunc(a.as.f), "trunc()"));
+    return px_int(px_num_to_i64_arg(a, "trunc()"));
+}
+
+// list_remove_at(list, i) → **新 list**（M390 / 清歌 PX-022）
+//   修前删除中间元素只能 `l[0:i] + l[i+1:]` 重建，且必须赋回上层容器（嵌套结构里极易漏）。
+//   选择返回新 list 而不是原地删：与 px 的「函数面纯函数」口径一致，也不依赖别名语义。
+//   i 允许负数（Python 口径：-1 = 末元素）；越界 → R1003（不静默）。
+static LXValue bi_list_remove_at(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: list_remove_at 需要 (list, index) 参数");
+    if (args[0].type != PX_LIST) px_error("R1002: list_remove_at 需要 list，实际是 %s", px_type_name(args[0]));
+    LXObject* o = args[0].as.obj;
+    int n = o->as.list.len;
+    int64_t i = px_arg_int(args[1], "list_remove_at", "index");
+    if (i < 0) i += n;
+    if (i < 0 || i >= (int64_t)n) px_error("R1003: list_remove_at 索引越界: %lld（长度 %d）", (long long)i, n);
+    LXValue r = px_list(n > 1 ? n - 1 : 1);
+    px_root_push_keep(r);
+    for (int k = 0; k < n; k++) {
+        if (k == (int)i) continue;
+        px_list_push(r, o->as.list.items[k]);
+    }
+    px_root_pop();
+    return r;
+}
+
 // ============ M185（第 63 轮）：严格解析的**判定器**（`is_int_str` / `is_float_str`）============
 // 由来：M184 把 `int()`/`float()` 收紧为「整体合法」（第三方 PX-DEF-002）之后，
 //   **任何想容错解析外部输入的地方都必须先判断**，而语言层没有判定器 ⇒
@@ -7507,32 +7576,41 @@ static LXValue bi_sleep(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// M390：Unicode 助手（定义在下方 trim 段；本段先用）—— 前置声明
+static int px_u8_decode(const unsigned char* p, int rem, unsigned int* out);
+static int px_u8_encode(unsigned int cp, char* out);
+static unsigned int px_u_upper(unsigned int cp);
+static unsigned int px_u_lower(unsigned int cp);
+
+// M390（清歌 PX-032）：大小写转换走 Unicode 简单映射表（Go unicode 生成），
+//   并按**字节长**读（遇 NUL 不截断）。映射可能改变字节数（如 U+0131→U+0049），故按 rune 重建。
+static LXValue px_case_conv(LXValue v, int to_up) {
+    LXObject* o = v.as.obj;
+    const unsigned char* s = (const unsigned char*)o->as.str.data;
+    int len = o->as.str.len;
+    char* d = xmalloc((size_t)len * 2 + 8);
+    int j = 0, i = 0;
+    while (i < len) {
+        unsigned int cp; int n = px_u8_decode(s + i, len - i, &cp);
+        unsigned int m = to_up ? px_u_upper(cp) : px_u_lower(cp);
+        j += px_u8_encode(m, d + j);
+        i += n;
+    }
+    LXValue r = px_str_len(d, j);
+    xfree(d);
+    return r;
+}
+
 static LXValue bi_to_upper(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: to_upper 需要一个字符串参数");
-    const char* s = args[0].as.obj->as.str.data;
-    int len = (int)strlen(s);
-    char* d = xmalloc(len + 1);
-    for (int i = 0; i < len; i++) {
-        char c = s[i];
-        d[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
-    }
-    d[len] = 0;
-    return px_str(d);
+    return px_case_conv(args[0], 1);
 }
 
 static LXValue bi_to_lower(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: to_lower 需要一个字符串参数");
-    const char* s = args[0].as.obj->as.str.data;
-    int len = (int)strlen(s);
-    char* d = xmalloc(len + 1);
-    for (int i = 0; i < len; i++) {
-        char c = s[i];
-        d[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
-    }
-    d[len] = 0;
-    return px_str(d);
+    return px_case_conv(args[0], 0);
 }
 
 // ==================== M133：码点 ↔ 字符（ord / chr） ====================
@@ -7592,14 +7670,87 @@ static LXValue bi_chr(LXValue* args, int nargs, void* ctx) {
     return px_str_len(buf, n);
 }
 
+// ==================== M390：Unicode 简单大小写 / 空白（清歌 PX-032）====================
+// 表由 **Go unicode 包逐码位生成**（runtime/runtime_unicode_tbl.h）：
+//   PX_U_CASE  = {cp, unicode.ToUpper(cp), unicode.ToLower(cp)}，只收「至少一侧与自身不同」的码位；
+//   PX_U_SPACE = unicode.IsSpace 为真的全部码点。
+// ⇒ 不靠语感手写区间，逐码位与 Go 对齐（scope：**简单映射**，不含 ß→SS 这类全长展开）。
+#include "runtime_unicode_tbl.h"
+
+static const PXUCase* px_ucase_find(unsigned int cp) {
+    int lo = 0, hi = PX_U_CASE_N - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (PX_U_CASE[mid].cp == cp) return &PX_U_CASE[mid];
+        if (PX_U_CASE[mid].cp < cp) lo = mid + 1; else hi = mid - 1;
+    }
+    return NULL;
+}
+static unsigned int px_u_upper(unsigned int cp) { const PXUCase* e = px_ucase_find(cp); return e ? e->up : cp; }
+static unsigned int px_u_lower(unsigned int cp) { const PXUCase* e = px_ucase_find(cp); return e ? e->lo : cp; }
+static int px_u_isspace(unsigned int cp) {
+    int lo = 0, hi = PX_U_SPACE_N - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (PX_U_SPACE[mid] == cp) return 1;
+        if (PX_U_SPACE[mid] < cp) lo = mid + 1; else hi = mid - 1;
+    }
+    return 0;
+}
+
+// UTF-8 解码：与 px_utf8_step **同源**判定长度（畸形字节各成一步，绝不吞字节）。
+static int px_u8_decode(const unsigned char* p, int rem, unsigned int* out) {
+    if (rem <= 0) { *out = 0xFFFD; return 1; }
+    int n = px_utf8_step(p, rem);
+    if (n == 1) { *out = (p[0] < 0x80) ? (unsigned int)p[0] : 0xFFFD; return 1; }
+    unsigned int cp;
+    if (n == 2) cp = p[0] & 0x1F;
+    else if (n == 3) cp = p[0] & 0x0F;
+    else cp = p[0] & 0x07;
+    for (int k = 1; k < n; k++) cp = (cp << 6) | (p[k] & 0x3F);
+    *out = cp;
+    return n;
+}
+static int px_u8_encode(unsigned int cp, char* out) {
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6)); out[1] = (char)(0x80 | (cp & 0x3F)); return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F)); return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F)); return 4;
+}
+
+// M390（PX-006）：**按显式字节长**的子串查找（定义在下方「字节级子串查找」段，
+//   唯一的实现；此处只前置声明 —— 本段（split/replace）先用到）。
+static const char* px_memmem(const char* hay, int hl, const char* ned, int nl);
+
 static LXValue bi_trim(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: trim 需要一个字符串参数");
-    const char* s = args[0].as.obj->as.str.data;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    int len = (int)strlen(s);
-    while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' || s[len-1] == '\n' || s[len-1] == '\r')) len--;
-    return px_str_len(s, len);
+    // M390（清歌 PX-032 / 晨曦 CX-05）：按**字节长**走，Unicode White_Space 全收（含 U+00A0/U+3000），
+    //   不再用 strlen（遇 NUL 截断）也不再只认 4 个 ASCII 空白。
+    LXObject* o = args[0].as.obj;
+    const unsigned char* s = (const unsigned char*)o->as.str.data;
+    int len = o->as.str.len;
+    int i = 0, end = len;
+    while (i < end) {
+        unsigned int cp; int n = px_u8_decode(s + i, end - i, &cp);
+        if (!px_u_isspace(cp)) break;
+        i += n;
+    }
+    while (end > i) {
+        int st = end - 1, back = 1;
+        while (st > i && back < 4 && ((s[st] & 0xC0) == 0x80)) { st--; back++; }
+        unsigned int cp; int n = px_u8_decode(s + st, end - st, &cp);
+        if (st + n != end) break;               // 尾部残缺序列：原样保留（不吞字节）
+        if (!px_u_isspace(cp)) break;
+        end = st;
+    }
+    return px_str_len(o->as.str.data + i, end - i);
 }
 
 static LXValue bi_now_ms(LXValue* args, int nargs, void* ctx) {
@@ -7960,32 +8111,52 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     //   而解释轨有独立守卫（`split 参数需要 string`，M190 加）⇒ **三轨分叉**。
     //   实测（M199 自动探针 split__p1）：解释轨 rc=1 R1002 / VM·C 轨 rc=0 输出 `[s]`。
     if (nargs >= 2 && args[1].type != PX_STR) px_error("R1002: split 参数需要 string");
-    const char* s = args[0].as.obj->as.str.data;
-    const char* sep = (nargs >= 2) ? args[1].as.obj->as.str.data : " ";
-    int sep_len = (int)strlen(sep);
+    // M390（清歌 PX-006）：整条链路按**显式字节长**走 —— 修前用 strlen/strstr，
+    //   字符串里一个 0x00 就让「len() 说 6 字节、split 只看到 1 段」（同一语言两种语义）。
+    //   分隔符为空串 = 按空白切分（既有契约），空白集升级为 Unicode White_Space（PX-032）。
+    LXObject* so = args[0].as.obj;
+    const char* s = so->as.str.data;
+    int slen = so->as.str.len;
+    const char* sep = " ";
+    int sep_len = 1;
+    if (nargs >= 2) { sep = args[1].as.obj->as.str.data; sep_len = args[1].as.obj->as.str.len; }
     LXValue r = px_list(0);
     px_root_push_keep(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
     if (sep_len == 0) {
-        // 按空白切分
-        const char* p = s;
-        while (*p) {
-            while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-            if (!*p) break;
-            const char* start = p;
-            while (*p && !(*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-            px_list_push(r, px_str_len(start, (int)(p - start)));
+        const unsigned char* p = (const unsigned char*)s;
+        int i = 0;
+        while (i < slen) {
+            unsigned int cp; int n = px_u8_decode(p + i, slen - i, &cp);
+            if (!px_u_isspace(cp)) break;
+            i += n;
+        }
+        while (i < slen) {
+            int start = i;
+            while (i < slen) {
+                unsigned int cp; int n = px_u8_decode(p + i, slen - i, &cp);
+                if (px_u_isspace(cp)) break;
+                i += n;
+            }
+            px_list_push(r, px_str_len(s + start, i - start));
+            while (i < slen) {
+                unsigned int cp; int n = px_u8_decode(p + i, slen - i, &cp);
+                if (!px_u_isspace(cp)) break;
+                i += n;
+            }
         }
         px_root_pop();
         return r;
     }
     const char* p = s;
-    while (1) {
-        const char* hit = strstr(p, sep);
+    int rem = slen;
+    for (;;) {
+        const char* hit = px_memmem(p, rem, sep, sep_len);
         if (!hit) {
-            px_list_push(r, px_str(p));
+            px_list_push(r, px_str_len(p, rem));
             break;
         }
         px_list_push(r, px_str_len(p, (int)(hit - p)));
+        rem -= (int)(hit - p) + sep_len;
         p = hit + sep_len;
     }
     px_root_pop();
@@ -8054,10 +8225,19 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
 // M83-S1（Issue 16 GAP-STR-1-B1）：字节级子串查找（hay[0..hl)/ned[0..nl)，可含 NUL），
 // 替代 strstr 的 C 字符串语义（遇 NUL 截断）。对无内嵌 NUL 的文本与 strstr 结果一致。
 static const char* px_memmem(const char* hay, int hl, const char* ned, int nl) {
-    if (nl == 0) return hay;
+    if (nl <= 0) return hay;
     if (hl < nl) return NULL;
-    for (int i = 0; i <= hl - nl; i++) {
-        if (hay[i] == ned[0] && memcmp(hay + i, ned, (size_t)nl) == 0) return hay + i;
+    // M390：用 memchr 定位首字节候选（libc 的 memchr 是 SIMD 实现），再 memcmp 校验。
+    //   修前逐字节 `hay[i] == ned[0]` —— 1 字节/次，8.5× 慢于 memmem（晨曦 CX-02 实测）。
+    //   语义不变（返回首个子串起点，无命中 null）。
+    const char* p = hay;
+    int rem = hl;
+    while (rem >= nl) {
+        const char* hit = (const char*)memchr(p, ned[0], (size_t)(rem - nl + 1));
+        if (!hit) return NULL;
+        if (memcmp(hit, ned, (size_t)nl) == 0) return hit;
+        rem -= (int)(hit - p) + 1;
+        p = hit + 1;
     }
     return NULL;
 }
@@ -8146,45 +8326,60 @@ static LXValue bi_replace(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3 || args[0].type != PX_STR || args[1].type != PX_STR || args[2].type != PX_STR)
         px_error("R1002: replace 需要 3 个字符串参数");
-    const char* s = args[0].as.obj->as.str.data;
-    const char* old = args[1].as.obj->as.str.data;
-    const char* nw = args[2].as.obj->as.str.data;
-    int old_len = (int)strlen(old);
+    // M390（清歌 PX-006 / 晨曦 CX-04）：修前三处病灶一起治 ——
+    //   ① strlen 遇 NUL 截断；② strstr 无长度；③ strcat/strncat 每轮全量 strlen ⇒
+    //   O(n²) 且实测 267 KB/s。现改为**单遍 + 显式长度 + memchr 查找**，输出缓冲按需倍增。
+    LXObject* so = args[0].as.obj;
+    LXObject* oo = args[1].as.obj;
+    LXObject* no = args[2].as.obj;
+    const char* s = so->as.str.data;
+    const char* old = oo->as.str.data;
+    const char* nw = no->as.str.data;
+    int slen = so->as.str.len, old_len = oo->as.str.len, nl = no->as.str.len;
     if (old_len == 0) return args[0];
-    size_t cap = strlen(s) * 2 + strlen(nw) * (strlen(s) / old_len + 1) + 16;
+    size_t cap = (size_t)slen + 16;
     char* out = xmalloc(cap);
-    out[0] = 0;
+    size_t used = 0;
     const char* p = s;
-    while (1) {
-        const char* hit = strstr(p, old);
-        if (!hit) {
-            strcat(out, p);
-            break;
-        }
-        strncat(out, p, hit - p);
-        strcat(out, nw);
+    int rem = slen;
+    while (rem > 0) {
+        const char* hit = px_memmem(p, rem, old, old_len);
+        if (!hit) break;
+        size_t pre = (size_t)(hit - p);
+        size_t need = used + pre + (size_t)nl + 1;
+        if (need > cap) { while (need > cap) cap *= 2; out = xrealloc(out, cap); }
+        memcpy(out + used, p, pre); used += pre;
+        memcpy(out + used, nw, (size_t)nl); used += (size_t)nl;
+        rem -= (int)(pre + (size_t)old_len);
         p = hit + old_len;
     }
-    return px_str(out);
+    size_t need = used + (size_t)rem + 1;
+    if (need > cap) { while (need > cap) cap *= 2; out = xrealloc(out, cap); }
+    memcpy(out + used, p, (size_t)rem); used += (size_t)rem;
+    LXValue r = px_str_len(out, (int)used);
+    xfree(out);
+    return r;
 }
 
 static LXValue bi_starts_with(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) px_error("R1002: starts_with 需要 2 个字符串参数");
-    const char* s = args[0].as.obj->as.str.data;
-    const char* p = args[1].as.obj->as.str.data;
-    size_t lp = strlen(p);
-    return px_bool(strncmp(s, p, lp) == 0);
+    // M390（PX-006）：显式字节长（修前 strlen/strncmp 遇 NUL 截断）
+    LXObject* so = args[0].as.obj;
+    LXObject* po = args[1].as.obj;
+    int ls = so->as.str.len, lp = po->as.str.len;
+    if (lp > ls) return px_bool(false);
+    return px_bool(memcmp(so->as.str.data, po->as.str.data, (size_t)lp) == 0);
 }
 
 static LXValue bi_ends_with(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) px_error("R1002: ends_with 需要 2 个字符串参数");
-    const char* s = args[0].as.obj->as.str.data;
-    const char* p = args[1].as.obj->as.str.data;
-    size_t ls = strlen(s), lp = strlen(p);
+    LXObject* so = args[0].as.obj;
+    LXObject* po = args[1].as.obj;
+    int ls = so->as.str.len, lp = po->as.str.len;
     if (lp > ls) return px_bool(false);
-    return px_bool(memcmp(s + ls - lp, p, lp) == 0);
+    return px_bool(memcmp(so->as.str.data + ls - lp, po->as.str.data, (size_t)lp) == 0);
 }
 
 static LXValue bi_pow(LXValue* args, int nargs, void* ctx) {
@@ -8840,7 +9035,10 @@ static LXValue bi_read(LXValue* args, int nargs, void* ctx) {
     if (nargs != 2) px_error("R1002: read 需要 (fd, maxlen) 参数");
     if (args[0].type != PX_INT) px_error("R1002: read 的 fd 需要整数，实际是 %s", px_type_name(args[0]));
     int64_t maxlen = px_arg_int(args[1], "read", "maxlen");
-    if (maxlen <= 0 || maxlen > (int64_t)INT_MAX - 1) px_error("R1002: read 的 maxlen 需要 1..INT_MAX-1");
+    // M390（晨曦 CX-09）：`read(fd, 0)` 应返回空 bytes —— 修前整进程抛 R1002。
+    //   按 len 语义，0 字节请求是合法边界（Go 的 Read 对 len(b)==0 直接返回 0,nil）。
+    if (maxlen == 0) return px_bytes_len("", 0);
+    if (maxlen < 0 || maxlen > (int64_t)INT_MAX - 1) px_error("R1002: read 的 maxlen 需要 0..INT_MAX-1");
     int fd = (int)args[0].as.i;
     char* buf = xmalloc((size_t)maxlen + 1);
     // M256（缺陷 456）：经 px_io_read —— 用户面 fd（tcp_connect_ex/tcp_opt/服务端连接）
@@ -8854,6 +9052,26 @@ static LXValue bi_read(LXValue* args, int nargs, void* ctx) {
         return px_int(-1);
     }
     LXValue r = px_bytes_len(buf, (int)n);   // n==0 → 空 bytes（EOF），类型上与 int -1 区分
+    xfree(buf);
+    return r;
+}
+
+// read_chunk_str(fd, n) → string（M390 / 晨曦 CX-01）
+//   为什么：修前要把读到的字节当字符串用，只有两条路 —— 整文件 read_file_opt（大文件爆内存）
+//   或 read → bytes_to_str（多一次整块拷贝）。晨曦实测同一目录读全量字节：Go 750ms / px 1300ms，
+//   差距 100% 在读路径。本函数**一次分配、直接按 string 返回**，不再多拷一遍。
+//   EOF（读 0 字节）→ 空串；出错 → null（不抛错，便于循环收尾）。
+static LXValue bi_read_chunk_str(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: read_chunk_str 需要 (fd, n) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: read_chunk_str 的 fd 需要整数，实际是 %s", px_type_name(args[0]));
+    int64_t n64 = px_arg_int(args[1], "read_chunk_str", "n");
+    if (n64 <= 0 || n64 > (int64_t)INT_MAX - 1) px_error("R1002: read_chunk_str 的 n 需要 1..INT_MAX-1");
+    int fd = (int)args[0].as.i;
+    char* buf = xmalloc((size_t)n64 + 1);
+    ssize_t n = px_io_read(fd, buf, (size_t)n64);
+    if (n < 0) { xfree(buf); return px_null(); }
+    LXValue r = px_str_len(buf, (int)n);
     xfree(buf);
     return r;
 }
@@ -9112,8 +9330,53 @@ static LXValue bi_file_stat(LXValue* args, int nargs, void* ctx) {
     px_dict_set(d, "mtime_ns", px_int((int64_t)st.st_mtim.tv_sec * 1000000000LL + (int64_t)st.st_mtim.tv_nsec));
     px_dict_set(d, "is_dir", px_bool(S_ISDIR(st.st_mode)));
     px_dict_set(d, "mode", px_int((int64_t)(st.st_mode & 07777)));
+    // M390（清歌 PX-023）：补 `is_symlink` / `link_target` —— 修前只能 stat（跟随链接），
+    //   无法实现 Go 的 Lstat / WalkDir「跳过符号链接」语义。`is_dir`/`size` 等既有字段
+    //   **保持跟随语义**（不动既有契约），是否链接用新字段问。
+    {
+        struct stat lst;
+        int is_link = 0;
+        if (lstat(args[0].as.obj->as.str.data, &lst) == 0 && S_ISLNK(lst.st_mode)) is_link = 1;
+        px_dict_set(d, "is_symlink", px_bool(is_link));
+        if (is_link) {
+            char lbuf[4096];
+            ssize_t n = readlink(args[0].as.obj->as.str.data, lbuf, sizeof(lbuf) - 1);
+            if (n >= 0) { lbuf[n] = 0; px_dict_set(d, "link_target", px_str_len(lbuf, (int)n)); }
+            else px_dict_set(d, "link_target", px_null());
+        } else {
+            px_dict_set(d, "link_target", px_null());
+        }
+    }
     px_root_pop();
     return d;
+}
+
+// ---- M390（清歌 PX-020）：路径原语 getcwd / chdir / readlink ----
+// 修前 `native_symbols()` 里一个都没有 ⇒ 实现 realpath / filepath.Abs / Rel / 符号链接解析
+//   只能「剥掉 cleaned root 前缀」自己拼。⚠️ getcwd/chdir 是**进程级**状态（与 Go os 同），
+//   多线程服务里改动它会影响别的请求 —— 文档已注明，只在 CLI 工具里用。
+static LXValue bi_getcwd(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)ctx;
+    if (nargs != 0) px_error("R1002: getcwd 不需要参数");
+    char buf[4096];
+    if (!getcwd(buf, sizeof(buf))) return px_null();
+    return px_str(buf);
+}
+
+static LXValue bi_chdir(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: chdir 需要一个路径参数");
+    return px_bool(chdir(args[0].as.obj->as.str.data) == 0);
+}
+
+// readlink(path) → 链接目标（**不跟随**）；不是链接/读不到 ⇒ null（不抛错，与 file_stat 同口径）
+static LXValue bi_readlink(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: readlink 需要一个路径参数");
+    char buf[4096];
+    ssize_t n = readlink(args[0].as.obj->as.str.data, buf, sizeof(buf) - 1);
+    if (n < 0) return px_null();
+    return px_str_len(buf, (int)n);
 }
 
 // Go syscall.Errno 文案表（Linux amd64）：由 tools/gen_go_errno_table.go 从 Go 自身导出
@@ -9758,6 +10021,79 @@ static LXValue bi_sha256_strict(LXValue* args, int nargs, void* ctx) {
     char hex[65];
     bytes_to_hex(digest, 32, hex);
     return px_str(hex);
+}
+
+// M390：前置声明（真正的定义在下方 hmac_sha256 区；新加的 raw/hkdf 变体先用）
+static void px_hmac_sha256(const unsigned char* key, int klen,
+                           const unsigned char* data, int dlen, unsigned char out[32]);
+
+// sha256_raw(data) → 32 字节 bytes（M390 / 清歌 PX-034）
+//   为什么：`sha256` 返回 hex 是既定契约（M129/M233 有用例保护），但**多级链式**场景
+//   （AWS SigV4 四级 HMAC、HKDF、TLS 记录）需要原始字节。修前只能 `hex_to_bytes(sha256(x))`
+//   —— 写反一次就是「hex 再 hex」，服务端只回 SignatureDoesNotMatch，最难查的一类。
+//   故新增 raw 变体，旧函数一字不动。入参与 sha256_strict 同口径（只收 str|bytes）。
+static LXValue bi_sha256_raw(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: sha256_raw 需要一个参数");
+    int len = 0;
+    const char* data = px_hash_arg_strict(args[0], "sha256_raw", "data", &len);
+    unsigned char digest[32];
+    if (mbedtls_sha256((const unsigned char*)data, (size_t)len, digest, 0) != 0)
+        px_error("sha256_raw 计算失败");
+    return px_bytes_len((const char*)digest, 32);
+}
+
+// hmac_sha256_raw(key, msg) → 32 字节 bytes（M390 / 清歌 PX-034）
+static LXValue bi_hmac_sha256_raw(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: hmac_sha256_raw 需要 (key, msg) 参数");
+    int kl = 0, ml = 0;
+    const char* kd = px_hash_arg_strict(args[0], "hmac_sha256_raw", "key", &kl);
+    const char* md = px_hash_arg_strict(args[1], "hmac_sha256_raw", "msg", &ml);
+    unsigned char digest[32];
+    px_hmac_sha256((const unsigned char*)kd, kl, (const unsigned char*)md, ml, digest);
+    return px_bytes_len((const char*)digest, 32);
+}
+
+// hkdf_sha256(ikm, salt, info, outlen) → bytes（M390 / 清歌 PX-019 · RFC 5869）
+//   现代协议（TLS 1.3 / Noise / JOSE / HPKE）的刚需 KDF，此前只能用 hmac_sha256 手拼。
+//   extract: PRK = HMAC(salt, ikm)（salt 为空 ⇒ 32 个 0x00，RFC 5869 §2.2）
+//   expand : T(i) = HMAC(PRK, T(i-1) || info || i)，拼接到 outlen（≤ 255*32）
+static LXValue bi_hkdf_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 4) px_error("R1002: hkdf_sha256 需要 (ikm, salt, info, outlen) 参数");
+    int il = 0, sl = 0, fl = 0;
+    const char* ikm = px_hash_arg_strict(args[0], "hkdf_sha256", "ikm", &il);
+    const char* salt = px_hash_arg_strict(args[1], "hkdf_sha256", "salt", &sl);
+    const char* info = px_hash_arg_strict(args[2], "hkdf_sha256", "info", &fl);
+    int64_t outlen = px_arg_int(args[3], "hkdf_sha256", "outlen");
+    if (outlen <= 0 || outlen > 255 * 32) px_error("R1002: hkdf_sha256 的 outlen 需要 1..8160");
+    unsigned char zero_salt[32];
+    memset(zero_salt, 0, sizeof(zero_salt));
+    unsigned char prk[32];
+    if (sl <= 0) px_hmac_sha256(zero_salt, 32, (const unsigned char*)ikm, il, prk);
+    else px_hmac_sha256((const unsigned char*)salt, sl, (const unsigned char*)ikm, il, prk);
+    unsigned char* out = xmalloc((size_t)outlen);
+    unsigned char t[32];
+    int tlen = 0, done = 0, counter = 1;
+    while (done < (int)outlen) {
+        // 输入 = T(i-1) || info || i
+        int inlen = tlen + fl + 1;
+        unsigned char* in = xmalloc((size_t)inlen);
+        if (tlen) memcpy(in, t, (size_t)tlen);
+        if (fl) memcpy(in + tlen, info, (size_t)fl);
+        in[tlen + fl] = (unsigned char)counter;
+        px_hmac_sha256(prk, 32, in, inlen, t);
+        xfree(in);
+        tlen = 32;
+        int take = outlen - done < 32 ? (int)(outlen - done) : 32;
+        memcpy(out + done, t, (size_t)take);
+        done += take;
+        counter++;
+    }
+    LXValue r = px_bytes_len((const char*)out, (int)outlen);
+    xfree(out);
+    return r;
 }
 
 // hmac_sha256(key, msg) → 64 字符小写 hex（HMAC-SHA256）
@@ -10407,6 +10743,7 @@ typedef struct RNode {
     int nkids;
     struct RNode* child;     // RN_REP / RN_GROUP
     int min, max;            // RN_REP
+    int lazy;                // RN_REP：`*?` `+?` `??` `{n,m}?` —— 候选**短优先**（M390 / PX-004）
     int gidx;                // RN_GROUP
     // M107-S1b（Issue 34 建议 A 的保守子集）：根节点的「必备字面前缀」（由 rcompile 填充，预筛用）
     unsigned char lit[32];
@@ -10933,13 +11270,22 @@ static RNode* rp_parse_atom(RParser* p) {
     }
 }
 
+// M390（清歌 PX-004）：量词后紧跟 `?` ⇒ **非贪婪（惰性）**。
+//   修前解析器把 `.*?` 当成 `.*` 再吃一个 `?`（或直接当字面量），于是
+//   `regex_match("a.*?b","axxbxxb")` 恒 false、`regex_replace` 原样返回 —— **静默错**，
+//   不报错、不崩，只是结果不对（晨曦的围栏解析因此自写了 1000 行引擎）。
+static RNode* rp_maybe_lazy(RParser* p, RNode* r) {
+    if (r && rp_peek(p) == '?') { p->pos++; r->lazy = 1; }
+    return r;
+}
+
 static RNode* rp_parse_repeat(RParser* p) {
     RNode* atom = rp_parse_atom(p);
     if (!atom) return NULL;
     int c = rp_peek(p);
-    if (c == '*') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 0; r->max = -1; return r; }
-    if (c == '+') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 1; r->max = -1; return r; }
-    if (c == '?') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 0; r->max = 1; return r; }
+    if (c == '*') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 0; r->max = -1; return rp_maybe_lazy(p, r); }
+    if (c == '+') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 1; r->max = -1; return rp_maybe_lazy(p, r); }
+    if (c == '?') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 0; r->max = 1; return rp_maybe_lazy(p, r); }
     if (c == '{') {
         int save = p->pos;
         p->pos++;
@@ -10965,7 +11311,7 @@ static RNode* rp_parse_repeat(RParser* p) {
         r->child = atom;
         r->min = min;
         r->max = max;
-        return r;
+        return rp_maybe_lazy(p, r);
     }
     return atom;
 }
@@ -11368,7 +11714,9 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
                     if (!rn_byte_match(n->child, text, len, pos + k)) break;
                     k++;
                 }
-                for (int lv = k; lv >= n->min; lv--) rcand_add(&out, pos + lv, groups);
+                // M390（PX-004）：惰性量词 ⇒ 候选**短优先**（回溯顺序反了就是「静默错」）
+                if (n->lazy) { for (int lv = (n->min > k ? k + 1 : n->min); lv <= k; lv++) rcand_add(&out, pos + lv, groups); }
+                else for (int lv = k; lv >= n->min; lv--) rcand_add(&out, pos + lv, groups);
                 break;
             }
             // BFS：all 记录 (end, groups, level)；贪心优先 = level 降序
@@ -11419,11 +11767,15 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
                 frontier = next;
                 flen = nlen;
             }
-            // 插入排序：level 降序（贪心优先，稳定）
+            // 插入排序：贪心 ⇒ level 降序；**惰性 ⇒ level 升序**（M390 / PX-004）
             for (int i = 1; i < all_len; i++) {
                 RRepCand key = all[i];
                 int j = i - 1;
-                while (j >= 0 && all[j].level < key.level) { all[j + 1] = all[j]; j--; }
+                if (n->lazy) {
+                    while (j >= 0 && all[j].level > key.level) { all[j + 1] = all[j]; j--; }
+                } else {
+                    while (j >= 0 && all[j].level < key.level) { all[j + 1] = all[j]; j--; }
+                }
                 all[j + 1] = key;
             }
             for (int i = 0; i < all_len; i++) {
@@ -12000,6 +12352,26 @@ static LXValue json_parse_value(JsonCtx* j) {
     if (strncmp(j->p, "false", 5) == 0) { j->p += 5; return px_bool(false); }
     if (strncmp(j->p, "null", 4) == 0) { j->p += 4; return px_null(); }
     // 数字
+    // M390（清歌 PX-010）：**先按 RFC 8259 词法严校**，再交给 strtoll/strtod。
+    //   修前 strtoll 直接吃 `01` / `1.` / `+1` / `.5` ⇒ `{"a":01}` 被读成 1，
+    //   「看着合法」的畸形输入能穿过协议校验。Go json.Unmarshal 全部拒绝。
+    {
+        const char* q = j->p;
+        int ok = 0;
+        if (*q == '-') q++;
+        if (*q == '0') { q++; ok = !(*q >= '0' && *q <= '9'); }
+        else if (*q >= '1' && *q <= '9') { while (*q >= '0' && *q <= '9') q++; ok = 1; }
+        if (ok && *q == '.') {
+            q++; ok = 0;
+            if (*q >= '0' && *q <= '9') { while (*q >= '0' && *q <= '9') q++; ok = 1; }
+        }
+        if (ok && (*q == 'e' || *q == 'E')) {
+            q++; ok = 0;
+            if (*q == '+' || *q == '-') q++;
+            if (*q >= '0' && *q <= '9') { while (*q >= '0' && *q <= '9') q++; ok = 1; }
+        }
+        if (!ok) px_error("json: 非法数字");
+    }
     char* end;
     // M136（qg-issue 87 缺陷 93）：**整数溢出必须回落浮点，而不是夹到 INT64_MAX**。
     //   此前 `strtoll` 溢出返回 LLONG_MAX 且 end 已越过全部数字 ⇒ 判定"整数解析成功"
@@ -12032,6 +12404,10 @@ static LXValue bi_json_parse(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: json_parse 需要一个字符串参数");
     JsonCtx j = { args[0].as.obj->as.str.data };
     LXValue r = json_parse_value(&j);
+    // M390（清歌 PX-010）：**尾随垃圾必须响亮** —— 修前 `{"a":1}x` 静默返回 `{a:1}`。
+    //   Go json.Unmarshal 报 `invalid character 'x' after top-level value`。
+    json_ws(&j);
+    if (*j.p != '\0') px_error("json: 顶层值之后存在尾随内容（严格模式）");
     return r;
 }
 
@@ -12952,6 +13328,18 @@ void px_register_builtins(void) {
     px_set_global("to_upper", px_native("to_upper", bi_to_upper));
     px_set_global("to_lower", px_native("to_lower", bi_to_lower));
     px_set_global("trim", px_native("trim", bi_trim));
+    // M390（清歌 PX-008 / PX-022 / PX-034 / PX-019 / PX-020 / 晨曦 CX-01）
+    px_set_global("int_floor", px_native("int_floor", bi_int_floor));
+    px_set_global("int_ceil", px_native("int_ceil", bi_int_ceil));
+    px_set_global("trunc", px_native("trunc", bi_trunc));
+    px_set_global("list_remove_at", px_native("list_remove_at", bi_list_remove_at));
+    px_set_global("read_chunk_str", px_native("read_chunk_str", bi_read_chunk_str));
+    px_set_global("getcwd", px_native("getcwd", bi_getcwd));
+    px_set_global("chdir", px_native("chdir", bi_chdir));
+    px_set_global("readlink", px_native("readlink", bi_readlink));
+    px_set_global("sha256_raw", px_native("sha256_raw", bi_sha256_raw));
+    px_set_global("hmac_sha256_raw", px_native("hmac_sha256_raw", bi_hmac_sha256_raw));
+    px_set_global("hkdf_sha256", px_native("hkdf_sha256", bi_hkdf_sha256));
     px_set_global("now_ms", px_native("now_ms", bi_now_ms));
     px_set_global("abs", px_native("abs", bi_abs));
     px_set_global("min", px_native("min", bi_min));
@@ -13339,6 +13727,7 @@ void px_register_builtins(void) {
     px_set_global("os_random_hex", px_native("os_random_hex", bi_os_random_hex));
     px_set_global("os_file_sha256", px_native("os_file_sha256", bi_os_file_sha256));
     px_set_global("os_spawn_capture", px_native("os_spawn_capture", bi_os_spawn_capture));
+    px_set_global("os_spawn_capture_sep", px_native("os_spawn_capture_sep", bi_os_spawn_capture_sep));
     px_set_global("os_wait", px_native("os_wait", bi_os_wait));
     px_set_global("os_kill", px_native("os_kill", bi_os_kill));
     // M66：qg-issue 合入（unix_connect/os_capture/os_popen）
@@ -14392,6 +14781,36 @@ static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
     return l;
 }
 
+// os_spawn_capture_sep(cmd, args[, opts]) → {rc, stdout, stderr}（M390 / 清歌 PX-030）
+//   为什么另开一个函数而不是改 os_spawn_capture：后者返回 `[rc, 合并输出]` 是**既有契约**
+//   （等价 Go CombinedOutput），仓内已有调用点依赖它。要分离输出只能新增。
+//   顺带治「命令不存在只给 [127, ""] 无法诊断」—— stderr 现在能看见：
+//   实测 `os_spawn_capture_sep("/nonexistent/xx", [])` 的 stderr 给出 shell 层原因。
+static LXValue bi_os_spawn_capture_sep(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("R1002: os_spawn_capture_sep 需要 (cmd, args[, opts]) 参数");
+    PxSpawnOpts o;
+    px_spawn_opts_parse(nargs == 3 ? args[2] : px_null(), &o, 0);
+    const char* cmd = args[0].as.obj->as.str.data;
+    int argc = args[1].as.obj->as.list.len;
+    char** argv = px_argv_build(cmd, args[1], "os_spawn_capture_sep");
+    int rc = -1, no = 0, ne = 0;
+    char *bo = NULL, *be = NULL;
+    int r = px_spawn_run_capture(cmd, argv, &o, 0, &rc, &bo, &no, &be, &ne);
+    px_argv_free(argv, argc);
+    if (r != 0) return px_null();
+    LXValue d = px_dict();
+    px_root_push_keep(d);
+    px_dict_set(d, "rc", px_int((int64_t)rc));
+    px_dict_set(d, "stdout", px_str_len(bo ? bo : "", no));
+    px_dict_set(d, "stderr", px_str_len(be ? be : "", ne));
+    if (bo) xfree(bo);
+    if (be) xfree(be);
+    px_root_pop();
+    return d;
+}
+
 // os_exec(cmd, args?) → 进程替换（execvp）：成功不返回，当前进程被目标程序替换；
 //                        失败（命令不存在/无权限等）px_error 报错退出。
 // 与 os_spawn（fork+execvp 返回 pid）互补：用于 launcher/daemon 场景的语义级 exec。
@@ -15208,18 +15627,26 @@ static LXValue bi_base64_to_bytes_strict(LXValue* args, int nargs, void* ctx) {
 // bytes_find(b, sub) → int|null（子串字节下标；sub 可为 bytes 或 str）
 static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("R1002: bytes_find 需要 (bytes, sub) 参数");
+    // M390（晨曦 CX-02）：补第 3 参 `start`（从下标处继续找），并走 memchr 加速。
+    //   修前只有 2 参且逐字节 memcmp（实测 190 MiB/s，同数据 contains 是 1.6 GiB/s）⇒
+    //   「从上次位置继续找」只能每次从头扫，复杂度退化成 O(n²)。
+    if (nargs != 2 && nargs != 3) px_error("R1002: bytes_find 需要 (bytes, sub[, start]) 参数");
     if (args[0].type != PX_BYTES) px_error("R1002: bytes_find 需要 bytes，实际是 %s", px_type_name(args[0]));
     const char* b = args[0].as.obj->as.str.data;
     int bl = args[0].as.obj->as.str.len;
     const char* sub = bdata(args[1]);
     int sl = blen(args[1]);
-    if (sl == 0) return px_int(0);
-    if (sl > bl) return px_null();
-    for (int i = 0; i + sl <= bl; i++) {
-        if (memcmp(b + i, sub, (size_t)sl) == 0) return px_int(i);
+    int start = 0;
+    if (nargs == 3) {
+        int64_t s64 = px_arg_int(args[2], "bytes_find", "start");
+        if (s64 < 0 || s64 > (int64_t)bl) px_error("R1002: bytes_find 的 start 需要在 0..bytes_len 之间");
+        start = (int)s64;
     }
-    return px_null();
+    if (sl == 0) return px_int(start <= bl ? start : bl);
+    if (sl > bl - start) return px_null();
+    const char* hit = px_memmem(b + start, bl - start, sub, sl);
+    if (!hit) return px_null();
+    return px_int((int64_t)(hit - b));
 }
 
 // read_bytes(path) → bytes（二进制安全读取）
@@ -29468,8 +29895,12 @@ LXValue bi_time_format(LXValue* args, int nargs, void* ctx) {
         px_error("R1002: time_format 的 fmt 需要字符串，实际是 %s", px_type_name(args[1]));
     if (nargs == 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
         px_error("R1002: time_format 的 tz 需要字符串，实际是 %s", px_type_name(args[2]));
-    int64_t off = 0;
+    // M390（清歌 PX-033）：**省略 tz ⇒ 本地时区**（与 Go `time.Now().Format` 一致）。
+    //   修前恒按 UTC 处理，而编译器/运行时的注释从没写过这一条 ⇒ 服务端日志时间戳
+    //   静默少 8 小时。要 UTC 就显式传 "UTC"（既有调用点绝大多数都显式传了）。
+    int64_t off = px_local_off();
     if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
+    else if (nargs == 3 && args[2].type == PX_NULL) off = 0;   // 显式 null = UTC（逃生口）
     int64_t y, mo, d, h, mi, s, wd;
     px_breakdown(args[0].as.i, off, &y, &mo, &d, &h, &mi, &s, &wd);
     const char* fmt = args[1].as.obj->as.str.data;
@@ -29550,8 +29981,12 @@ LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
         px_error("R1002: time_parse 的 fmt 需要字符串，实际是 %s", px_type_name(args[1]));
     if (nargs == 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
         px_error("R1002: time_parse 的 tz 需要字符串，实际是 %s", px_type_name(args[2]));
-    int64_t off = 0;
+    // M390（清歌 PX-033）：**省略 tz ⇒ 本地时区**（与 Go `time.Now().Format` 一致）。
+    //   修前恒按 UTC 处理，而编译器/运行时的注释从没写过这一条 ⇒ 服务端日志时间戳
+    //   静默少 8 小时。要 UTC 就显式传 "UTC"（既有调用点绝大多数都显式传了）。
+    int64_t off = px_local_off();
     if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
+    else if (nargs == 3 && args[2].type == PX_NULL) off = 0;   // 显式 null = UTC（逃生口）
     const char* s = args[0].as.obj->as.str.data;
     int slen = args[0].as.obj->as.str.len;
     const char* fmt = args[1].as.obj->as.str.data;

@@ -2021,3 +2021,11 @@ run m388_publish_chain bash examples/m388_publish_chain/verify.sh
 #     · C7 令牌本体不落输出。
 #   负控 2 条：401 当成功 ⇒ C2 红；取不到数返 rc=0+空文件 ⇒ C4 红（均带前提自证 P3）。
 run m389_gh_auth bash examples/m389_gh_auth/verify.sh
+# ── m390_px_semantics（M390 · 缺陷 713–729）────────────────────────────────
+#   外部（清歌 34 条 / 晨曦 11 条）提的运行时缺陷按**机制**收口：一条 px_memmem
+#   同时治 split/replace/starts_with/ends_with 的 NUL 截断与 replace 的 O(n²)；
+#   一张由 Go unicode 包逐码位生成的表同时治 trim/to_upper/to_lower 的 ASCII 限定。
+#   判据六组（A NUL · B 惰性量词 · C 严格 JSON · D Unicode · E 九件新原语 · F 时区）
+#   + G 组前提自证（链的必须是当前 runtime，9 个新名须全在 native_symbols 里）。
+#   差分负控：split 退回 strlen / lazy 位清零 / json 词法校验摘掉 ⇒ 对应用例必红。
+run m390_px_semantics bash examples/m390_px_semantics/verify.sh
