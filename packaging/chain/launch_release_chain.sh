@@ -71,9 +71,9 @@ launch() {
         return 0
     fi
 
-    # ② 主链（全量门 → 判绿 → push/tag）
+    # ② 主链（前置自证 → 全量分片门 → STAMP → publish_on_green）
     SYSTEMD_RUN "$U_MAIN" "M${MS} full gate chain" \
-        /bin/bash "$REPO/packaging/chain/gate_release_chain.sh" "$MS" "$HEAD_SHA" >/dev/null 2>&1
+        /bin/bash "$REPO/packaging/chain/run_release_chain.sh" --ms "$MS" --repo "$REPO" >/dev/null 2>&1
     say "start $U_MAIN rc=$?"
 
     # ③ 判红守门（红/链消失/超时 ⇒ p1）

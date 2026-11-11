@@ -11,8 +11,12 @@
        red-guard / postupgrade 没起 ⇒ 判红没人叫、判绿不会自动升级
 病史② 2026-11-12 01:31 M392 r2 判绿：postupgrade 在 r1 判红时已 SKIP 退出、
        **没跟着重启** ⇒ 自动 dnf 升级从未触发，06:27 才人工补
+病史③ M379–M392 每轮手写一个 m<N>_chain.sh：93 行里 80 行是同一骨架，
+       只差里程碑号 ⇒ 每轮都可能漏一步（M390 漏伴生单元、M392 漏 --mirror-url）
 修法   packaging/chain/launch_release_chain.sh —— 起主链 + 两个伴生单元，
        起完 sleep 后逐个 systemctl is-active 自检，缺一条 ⇒ rc=3 + p1 点名
+       packaging/chain/run_release_chain.sh  —— 主链本体参数化（前置自证 → 分片门 →
+       chain_stamp 判据 → publish_on_green），里程碑只传 --ms；不再每轮抄骨架
 自测   10/10（P1 正控三单元齐 · N1 缺 postupgrade · N2 缺主链 · N3 树脏不起单元 · N4 缺参数
        + 前提自证「systemd-run 真被调用 3 次」）
 ```
