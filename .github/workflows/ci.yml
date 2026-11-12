@@ -1809,6 +1809,14 @@ jobs:
           set +e
           bash examples/m395_list_copy/verify.sh > /tmp/v_copy.log 2>&1 || { echo "❌ m395_list_copy 门失败（拷贝语义回归）"; tail -40 /tmp/v_copy.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m395_list_copy（别名 / 浅拷贝 / deep_copy · 三轨一致）PASS"
+      - name: m396_dict_index（dict 桶索引 + 满容量 set 免备货 · M396 · PX-015 · 缺陷 756）
+        # 判据：X1 三轨逐字节一致 · S sizeof(LXObject) 不得被侧表撑大 · P 有/无索引的比值判据
+        #   · N1 有牙负控（PX_DICT_NO_INDEX=1 时比值必须变红）。
+        if: always()
+        run: |
+          set +e
+          bash examples/m396_dict_index/verify.sh > /tmp/v_didx.log 2>&1 || { echo "❌ m396_dict_index 门失败（dict 索引 / 满容量 set 回归）"; tail -40 /tmp/v_didx.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m396_dict_index（三轨一致 / 尺寸不被撑大 / 索引有牙）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

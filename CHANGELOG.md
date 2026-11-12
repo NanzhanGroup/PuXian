@@ -1,3 +1,41 @@
+## M396 补7：全量门 9 红收口（缺陷 757 + 两处门自身瑕疵）
+
+> **一句话**：M396 全量门（head=554f99b）判 RED 9 门，是**三条独立根因**叠在一起 ——
+> ① 新 helper 的 `while (*s)` 长成派生器「间接调用」的语法形状 ⇒ GC 触发集 578→741 ⇒
+> 七门（m206/m208/m209/m212/m213/m214/m269）同时假红；② 新门 `m396_dict_index` 漏注册 CI；
+> ③ 同一门的尺寸探针链接缺 `-static`。**没有一条是真实缺陷**（751 个运行期用例与三轨一致判据全绿）。
+
+```
+证据  /data/gatevm/m396-chain-20261113-004708.log（8 分片 + 3 quiet 车道 · 96 min · head=554f99b）
+      绿 263 · 红 9 · 清单 272 —— 红门：m206_gcroot · m208_vm_c_local_roots · m209_gcroot_rules
+      · m212_gcroot_derive · m213_gcroot_precision · m214_audit_exempt · m269_gcroot_coverage
+      · gate_registry · m219_link_flags
+根因① gcroot_derive.py 的 loose 兜底 `\(\s*\*[A-Za-z_]` = 「任何 `(*x` 形状都当可能的间接调用」
+      （M213 缺陷 295 **有意**的过近似，宁多收）。M396 新增 px_dj_hash 体内 `while (*s)` 命中该形状
+      ⇒ px_dj_hash ∈ TRIGGER ⇒ 经 px_dict_find → px_dict_get → px_dict_has 的调用边闭包爆炸：
+      TRIGGER 578→741（+163 函数）· PRODUCER 345→442 · 分配站点 2791→4491 · WEAK 台账 +97 条
+      ⇒ 15 个**老**站点（px_method 的 mutex/rwlock with 分支、bi_sum/bi_unique/bi_flatten/bi_join/
+      bi_sorted/bi_reversed 的 px_type_name 错误路径）从「不在触发集」变成「候选」。
+      定性：px_dj_hash 只碰 `const char*`（不是 LXValue），体内零分配、零间接调用 ⇒ **判据的假阳**，
+      不是运行时风险；15 个候选全部标「保守兜底·过近似」= 同一形状的既有站点。
+修法  runtime/runtime.c px_dj_hash：`while (*s) { … *s++ … }` → `while (s[0]) { … s[0]; s++ … }`，
+      逐字节等价（FNV-1a 不变），让判据看到真形状。**不动派生器** —— loose 档是 M213 显式决策
+      （收紧到 tight 会让 346 个「保守兜底独有」函数整体离开 TRIGGER，需独立里程碑做 A/B）。
+      派生器自身的过近似代价登记为**缺陷 757**（下一里程碑候选：把 `while/if/switch (...)` 条件里的
+      `(*x` 与 `sizeof(*x)` 从兜底档摘出去，先在 346 个函数上量化漏报面）。
+复验  python3 selfhost/gcroot_derive.py --list triggers → 578（回基线）
+      python3 selfhost/gcroot_audit.py → 候选 0（TRIGGER=578 PRODUCER=345 · 分配站点 2791）
+根因② gate_registry：本地门清单 208 扇 example 门 vs ci.yml 209 —— 新增的
+      examples/m396_dict_index/verify.sh 只在注册源里，CI 无对应 step（M235 缺陷 355 同形）。
+修法  .github/workflows/ci.yml 在 m395_list_copy 之后补 m396_dict_index step（判据摘要写进注释）。
+根因③ m219_link_flags：m396_dict_index/verify.sh:82 的尺寸探针 `gcc -I … -o …` 无链接 flag
+      ⇒ 违反本仓 `-static` 口径（Red Hat 宿主默认非 PIE ⇒ 本机绿、CI 红）。
+修法  该行补 `-static`（探针只打印 sizeof，静态链接无副作用）。
+教训  ① 「新 helper 换了写法」也能红一票门：判据面是**语法形状**，不是语义；
+      ② 门自己也要过 M219/gate_registry —— 新门落地必须同时进 ci.yml 且守链接口径；
+      ③ 三条根因互相独立，只看「红 9 门」会误以为是同一个回归 ⇒ 必须逐门读日志定位。
+```
+
 ## M396 补1：dict 满容量时每次 set 既有键都白备两套数组（缺陷 756）
 
 > **一句话**：`px_dict_set` 的扩容预判 `len0 >= cap0` 在「恰好满容量」时恒成立 ⇒ 每次更新既有键

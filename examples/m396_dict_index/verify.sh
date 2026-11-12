@@ -79,7 +79,9 @@ cat > "$TMP/sz.c" <<'CEOF'
 #include "runtime.h"
 int main(void) { printf("%zu\n", sizeof(LXObject)); return 0; }
 CEOF
-if gcc -I "$ROOT/runtime" -I "$ROOT/runtime/third_party/miniz" -o "$TMP/sz" "$TMP/sz.c" 2> "$TMP/sz.err"; then
+# -static：本仓链接口径（M219 全仓链接 flag 卫生扫的判据；Red Hat 宿主默认非 PIE、
+#   Ubuntu CI 默认 PIE ⇒ 不写 -static 会出现「本机绿、CI 红」）。探针只打印 sizeof，静态链接无副作用。
+if gcc -static -I "$ROOT/runtime" -I "$ROOT/runtime/third_party/miniz" -o "$TMP/sz" "$TMP/sz.c" 2> "$TMP/sz.err"; then
     sz="$("$TMP/sz")"
     if [ "$sz" = "192" ]; then
         ok "S sizeof(LXObject)=$sz（与 M395 基线一致 ⇒ 索引零额外对象内存）"

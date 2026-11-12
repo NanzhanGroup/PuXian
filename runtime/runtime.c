@@ -6373,9 +6373,17 @@ void px_list_push(LXValue list, LXValue val) {
 // 结构 PXDictIdxSnap + PX_DICT_IDX_MIN / CHAIN_MAX 定义在文件上方（gc_obj_size 之前）——
 //   px_obj_free / gc_obj_size 要先看到完整类型才能释放与估算。
 
+// ⚠️ 循环条件写 `s[0]` 而不是 `*s`（M396 补7 · 缺陷 757）：本仓的 gcroot 派生器把
+//   「**任何** `(*x` 形状」当**可能的间接调用**（gcroot_derive.py 的 loose 兜底，有意过近似）。
+//   `while (*s)` 正好长成那个形状 ⇒ 本函数被当作「体内有看不见的调用」⇒ 进入 TRIGGER ⇒
+//   经 px_dict_find → px_dict_get 的调用边把闭包从 578 撑到 741（+163 函数 / +97 条 WEAK），
+//   于是 m206/m208/m209/m212/m213/m214/m269 七门同时假红（候选 0 → 15）。
+//   本函数只碰 `const char*`（不是 LXValue），**不可能**触发 GC ⇒ 用等价的 `s[0]` 表述，
+//   让判据看到真形状。**不是**为了让门变绿而改语义：逐字节等价，m396_dict_index 的
+//   性能/正确性判据与 PX_DICT_NO_INDEX 对照档均不变。派生器本身的过近似代价另记缺陷 757。
 static inline uint32_t px_dj_hash(const char* s) {   // FNV-1a：短键热路径，比 sdbm 少一次乘
     uint32_t h = 2166136261u;
-    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    while (s[0]) { h ^= (uint8_t)s[0]; s++; h *= 16777619u; }
     return h;
 }
 
