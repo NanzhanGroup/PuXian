@@ -1800,6 +1800,15 @@ jobs:
           set +e
           bash examples/m394_release_watch/verify.sh > /tmp/v_rw.log 2>&1 || { echo "❌ m394_release_watch 门失败（发布观察器 / starter 判据）"; tail -40 /tmp/v_rw.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m394_release_watch（观察器自测 / starter 自测 / 负控）PASS"
+      - name: m395_list_copy（三种拷贝：别名 / 浅拷贝 / deep_copy · M395 · PX-009）
+        # 判据：T1 浅拷贝断第一层 · T2 浅拷贝边界正控 · T3 深拷贝三层断开 · T4 别名负控
+        #   · T5 字典键序+值断开 · T6 标量原样 · N1 循环引用 R1002 且不挂死（timeout）
+        #   · N2 判据自证（浅拷贝版必红）· X1 三轨逐字节一致 · P 前提自证（v0.2.394 不认 deep_copy）。
+        if: always()
+        run: |
+          set +e
+          bash examples/m395_list_copy/verify.sh > /tmp/v_copy.log 2>&1 || { echo "❌ m395_list_copy 门失败（拷贝语义回归）"; tail -40 /tmp/v_copy.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m395_list_copy（别名 / 浅拷贝 / deep_copy · 三轨一致）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

@@ -2050,3 +2050,11 @@ run m392_try_catch bash examples/m392_try_catch/verify.sh
 #        · N1 破坏体积判据后自测必须变红（鉴别力自证 + 扰动真发生）
 #        · N2 finished(ok) 秒完成不许误判「没起来」（2026-11-12 10:51 实测假红）。
 run m394_release_watch bash examples/m394_release_watch/verify.sh
+
+# ── m395_list_copy（M395 · PX-009 处置）────────────────────────────────────
+#   三种拷贝：别名 `b = a`（引用，语义保留）/ 浅拷贝 `a[:]` / 深拷贝 `deep_copy(x)`（新内建）。
+#   判据：T1 浅拷贝断第一层 · T2 浅拷贝边界正控（内层仍共享，是语义不是 bug）
+#        · T3 深拷贝三层全断开 · T4 别名负控（不许被偷偷改成拷贝）· T5 字典键序+值断开
+#        · T6 标量原样 · N1 循环引用 R1002 且不挂死（timeout 判据）
+#        · N2 判据自证（浅拷贝版必红）· X1 三轨逐字节一致 · P 前提自证（v0.2.394 不认 deep_copy）。
+run m395_list_copy bash examples/m395_list_copy/verify.sh

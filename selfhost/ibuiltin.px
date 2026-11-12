@@ -310,6 +310,15 @@ def i_call_builtin(name, args, pos):
         if t == "generator":
             return Ok(args[0]["__gen__"])
         return Ok(list(args[0]))
+    if name == "deep_copy":
+        # M395（PX-009）：显式深拷贝。解释轨**直接转发宿主 native**（runtime 的 bi_deep_copy）
+        #   —— 语义只有一份实现，三轨同源；本分支只做参数计数与 Err 口径。
+        #   ⚠️ 解释轨的 struct/enum 是「带标记的 dict」：deep_copy 会把标记一起拷成新 dict
+        #      ⇒ 副本不再是「同一个结构体实例」（`is` 身份断开）。这与深拷贝的语义一致，
+        #      但要显式记在这里，避免以后有人拿它当「复制结构体实例」用。
+        if len(args) != 1:
+            return Err(i_r1002("deep_copy 需要 1 个参数", pos))
+        return Ok(deep_copy(args[0]))
     if name == "tuple":
         if len(args) != 1:
             return Err(i_r1002("tuple 需要 1 个参数", pos))

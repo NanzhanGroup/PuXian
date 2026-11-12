@@ -7534,6 +7534,71 @@ static LXValue bi_list_remove_at(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// ============ M395（PX-009）：deep_copy —— 显式**深拷贝** ============
+// 背景（清歌 / 晨曦 2026-11-09 反馈，用户 2026-11-12 决策）：px 的 list/dict 是**引用语义**
+//   （与 Python/Go/Java/JS 一致，见 docs/PX_DEF_TRIAGE.md PX-DEF-022「设计如此」）。
+//   参考语义不改 —— 改成值语义会把「每次赋值 O(n) 拷贝」的成本转嫁给所有跑门的代码，
+//   而自举编译器本身就是最大的 list 使用者（parser.px 递归下行传 AST）。
+//   缺口是**工具**：浅拷贝有 `a[:]`，深拷贝没有 ⇒ 嵌套结构只能手写递归，或者写错而不自知。
+//   ⇒ 本内建即 PX-009 的处置：显式 deep_copy(x)，语义写死、三轨同源、有门（m395_list_copy）。
+// 语义（**只此一条，不猜**）：
+//   · list  → 新 list，元素逐层递归复制（嵌套 list/dict 全部断开）
+//   · dict  → 新 dict，键序与源一致（px_dict_set 保插入序），值逐层递归复制
+//   · 其它  → **原样返回**（int/float/bool/null/str/bytes/function/struct/enum/tuple）
+//             理由：它们要么不可变，要么语义上就是句柄（函数/结构体实例）；
+//             把 struct 实例也拷成新对象会破坏 `is` 身份与 impl 方法里的 self 改动语义。
+//   · 循环引用（对象在**自身路径**上被再次引用）→ R1002 明确报错，**不死循环**
+//   · 嵌套深度上限 256（既是循环引用的兜底，也是 C 栈保护）
+// 为什么用「路径栈」而不是全局 visited 表：兄弟位置引用同一个对象是合法的（DAG），
+//   按 Python copy.deepcopy 的 memo 语义它会**共享一份副本**；本实现选择「各拷各的」——
+//   更简单、更可预测（不会因为遍历顺序不同得到不同的共享拓扑），代价是 DAG 多占内存。
+//   这条差异写在这里，不藏。
+#define PX_DEEP_COPY_MAX_DEPTH 256
+
+static int px_dc_on_path(LXObject** path, int n, LXObject* o) {
+    for (int i = 0; i < n; i++) if (path[i] == o) return 1;
+    return 0;
+}
+
+static LXValue px_dc_rec(LXValue v, LXObject** path, int depth) {
+    if (v.type != PX_LIST && v.type != PX_DICT) return v;   // 标量/不可变/句柄：原样
+    LXObject* o = v.as.obj;
+    if (o == NULL) return v;
+    if (depth >= PX_DEEP_COPY_MAX_DEPTH)
+        px_error("R1002: deep_copy 嵌套超过 %d 层（疑似循环引用）", PX_DEEP_COPY_MAX_DEPTH);
+    if (px_dc_on_path(path, depth, o))
+        px_error("R1002: deep_copy 检测到循环引用（对象在自身内部被再次引用）");
+    path[depth] = o;
+    if (v.type == PX_LIST) {
+        int n = o->as.list.len;
+        LXValue out = px_list(n);
+        px_root_push_keep(out);              // out 跨 px_list_push/px_list 分配
+        for (int i = 0; i < n; i++) {
+            LXValue item = px_dc_rec(o->as.list.items[i], path, depth + 1);
+            px_list_push(out, item);
+        }
+        px_root_pop();
+        return out;
+    }
+    LXValue out = px_dict();
+    px_root_push_keep(out);                  // 同上：out 跨 px_dict_set 分配
+    for (int i = 0; i < o->as.dict.len; i++) {
+        // 键先取值再递归：px_dict_set 只改 out，不动源 o 的 keys
+        const char* k = o->as.dict.keys[i];
+        LXValue val = px_dc_rec(o->as.dict.vals[i], path, depth + 1);
+        px_dict_set(out, k, val);
+    }
+    px_root_pop();
+    return out;
+}
+
+static LXValue bi_deep_copy(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: deep_copy 需要 1 个参数");
+    LXObject* path[PX_DEEP_COPY_MAX_DEPTH];
+    return px_dc_rec(args[0], path, 0);
+}
+
 // ============ M185（第 63 轮）：严格解析的**判定器**（`is_int_str` / `is_float_str`）============
 // 由来：M184 把 `int()`/`float()` 收紧为「整体合法」（第三方 PX-DEF-002）之后，
 //   **任何想容错解析外部输入的地方都必须先判断**，而语言层没有判定器 ⇒
@@ -13369,6 +13434,8 @@ void px_register_builtins(void) {
     px_set_global("int_ceil", px_native("int_ceil", bi_int_ceil));
     px_set_global("trunc", px_native("trunc", bi_trunc));
     px_set_global("list_remove_at", px_native("list_remove_at", bi_list_remove_at));
+    // M395（PX-009）：显式深拷贝 —— 引用语义不变，缺的是「想拷一份」的明确写法
+    px_set_global("deep_copy", px_native("deep_copy", bi_deep_copy));
     px_set_global("read_chunk_str", px_native("read_chunk_str", bi_read_chunk_str));
     px_set_global("getcwd", px_native("getcwd", bi_getcwd));
     px_set_global("chdir", px_native("chdir", bi_chdir));
