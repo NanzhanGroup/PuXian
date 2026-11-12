@@ -1,0 +1,41 @@
+# m396 性能形状装置：同一进程内量两个规模，判据只看**比值**（不看绝对 ns）
+#   N=32   已建表的最小型
+#   N=1024 线性扫最贵的档
+# 判据：ratio = GET(1024)/GET(32)。线性扫 ⇒ 约 15×；有桶索引 ⇒ 约 1×。
+def bench(n):
+    var ks = []
+    var i = 0
+    while i < n:
+        ks.append("k" + str(i))
+        i = i + 1
+    var d = {}
+    i = 0
+    while i < n:
+        d.set(ks[i], i)
+        i = i + 1
+    # 固定 20000 次命中查询
+    var reps = 20000 / n
+    if reps < 1:
+        reps = 1
+    var acc = 0
+    var t0 = now_us()
+    var r = 0
+    while r < reps:
+        i = 0
+        while i < n:
+            acc = acc + d[ks[i]]
+            i = i + 1
+        r = r + 1
+    var t1 = now_us()
+    var cnt = reps * n
+    return (t1 - t0) * 1000 / cnt
+
+def main():
+    var g32 = bench(32)
+    var g1024 = bench(1024)
+    var ratio = g1024 / g32
+    print("GET32=" + str(g32) + " GET1024=" + str(g1024) + " RATIO=" + str(ratio))
+    if ratio * 100 < 300:
+        print("SHAPE=INDEXED")
+    else:
+        print("SHAPE=LINEAR")

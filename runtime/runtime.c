@@ -2346,6 +2346,17 @@ int px_dbg_val_is_obj(LXValue v) { return px_value_is_obj(v) ? 1 : 0; }
 // ⚠️ 必须是**纯读**：不分配、不调 px_type_name（M257：后者内部走 px_dict_get ⇒ 与容器守卫互递归）。
 // ⚠️ O(1)/对象 —— dict/struct 的**键内容**刻意不计（键通常远小于容器本体；计了会让 sweep
 //   从 O(对象数) 变成 O(总键数)，而 sweep 在 STW 窗口里跑）。
+// ── M396（PX-015）dict 桶索引：**结构定义放这里**，因为 px_obj_free / gc_obj_size（本处）
+//    要先看到完整类型才能释放与估算。实现在 px_dict 段（搜索「M396（PX-015）：dict 桶索引」）。
+#define PX_DICT_IDX_MIN 32           // len < 32 不建表：N≤32 线性扫已在地板（369ns 级）
+#define PX_DICT_IDX_CHAIN_MAX 32     // 旧快照链上限（= 可回溯的结构变更代数）
+typedef struct PXDictIdxSnap {
+    struct PXDictIdxSnap* prev;      // 上一代（延迟释放）
+    int32_t nb;                      // 桶数（2 的幂；0 = 墓碑 ⇒ 索引作废）
+    int32_t n;                       // 建表时的 len（== 当前 len 才可用）
+    int32_t bucket[];                // 柔性数组：keys 下标；-1 空槽
+} PXDictIdxSnap;
+
 static long long gc_obj_size(const LXObject* o) {
     long long sz = (long long)sizeof(LXObject);
     switch (o->type) {
@@ -2361,6 +2372,11 @@ static long long gc_obj_size(const LXObject* o) {
             break;
         case PX_DICT:
             sz += (long long)o->as.dict.cap * (long long)(sizeof(char*) + sizeof(LXValue));
+            // M396：桶索引当前代（旧代不计 —— 同「键内容不计」的估算口径；链长有上限 32）
+            if (o->as.dict.idx) {
+                const PXDictIdxSnap* sg = (const PXDictIdxSnap*)o->as.dict.idx;
+                sz += (long long)sizeof(PXDictIdxSnap) + (long long)sg->nb * (long long)sizeof(int32_t);
+            }
             break;
         case PX_STRUCT:
             sz += (long long)o->as.struct_inst.nfields * (long long)(sizeof(char*) + sizeof(LXValue));
@@ -2398,6 +2414,12 @@ static void px_obj_free(LXObject* o) {
             for (int i = 0; i < o->as.dict.len; i++) xfree(o->as.dict.keys[i]);
             xfree(o->as.dict.keys);
             xfree(o->as.dict.vals);
+            // M396：桶索引快照链（只含 int 下标 ⇒ GC 不扫；但必须在这里逐代释放）
+            if (o->as.dict.idx) {
+                PXDictIdxSnap* sg = (PXDictIdxSnap*)o->as.dict.idx;
+                while (sg) { PXDictIdxSnap* pv = sg->prev; xfree(sg); sg = pv; }
+                o->as.dict.idx = NULL;
+            }
             break;
         case PX_FUNC: xfree(o->as.func.name); break;   // env 为 LXValue，随对象一并丢弃（无内部分配）
         case PX_NATIVE: xfree(o->as.native.name); break;
@@ -4150,6 +4172,7 @@ LXValue px_dict(void) {
     o->as.dict.keys = xmalloc(sizeof(char*) * 8);
     o->as.dict.vals = xmalloc(sizeof(LXValue) * 8);
     o->as.dict.len = 0; o->as.dict.cap = 8;
+    o->as.dict.idx = NULL;   // M396：本构造函数**不走 memset**（直排字段）⇒ 索引指针必须显式清零
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + 8 * (sizeof(char*) + sizeof(LXValue)));
     return v;
@@ -6329,6 +6352,119 @@ void px_list_push(LXValue list, LXValue val) {
     }
 }
 
+// ════════ M396（PX-015）：dict 桶索引 —— 纯加速侧表，**零语义变更** ════════
+// 动机（实测 /data/autodrive/M396-MEASURE.md · VM 轨产物 · 独立进程）：px_dict_get 线性扫，
+//   N=256→1024（四倍键）GET 1.7us → 6.3–11.0us（线性成立）。而 dict 只有一份实现
+//   （VM: PXOP_DICTSET→px_dict_set · 解释轨: 宿主 native · C 轨同一 runtime）
+//   ⇒ 改本文件一处，三轨同享。
+// 为什么不做「原地维护的哈希表」（两条都是读代码得到的硬事实，不是保守估计）：
+//   ① `d.remove(k)` **存在且会前移后续元素**（本文件 px_method 的 "remove" 分支）
+//      ⇒ 「无删除 ⇒ 下标永久稳定」**不成立**。索引必须能整体作废，不能只靠增量维护。
+//   ② px_dict_get / px_dict_has **不加锁**（见本文件「读入口降噪」段的既定语料：运行时有
+//      大量合法的探测式读），而写路径在 g_gc_mu 下 ⇒ 索引只能是**发布后不可变**的快照。
+// 于是：不可变快照 + 原子换指针。
+//   · 读（get/has）：快照有效（s->n == len）⇒ 探桶；否则**回落原线性扫**（永不变慢，只是没加速）
+//   · 写（set）   ：追加后 len 达到 s->n 的 1.25 倍才重建（几何级数 ⇒ 摊还 O(1)）；
+//                   期间读路径靠「桶 + 尾部补扫 [s->n, len)」保持正确与大部分收益
+//   · 删（remove）：发布「墓碑」（nb==0）⇒ 索引整体作废，下次 insert 按需重建
+//                   （必须作废：元素前移会让桶里的旧下标指错键）
+//   · 旧快照链 prev：只在对象析构时统一释放；链长超上限时释放**最老**一代。
+//     这条比 keys/vals 更保守 —— 那两个数组是锁内直接 xfree 的，无锁读者可能正扫它们。
+// 结构 PXDictIdxSnap + PX_DICT_IDX_MIN / CHAIN_MAX 定义在文件上方（gc_obj_size 之前）——
+//   px_obj_free / gc_obj_size 要先看到完整类型才能释放与估算。
+
+static inline uint32_t px_dj_hash(const char* s) {   // FNV-1a：短键热路径，比 sdbm 少一次乘
+    uint32_t h = 2166136261u;
+    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    return h;
+}
+
+// 对照档开关（门 m396_dict_index 的负控用）：PX_DICT_NO_INDEX=1 ⇒ 永不建表 = 原线性扫行为。
+//   为什么必须有：性能类判据要能**证明自己有牙** —— 关掉索引后那条判据必须变红。
+static int px_dict_idx_off(void) {
+    static int off = -1;
+    if (off < 0) off = getenv("PX_DICT_NO_INDEX") ? 1 : 0;
+    return off;
+}
+
+// 建一代快照（调用方须保证 keys 不被并发改动：set 路径在 g_gc_mu 内）
+static PXDictIdxSnap* px_dict_idx_build(const LXObject* o, PXDictIdxSnap* prev) {
+    int n = o->as.dict.len;
+    int32_t nb = 8;
+    while (nb < n * 2) nb <<= 1;                 // 负载 ≤ 0.5 ⇒ 线性探测平均 <1.5 次
+    PXDictIdxSnap* s = (PXDictIdxSnap*)xmalloc(sizeof(PXDictIdxSnap) + sizeof(int32_t) * (size_t)nb);
+    s->prev = prev; s->nb = nb; s->n = n;
+    for (int32_t i = 0; i < nb; i++) s->bucket[i] = -1;
+    uint32_t mask = (uint32_t)nb - 1;
+    for (int i = 0; i < n; i++) {
+        uint32_t p = px_dj_hash(o->as.dict.keys[i]) & mask;
+        while (s->bucket[p] >= 0) p = (p + 1) & mask;
+        s->bucket[p] = i;
+    }
+    return s;
+}
+
+// 发布一代快照（release）：链超限时摘掉最老一代
+static void px_dict_idx_publish(LXObject* o, PXDictIdxSnap* s) {
+    int cnt = 0;
+    for (PXDictIdxSnap* p = s; p; p = p->prev) cnt++;
+    if (cnt > PX_DICT_IDX_CHAIN_MAX) {
+        PXDictIdxSnap* cur = s;
+        while (cur->prev && cur->prev->prev) cur = cur->prev;
+        PXDictIdxSnap* oldest = cur->prev;
+        cur->prev = NULL;
+        if (oldest) xfree(oldest);
+    }
+    __atomic_store_n(&o->as.dict.idx, s, __ATOMIC_RELEASE);
+}
+
+// 查一个键：返回 keys 下标或 -1。**不加锁**（与既有 px_dict_get 同口径）
+static int px_dict_find(const LXObject* o, const char* key) {
+    int len = o->as.dict.len;                    // 无锁快照（陈旧只会漏掉更新的键，同既有语义）
+    PXDictIdxSnap* s = __atomic_load_n(&o->as.dict.idx, __ATOMIC_ACQUIRE);
+    if (s && s->nb > 0 && s->n <= len) {         // 快照覆盖前 s->n 个键（无删除 ⇒ 下标稳定）
+        uint32_t mask = (uint32_t)s->nb - 1;
+        uint32_t p = px_dj_hash(key) & mask;
+        for (int32_t i = 0; i < s->nb; i++) {
+            int32_t k = s->bucket[p];
+            if (k < 0) break;                    // 空槽 ⇒ 不在表内；但**仍可能**在尾部新增区
+            if (k < s->n && strcmp(o->as.dict.keys[k], key) == 0) return k;
+            p = (p + 1) & mask;
+        }
+        // 尾部补扫 [s->n, len)：建表之后追加的键。几何重建（1.25×）⇒ 尾部平均 ≤ 12.5% n
+        for (int i = s->n; i < len; i++) {
+            if (strcmp(o->as.dict.keys[i], key) == 0) return i;
+        }
+        return -1;
+    }
+    for (int i = 0; i < len; i++) {
+        if (strcmp(o->as.dict.keys[i], key) == 0) return i;
+    }
+    return -1;
+}
+
+// 插入后维护（set 路径在 g_gc_mu 内调用）
+// 重建阈值 = len 达到快照 n 的 1.25 倍（不是 2 倍）：尾部补扫长度平均 ≤ 12.5% n，
+//   而每次重建 O(n) 只摊到 0.25n 次插入上 ⇒ 摊还约 8 个桶写/插入（远低于一次线性扫的 strcmp 数）。
+static void px_dict_idx_after_insert(LXObject* o) {
+    int len = o->as.dict.len;
+    if (len < PX_DICT_IDX_MIN) return;
+    if (px_dict_idx_off()) return;               // 对照档：PX_DICT_NO_INDEX=1 ⇒ 退化为原线性扫
+    PXDictIdxSnap* s = o->as.dict.idx;
+    if (!s || s->nb == 0 || (int64_t)len * 4 >= (int64_t)s->n * 5) {
+        px_dict_idx_publish(o, px_dict_idx_build(o, s));
+    }
+}
+
+// 删除后作废（remove 路径不持 g_gc_mu —— 只做一次原子换指针，不碰 keys）
+static void px_dict_idx_after_remove(LXObject* o) {
+    PXDictIdxSnap* s = o->as.dict.idx;
+    if (!s || s->nb == 0) return;                // 本来就没索引/已是墓碑
+    PXDictIdxSnap* t = (PXDictIdxSnap*)xmalloc(sizeof(PXDictIdxSnap));
+    t->prev = s; t->nb = 0; t->n = -1;
+    px_dict_idx_publish(o, t);
+}
+
 // M127 及以前的锁内扩容 + 锁内键副本路径（兜底 + `PX_GROW_RETRY_MAX=0` 对照用）。与历史实现逐字一致。
 static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
     LXObject* o = dict.as.obj;
@@ -6351,6 +6487,7 @@ static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
     o->as.dict.keys[o->as.dict.len] = xstrdup(key);
     o->as.dict.vals[o->as.dict.len] = val;
     o->as.dict.len++;
+    px_dict_idx_after_insert(o);     // M396：兜底路径也要维护索引（否则索引缺项 ⇒ 读路径永远回落）
     pthread_mutex_unlock(&g_gc_mu);
     gc_unblock_stop(&old);
 }
@@ -6383,10 +6520,7 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
     gc_block_stop(&old);
     {
         int len_f = o->as.dict.len;
-        int idx_f = -1;
-        for (int i = 0; i < len_f; i++) {
-            if (strcmp(o->as.dict.keys[i], key) == 0) { idx_f = i; break; }
-        }
+        int idx_f = px_dict_find(o, key);      // M396：走桶索引（无索引/失效时自动回落线性扫）
         if (idx_f >= 0) {                       // 命中既有键：只改值（与旧路径等价，但不备货）
             o->as.dict.vals[idx_f] = val;
             pthread_mutex_unlock(&g_gc_mu);
@@ -6473,6 +6607,7 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
         o->as.dict.vals[len] = val;
         o->as.dict.len = len + 1;
         spare_key = NULL;
+        px_dict_idx_after_insert(o);           // M396：索引维护（锁内；len 达 2× 才重建）
         pthread_mutex_unlock(&g_gc_mu);
         gc_unblock_stop(&old);
         return;
@@ -6504,18 +6639,13 @@ LXValue px_dict_get(LXValue dict, const char* key) {
         if (px_ctr_livechk_on()) px_ctr_guard_fail(o, PX_DICT, "px_dict_get");
         return px_null();
     }
-    for (int i = 0; i < o->as.dict.len; i++) {
-        if (strcmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
-    }
-    return px_null();
+    int i = px_dict_find(o, key);          // M396：桶索引优先，失效自动回落线性扫
+    return i >= 0 ? o->as.dict.vals[i] : px_null();
 }
 
 bool px_dict_has(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
-    for (int i = 0; i < o->as.dict.len; i++) {
-        if (strcmp(o->as.dict.keys[i], key) == 0) return true;
-    }
-    return false;
+    return px_dict_find(o, key) >= 0;
 }
 
 int px_len(LXValue v) {
@@ -6939,6 +7069,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
                         o->as.dict.vals[j] = o->as.dict.vals[j + 1];
                     }
                     o->as.dict.len--;
+                    px_dict_idx_after_remove(o);   // M396：元素已前移 ⇒ 索引整体作废（墓碑）
                     break;
                 }
             }

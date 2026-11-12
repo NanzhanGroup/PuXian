@@ -87,7 +87,11 @@ struct LXObject {
             int rune_len; int offs_cnt; int* rune_offs;
         } str;
         struct { LXValue* items; int len, cap; } list;
-        struct { char** keys; LXValue* vals; int len, cap; } dict;
+        // M396（PX-015）：idx = 桶索引快照链头（PXDictIdxSnap* · 惰性 · NULL = 无索引）。
+        //   **不是 LXObject\***（桶里只存 int32 下标）⇒ GC 不扫它，但 px_obj_free 必须释放它。
+        //   加这一个指针后本成员 32 字节，仍小于 union 内最大成员（func 40 字节）
+        //   ⇒ sizeof(LXObject) **不变**（门 m396_dict_index 有尺寸判据盯着）。
+        struct { char** keys; LXValue* vals; int len, cap; void* idx; } dict;
         // M129（qg-issue 87 缺陷 21）：闭包捕获环境（upvalue cell 字典）。
         //   `env` 为 px_null() = 无捕获（旧行为零变化）。有捕获时 **ctx 指向本字段**
         //   （`&o->as.func.env`）—— 必须存在对象内：GC 只扫已知对象字段，

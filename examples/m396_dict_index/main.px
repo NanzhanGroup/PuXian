@@ -1,0 +1,67 @@
+# m396 三轨正确性主用例（判据与期望值见 verify.sh 的 exp）
+def main():
+    var bad = 0
+
+    # T1：100 键 = 全命中 + 缺键 + 长度
+    var d = {}
+    var i = 0
+    while i < 100:
+        d.set("k" + str(i), i)
+        i = i + 1
+    i = 0
+    while i < 100:
+        if d["k" + str(i)] != i:
+            bad = bad + 1
+        if d.has("k" + str(i)) == false:
+            bad = bad + 1
+        i = i + 1
+    var hz = "n"
+    if d.has("zz"):
+        hz = "y"
+    print("T1 " + str(len(d)) + " " + str(d["k99"]) + " " + str(d.get("zz", -1)) + " " + hz)
+
+    # T2：键序 = 插入序（.keys() / .items() 都按 keys 数组序）
+    var ks = d.keys()
+    var it = d.items()
+    print("T2 " + ks[0] + "," + ks[1] + "," + ks[99] + " " + it[99][0] + "=" + str(it[99][1]))
+
+    # T3：删除中段 ⇒ 元素前移（索引必须整体作废，否则桶里的旧下标会指错键）
+    var r = d.remove("k50")
+    var h50 = "n"
+    if d.has("k50"):
+        h50 = "y"
+    print("T3 " + str(r) + " " + str(len(d)) + " " + str(d["k49"]) + " " + str(d["k51"]) + " " + h50)
+    # 删后重插：新键进尾部
+    d.set("k50", 500)
+    var ks2 = d.keys()
+    print("T3b " + ks2[len(d) - 1] + " " + ks2[50] + " " + str(d["k50"]))
+
+    # T3c：连续删除一半后全量读（验证墓碑 + 后续重建）
+    i = 0
+    while i < 100:
+        if i % 2 == 0:
+            d.remove("k" + str(i))
+        i = i + 1
+    var acc = 0
+    i = 0
+    while i < 100:
+        if i % 2 == 1:
+            acc = acc + d["k" + str(i)]
+        i = i + 1
+    print("T3c " + str(len(d)) + " " + str(acc))
+
+    # T4：深拷贝（M395）不受索引影响
+    var big = {}
+    i = 0
+    while i < 1000:
+        big.set("b" + str(i), i * 2)
+        i = i + 1
+    var dc = deep_copy(big)
+    dc.set("b0", -1)
+    print("T4 " + str(len(big)) + " " + str(big["b0"]) + " " + str(dc["b0"]))
+
+    # T5：小 dict（不建表区间）行为不变
+    var s = {"a": 1, "b": 2}
+    print("T5 " + str(len(s)) + " " + str(s["a"]) + " " + str(s["b"]))
+
+    print("BAD=" + str(bad))
