@@ -21824,7 +21824,7 @@ int main(int argc, char** argv) {
     px_srcline(72);
     px_set_global("g_bcm", px_null());
     px_srcline(74);
-    px_set_global("PXC_VER", px_str("0.2.393"));
+    px_set_global("PXC_VER", px_str("0.2.394"));
     px_srcline(75);
     px_set_global("PXC_MS", px_str("M-B9a"));
     { LXValue _r = fn_main(NULL, 0, NULL); int _code = 0;

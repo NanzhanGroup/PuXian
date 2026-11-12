@@ -122,3 +122,44 @@ python3 selfhost/check_orchestrator.py --file /tmp/m284/final.sh   # /tmp 编排
 ```
 
 —— **那条假警报根本不会发出去**。
+
+---
+
+## 发布之后那条腿：观察器（M394）
+
+**别再每轮手写 `m<N>-release-watch.sh`。** 唯一实现：
+
+```bash
+packaging/chain/release_watch.sh --ms 394            # 观察器本体（参数化）
+packaging/chain/start_release_watcher.sh --ms 394    # 起单元 + 自检 + 该 p1 就 p1
+```
+
+为什么（2026-11-12 01:31 实测）：M375…M393 每轮手写一份观察器（2650 B → 11702 B），
+M392 那轮没人写 ⇒ `publish_on_green.sh` 第 9 段只打印
+`WARN 观察器不存在：m392-release-watch.sh` 就继续（rc 仍 0）⇒
+11-11 刚修好的「镜像已齐，可 dnf upgrade」通报**从来没有生成过**，
+而用户那条「已发布」通知恰好 3 次投递失败被放弃 ⇒ 他整晚不知道发布成功。
+
+两条纪律（都是实测换来的）：
+
+1. **「起来了」的判据不是 `is-active`**。观察器一轮就判 OK 时会秒完成退出，
+   `is-active` 返回 `inactive` ⇒ 被误判「没起来」（10:51 真踩到）。
+   要看 `ActiveState` + `Result`：`running(*)` / `finished(ok)` 都算起来了，
+   `bad(...)` / `missing` 才算没起来。同时**不要加 `--collect`**：它会把秒完成的单元
+   立刻回收，随后 `show` 查不到，又变成 `missing`。
+2. **缺件/没起来必须 p1**，不能只写一行 WARN 就往下走 —— 那正是缺陷 745 的形状。
+
+自测（离线，不联网、不通知、不碰 systemd）：
+
+```bash
+bash packaging/chain/release_watch.sh --selftest         # 13/13
+bash packaging/chain/start_release_watcher.sh --selftest # 17/17
+bash examples/m394_release_watch/verify.sh               # 门 m394_release_watch
+```
+
+端到端演练（不推用户）：
+
+```bash
+bash packaging/chain/release_watch.sh --ms <已发布的号> --no-notify --log-dir /tmp/x
+```
+

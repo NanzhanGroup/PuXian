@@ -2041,3 +2041,12 @@ run m391_parser_features bash examples/m391_parser_features/verify.sh
 #   + N1/N2 负控（退出路径不段错误 · 未捕获错误仍响亮）+ X1 三轨逐字节一致
 #   + P 前提自证（v0.2.391 编译器必须拒绝本用例语法）。
 run m392_try_catch bash examples/m392_try_catch/verify.sh
+
+# ── m394_release_watch（M394 · 缺陷 745–747）────────────────────────────────
+#   发布观察器入仓参数化（release_watch.sh）+ 起观察器这件事有判据（start_release_watcher.sh）。
+#   病史：M392 01:31 判绿时 publish 只打「WARN 观察器不存在」就过去（rc 仍 0）⇒
+#        「镜像已齐，可 dnf upgrade」通报从未生成，用户整晚不知道发布成功。
+#   判据：G1/G2 两件自测全绿 · G3 可执行 + shebang=bash
+#        · N1 破坏体积判据后自测必须变红（鉴别力自证 + 扰动真发生）
+#        · N2 finished(ok) 秒完成不许误判「没起来」（2026-11-12 10:51 实测假红）。
+run m394_release_watch bash examples/m394_release_watch/verify.sh

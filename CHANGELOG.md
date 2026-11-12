@@ -1,3 +1,89 @@
+## M394：观察器入仓 + 起观察器有判据（缺陷 745–747）
+
+> **一句话**：M393 把「起链」收成一个入口，但**发布之后**那条腿还漏着 ——
+> 观察器每轮手写、M392 那轮没人写、publish 只 WARN 就过去（rc 仍 0）⇒
+> 「镜像已齐，可 dnf upgrade」通报**从来没有生成过**。
+> 本轮把它入仓参数化，并让「观察器没起来」变成 p1，而不是一行日志。
+
+### 一 观察器入仓（缺陷 745）
+
+```
+病史  M375…M393 每轮手写 m<N>-release-watch.sh：2650 B → 11702 B，
+      每轮的修法只活在那一轮；2026-11-12 01:31 M392 判绿时 publish 打印
+      「WARN 观察器不存在：m392-release-watch.sh」就继续（rc=0）⇒
+      11-11 刚修好的「镜像已齐」通报**从未生成**，而用户那条「已发布」通知
+      恰好 3 次投递失败被放弃 ⇒ 他整晚不知道发布成功。
+修法  packaging/chain/release_watch.sh —— 唯一实现，里程碑只传 --ms
+      里程碑号归一：394 / m394 / v0.2.394 / 0.2.394 都认
+      沿用的历史修法全部保留：
+        660 tarball 体积下限 · 663 主判据=镜像根 · 698① 正文读文件不硬编码
+        698③ 用户通知唯一出口 · 699 超时后 GRACE 复核（60min 硬超时比同步真实耗时紧）
+        704 令牌 401 降级匿名 + 放宽轮询；「取不到数」≠「资产=0」
+        707 看 rc 说话，不许 announce 成功 · 737 呈报新信息（OK ⇒「镜像已齐」）
+自测  13/13：P 前提自证 + C1–C5（judge 正控 + 镜像未到/el9=404/资产不足/tarball 太小）
+      + N1 空串不当 0（704 形态）+ N2 归一三形态 + N3 拒非法
+      + N4 OK 标题不许含「已发布」（737 回归）+ N5 OK/GRACE 标题必须区分
+实测  正控 --ms 393 --no-notify：assets=4 tgz=74117382 latest=v0.2.393
+      mirror_tag=v0.2.393 el9=200 el7=200 ⇒ VERDICT=OK
+      负控 --ms 999：VERDICT=TIMEOUT rc=1
+```
+
+### 二 起观察器这件事要有判据（缺陷 746）
+
+```
+packaging/chain/start_release_watcher.sh
+  选脚本（仓库版优先 / legacy 回退并在日志记 DEPRECATED）→ 起单元 → 自检
+  两处都缺    ⇒ p1 m<ms>-watcher-missing + rc=3
+  起了但没起来 ⇒ p1 m<ms>-watcher-down    + rc=3
+自测 17/17（C1 running · C2 legacy 回退 · C3 finished(ok) · N1 缺件不许起单元
+            · N2 failed · N4 missing · N3 参数校验 + 前提自证）
+```
+
+★ **C3 是实测换来的判据**（2026-11-12 10:51）：
+第一次真起单元时观察器一轮就判 OK 并在 4 秒内退出 ⇒ `systemctl is-active` 返回
+`inactive` ⇒ starter 判「没起来」rc=3。这是**假红**，病根是把「是否在跑」当成
+「是否起来了」。修法两条：
+```
+判据  看 ActiveState + Result，而不是 is-active：
+        running(active|activating|reloading)          ⇒ 起来了
+        finished(ok) = inactive + Result=success      ⇒ 起来了且已正常收工
+        bad(state=…,sub=…,result=…)                   ⇒ 起不来
+        missing                                       ⇒ 没起来
+起法  去掉 systemd-run --collect —— 它会把秒完成的单元立刻回收，
+      随后 show 查不到 ⇒「已完成」又变成 missing。
+```
+
+### 三 publish 不再「WARN 后当没事」（缺陷 747）
+
+```
+改前  say "WARN 观察器不存在：$WATCHER" 后继续 exit 0
+改后  第 9 段缩成一次 starter 调用：
+        starter rc≠0 ⇒ 日志记 WARN（发布本身仍 rc=0：tag 已推、Release 已出）
+        但 starter 已 p1 叫人 ⇒ 「通报链断了」不再只活在日志里
+```
+
+### 四 新门 m394_release_watch
+
+```
+G1/G2  release_watch.sh / start_release_watcher.sh 的 --selftest 必须全绿
+G3     两件可执行且 shebang=bash（发布链直接执行，不经 bash 包装时靠它）
+N1     把 release_watch 的 TGZ_MIN 改坏后自测必须变红
+       + 扰动前提自证（确认 sed 真改到了，否则 N1 是空判）
+N2     starter 收到 finished(ok) 必须 rc=0 且不报 p1（守上面那条假红）
+```
+
+### 五 代价与边界
+
+```
+未做  publish_on_green.sh / notify_preflight.sh 仍在 /data/autodrive（仓库外）
+      —— 它们下一步也该入仓；本轮只把观察器与 starter 收进来
+重烘  改了版本字面量（compiler.px / interp.px / tools/px / tools/pxlsp.px /
+      tools/pxmcp.px / tools/pxfmt.px 共 7 处锚点）⇒ bootstrap 14 件指纹变、
+      自举 golden 需重定基 ⇒ .rtcache 冷
+全量  269 + 1 = 270 门，冷缓存预计 2–2.5h
+```
+
+
 ## M393：发布链与观测点（缺陷 741–744）
 
 > **一句话**：本轮**不改语言本体**，只修「我自己每发布一次都要付的那笔税」——
