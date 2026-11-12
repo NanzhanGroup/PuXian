@@ -73,11 +73,22 @@ launch() {
     HEAD_SHA="${HEAD_SHA:-$(git -C "$REPO" rev-parse --short=7 HEAD)}"
 
     local U_MAIN="m${MS}-chain" U_RED="m${MS}-red-guard" U_PU="m${MS}-postupgrade"
+    local STAMP="${AD:-/data/autodrive}/M${MS}-GATE-DONE"
     say "=== launch start ms=$MS head=$HEAD_SHA repo=$REPO dry=$DRY ==="
 
     if [ "$DRY" = "1" ]; then
         echo "DRY-RUN 将起三单元：$U_MAIN $U_RED $U_PU（不执行）"
         return 0
+    fi
+
+    # ★起链前先删出上轮的裁决文件（M393 重跑时实测踩到）：
+    #   red-guard 一起来就看到**上一轮的** M<ms>-GATE-DONE（里面是 RED）⇒ 当场报警并退出，
+    #   自检报 missing: m393-red-guard。这与 postupgrade 的「旧 STAMP 不采信」是同一族病：
+    #   把上一轮的结果当成这一轮的。删掉是最干净的处置（主链也会再删一次，幂等）。
+    if [ -f "$STAMP" ]; then
+        say "rm stale stamp $STAMP（内容：$(head -c 120 "$STAMP" 2>/dev/null)）"
+        echo "STALE-STAMP-REMOVED $(head -c 80 "$STAMP" 2>/dev/null)"
+        rm -f "$STAMP"
     fi
 
     # ② 主链（前置自证 → 全量分片门 → STAMP → publish_on_green）

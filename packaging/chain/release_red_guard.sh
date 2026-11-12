@@ -65,14 +65,22 @@ run_guard() {
     [ -n "$MS" ] || { echo "--ms 必填" >&2; return 2; }
     STAMP="${STAMP:-/data/autodrive/M${MS}-GATE-DONE}"
     UNIT="${UNIT:-m${MS}-chain}"
+    # 只采信**本轮**的 STAMP：mtime 早于本进程启动超过容差 ⇒ 一定是上一轮遗留。
+    #   否则「上一轮判红的 STAMP 还在」⇒ 新链刚起就立刻报红并退出（M393 重跑实测：自检报
+    #   missing m393-red-guard）。与 release_postupgrade 的旧 STAMP 判据同族。
+    local start; start=$(date +%s)
+    local GRACE=${RED_GUARD_STAMP_GRACE:-120}
     local deadline=$(( $(date +%s) + MAXH * 3600 )) idle=0
     say "=== red-guard start ms=$MS stamp=$STAMP unit=$UNIT max=${MAXH}h pid=$$ ==="
     while :; do
         if [ -f "$STAMP" ]; then
-            if grep -q 'CHAIN-VERDICT=GREEN' "$STAMP" 2>/dev/null; then
+            local mt; mt=$(stat -c %Y "$STAMP" 2>/dev/null || echo 0)
+            if [ "$mt" -lt $((start - GRACE)) ]; then
+                say "IGNORE stale STAMP（mtime 早于启动 ${GRACE}s 容差）⇒ 视为上一轮遗留"
+            elif grep -q 'CHAIN-VERDICT=GREEN' "$STAMP" 2>/dev/null; then
                 say "GREEN —— 静默退出（用户通知由 publish 负责，这里不重复推）"
                 return 0
-            fi
+            else
             local v; v="$(tr '\n' ' ' < "$STAMP" 2>/dev/null | cut -c1-400)"
             alert "m${MS}-chain-red" "M${MS} 全量门判红/中止" \
                 "STAMP=$STAMP
@@ -81,6 +89,7 @@ $(red_lines)
 处置：看门日志，修完重跑；本条只叫醒东月，不推用户。"
             return 1
         fi
+        fi          # ← 外层 if [ -f "$STAMP" ]（M393 补4 加 stale 分支后这里少了一个）
         if ! unit_active "$UNIT"; then
             idle=$((idle + 1))
             say "unit=$UNIT 非 active（第 $idle 轮）"
@@ -156,6 +165,19 @@ STUB
     rc=$?
     [ "$rc" = 1 ] && ok "N3 负控：超时 ⇒ rc=1" || bad "N3 rc=$rc（应 1）"
     grep -q 'chain-timeout' "$STUB_ALERTS" 2>/dev/null && ok "N3 报出 chain-timeout" || bad "N3 键不对"
+
+    # N5 负控（M393 重跑实测补）：上一轮遗留的 RED STAMP（mtime 很旧）**不许**被当成本轮裁决。
+    #   现场：重跑时 red-guard 一起来就看到上轮的 M393-GATE-DONE=RED ⇒ 立刻报警退出，
+    #   launch 自检报 missing m393-red-guard。跟 postupgrade 的旧 STAMP 同族。
+    printf 'CHAIN-VERDICT=RED reason=old-round\n' > "$T/stamp-stale"
+    touch -d '2020-01-01' "$T/stamp-stale"
+    : > "$STUB_ALERTS"
+    MS=994 STAMP="$T/stamp-stale" UNIT=u RED_GUARD_UNIT_PROBE="$T/probe-up" \
+        bash "$0" --ms 994 --stamp "$T/stamp-stale" --unit u --max-hours 0 >/dev/null 2>&1
+    rc=$?
+    [ "$rc" = 1 ] && ok "N5 旧 STAMP ⇒ 不采信（走到超时 rc=1，而不是立刻判红）" || bad "N5 rc=$rc（应 1）"
+    grep -q 'chain-timeout' "$STUB_ALERTS" 2>/dev/null && ok "N5 报的是超时键，不是 chain-red" || bad "N5 把旧 STAMP 当本轮了"
+    grep -q 'IGNORE stale STAMP' "$RED_GUARD_LOG" 2>/dev/null && ok "N5 日志写明 IGNORE stale STAMP（可核）" || bad "N5 没留痕"
 
     # N4 负控：参数错 ⇒ rc=2（不许静默当绿）
     bash "$0" --stamp x --unit u >/dev/null 2>&1
