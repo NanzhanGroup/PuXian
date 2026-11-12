@@ -1,3 +1,26 @@
+## M395 补3：全量门 NO-GO —— 新内置没进「覆盖面消费面」（缺陷 754）
+
+> **一句话**：第二轮全量门判红 1 门 `m250_onnx_tensor` 的 [1] 台账 —— `deep_copy` 只出现在
+> `.sh` 装置里，`.px` 消费面里一次都没出现 ⇒ 判据③「新增未覆盖」判红。判据是对的，缺的是语料。
+
+```
+实测  2026-11-12 19:03 链 m395-chain-20261112-182534 · shard5 28 绿 1 红
+      red/shard5_gate_m250_onnx_tensor.log：
+        FAIL [1] 覆盖面实跑 rc=0（判据 ①②③④⑤）· 已覆盖 403（97.6%）· 未覆盖 10
+        ❌ 判据③ **新增未覆盖** 1 个（基线只许缩小）—— deep_copy
+根因  check_native_coverage.py 的消费面只扫 examples/ + registry/ 下的 **`.px`**；
+      M395 的 deep_copy 语料全写在 examples/m395_list_copy/verify.sh 里（.sh 是装置、不是语料，
+      M250 首跑就定了这条口径，见 缺陷 754 的姊妹条目 433/752/753）
+修法  新增 examples/m395_list_copy/surface.px（合法侧冒烟：列表 / 三层嵌套 / 字典键序 / 标量原样），
+      **不动判据、不动基线**（基线只许缩小，解不了「新增未覆盖」）
+复验  ./tools/px run examples/m395_list_copy/surface.px  rc=0（S1 1 9 / S2 1 5 9 / S3 1 2 9 / S4 5 x true null）
+      python3 selfhost/check_native_coverage.py  rc=0（已覆盖 404（97.8%）· 未覆盖 9 与基线一致）
+      bash examples/m250_onnx_tensor/verify.sh --neg-skip  → M250-VERIFY-OK（18/18）
+教训  这是同一条教训的第三次现形：**「名册自然增长」要同步三处** ——
+      源码派生索引（753）· 判据里的绝对数（752）· 覆盖面消费面语料（754）。
+      新增内置的提交清单应自带三问：索引重生成没有？哪条判据盯着总数？`.px` 里调过没有？
+```
+
 ## M395 补2：全量门 NO-GO —— 索引没跟着新内置重生成（缺陷 753）
 
 > **一句话**：M395 链判红 1 门 `eco_index` —— 不是产品问题，也不是判据错，是

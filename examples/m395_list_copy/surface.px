@@ -1,0 +1,25 @@
+# M395 · deep_copy 普贤语料冒烟（覆盖面台账的**消费面**只扫 .px）
+# 来历：M395 在 runtime 注册了新内置 deep_copy（native 413）⇒
+#   selfhost/check_native_coverage.py 判据③「新增未覆盖」判红（deep_copy 只出现在 .sh 装置里）。
+#   口径（M250 首跑定的）：语料若是运行期生成的/写在脚本里的，必须另提交一份 .px 冒烟。
+# 本文件不是新门，只是一个**合法侧的普贤源程序**：deep_copy 的每种入参各调一次。
+# 判定靠既有门 m395_list_copy（语义三轨）与 m250_onnx_tensor 的 [1] 台账，本文件不设自己的判据。
+
+var a1 = [1, 2, 3]
+var b1 = deep_copy(a1)
+b1[0] = 9
+print("S1 " + str(a1[0]) + " " + str(b1[0]))
+
+var a2 = [[1, 2], [3, [4, 5]]]
+var b2 = deep_copy(a2)
+b2[0][0] = 9
+b2[1][1][1] = 9
+print("S2 " + str(a2[0][0]) + " " + str(a2[1][1][1]) + " " + str(b2[0][0]))
+
+var d3 = {"b": [1], "a": 2}
+var e3 = deep_copy(d3)
+e3["b"][0] = 9
+e3["a"] = 7
+print("S3 " + str(d3["b"][0]) + " " + str(d3["a"]) + " " + str(e3["b"][0]))
+
+print("S4 " + str(deep_copy(5)) + " " + deep_copy("x") + " " + str(deep_copy(true)) + " " + str(deep_copy(null)))
