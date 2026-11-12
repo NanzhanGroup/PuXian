@@ -128,7 +128,11 @@ def parse_changelog(path):
                 continue
             s = decl_of_seg(seg)
             if s:
-                decl[key] = s
+                # ⚠️ 必须**并集**，不能后写的覆盖先写的：同一里程碑的「补N」小标题
+                # 在 RE_OWN_HEAD 下都塌成同一个 key（`补` 不在 group2 的字符集里），
+                # 覆盖语义会让「最新补N」吃掉「补1」的声明 —— M396 补7（缺陷 757）
+                # 就是这么被判成「757 未声明」（缺陷 758）。
+                decl.setdefault(key, set()).update(s)
                 decl.setdefault('M' + om.group(1), set()).update(s)
             else:
                 no_decl.add(key)
@@ -244,6 +248,9 @@ def selftest(root):
         f.write('## M175 · 两小项（第 57 轮 · 缺陷 153 `len(bytes)` + 缺陷 14 `os_popen`）\n')
         # 外来命名空间（M189 形状）
         f.write('## M189 · 边界族 + 第三方缺陷 018…030 全量判定（第 67 轮）\n')
+        # 同一里程碑多个「补N」标题 ⇒ 声明必须并集（缺陷 758：后者覆盖前者）
+        f.write('## M500 补7：收口（缺陷 601）\n')
+        f.write('## M500 补1：初版（缺陷 600）\n')
 
     def run(content):
         with open(src, 'w', encoding='utf-8') as f:
@@ -274,6 +281,10 @@ def selftest(root):
          '★ 半角 `)` 不得把声明段砍半（M175 形状）'),
         ('// M189（缺陷 211）\n', [('M189', 211, 'SKIP')],
          '★ 第三方缺陷 0NN…0NN 不得被当成本里程碑的编号'),
+        ('// M500（缺陷 600）\n', [('M500', 600, 'OK')],
+         '★ 补N 多标题：补1 的声明不得被补7 覆盖（缺陷 758）'),
+        ('// M500（缺陷 601）\n', [('M500', 601, 'OK')],
+         '★ 补N 多标题：补7 的声明同样有效'),
     ]
     bad = 0
     for content, want, name in cases:

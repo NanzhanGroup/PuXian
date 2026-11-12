@@ -31,9 +31,21 @@
 根因③ m219_link_flags：m396_dict_index/verify.sh:82 的尺寸探针 `gcc -I … -o …` 无链接 flag
       ⇒ 违反本仓 `-static` 口径（Red Hat 宿主默认非 PIE ⇒ 本机绿、CI 红）。
 修法  该行补 `-static`（探针只打印 sizeof，静态链接无副作用）。
+根因④（复跑 head=53c6916 才暴露）check_defect_refs 红：`runtime/runtime.c:6376` 引用
+      `M396（缺陷 757）`，判据却认为 M396 的声明集合只有 [756]。
+      病根不在源码 —— `RE_OWN_HEAD` 的命名空间字符集不含中文「补」⇒ `## M396 补7…` 与
+      `## M396 补1…` 塌成**同一个 key**，而旧代码 `decl[key] = s` 是**覆盖**语义 ⇒ 文件里更靠后的
+      「补1（缺陷 756）」把「补7（缺陷 757）」的声明吃掉了。
+      影响面：任何「最新补N 的声明 ≠ 最靠后补N 的声明」的里程碑，声明集合都会失真（可能假阳也可能假阴）。
+修法  selfhost/check_defect_refs.py 声明改**并集**（`decl.setdefault(key, set()).update(s)`），
+      补两例 fixture 锁死（补1 / 补7 各自声明都有效）。登记**缺陷 758**（判据自身瑕疵）。
+复验  python3 selfhost/check_defect_refs.py --self-test → 13 例 0 失败；
+      python3 selfhost/check_defect_refs.py → 判定 745 条 · 跳过 121 条 · 一致（rc=0）
 教训  ① 「新 helper 换了写法」也能红一票门：判据面是**语法形状**，不是语义；
       ② 门自己也要过 M219/gate_registry —— 新门落地必须同时进 ci.yml 且守链接口径；
       ③ 三条根因互相独立，只看「红 9 门」会误以为是同一个回归 ⇒ 必须逐门读日志定位。
+      ④ 判据自身的瑕疵同样能把全量门判红；局部复验只挑「改到的功能门」会漏掉 0s 元门
+        （本轮漏了 check_defect_refs）⇒ 复验选门 = 改到的门 + **全部元门**。
 ```
 
 ## M396 补1：dict 满容量时每次 set 既有键都白备两套数组（缺陷 756）
