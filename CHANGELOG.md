@@ -1,3 +1,24 @@
+## M395 补2：全量门 NO-GO —— 索引没跟着新内置重生成（缺陷 753）
+
+> **一句话**：M395 链判红 1 门 `eco_index` —— 不是产品问题，也不是判据错，是
+> 新增内置 `deep_copy` 后**漏了重生成 `docs/native_index.json`**（count 412 与实际 413 不符）。
+
+```
+实测  2026-11-12 18:24 全量门链 RED · green=270 red=1 listed=271
+      证据 /data/gatevm/m395-chain-20261112-164746.log
+      red/shard8_gate_eco_index.log：`Files /tmp/eco_before_b.json and docs/native_index.json differ`
+复现  cp docs/native_index.json /tmp/nb.json && bash tools/gen_native_table.sh
+      diff：`"count": 412` → `413`，并新增 `"deep_copy"`
+根因  M395 在 runtime/runtime.c:13438 注册了 px_native("deep_copy")，
+      但提交里没有随之重生成的 docs/native_index.json（索引是派生物，必须同提交落盘）。
+      判据本身没问题 —— 这条门存在的意义就是抓「源码与索引脱节」。
+修法  重跑 tools/gen_native_table.sh，把 docs/native_index.json 一并提交（无源码改动）。
+复验  eco_index 全链手工复跑（gen_ecosystem + gen_native_table + gen_native_map --update + 三处 diff）rc=0
+      ⇒ 「索引与 stdlib/runtime 一致（ecosystem + native + mod_map）」
+教训  新增 px_native / stdlib 导出这类「名册自然增长」的改动，
+      源与派生索引必须同一个提交；否则下一轮全量门必红（本轮就是这样烧掉 97 分钟）。
+```
+
 ## M395 补1：一个门把「内置总数」当判据（缺陷 752）
 
 > **一句话**：M395 首跑提交前门档判红 1 门 —— 不是产品问题，是 `m197_builtin_arity`

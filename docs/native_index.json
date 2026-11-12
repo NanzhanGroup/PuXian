@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 412,
+ "count": 413,
  "names": [
   "Err",
   "Ok",
@@ -68,6 +68,7 @@
   "ctx_clear",
   "ctx_get",
   "ctx_set",
+  "deep_copy",
   "dict",
   "dns_lookup",
   "dns_txt",
