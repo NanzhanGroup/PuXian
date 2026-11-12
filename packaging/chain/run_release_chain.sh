@@ -80,7 +80,12 @@ if [ -f "$AD/release_preflight.sh" ]; then
     say "version-position rc=$vp"
     [ "$vp" = 0 ] || { red "version-position-$vp" "m${MS}-verpos" "M${MS} 版本位不对（rc=$vp）"; exit 1; }
 fi
-if ! bash selfhost/rebake_bin.sh --check-all 2>&1 | grep -q '14/14 件与当前源码一致'; then
+# 重烘一致性：**不用 `... | grep -q`** —— 生产者被 grep -q 提前关闭会撞 SIGPIPE，
+# 配上 set -o pipefail 就是「明明一致却返回非 0」（本仓 pkg_pipe_grep 门盯的就是这个形态，
+# M393 首跑红之二）。改成先落文件再 grep。
+RB="$AD/.m${MS}-rebake-check.txt"
+bash selfhost/rebake_bin.sh --check-all > "$RB" 2>&1 || true
+if ! grep -q '14/14 件与当前源码一致' "$RB"; then
     red rebake-stale "m${MS}-rebake" "M${MS} 内嵌件未全部重烘（先 --rebake-all）"
     exit 3
 fi

@@ -243,8 +243,11 @@ STUB2
 fi
 
 if [ -z "$ROOT" ]; then
+    # 缺陷 300：门里不许出现**开发机绝对路径**（本机绿 / CI 红；分片档还会污染被测树）。
+    #   原兜底写死了 /data/code/puxian —— 本脚本入仓后被 check_gate_paths 当场抓到（M393 首跑红）。
+    #   改成按脚本位置推导；仓库根 = 脚本所在目录的上一级。
     ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || true)"
-    [ -n "$ROOT" ] || ROOT="/data/code/puxian"
+    [ -n "$ROOT" ] || ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 if [ "$GATES" = 1 ]; then gate_check "$ROOT"; exit $?; fi
 check "$ROOT"
