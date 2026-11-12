@@ -43,6 +43,15 @@ alert() { say "ALERT $1 $2"; [ -x "$NOTIFY_SH" ] && DY_NOTIFY_MUTATE=publish "$N
 
 SYSTEMD_RUN() {  # SYSTEMD_RUN <unit> <desc> <cmd...>
     local unit="$1" desc="$2"; shift 2
+    # ★同名单元可能还活着（上一轮 red-guard 报警后退出、postupgrade 还在等镜像）：
+    #   不先停/重置 ⇒ systemd-run 报 "unit already exists" 静默失败 ⇒ 新链没有伴生单元。
+    #   这就是 M392 的漏（「链重启但伴生单元没跟着重启」）的机制版成因，M393 重跑时实测踩到。
+    if [ -z "${SR_SYSTEMD_RUN:-}" ]; then
+        systemctl stop "$unit" >/dev/null 2>&1 || true
+        systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    else
+        "$SR_SYSTEMD_RUN" --pre-stop "$unit" >/dev/null 2>&1 || true
+    fi
     if [ -n "${SR_SYSTEMD_RUN:-}" ]; then "$SR_SYSTEMD_RUN" "$unit" "$@"; return $?; fi
     systemd-run --unit="$unit" --collect --slice="$SLICE" --description="$desc" "$@"
 }
@@ -111,8 +120,9 @@ if [ "$SELF" = 1 ]; then
     # 假 systemd-run：记录调用，并按 FAKE_ACTIVE 名单决定「单元是否起来」
     cat > "$T/sdrun" <<'STUB'
 #!/usr/bin/env bash
+if [ "${1:-}" = "--pre-stop" ]; then echo "prestop $2" >> "$STUB_CALLS"; exit 0; fi
 unit="$1"; shift
-echo "$unit" >> "$STUB_CALLS"
+echo "start $unit" >> "$STUB_CALLS"
 case " $FAKE_ACTIVE " in *" $unit "*) echo "$unit" >> "$STUB_UP" ;; esac
 exit 0
 STUB
@@ -145,8 +155,12 @@ STUB
     out="$(FAKE_ACTIVE="$FAKE_ACTIVE" bash "$0" --ms 991 --repo "$T/repo" 2>&1)"; rc=$?
     [ "$rc" = 0 ] && ok "P1 正控：三单元都在 ⇒ rc=0" || bad "P1 rc=$rc（应 0）"
     grep -q 'LAUNCH-VERDICT=OK units=3' <<<"$out" && ok "P1 输出 LAUNCH-VERDICT=OK units=3" || bad "P1 汇总行不对"
-    [ "$(wc -l < "$STUB_CALLS")" = 3 ] && ok "前提自证：systemd-run 真被调用 3 次" \
-                                       || bad "前提缺失：起单元调用数=$(wc -l < "$STUB_CALLS")（应 3）"
+    [ "$(grep -c '^start ' "$STUB_CALLS")" = 3 ] && ok "前提自证：systemd-run 真起了 3 个单元" \
+                                       || bad "前提缺失：起单元调用数=$(grep -c '^start ' "$STUB_CALLS")（应 3）"
+    # N5 负控：每个单元起前必须先 stop + reset-failed（否则同名单元存在 ⇒ systemd-run 静默失败）；
+    #   M392 的漏（链重启但伴生单元没跟着重启）就是这条不在时发生的。
+    [ "$(grep -c '^prestop ' "$STUB_CALLS")" = 3 ] && ok "N5 每个单元起前都做了 pre-stop（3 次）" \
+                                              || bad "N5 pre-stop 次数=$(grep -c '^prestop ' "$STUB_CALLS")（应 3）"
 
     # N1 负控：postupgrade 没起来 ⇒ rc=3 + 点名 + p1（这正是 M390/M392 的事故）
     : > "$T/alerts.txt"
