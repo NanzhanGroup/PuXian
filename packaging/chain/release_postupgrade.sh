@@ -96,14 +96,30 @@ run_pu() {
     if [ "$cur" = "$TARGET" ]; then say "③ 已是 $TARGET，无需升级"; return 0; fi
     if [ "$DRY" = "1" ]; then say "③ DRY-RUN 只报不动：cur=${cur:-none} want=$TARGET"; return 0; fi
 
-    say "③ dnf -y upgrade puxian（cur=${cur:-none} → $TARGET）"
-    if ! dnf -y upgrade puxian >> "$LOG" 2>&1; then
-        alert "m${MS}-postupgrade-fail" "M${MS} dnf upgrade 失败" "见 $LOG"
-        return 1
-    fi
+    # ③ dnf 升级 —— 两步都不能省（M393 首跑实测踩到的两个真 bug）
+    #   bug-a：镜像已到 v0.2.393（synced_at 10:40:22），但本机 dnf metadata 缓存是 09:45 的
+    #          ⇒ `dnf -y upgrade puxian` 输出 "Nothing to do!" ⇒ 升了个寂寞。
+    #          修：升级前 dnf -q makecache --refresh。
+    #   bug-b：只做一次升级、不核对结果就报成功/失败 ⇒ 缓存半新半旧时一次失败就 p1。
+    #          修：升级后自验 rpm 版本，不符则刷新缓存重试（最多 2 次），仍不符才 p1。
+    say "③ dnf makecache --refresh"
+    dnf -q makecache --refresh >> "$LOG" 2>&1 || say "③ makecache 返回非 0（继续，下面会自验结果）"
+    local try=1 nowv
+    while [ "$try" -le 2 ]; do
+        say "③ dnf -y upgrade puxian（第 $try 次，cur=${cur:-none} → $TARGET）"
+        dnf -y upgrade puxian >> "$LOG" 2>&1
+        rc_up=$?
+        nowv="$(rpm -q --qf '%{VERSION}\n' puxian 2>/dev/null | head -1)"
+        say "③ 第 $try 次 rc=$rc_up ⇒ rpm=${nowv:-none}"
+        [ "${nowv:-}" = "$TARGET" ] && break
+        [ "$try" -ge 2 ] && break
+        say "③ 未达目标 ⇒ 再刷一次 metadata 重试"
+        dnf -q makecache --refresh >> "$LOG" 2>&1 || true
+        try=$((try+1))
+    done
 
-    # ④ 自验（不是"dnf 说成功就算成功"）
-    local nowv binv
+    # ④ 自验（不是"dnf 说成功就算成功"）—— nowv 已在 ③ 的循环里 refresh 过
+    local binv
     nowv="$(rpm -q --qf '%{VERSION}\n' puxian 2>/dev/null | head -1)"
     binv="$(px --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     say "④ rpm=$nowv px=$binv want=$TARGET"
