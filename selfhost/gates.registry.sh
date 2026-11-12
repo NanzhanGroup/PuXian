@@ -2058,3 +2058,12 @@ run m394_release_watch bash examples/m394_release_watch/verify.sh
 #        · T6 标量原样 · N1 循环引用 R1002 且不挂死（timeout 判据）
 #        · N2 判据自证（浅拷贝版必红）· X1 三轨逐字节一致 · P 前提自证（v0.2.394 不认 deep_copy）。
 run m395_list_copy bash examples/m395_list_copy/verify.sh
+
+# ── m396_dict_index（M396 · PX-015 处置）────────────────────────────────────
+#   dict 桶索引：不可变快照 + 原子换指针；remove 发墓碑整体作废；重建因子 1.25。
+#   判据：T1–T5 语义不变（100 键命中/缺键/键序/items/删中段/删后重插/连续删除/深拷贝/小 dict）
+#        · X1 三轨逐字节一致 · S sizeof(LXObject) 必须仍为 192（侧表不许撑大对象）
+#        · P 形状判据 GET(1024)/GET(32) < 3.0（线性扫约 15x）
+#        · N1 **有牙负控** PX_DICT_NO_INDEX=1 时同一判据必红
+#        · P2 前提自证 off/on > 1.5x（没测到收益就是判据自欺）。
+run m396_dict_index bash examples/m396_dict_index/verify.sh
