@@ -1,0 +1,24 @@
+# M397 · bytes 运算符面（PX-021 收口）：`+` 拼接 / `in` 成员
+# 判据锚点：每行第一个 token 就是判据号（verify.sh 用整行比对）。
+def main():
+    let a = bytes("ab")
+    let b = bytes("cd")
+    let c = a + b
+    # T1：普通拼接 + **类型必须是 bytes**（不许静默变 string）
+    print("T1", bytes_to_str(c), type(c), len(c))
+    # T2：二进制安全 —— 内嵌 NUL 原样保留（长度按字节计，绝不用 strlen）
+    let z = bytes_concat(bytes("x\0y"), bytes("\0z"))
+    let z2 = z + bytes("!")
+    print("T2", len(z2), bytes_base64(z2))
+    # T3：空 bytes 边界（左空 / 右空 / 双空）
+    print("T3", len(a + bytes("")), len(bytes("") + b), type(bytes("") + bytes("")))
+    # T4：in —— bytes needle / string needle（同契约）/ 未命中
+    print("T4", bytes("bc") in c, "bc" in c, bytes("zz") in c)
+    # T5：空 needle 恒命中（含空 haystack）
+    print("T5", bytes("") in c, bytes("") in bytes(""))
+    # T6：内嵌 NUL 的 needle 也能命中（按字节长度取边界，不截断）
+    print("T6", bytes("\0z") in z, bytes("\0") in z)
+    # T7：回归锚点 —— `==` / len / 下标 / 切片 本就不变，加运算符不许碰它们
+    print("T7", a == bytes("ab"), len(c), c[0], bytes_base64(c[0:2]))
+    # T8：bytes_concat 多参版不受影响（与 `+` 同结果）
+    print("T8", bytes_base64(bytes_concat(a, b, bytes("ef"))), bytes_base64(c + bytes("ef")))

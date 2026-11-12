@@ -726,6 +726,14 @@ def i_membership(l, r, opname, pos):
         if i_type_name(l) != "string":
             return Err(i_r1002(opname + " 运算符左操作数需要 string，实际是 " + i_type_name(l), pos))
         hit = contains(r, l)
+    elif tr == "bytes":
+        # M397（PX-021 · 缺陷 760）：bytes 的 `in` = 二进制安全子串判定。
+        #   与编译轨 px_membership_probe 的 PX_BYTES 分支同契约：needle 收 string 或 bytes
+        #   （同一内存表示；str→bytes 无损），按字节长度取边界（内嵌 NUL 不截断）。
+        let tl_b = i_type_name(l)
+        if tl_b != "string" and tl_b != "bytes":
+            return Err(i_r1002(opname + " 运算符左操作数需要 string 或 bytes，实际是 " + tl_b, pos))
+        hit = bytes_find(r, l) != null
     elif tr == "list" or tr == "tuple" or tr == "generator":
         var src = r
         if tr == "generator":
@@ -753,6 +761,11 @@ def i_bin_add(l, r, pos):
         return Ok(l + r)
     if tl == "string" and tr == "string":
         return Ok(l + r)
+    # M397（PX-021 · 缺陷 760）：`bytes + bytes` ⇒ bytes（与编译轨 px_add 同码同文）
+    #   转发 native `bytes_concat`：内嵌 NUL 原样、长度按字节计 —— 绝不先转 string
+    #   （转 string 会静默改变类型且对二进制数据有损）。
+    if tl == "bytes" and tr == "bytes":
+        return Ok(bytes_concat(l, r))
     if tl == "list" and tr == "list":
         var out = []
         var i = 0

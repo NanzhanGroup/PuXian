@@ -333,6 +333,9 @@ examples/m390_px_semantics/surface.px src=e5274d6866afc44c rc=0 out=24b5aa699350
 examples/m395_list_copy/surface.px src=9524366870ab2263 rc=0 out=6bc3166f333118cd28fe1390aad7f32a err=e3b0c44298fc1c14
 examples/m396_dict_index/main.px src=89de81ceee81e2df rc=0 out=36886978f5e0db65f8d685ad9bd0218f err=e3b0c44298fc1c14
 examples/m396_dict_index/shape.px src=14c3e37f2572ac86 rc=0 out=e8ea75f78ab061873a55b9c45ee3387f err=e3b0c44298fc1c14
+examples/m397_bytes_ops/main.px src=0b1bc629bfa64b28 rc=0 out=6c182028f84b2597b1bf97cf1b3aa1a8 err=e3b0c44298fc1c14
+examples/m397_bytes_ops/neg_add.px src=0ebbe1ad6a62d644 rc=0 out=3f81270404813149bfafeff491ea8ba4 err=e3b0c44298fc1c14
+examples/m397_bytes_ops/neg_in.px src=6fb5ddec0f96363f rc=0 out=49061896287e02af3f05fb32ed516d78 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -515,7 +518,7 @@ selfhost/cases/s12_cffi.px src=064f9a659a8864c4 rc=0 out=2438087d32d2fa1d4c7425d
 selfhost/cases/s13_langsugar.px src=7ee402ab6bc82713 rc=0 out=8ef4c4ccabdfd22dba02db6863bbbb6d err=e3b0c44298fc1c14
 selfhost/cases/s14_semver.px src=9dd54216d35d6384 rc=0 out=583166bc49e1444989ea91572262308a err=e3b0c44298fc1c14
 selfhost/cases/s15_multiline.px src=cff70b7cba09d2ed rc=0 out=99f3dd3cf3cfc641e462dd5021300211 err=e3b0c44298fc1c14
-selfhost/cases/v01_value.px src=3b49797916ac6cb9 rc=0 out=159be666009d388e7444908c12e2fe35 err=e3b0c44298fc1c14
+selfhost/cases/v01_value.px src=3b49797916ac6cb9 rc=0 out=735a44dc47affabd4651dc63f9a35963 err=e3b0c44298fc1c14
 selfhost/cases/v02_env.px src=4a30676fd261bac7 rc=0 out=d828c7b7a6bc2da4771aed5c092d2f0d err=e3b0c44298fc1c14
 selfhost/cases/v03_module.px src=4ef4dccdadae350f rc=0 out=b2bc458f011f700747c92b135395c725 err=e3b0c44298fc1c14
 selfhost/cases/v04_module_state.px src=9daaaad1897c42f9 rc=0 out=cbc41c9e2bfd91ba378ff1d3ac2ed6ea err=e3b0c44298fc1c14

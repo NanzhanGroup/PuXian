@@ -2067,3 +2067,13 @@ run m395_list_copy bash examples/m395_list_copy/verify.sh
 #        · N1 **有牙负控** PX_DICT_NO_INDEX=1 时同一判据必红
 #        · P2 前提自证 off/on > 1.5x（没测到收益就是判据自欺）。
 run m396_dict_index bash examples/m396_dict_index/verify.sh
+
+# ── m397_bytes_ops（M397 · PX-021 处置 · 缺陷 760）─────────────────────
+#   bytes 运算符面：`bytes + bytes` ⇒ bytes（二进制安全，内嵌 NUL 原样）· `x in bytes` ⇒ 子串判定
+#   （needle 收 string 或 bytes，与 bytes_find 同契约）。
+#   判据：T1–T8 正向（拼接/类型/NUL/空边界/两种 needle/NUL needle/回归锚点/多参版）
+#        · X1 三轨逐字节一致
+#        · N1 负控 `bytes + string` 必须 R1002（防「随手加隐式转换」⇒ 类型静默漂移）
+#        · N2 负控 `1 in bytes` 必须 R1002 且文案与实际接受的类型集合一致
+#        · P 前提自证：v0.2.396 的 bootstrap/pxi（内嵌旧 runtime + 旧解释器）必须拒绝。
+run m397_bytes_ops bash examples/m397_bytes_ops/verify.sh

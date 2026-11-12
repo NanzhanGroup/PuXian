@@ -141,6 +141,11 @@ def v_arith(op, a, b):
             return {"ok": true, "v": a + b}
         if ta == "string" and tb == "string":
             return {"ok": true, "v": a + b}
+        # M397（PX-021 · 缺陷 760）：bytes + bytes ⇒ bytes。
+        #   ⚠️ 本函数目前**无调用点**（interp 的活路径是 ival.px 的 i_bin_add）——
+        #      这里同步修是为了不留一份“说法不一样”的参考实现（下次谁照着它写就会分叉）。
+        if ta == "bytes" and tb == "bytes":
+            return {"ok": true, "v": bytes_concat(a, b)}
         if ta == "list" and tb == "list":
             let out = []
             for item in a:

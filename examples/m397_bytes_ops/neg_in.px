@@ -1,0 +1,5 @@
+# M397 负控 N2：bytes 集合的 `in` 只收 string / bytes；给 int 必须响亮，
+#   且文案要与**实际接受的类型集合**一致（M228「词条归属」纪律：
+#   措辞写"需要 string"却接受 bytes ＝ 说错话）。
+def main():
+    print(1 in bytes("ab"))

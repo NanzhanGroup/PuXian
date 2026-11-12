@@ -531,7 +531,7 @@ print("upper=" + to_upper("px"))
 `json_parse(s)` → dict/list/标量 · `json_stringify(v)` → str · `json_path(d, expr)` / `json_path_set` · `base64_encode/decode` · `int_to_hex/hex_to_int` · `bytes_to_hex/hex_to_bytes`
 
 ### bytes 二进制
-`bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_to_dec`（**精确十进制，≤16 字节**，见事实 227）`bytes_base64` `bytes_find` · `bit_count` `bit_length`
+`bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_to_dec`（**精确十进制，≤16 字节**，见事实 227）`bytes_base64` `bytes_find` · **运算符（M397 起）：`a + b` 拼接 → bytes · `x in b` 子串判定**（`bytes + string` **不隐式转换**，响亮 R1002；见事实 267）· `bit_count` `bit_length`
 
 ### 时间 / 定时 / 调度
 `now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）**`now_ns()`**（M141：**墙钟** Unix **纳秒** = `sec*1e9+nsec`；⚠️ `now_ms`/`now_us` 是 **CLOCK_MONOTONIC**（自 boot 起算），**`now_ns` 才是墙钟** —— 移植 Go 的 `time.Now().UnixNano()` / `Format("...000000000")` 必须用它，拿 `now_us()*1000` 冒充得到的是完全不同的值与数量级）**`sleep(ms)`**（⚠️ M128 实测更正：参数是**毫秒**不是秒！runtime `bi_sleep` 按 ms 换算；`sleep(1)`=1ms、`sleep(1500)`=1500ms。移植 Go `time.Sleep(30*time.Second)` 若写成 `sleep(30)` 会少睡 1000 倍。**M195 起接受小数**：`sleep(0.5)` = **真的睡 0.5 毫秒**（纳秒精度；修前走 `int_val` 截断成 0 = 不睡））`sleep_us`（微秒） `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
@@ -3268,6 +3268,24 @@ set_timeout(fn (): print("once after 2s"), 2000)
        「两次 send 合成一段」（那是内核行为）⇒ 用裸 socket 才做得出**确定性**夹具。
        判据见 §7 · 门 `examples/m288_ws_handshake_residual/`（4 模式 × 三轨 +
        服务端两侧 + 负载档 20 次 + 负控 3 道 · 覆盖边界 5 条）。
+
+267. **bytes 的两个运算符：`a + b` 拼接、`x in b` 子串（第 200 轮 · M397 收口第三方 PX-021 · 缺陷 760）**：
+     **一句话**：以前只能写 `bytes_concat(a, b)` / `bytes_find(b, x) != null`，现在运算符面补齐了 ——
+     但**类型绝不漂移**：`bytes + bytes` 得到的是 **bytes**（不是 string）。
+     ```px
+     let c = bytes("ab") + bytes("cd")      # bytes，len=4，内嵌 NUL 原样保留
+     print(type(c))                        # bytes（不是 string！）
+     print(bytes("bc") in c)               # true（二进制安全子串）
+     print("bc" in c)                      # true —— bytes 的 in 也收 string 作为 needle
+     print(bytes("a") + "b")               # R1002 无法相加: bytes + string（**不隐式转换**）
+     ```
+     · **为什么 `bytes + string` 故意报错**：`str→bytes` 无损、`bytes→str` 有损（非 UTF-8 时替换）
+       ⇒ 谁转谁说不清 ⇒ 让写代码的人自己决定（写 `bytes_concat(a, bytes(s))` 或 `bytes_to_str`）。
+       静默转换最坏的一面是**类型漂移**：`type()` 变了、`==` 语义跟着变，而代码看起来没变。
+     · **空串边界**：`bytes("") + bytes("")`、`bytes("") in c`、`bytes("") in bytes("")` 全部成立
+       （空 needle 恒命中，与 `str` 的 `"" in s` 同口径）。
+     · **`bytes_get`/下标仍是 int**：`c[0]` = 97（不改）；切片 `c[0:2]` 得到 bytes。
+     · 判据见 `examples/m397_bytes_ops/`（三轨逐字节 + 两条负控 + 前提自证）。
 
 ---
 

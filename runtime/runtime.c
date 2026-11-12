@@ -4075,6 +4075,31 @@ static LXValue px_str_concat2(const char* sa, int la, const char* sb, int lb) {
     return v;
 }
 
+// ═══ M397（PX-021 · 缺陷 760）：`bytes + bytes` = **二进制安全**拼接 ═══
+//   为什么必须**新增**而不是复用 px_str_concat2：后者产出 PX_STR ⇒
+//   `b1 + b2` 会**静默变成字符串**（类型变了、`type()` 变了、`==` 语义也变了）。
+//   静默类型漂移是比「报错」更坏的一类（三轨一致地错 ⇒ 每个用户都以为语言如此）。
+//   与 px_str_concat2 **同形**：单次分配、data 紧随 LXObject、一次 gc_register。
+//   差别只有三处：type=PX_BYTES · is_mmap=0（data 内联，不是 mmap 映射区）·
+//   rune 表恒不建（M106-S2：bytes 按字节，不做 rune 索引）。
+//   ⚠️ 内嵌 NUL 原样保留 —— 长度按 as.str.len 计，绝不用 strlen。
+static LXValue px_bytes_concat2(const char* da, int la, const char* db, int lb) {
+    int n = la + lb;
+    if (n <= 0) return px_bytes_len("", 0);
+    LXObject* o = xmalloc(sizeof(LXObject) + (size_t)n + 1);
+    o->type = PX_BYTES;
+    o->is_mmap = 0;
+    char* d = (char*)o + sizeof(LXObject);
+    if (la > 0) memcpy(d, da, (size_t)la);
+    if (lb > 0) memcpy(d + la, db, (size_t)lb);
+    d[n] = 0;
+    o->as.str.data = d; o->as.str.len = n;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;
+    LXValue v; v.type = PX_BYTES; v.as.obj = o;
+    gc_register(o, sizeof(LXObject) + (size_t)n + 1);
+    return v;
+}
+
 LXValue px_str(const char* s) { return px_str_len(s, (int)strlen(s)); }
 // M270（同上）：**单次分配**的重复串（`str * int`）。
 //   原路径：xmalloc 中间缓冲 → n 次 memcpy → px_str_len（再分配 + 再整串拷贝）→ xfree
@@ -5380,6 +5405,13 @@ LXValue px_add(LXValue a, LXValue b) {
         //   其它仍走 px_str_len 的站点照旧）。字符串 `+=` 的 O(n²) 复杂度**未变**（见 §七）。
         return px_str_concat2(a.as.obj->as.str.data, a.as.obj->as.str.len,
                               b.as.obj->as.str.data, b.as.obj->as.str.len);
+    }
+    // M397（PX-021 · 缺陷 760）：bytes + bytes ⇒ bytes（二进制安全；内嵌 NUL 原样）
+    //   刻意**不**接受 bytes + string：那需要一次隐式转换，两边都能转（str→bytes
+    //   无损、bytes→str 有损）⇒ 谁转谁说不清 ⇒ 响亮报错，让用户自己写 bytes_concat。
+    if (a.type == PX_BYTES && b.type == PX_BYTES) {
+        return px_bytes_concat2(a.as.obj->as.str.data, a.as.obj->as.str.len,
+                                b.as.obj->as.str.data, b.as.obj->as.str.len);
     }
     if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i + b.as.i);
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
@@ -6742,6 +6774,8 @@ enum {
     PX_MEM_FOUND     = 1,   // 是成员
     PX_MEM_ERR_COLL  = 2,   // 集合（右操作数 / 接收者）类型不支持
     PX_MEM_ERR_ELEM  = 3,   // 元素（左操作数 / 实参）类型不符：str/dict 集合只收 string
+    PX_MEM_ERR_ELEM_BYTES = 4,  // M397：bytes 集合（haystack）收 string 或 bytes —— 措辞单独一档
+                                //   （沿用 M228 的「词条归属」纪律：措辞要与实际接受的类型集合一致）
 };
 static int px_membership_probe(LXValue coll, LXValue val);
 
@@ -8532,6 +8566,19 @@ static int px_membership_probe(LXValue coll, LXValue val) {
         return px_memmem(h->as.str.data, h->as.str.len, n->as.str.data, n->as.str.len)
                    ? PX_MEM_FOUND : PX_MEM_NOT_FOUND;
     }
+    if (coll.type == PX_BYTES) {
+        // M397（PX-021 · 缺陷 760）：bytes 的 `in` = **二进制安全子串**判定。
+        //   契约与 `bytes_find(b, sub[, start])` 对齐（同一个 bdata/blen 通道）：
+        //   needle 收 **string 或 bytes** —— 二者在内存里本就是同一表示（data+len），
+        //   而“str→bytes 无损、bytes→str 有损” ⇒ 只在这个方向放宽是安全的。
+        //   按 as.str.len 取边界（M83-S1 同一口径），内嵌 NUL 不截断。
+        if ((val.type != PX_BYTES && val.type != PX_STR) || !val.as.obj)
+            return PX_MEM_ERR_ELEM_BYTES;
+        LXObject* h = coll.as.obj;
+        LXObject* n = val.as.obj;
+        return px_memmem(h->as.str.data, h->as.str.len, n->as.str.data, n->as.str.len)
+                   ? PX_MEM_FOUND : PX_MEM_NOT_FOUND;
+    }
     if (coll.type == PX_LIST) {
         LXObject* o = coll.as.obj;
         for (int i = 0; i < o->as.list.len; i++)
@@ -8568,6 +8615,8 @@ static LXValue px_membership_op(LXValue a, LXValue b, const char* opname, int ne
     int r = px_membership_probe(b, a);
     if (r == PX_MEM_ERR_ELEM)
         px_error("R1002: %s 运算符左操作数需要 string，实际是 %s", opname, px_type_name(a));
+    if (r == PX_MEM_ERR_ELEM_BYTES)
+        px_error("R1002: %s 运算符左操作数需要 string 或 bytes，实际是 %s", opname, px_type_name(a));
     if (r == PX_MEM_ERR_COLL)
         px_error("R1002: %s 运算符右操作数不支持类型 %s", opname, px_type_name(b));
     return px_bool(negate ? (r != PX_MEM_FOUND) : (r == PX_MEM_FOUND));
@@ -8583,6 +8632,8 @@ static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
     int r = px_membership_probe(args[0], args[1]);
     if (r == PX_MEM_ERR_ELEM)
         px_error("R1002: contains 参数 2 需要 string，实际是 %s", px_type_name(args[1]));
+    if (r == PX_MEM_ERR_ELEM_BYTES)
+        px_error("R1002: contains 参数 2 需要 string 或 bytes，实际是 %s", px_type_name(args[1]));
     if (r == PX_MEM_ERR_COLL)
         px_error("R1002: contains 不支持类型 %s", px_type_name(args[0]));
     return px_bool(r == PX_MEM_FOUND);

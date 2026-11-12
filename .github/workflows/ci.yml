@@ -1817,6 +1817,14 @@ jobs:
           set +e
           bash examples/m396_dict_index/verify.sh > /tmp/v_didx.log 2>&1 || { echo "❌ m396_dict_index 门失败（dict 索引 / 满容量 set 回归）"; tail -40 /tmp/v_didx.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m396_dict_index（三轨一致 / 尺寸不被撑大 / 索引有牙）PASS"
+      - name: m397_bytes_ops（bytes 运算符面 · M397 · PX-021 · 缺陷 760）
+        # 判据：T1–T8 正向 · X1 三轨逐字节一致 · N1/N2 负控（bytes+string / 1 in bytes 必须 R1002）
+        #   · P 前提自证（v0.2.396 的 pxi 必须拒绝）。负控是**防复发**：阻止后人加隐式转换。
+        if: always()
+        run: |
+          set +e
+          bash examples/m397_bytes_ops/verify.sh > /tmp/v_bops.log 2>&1 || { echo "❌ m397_bytes_ops 门失败（bytes 运算符）"; tail -40 /tmp/v_bops.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m397_bytes_ops（+ 拼接 / in 子串 三轨一致 + 负控）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

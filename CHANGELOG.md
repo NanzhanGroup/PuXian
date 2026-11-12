@@ -1,3 +1,102 @@
+## M397：bytes 运算符面收口（PX-021 · 缺陷 760）
+
+> **一句话**：`bytes + bytes` ⇒ **bytes**（二进制安全拼接，内嵌 NUL 原样、长度按字节计）；
+> `x in bytes` ⇒ **二进制安全子串**判定（needle 收 `string` 或 `bytes`，契约与 `bytes_find` 对齐）。
+> **刻意不做** `bytes + string` 的隐式转换 —— 那会让结果静默变 `string`，类型与 `==` 语义一起漂移。
+
+```
+令源   用户 2026-11-13 07:03「通知断了的问题无需修复，也不用等待发布镜像同步，你开始 M397」
+基线   412d459（M396 已 tag v0.2.396 / 已推 origin；镜像未同步、本机仍 0.2.395 —— 用户明确不等待）
+选型   在剩余清单里挑「有现成三轨实现 + 边界清晰 + 可判」的一条：
+       PX-021 bytes 运算符。与 M395（拷贝）/ M396（dict 索引）同族（数据类型面），工具链热着。
+       *不*选的两条及理由：缺陷 759（m128 C7 偶发）单跑/加压均不复现，追它大概率是空轮；
+       缺陷 757（gcroot 派生器 loose 档收紧）会缩小 GC 触发集，属内存安全面，需独立 A/B 里程碑。
+```
+
+### 一 改了什么（三轨同轮，语义只有一份写法）
+
+```
+runtime/runtime.c  px_bytes_concat2()         新 helper：单次分配 + data 紧随 LXObject（与 px_str_concat2 同形）
+                   px_add()                   + `bytes + bytes` 分支（**不**复用 px_str_concat2：那会产出 PX_STR）
+                   px_membership_probe()      + PX_BYTES 分支（needle 收 string/bytes，按 as.str.len 取边界）
+                   PX_MEM_ERR_ELEM_BYTES      新枚举值：措辞单独一档（M228「词条归属」：措辞要与实际接受的类型集合一致）
+                   px_membership_op / bi_contains  + 该档的文案：「需要 string 或 bytes」
+selfhost/ival.px   i_bin_add / i_membership   解释轨两处（转发 native bytes_concat / bytes_find，同码同文）
+selfhost/value.px  v_arith                    ⚠️ 该函数当前**无调用点**；同步修是为了不留一份「说法不一样」的
+                                              参考实现（谁照着它写就会分叉）。门覆盖的是活路径 i_bin_add。
+docs/spec.md §2.6  算术行 + bytes 子句；成员行 + bytes 集合与 needle 集合
+docs/PUXIAN_CHEATSHEET.md  事实 267（含三种写法的可跑示例）+ §2 native 表 bytes 行
+```
+
+为什么 `bytes + string` 必须响亮而不是隐式转：`str→bytes` 无损、`bytes→str` 有损（非 UTF-8 要替换）。
+方向不对称 ⇒「谁转谁」说不清 ⇒ 让写代码的人自己写 `bytes_concat(a, bytes(s))`。
+静默转换最坏的一面不是值错，是**类型漂移**：`type()` 变了、`==` 语义跟着变，而代码一行没动。
+
+### 二 判据（门 m397_bytes_ops · 首跑 17/17 绿）
+
+```
+T1 拼接 + 类型必须是 bytes        T2 内嵌 NUL：len=6 / base64=eAB5AHoh
+T3 空边界（左空/右空/双空）        T4 in：bytes needle / string needle / 未命中
+T5 空 needle 恒命中（含空 haystack）  T6 内嵌 NUL 的 needle 也命中
+T7 回归锚点：== / len / 下标(int 97) / 切片(base64)  —— 加运算符不许碰它们
+T8 bytes_concat 多参版与 `+` 同结果
+X1 三轨（interp / vm / c）逐字节一致（8 行）
+N1 负控：`bytes + string` 三轨均 R1002 且文案含「无法相加: bytes + string」
+N2 负控：`1 in bytes` 三轨均 R1002 且文案含「需要 string 或 bytes」
+P  前提自证：v0.2.396 的 bootstrap/pxi（内嵌旧 runtime + 旧解释器）跑同一份 main.px **必须失败**
+   —— 实测报「无法相加: bytes + bytes」⇒ 本门测到的确实是新东西
+```
+
+N1 是**防复发**判据而不是回归判据：它存在的唯一理由是阻止后人在 N1 上「顺手加个隐式转换」。
+N1/N2 的文案判据同理 —— 判据要贴契约（接受哪些类型），不是贴「有没有报错」。
+
+### 三 诚实边界
+
+```
+证的  ① 三轨（px run / px build / px build --c）在这 8 行正向语义上逐字节一致；
+      ② 两条负控在三轨上都响亮，且文案与契约一致；
+      ③ v0.2.396 的运行时确实不认这两个运算符（P 判据，实测输出已记在门日志）；
+      ④ 本机改前 `bytes("ab") + bytes("cd")` 报 R1002、改后得 bytes 4 字节 —— 同一台机、同一份源码。
+推的  「生态库写 crypto/协议代码时撞到的就是它」—— 依据是 PX-021 的原文措辞与 CHANGELOG:852 的
+      本轮排期记录，**我没有去 registry-px 侧统计实际调用点**。
+没做  bytes 的其它运算符（`*` 重复 / `<` 比较 / `-`）**没有**新增。理由：`le=` 实测已可用（bytes 走
+      str 的比较路径），而 `*` / `-` 没有第三方提出、也没有语义共识（`bytes * 3` 是重复还是别的？）
+      ⇒ 不凭「补齐看起来整齐」扩面。要加请单独立项并给契约。
+```
+
+### 四 顺带记录（不修，写下来免得下次重踩）
+
+```
+· 缺陷 759（m128 C7 偶发）仍开着：整门复跑 4 次 + 单用例加压 60 次均不复现，只在真实全量门的
+  多门并发下出现过一次。追它需要 cid 级日志（两个 TLS 变量 t_coro_errored / t_isolate_errored 的边界），
+  属独立里程碑。本轮**不碰**。
+· 缺陷 757（gcroot_derive loose 档过近似）仍开着：它这轮没咬人（px_bytes_concat2 刻意不用
+  `while (*s)` 形状，改用定长 for + memcpy），但机制没变 —— 下一个长成 `(*x` 形状的新函数照样会假红。
+· m187_registry_import 在 M396 的提交前门里用掉 747/900s（83% 配额）：再被别的任务占一点就会因
+  **超时**假红。属门档参数问题，不是产品问题，登记待办。
+· **缺陷 761（新）· 发射冻结门的「源码指纹」不含 import 闭包**：本轮的 `--freeze` 是被
+  `selfhost/cases/v01_value.px` 触发的，而**它的源码一个字节都没动** —— 它 `import "../value.px"`，
+  我改了 value.px（+6 行分支）⇒ 编译单元内容变了 ⇒ `--emit-c` 产物变 ⇒ 门按「src 未变 + out 变」
+  判成**类别 B（发射行为回归，必须查）**。
+  实测取证（同一份 v01_value.px，只换 value.px 新旧）：
+  `old 3559 行 / new 3580 行 · diff 2117 行`，差异只有两类 —— 新增分支的代码与
+  `PXOP_SRCLINE` 行号平移（144→147 等），**没有一条是发射逻辑变化**。
+  ⇒ 判据缺陷：`src=$(sha256sum "$f")` 只哈希**被编译文件本身**。改任何被 import 的公共模块
+  （value.px / ival.px / stdlib/*）都会把它所有 import 方误报成 B。
+  这是**狼来了**式风险：B 档被判据写着「必须查」，误报多了人就会习惯性 `--freeze`，
+  真回归混在里面也看不出。
+  本轮**不改这个门**（改它要动闭包哈希 + 整份基准重定基，属独立一轮）；本轮按 A 类处置：
+  `--freeze` 并在提交信息里写明「为什么发射会变」。修法已写进交接单。
+```
+
+### 五 数字
+
+```
+改动  产品源码 3 文件（runtime.c / ival.px / value.px）· 文档 2 件 · 门 1 件（4 文件）· 注册 2 处
+判据  17 条（正向 8 + 三轨 2 + 负控 6 + 前提自证 1）· 首跑 17/17
+版本  0.2.397（7 个锚点一次改齐：compiler.px · interp.px · pxfmt.px · pxmcp.px ×2 · pxlsp.px · tools/px）
+```
+
 ## M396 补8：全量链 1 红定性（m128 C7 偶发 · 缺陷 759 · 不改产品代码）
 
 > **一句话**：head=d321e80 的全量链判 RED 1 门 —— `m128_unlock_grow` 的 **C7（dict 不变量）**。
