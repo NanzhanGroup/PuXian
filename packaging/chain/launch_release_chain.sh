@@ -41,17 +41,20 @@ done
 say() { printf '[%s] %s\n' "$(date +%F' '%T)" "$*" >> "$LOG" 2>/dev/null || true; }
 alert() { say "ALERT $1 $2"; [ -x "$NOTIFY_SH" ] && DY_NOTIFY_MUTATE=publish "$NOTIFY_SH" p1 "$1" "$2" "$3" >/dev/null 2>&1 || true; }
 
+PRE_STOP() {  # PRE_STOP <unit>：停掉同名旧单元 + 清 failed（否则 systemd-run 报 unit already exists）
+    if [ -z "${SR_SYSTEMD_RUN:-}" ]; then
+        systemctl stop "$1" >/dev/null 2>&1 || true
+        systemctl reset-failed "$1" >/dev/null 2>&1 || true
+    else
+        "$SR_SYSTEMD_RUN" --pre-stop "$1" >/dev/null 2>&1 || true
+    fi
+}
 SYSTEMD_RUN() {  # SYSTEMD_RUN <unit> <desc> <cmd...>
     local unit="$1" desc="$2"; shift 2
     # ★同名单元可能还活着（上一轮 red-guard 报警后退出、postupgrade 还在等镜像）：
     #   不先停/重置 ⇒ systemd-run 报 "unit already exists" 静默失败 ⇒ 新链没有伴生单元。
     #   这就是 M392 的漏（「链重启但伴生单元没跟着重启」）的机制版成因，M393 重跑时实测踩到。
-    if [ -z "${SR_SYSTEMD_RUN:-}" ]; then
-        systemctl stop "$unit" >/dev/null 2>&1 || true
-        systemctl reset-failed "$unit" >/dev/null 2>&1 || true
-    else
-        "$SR_SYSTEMD_RUN" --pre-stop "$unit" >/dev/null 2>&1 || true
-    fi
+    PRE_STOP "$unit"
     if [ -n "${SR_SYSTEMD_RUN:-}" ]; then "$SR_SYSTEMD_RUN" "$unit" "$@"; return $?; fi
     systemd-run --unit="$unit" --collect --slice="$SLICE" --description="$desc" "$@"
 }
@@ -90,6 +93,15 @@ launch() {
         echo "STALE-STAMP-REMOVED $(head -c 80 "$STAMP" 2>/dev/null)"
         rm -f "$STAMP"
     fi
+
+    # ①b ★先把上一轮的判红守门请下场，再动主链（M395 缺陷 755 的止血点）：
+    #   停主链要等满 TimeoutStopSec —— 分片里的 unshare/bash 不吃 SIGTERM，实测 19:14:12 停、
+    #   19:15:42 才 SIGKILL，整整 90s。这 90s 里 is-active 输出 deactivating，
+    #   上一轮 red-guard 的两次 60s 轮询（19:14:35 / 19:15:35）正好落在窗口里 ⇒ 假报
+    #   「主链单元消失且无裁决」p1（19:15:42 链就起来了）。
+    #   守门先退场，窗口里就没人看；new guard 在主链起来之后才起（③），看不到停链过程。
+    PRE_STOP "$U_RED"
+    say "pre-stop $U_RED（防旧守门看到停链窗口）"
 
     # ② 主链（前置自证 → 全量分片门 → STAMP → publish_on_green）
     SYSTEMD_RUN "$U_MAIN" "M${MS} full gate chain" \
@@ -170,8 +182,16 @@ STUB
                                        || bad "前提缺失：起单元调用数=$(grep -c '^start ' "$STUB_CALLS")（应 3）"
     # N5 负控：每个单元起前必须先 stop + reset-failed（否则同名单元存在 ⇒ systemd-run 静默失败）；
     #   M392 的漏（链重启但伴生单元没跟着重启）就是这条不在时发生的。
-    [ "$(grep -c '^prestop ' "$STUB_CALLS")" = 3 ] && ok "N5 每个单元起前都做了 pre-stop（3 次）" \
-                                              || bad "N5 pre-stop 次数=$(grep -c '^prestop ' "$STUB_CALLS")（应 3）"
+    #   M395 缺陷 755 起：red-guard 还要被**提前**停一次（在动主链之前），故总 prestop = 4。
+    [ "$(grep -c '^prestop ' "$STUB_CALLS")" = 4 ] && ok "N5 每个单元起前都做了 pre-stop（4 次，含主链前提前停守门）" \
+                                              || bad "N5 pre-stop 次数=$(grep -c '^prestop ' "$STUB_CALLS")（应 4）"
+    # N6 负控（缺陷 755）：第一条 prestop 必须是 red-guard ⇒ 证明「先请守门下场，再动主链」
+    [ "$(grep -m1 '^prestop ' "$STUB_CALLS" | awk '{print $2}')" = "m991-red-guard" ] \
+        && ok "N6 顺序正确：先停 red-guard，再动主链" || bad "N6 顺序错：$(grep -m1 '^prestop ' "$STUB_CALLS")"
+    # N6a 反向自证：主链的 start 必须晚于 red-guard 的 prestop
+    [ "$(grep -n '^prestop m991-red-guard' "$STUB_CALLS" | head -1 | cut -d: -f1)" -lt \
+      "$(grep -n '^start m991-chain' "$STUB_CALLS" | head -1 | cut -d: -f1)" ] \
+        && ok "N6a 主链 start 在 red-guard prestop 之后" || bad "N6a 顺序不对"
 
     # N1 负控：postupgrade 没起来 ⇒ rc=3 + 点名 + p1（这正是 M390/M392 的事故）
     : > "$T/alerts.txt"

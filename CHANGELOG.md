@@ -1,3 +1,23 @@
+## M395 补4：观测量缺「过渡态」⇒ 重起链期间假报 p1（缺陷 755）
+
+> **一句话**：M395 重起链时 red-guard 连报两次「主链消失」并 p1 叫醒，实际 7 秒后新链就起来了 ——
+> `systemctl is-active` 在停机窗口返回 `deactivating`，守门只认 `active`，把过渡当消失。
+
+```
+实测  2026-11-12 19:14:12 launch 主动重起（取 459b49f）→ 19:15:42 final-sigterm timeout 才停完
+      red-guard：19:14:35 非 active（第1轮）· 19:15:35 非 active（第2轮）+ ALERT chain-vanished
+      19:15:42 新守门启动 —— 报警后 7 秒链就活了
+根因  ① 分片里的 unshare/bash 不吃 SIGTERM ⇒ stop 等满 TimeoutStopSec（90s），期间 is-active=deactivating
+      ② launch 的停/起顺序是「主链 → red-guard」，旧守门看得见主链的整个停机窗口
+修法  release_red_guard.sh：unit_state() 三态（active / activating·deactivating·reloading / inactive·failed），
+      过渡态或 launch --ms N 在跑 ⇒ 不计消失；真消失仍 2 轮报警（N7a 反向自证）
+      launch_release_chain.sh：抽 PRE_STOP()，动主链**之前**先停 m<ms>-red-guard
+复验  两脚本 --self-test 20/20 · 13/13（含 N6 过渡态不报 / N7 起链在跑不报 / N7a 真消失照报）
+      selfhost/run_gates.sh --only m388_publish_chain,m394_release_watch,fmt_check → 失败 0 项
+教训  判「消失」不能只看 active：停机/启动也是合法状态。守门的观测量要覆盖过渡态，
+      否则「我们正在重起」会被自己的监控当成「它没了」。
+```
+
 ## M395 补3：全量门 NO-GO —— 新内置没进「覆盖面消费面」（缺陷 754）
 
 > **一句话**：第二轮全量门判红 1 门 `m250_onnx_tensor` 的 [1] 台账 —— `deep_copy` 只出现在

@@ -48,11 +48,29 @@ alert() {  # alert <台账键> <标题> <正文>
     fi
 }
 
-unit_active() {  # 主链单元是否 active（可注入 RED_GUARD_UNIT_PROBE 便于自测）
+unit_state() {  # 主链单元状态：active/activating/deactivating/reloading/inactive/failed/unknown
+    # 为什么不直接用 is-active（M395 缺陷 755）：launch 重起链时先 `systemctl stop` 旧主链，
+    #   而分片里的 unshare/bash **不吃 SIGTERM** ⇒ 要等满 TimeoutStopSec 才 SIGKILL
+    #   （2026-11-12 19:14:12 停 → 19:15:42 才真停，90s）。这段时间 is-active 输出
+    #   "deactivating"，本守门两次 60s 轮询正好落在窗口里 ⇒ 假报「主链消失且无裁决」p1
+    #   （19:14:35 / 19:15:35 两轮，19:15:42 链就起来了）。⇒ 必须区分「过渡态」与「真消失」。
     if [ -n "${RED_GUARD_UNIT_PROBE:-}" ]; then
-        "$RED_GUARD_UNIT_PROBE" "$1"; return $?
+        local s rc
+        s="$("$RED_GUARD_UNIT_PROBE" "$1" 2>/dev/null)"; rc=$?
+        if [ -n "$s" ]; then printf '%s\n' "$s"; return 0; fi   # 探针打印状态 ⇒ 按状态判
+        [ "$rc" = 0 ] && { echo active; return 0; }             # 兼容旧探针：只给退出码
+        echo inactive; return 0
     fi
-    [ "$(systemctl is-active "$1" 2>/dev/null)" = "active" ]
+    local st
+    st="$(systemctl show -p ActiveState --value "$1" 2>/dev/null)"
+    [ -n "$st" ] && printf '%s\n' "$st" || echo unknown
+}
+
+unit_active() { [ "$(unit_state "$1")" = active ]; }
+
+launch_in_flight() {  # 该里程碑的起链脚本是否正在跑（停旧链与起新链之间的空档也算「过渡」）
+    if [ -n "${RED_GUARD_LAUNCH_PROBE:-}" ]; then "$RED_GUARD_LAUNCH_PROBE"; return $?; fi
+    pgrep -f "launch_release_chain\.sh .*--ms ${MS}( |\$)" >/dev/null 2>&1
 }
 
 red_lines() {  # 从门日志里捞红门明细（最多 10 行）；日志路径由 STAMP 同轮 chain.log 提供
@@ -91,13 +109,21 @@ $(red_lines)
         fi
         fi          # ← 外层 if [ -f "$STAMP" ]（M393 补4 加 stale 分支后这里少了一个）
         if ! unit_active "$UNIT"; then
-            idle=$((idle + 1))
-            say "unit=$UNIT 非 active（第 $idle 轮）"
-            if [ "$idle" -ge 2 ]; then
-                alert "m${MS}-chain-vanished" "M${MS} 主链单元消失且无裁决" \
-                    "unit=$UNIT 不是 active，且 $STAMP 不存在
+            local st; st="$(unit_state "$UNIT")"
+            # 过渡态（停/起中途）或起链脚本在跑 ⇒ 不算消失：M395 缺陷 755 就是停旧链要等 90s
+            case "$st" in activating|deactivating|reloading) st_trans=1 ;; *) st_trans=0 ;; esac
+            if [ "$st_trans" = 1 ] || launch_in_flight; then
+                say "unit=$UNIT 过渡态（state=$st）⇒ 不计消失"
+                idle=0
+            else
+                idle=$((idle + 1))
+                say "unit=$UNIT 非 active（state=$st 第 $idle 轮）"
+                if [ "$idle" -ge 2 ]; then
+                    alert "m${MS}-chain-vanished" "M${MS} 主链单元消失且无裁决" \
+                        "unit=$UNIT state=$st（连续 $idle 轮非过渡态），且 $STAMP 不存在
 后果：既没绿也没红，没人会再动手。处置：查 journalctl -u $UNIT，重起链。"
-                return 1
+                    return 1
+                fi
             fi
         else
             idle=0
@@ -178,6 +204,35 @@ STUB
     [ "$rc" = 1 ] && ok "N5 旧 STAMP ⇒ 不采信（走到超时 rc=1，而不是立刻判红）" || bad "N5 rc=$rc（应 1）"
     grep -q 'chain-timeout' "$STUB_ALERTS" 2>/dev/null && ok "N5 报的是超时键，不是 chain-red" || bad "N5 把旧 STAMP 当本轮了"
     grep -q 'IGNORE stale STAMP' "$RED_GUARD_LOG" 2>/dev/null && ok "N5 日志写明 IGNORE stale STAMP（可核）" || bad "N5 没留痕"
+
+    # N6 负控（M395 缺陷 755）：单元处于 deactivating（重起链停旧链的 90s 窗口）**不许**判「消失」。
+    #   现场：19:14:12 停 → 19:15:42 才停完，两次 60s 轮询都看到 deactivating ⇒ 假 p1。
+    printf '#!/usr/bin/env bash\necho deactivating\n' > "$T/probe-deact"; chmod +x "$T/probe-deact"
+    : > "$STUB_ALERTS"
+    MS=996 STAMP="$T/none3-$$" UNIT=u RED_GUARD_UNIT_PROBE="$T/probe-deact" RED_GUARD_INTERVAL=0 \
+        bash "$0" --ms 996 --stamp "$T/none3-$$" --unit u --max-hours 0 >/dev/null 2>&1
+    rc=$?
+    [ "$rc" = 1 ] && ok "N6 过渡态 ⇒ 走到超时 rc=1" || bad "N6 rc=$rc（应 1）"
+    grep -q 'chain-vanished' "$STUB_ALERTS" 2>/dev/null && bad "N6 过渡态被误判成链消失（假 p1）" \
+        || ok "N6 过渡态**不报** chain-vanished"
+    grep -q '过渡态' "$RED_GUARD_LOG" 2>/dev/null && ok "N6 日志写明过渡态（可核）" || bad "N6 没留痕"
+
+    # N7 负控：单元 inactive 但起链脚本在跑（停旧链与起新链之间的空档）⇒ 同样不算消失
+    : > "$STUB_ALERTS"
+    MS=995 STAMP="$T/none4-$$" UNIT=u RED_GUARD_UNIT_PROBE="$T/probe-down" \
+        RED_GUARD_LAUNCH_PROBE=true RED_GUARD_INTERVAL=0 \
+        bash "$0" --ms 995 --stamp "$T/none4-$$" --unit u --max-hours 0 >/dev/null 2>&1
+    rc=$?
+    [ "$rc" = 1 ] && ok "N7 起链在跑 ⇒ 走到超时 rc=1" || bad "N7 rc=$rc（应 1）"
+    grep -q 'chain-vanished' "$STUB_ALERTS" 2>/dev/null && bad "N7 起链在跑却判链消失" \
+        || ok "N7 起链在跑时不报 chain-vanished"
+    # N7a 反向自证：起链不在跑时，同一探针必须照报（证明 N6/N7 没把真检测拆掉）
+    : > "$STUB_ALERTS"
+    MS=995 STAMP="$T/none5-$$" UNIT=u RED_GUARD_UNIT_PROBE="$T/probe-down" \
+        RED_GUARD_LAUNCH_PROBE=false RED_GUARD_INTERVAL=0 \
+        bash "$0" --ms 995 --stamp "$T/none5-$$" --unit u --max-hours 1 >/dev/null 2>&1
+    grep -q 'chain-vanished' "$STUB_ALERTS" 2>/dev/null && ok "N7a 反向自证：无过渡信号时仍报 chain-vanished" \
+        || bad "N7a 真消失不再报警（判据被拆掉了）"
 
     # N4 负控：参数错 ⇒ rc=2（不许静默当绿）
     bash "$0" --stamp x --unit u >/dev/null 2>&1
