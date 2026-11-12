@@ -22,6 +22,7 @@ SRC="$ROOT/examples/m396_dict_index"
 TMP="${TMPDIR:-/tmp}/m396_idx.$$"
 rm -rf "$TMP"; mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
+cp "$SRC/shape.px" "$TMP/shape.px" || exit 1
 
 pass=0; fail=0
 ok()  { echo "  ✅ $*"; pass=$((pass+1)); }
@@ -29,12 +30,15 @@ bad() { echo "  ❌ $*"; fail=$((fail+1)); }
 
 run_track() {
     local track="$1" src="$2" out="$3"
+    # 源先拷进 $TMP：px build 把产物写到 <源目录>/build/ ⇒ 不许污染仓库工作树
+    local base; base="$(basename "$src")"
+    cp "$src" "$TMP/$base" || return 9
     case "$track" in
-    interp) "$PX" run "$src" > "$out" 2> "$out.err" ;;
-    vm)     "$PX" build "$src" > "$out.build" 2>&1 || return $?
+    interp) "$PX" run "$TMP/$base" > "$out" 2> "$out.err" ;;
+    vm)     "$PX" build "$TMP/$base" > "$out.build" 2>&1 || return $?
             local nm; nm="$(basename "$src" .px)"
             "$TMP/build/$nm" > "$out" 2> "$out.err" ;;
-    c)      "$PX" build --c "$src" > "$out.build" 2>&1 || return $?
+    c)      "$PX" build --c "$TMP/$base" > "$out.build" 2>&1 || return $?
             local nm; nm="$(basename "$src" .px)"
             "$TMP/build/$nm" > "$out" 2> "$out.err" ;;
     *)      return 9 ;;
@@ -45,7 +49,7 @@ run_track() {
 if run_track interp "$SRC/main.px" "$TMP/i.out"; then
     exp() { if grep -qx -- "$1" "$TMP/i.out"; then ok "$1"; else bad "期望整行 [$1]，实得 [$(grep -m1 -- "^${1%% *} " "$TMP/i.out")]"; fi; }
     exp "T1 100 99 -1 n"
-    exp "T2 k0,k1,k99 b999=1998"
+    exp "T2 k0,k1,k99 k99=99"
     exp "T3 50 99 49 51 n"
     exp "T3b k50 k51 500"
     exp "T3c 50 2500"
@@ -88,7 +92,7 @@ fi
 
 # ── P / N1：形状判据 + 有牙负控 ───────────────────────────────────────────
 #   判据只看**比值**（不看绝对 ns）⇒ 8 分片并发跑门时不因机器忙而假红。
-if "$PX" build "$SRC/shape.px" > "$TMP/shape.build" 2>&1; then
+if "$PX" build "$TMP/shape.px" > "$TMP/shape.build" 2>&1; then
     SHAPEBIN="$TMP/build/shape"
 
     # 取 3 次里最小的 RATIO（噪声只会让它变大）
