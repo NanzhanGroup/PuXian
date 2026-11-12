@@ -195,7 +195,14 @@ if [ -n "$PID" ]; then
   H=$(req_full "/inv?kind=dict" /tmp/m128_C7_tgt.out); echo "     /inv?kind=dict → '$H'"
   B=$(body_of /tmp/m128_C7_tgt.out); echo "     body=$B"
   grep -q "px-m128] 注入命中：站点=dict_vals_grow" "$LOG" && ok "C7 注入确在站点 dict_vals_grow 命中（诊断行在）" || bad "C7 未见 dict_vals_grow 注入命中行"
-  case "$H" in *" 200"*) ok "C7 父协程未受影响（200）";; *) bad "C7 期望 200，实得 '$H'";; esac
+  case "$H" in *" 200"*) ok "C7 父协程未受影响（200）";; *)
+    bad "C7 期望 200，实得 '$H'"
+    # M396 补8（缺陷 759）：**纯观测**，不改判据强度 —— 失败时把服务端 stderr 尾部打到门输出，
+    #   便于下一次一眼分辨「父协程自身出错」还是「子协程的隔离错误被转成了本请求的 500」。
+    echo "     ── 服务端日志尾部（$LOG）──"
+    tail -20 "$LOG" | sed 's/^/     | /'
+    ;;
+  esac
   case "$B" in *"before=4096"*) ok "C7 失败点 = 数组满（len=4096），dict len 未被改动";; *) bad "C7 body 缺 before=4096";; esac
   case "$B" in *"v0=v0 vlast=v4095"*) ok "C7 首位/末位键值完好（未损坏）";; *) bad "C7 键值校验失败";; esac
   case "$B" in *"tail=ok len=4097"*) ok "C7 失败后仍可插入新键（len=4097）⇒ cap/数组长度一致";; *) bad "C7 插入校验失败";; esac
