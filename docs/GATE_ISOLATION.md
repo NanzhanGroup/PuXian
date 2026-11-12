@@ -377,3 +377,15 @@ M363 链首跑（2026-10-30 18:41→20:01）实测：**绿 237 / 红 2**，两�
 cd <gatevm>/wt1 && GATE_TIMEOUT_DEFAULT=900 bash selfhost/run_gates.sh --only m183_gc_root_handover
 cd <gatevm>/wt1 && GATE_TIMEOUT_DEFAULT=900 bash selfhost/run_gates.sh --only m208_vm_c_local_roots
 ```
+
+### 十一.4 M394 复测（2026-11-12 · 东月）：m208 的「并发敏感」终于量出来了
+
+```
+现场  M394 全量链（head=a62df59）quiet 并行车道 ⇒ m208 ④ probe_coro 压力档 rc=139 SIGSEGV
+      core 895224 · 12:27:08 · 崩在 px_io_poll 的指令中间（rbp=0）⇒ 栈被踩，不是 poll 的错
+对照  ① 空闲单跑 门整体 20/20 绿（207s）　② 8 个 CPU 占用（load 8.9）下 probe 20/20 绿
+      ③ **12 路并发** × 4 轮 ⇒ 2/12 红：R1003 容器长度变化 / LIVECHK 已回收对象 → core
+结论  不是「负载慢」，是**并发**把「GC 压力下不漏根」这个判据前提打掉了 ⇒ m208 归独占档
+      （quiet_exclusive.txt 已登记，理由带上面的数字；判据本体一个字没改）
+遗留  产品侧漏根未修 —— 需立项（PX_GC_TRACE + 连跑 100 次定性），与 m183 同族
+```

@@ -1791,6 +1791,15 @@ jobs:
           set +e
           bash examples/m392_try_catch/verify.sh > /tmp/v_try.log 2>&1 || { echo "❌ m392_try_catch 门失败（运行期错误模型回归）"; tail -40 /tmp/v_try.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m392_try_catch（捕获 / 退出路径 / 三轨逐字节一致）PASS"
+      - name: m394_release_watch（发布观察器 + starter 自测 · M394 · 缺陷 745–747）
+        # 判据：G1 release_watch --selftest 全绿 · G2 start_release_watcher --selftest 全绿 ·
+        #   G3 两件可执行 + shebang bash · N1 改坏体积判据后自测必须变红（鉴别力）·
+        #   N2 finished(ok) 必须 rc=0（秒完成不是没起来，11-12 10:51 真踩到的假红）。
+        if: always()
+        run: |
+          set +e
+          bash examples/m394_release_watch/verify.sh > /tmp/v_rw.log 2>&1 || { echo "❌ m394_release_watch 门失败（发布观察器 / starter 判据）"; tail -40 /tmp/v_rw.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m394_release_watch（观察器自测 / starter 自测 / 负控）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

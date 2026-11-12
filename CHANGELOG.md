@@ -83,6 +83,52 @@ N2     starter 收到 finished(ok) 必须 rc=0 且不报 p1（守上面那条假
 全量  269 + 1 = 270 门，冷缓存预计 2–2.5h
 ```
 
+### 六 M394 全量门 NO-GO：四红的归因与处置（补1 · 2026-11-12 13:0x–13:4x）
+
+```
+裁决  CHAIN-VERDICT=RED reason=红 4 门 green=266 red=4 head=a62df59
+      log=/data/gatevm/m394-chain-20261112-112548.log
+```
+
+**① 三红同根：新门的「配套漏项」（缺陷 748）** —— 与 M362/M363 同型（新门三件套之外还有装置侧两项）
+
+```
+gate_registry    本地清单 206 · ci.yml 207 ⇒ 漏注册 examples/m394_release_watch/verify.sh
+gate_lock_guard  J1：255 门里 254 门 source 了 gate_lock.sh ⇒ 就缺 m394_release_watch
+m276_gate_lock   [2] 段调同一个守卫 ⇒ 同一根因的第二张脸（不是两处 bug）
+修  examples/m394_release_watch/verify.sh 加 source selfhost/gate_lock.sh（在 set -u 之前）
+    .github/workflows/ci.yml 增 m394_release_watch 步（if: always()，与 m391/m392 同款）
+证  复跑 `run_gates.sh --only m394_release_watch,gate_registry,gate_lock_guard,m276_gate_lock` ⇒ 失败 0 项（7s）
+    直跑守卫：本地 206 ⇄ CI 208（2 条 CI 独有在例外表）· 255/255 门 source 锁
+```
+
+**② 一红是产品侧（缺陷 749，**未修**，只登记）**：`m208_vm_c_local_roots` ④ `probe_coro` 压力档 **rc=139 SIGSEGV**
+
+```
+现场  /data/gatevm/shard-20261112-112551/red/quiet1_gate_m208_vm_c_local_roots.log
+      rc=139 · timeout: the monitored command dumped core（其余 14 条判据全绿）
+core  coredumpctl 895224 · 2026-11-12 12:27:08 SIGSEGV · /tmp/m208_gate.jr7xtp/bcoro/build/probe_coro
+      gdb：16 线程 · 崩在 px_io_poll 的**指令中间**（0x423ffe，rbp=0，si_addr=0x2fffffffb）
+      ⇒ 返回地址/栈被踩，不是「poll 写错了」
+复现  12 路并发 × 4 轮（PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1）⇒ **2/12 红**，两种形态：
+        R1003 迭代期间被迭代容器长度变化: 8 → 3
+        [PX_GC_LIVECHK] 读到已回收对象（px_dict_set(dict)）… ⇒ core
+对照  空闲单跑 20/20 绿 · 8 个 CPU 占用下 20/20 绿（load 8.9）· 门整体单跑绿（207s）
+定性  GC 压力 + 协程/迭代组合下的**漏根**（与 m183 同族：历史 LIVECHK / R1003 同一根因面）
+      ⚠️ 判据**未放宽**；修它要改 runtime GC，属里程碑级，另立项（PX_GC_TRACE + 连跑 100 次定性）
+```
+
+**③ 档位错判：m208 被归到 quiet 并行车道（缺陷 750）**
+
+```
+现症  quiet_lanes.txt 的归档判据只看**耗时**（198s）⇒ m208 进车道1（并行）
+      但它的判据前提是「机器空闲」——上面 2/12 vs 20/20 就是量出来的差别
+修    quiet_exclusive.txt 登记 m208（理由=判据前提，附实测数字）→ quiet_archive.py --write 重归档
+      ⇒ m208 独占串行；quiet 尾 60.3 → 62.3 min；quiet_archive.py --check ⇒ QUIET-ARCHIVE-OK
+```
+
+**代价/边界**：本轮改的是「门与档位」，没动 runtime/parser；④ 的修不在此轮。
+
 
 ## M393：发布链与观测点（缺陷 741–744）
 

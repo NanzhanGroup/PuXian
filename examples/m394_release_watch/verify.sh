@@ -16,6 +16,8 @@
 # 用法：bash examples/m394_release_watch/verify.sh
 # 退出码：0 全绿 · 1 有判据红
 # ============================================================================
+# M276：门级互斥锁（全量门要求每扇门都 source，否则 gate_lock_guard / m276_gate_lock 判红）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
