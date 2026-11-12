@@ -6370,6 +6370,33 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
     int absent = 0;              // 上一轮锁内判定：键缺失
     int absent_len = -1;         // 判定时的 len —— 无删除 ⇒ 键集单调，len 未变即可免重扫（O(1) 复核）
     sigset_t old;
+    // ── M396（缺陷 756）：更新既有键的热路径前置 —— **零分配** ──
+    // 病：dict 恰好满容量（len == cap）时，阶段 A 的扩容预判 `len0 >= cap0` 恒成立
+    //   ⇒ 每次 set 既有键都先备两套新数组（keys + vals）再在锁内命中、随即原地 xfree
+    //   ⇒ 纯白税。实测（/data/autodrive/m396_scale2，独立进程 ×3，空闲机）：
+    //     N=1023 SET 3.9–7.3us · N=1024 SET 25.2–31.7us · N=1025 SET 4.0–5.8us
+    //   「恰好是 2 的幂」不是病根；病根是「更新一个已存在的键，却按插入路径先备货」。
+    // 修：先做一次「只更新」的锁内查找；命中即改值返回（一次分配不做）。
+    //   未命中时把判定记进 absent/absent_len ⇒ 后续插入路径走 O(1) 免重扫分支，不再多扫一遍。
+    //   正确性：只把既有的一遍锁内扫描提前，判定仍全在锁内；未命中时对象状态零改动。
+    pthread_mutex_lock(&g_gc_mu);
+    gc_block_stop(&old);
+    {
+        int len_f = o->as.dict.len;
+        int idx_f = -1;
+        for (int i = 0; i < len_f; i++) {
+            if (strcmp(o->as.dict.keys[i], key) == 0) { idx_f = i; break; }
+        }
+        if (idx_f >= 0) {                       // 命中既有键：只改值（与旧路径等价，但不备货）
+            o->as.dict.vals[idx_f] = val;
+            pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
+            return;
+        }
+        absent = 1; absent_len = len_f;         // 记下「缺失 + 判定时 len」⇒ 插入路径免重扫
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+    gc_unblock_stop(&old);
     for (;;) {
         if (retry >= maxr) {     // 兜底 / 对照：锁内扩容 + 锁内 xstrdup（M127 及以前行为）
             if (spare_keys) xfree(spare_keys);
