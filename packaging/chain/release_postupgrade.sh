@@ -82,7 +82,12 @@ run_pu() {
     #   而这一步本来就在「发布已完成」之后，多一个提交不影响 tag（tag 打的是发布提交）。
     #   失败**不挡升级**（升级是本单元的主职）：告警 + 让下一轮 gate_timeouts 的 P7 出面。
     baseline_refresh() {
-        local repo="${PU_REPO:-/data/code/puxian}"
+        # 路径按**脚本位置**推导，不写死开发机绝对路径（缺陷 300 / check_gate_paths 门；
+        #   M400 首跑就因这一行判红）。PU_REPO 仍可显式覆盖（分片 worktree / 异地部署）。
+        local here root
+        here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+        root=$(cd "$here/../.." && pwd)
+        local repo="${PU_REPO:-$root}"
         local rf="$repo/selfhost/refresh_gate_baseline.sh"
         if [ ! -x "$rf" ]; then say "①' 跳过基线回灌（$rf 不存在或不可执行）"; return 0; fi
         if [ "$DRY" = "1" ]; then

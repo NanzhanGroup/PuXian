@@ -94,6 +94,29 @@ N3 --no-fresh 不影响 P6（两条判据不互相顶替）
       ③ 窗口默认 3 轮的取舍没做实验比对（只论证了「不能取全历史」这一半）
 ```
 
+### 八 首跑 NO-GO 与修法（2026-11-13 20:1x 判红 · 20:2x 修完）
+
+全量门 r1：**275 门 · 绿 273 · 红 2**（head=a7834a5 · 证据 `/data/gatevm/m400-chain-20261113-183551.log`）。
+两红都是**本轮自己引入的**，不是产品缺陷：
+
+| 门 | 现场 | 根因 |
+|---|---|---|
+| `check_gate_paths` | `packaging/chain/release_postupgrade.sh:85: local repo="${PU_REPO:-/data/code/puxian}"` | 回灌器要 repo 路径，图省事写死开发机绝对路径 = 缺陷 300 的同形（本机绿 / CI 红，分片还拷错树） |
+| `gate_registry` | 本地清单 211 / ci.yml 212，缺 `examples/m400_baseline_feedback/verify.sh` | 新门只登了 `selfhost/gates.registry.sh`，**没登 ci.yml**（M243 判据双向，反向不缺口所以只报一条） |
+
+修法（两处，均最小改动）：
+
+```
+packaging/chain/release_postupgrade.sh  repo 由脚本位置推导（BASH_SOURCE → ../..），PU_REPO 仍可覆盖
+.github/workflows/ci.yml                新增 m400_baseline_feedback 步（if: always() + 失败注记，与 m394–m398 同款）
+```
+
+复核（本轮实测）：`check_gate_registry.sh` rc=0（13/13）· `check_gate_paths.sh` rc=0（618 个门/脚本无违例）·
+`release_postupgrade.sh --self-test` 7/7 · ci.yml `yaml.safe_load` 通过（5 jobs）。
+
+> 记一条口径：**「新门要登三处」**——`selfhost/gates.registry.sh`、`ci.yml`、以及分片用的耗时表；
+> 本轮漏的是第二处，而漏它的代价是整条 95 分钟的链白跑。
+
 ---
 
 ## M399：m187 门 **900s 时限债**收口（[2] 段 524s → 83s · 全门 713s → 229s · 缺陷 762）

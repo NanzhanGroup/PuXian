@@ -1836,6 +1836,18 @@ jobs:
           set +e
           bash examples/m398_freeze_deps/verify.sh > /tmp/v_fdep.log 2>&1 || { echo "❌ m398_freeze_deps 门失败（传递依赖指纹）"; tail -40 /tmp/v_fdep.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m398_freeze_deps（类别 A/B 分界正确 + 负控 + 旧格式兼容）PASS"
+      - name: m400_baseline_feedback（门耗时基线的输入回路 · M400 · 缺陷 763）
+        # 判据：T1 回灌器自证（窗口下界 / rc=124 丢弃 / retain 只补缺 / 幂等 / 缺口 rc=1）
+        #   · T2 check_gate_timeouts 的 P6 覆盖 + P7 新鲜度（各有负控 + 正控）
+        #   · T3 真基线行数 == 门清单数（本轮核心数字：233 → 275）· T4 rc=124 端到端
+        #   · N1 删门 ⇒ P6 必红 · N2 造假「已完成」stamp ⇒ P7 必红（两者都有正控）。
+        # 本门在 M400 首跑即抓到两处真缺陷（门注册漏 ci.yml / postupgrade 写死开发机路径）。
+        if: always()
+        run: |
+          set +e
+          bash examples/m400_baseline_feedback/verify.sh > /tmp/v_m400.log 2>&1 || { echo "❌ m400_baseline_feedback 门失败（基线输入回路）"; tail -40 /tmp/v_m400.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m400_baseline_feedback（P6/P7 正负控 + 基线覆盖锚点）PASS"
+
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。
