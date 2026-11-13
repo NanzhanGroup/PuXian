@@ -117,6 +117,50 @@ packaging/chain/release_postupgrade.sh  repo 由脚本位置推导（BASH_SOURCE
 > 记一条口径：**「新门要登三处」**——`selfhost/gates.registry.sh`、`ci.yml`、以及分片用的耗时表；
 > 本轮漏的是第二处，而漏它的代价是整条 95 分钟的链白跑。
 
+### 九 r2 首跑：P7 与回灌动作不同口径 ⇒ 链自锁死（2026-11-13 21:56 判红 · 22:1x 修完）
+
+链 r2（head=6f98648 · `/data/gatevm/m400-chain-20261113-202816.log`）：**275 门 · 绿 274 · 红 1**。
+唯一红是 `gate_timeouts` 的 **P7**：
+
+```
+── P7 回灌新鲜度 ──
+  ❌ 有已完成的全量门实测**未回灌**：链 20261113-183554 ＞ 基线最新 20261113-154538
+```
+
+根因不是数据，是**判据与动作不同口径**：
+
+```
+回灌（动作）：release_postupgrade.sh 只在 CHAIN-VERDICT=GREEN 后调 refresh_gate_baseline.sh
+判据（P7）  ：只看目录里有 CHAIN-COMPLETE.txt（不看绿红）
+⇒ r1（183554）判红 ⇒ 永不发布 ⇒ 永不回灌 ⇒ P7 之后**每一轮**都红，判据索要一件不会发生的事
+```
+
+r1 的两红已在 6f98648 修掉（r2 的 shard2/shard6 都是 rc=0，未复现），链是被这条新判据自己卡死的。
+
+修法（判据向动作对齐，最小改动）：
+
+```
+packaging/chain/run_release_chain.sh  判完 stamp 后把结论落到实测目录 GATE-VERDICT=GREEN|RED
+                                      （目录从链日志「日志目录：…」取最后一条；取不到只 WARN 不猜）
+selfhost/check_gate_timeouts.sh       P7 只数「CHAIN-COMPLETE.txt + GATE-VERDICT=GREEN」的链；
+                                      已完成但未判绿（含历史缺标记）⇒ ℹ️ 报条数，不判红
+examples/m400_baseline_feedback/verify.sh  N2 夹具补 GREEN 标记；新增 N2d 红链不判红 + N2e 前提自证
+docs/GATE_TIMEOUTS.md                  P7 口径改写（为什么红链不算「该回灌的实测」）
+```
+
+复核（本轮实测）：
+
+```
+check_gate_timeouts.sh --self-test   17/17（新增 S10d 红链不锁死 · S10e 前提自证）
+check_gate_timeouts.sh（真判）       M311-TIMEOUTS-OK rc=0；P7 ℹ️ 跳过 35 条历史链、判「无可判数据」
+m400_baseline_feedback/verify.sh     见下条（门级复核）
+bash -n 三脚本                        OK
+```
+
+边界（如实登记）：P7 从此只对「r3 起写了 GATE-VERDICT 的链」有牙；35 条历史已完成链无标记 ⇒ 视为
+「未判绿」跳过（不是判红，也不是装作有数据）。红链的耗时数据仍会被回灌窗口（最近 3 轮）吃到 ——
+那是数据，不是判据；窗**语义**没变。
+
 ---
 
 ## M399：m187 门 **900s 时限债**收口（[2] 段 524s → 83s · 全门 713s → 229s · 缺陷 762）

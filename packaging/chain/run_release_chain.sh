@@ -104,6 +104,25 @@ else
 fi
 say "stamp: $(cat "$DONE" 2>/dev/null)"
 
+# ── 判绿标记回落到实测目录（M400 首跑 r2 教训：P7 与回灌动作不同口径 ⇒ 链自锁死）──
+#   P7 判「有已完成实测未回灌」，而回灌只在**判绿后**由 release_postupgrade 触发 ——
+#   红链不发布 ⇒ 永不回灌。若 P7 只认 CHAIN-COMPLETE.txt，一条红链就让之后每一轮都红
+#   （实测：r1 链 20261113-183554 红 ⇒ r2 必红在 gate_timeouts，274 绿 1 红）。
+#   ⇒ 把判据结论落到 stamp 目录，P7 只数「已完成 **且** 判绿」的链（判据与动作同口径）。
+SDIR="$(grep -oE '日志目录：[^ ]+' "$LOG" 2>/dev/null | tail -1 | sed 's/.*：//')"
+if [ -n "$SDIR" ] && [ -d "$SDIR" ]; then
+    if grep -q 'CHAIN-VERDICT=GREEN' "$DONE" 2>/dev/null; then
+        printf 'GATE-VERDICT=GREEN\n' > "$SDIR/GATE-VERDICT"
+    else
+        printf 'GATE-VERDICT=RED reason=%s\n' \
+            "$(sed -n 's/^CHAIN-VERDICT=RED reason=\([^ ]*\).*/\1/p' "$DONE" 2>/dev/null)" \
+            > "$SDIR/GATE-VERDICT"
+    fi
+    say "GATE-VERDICT → $SDIR/GATE-VERDICT（$(cat "$SDIR/GATE-VERDICT" 2>/dev/null)）"
+else
+    say "WARN 未从链日志解析到实测目录 ⇒ 跳过 GATE-VERDICT（P7 将不把本轮算作「该回灌的实测」）"
+fi
+
 if ! grep -q 'CHAIN-VERDICT=GREEN' "$DONE" 2>/dev/null; then
     red no-go "m${MS}-gate-no-go" "M${MS} 全量门 NO-GO：$(cat "$DONE" 2>/dev/null)"
     exit 1

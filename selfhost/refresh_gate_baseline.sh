@@ -279,14 +279,32 @@ EOS
     # T3 retain 只补缺：g4 旧基线没有，窗口实测 30 ⇒ 补进来
     [ "$v4" = 30 ] && ok "T3 覆盖补齐：g4=30（旧基线无此行，窗口实测补上）" || bad "T3 g4=$v4"
 
-    # T4 幂等：同输入二次回灌，逐字节相同（生成时间行是唯一风险点）
+    # T4 幂等：同输入二次回灌，**数据行 + 除「生成时间」外的注释行**逐字节相同
+    #   ⚠️ 不能用整文件 cmp：文件头含「生成时间」，两次运行几乎必然跨秒 ⇒ flaky。
+    #      2026-11-13 22:2x 实测：同一脚本 r2 判绿、重跑就红（唯一差异是 `# 生成时间：` 那行）。
+    #      幂等的语义是「同样输入不产出不同数据」，不是「文件头时间戳冻结」。
     cp "$R/selfhost/gate_time_baseline.tsv" "$T/b1.tsv"
     MDIR="$T/md" bash "$0" --repo "$R" --measured-dir "$T/md" \
         --baseline selfhost/gate_time_baseline.tsv --stamps 3 >"$T/t4.log" 2>&1
-    if cmp -s "$T/b1.tsv" "$R/selfhost/gate_time_baseline.tsv"; then
-        ok "T4 幂等：二次回灌逐字节相同"
+    local d4 rows4
+    d4="$(diff <(grep -v '^# 生成时间：' "$T/b1.tsv" 2>/dev/null) \
+               <(grep -v '^# 生成时间：' "$R/selfhost/gate_time_baseline.tsv" 2>/dev/null) | head -4)"
+    rows4="$(grep -vc '^#' "$R/selfhost/gate_time_baseline.tsv" 2>/dev/null || echo 0)"
+    # 先证前提（两个文件都在、且有数据行）—— 否则 cmp/diff 两个空文件会假绿
+    if [ -s "$T/b1.tsv" ] && [ -s "$R/selfhost/gate_time_baseline.tsv" ] && [ "$rows4" -gt 0 ] && [ -z "$d4" ]; then
+        ok "T4 幂等：二次回灌数据行逐字节相同（忽略生成时间行；$rows4 行）"
     else
-        bad "T4 非幂等"
+        bad "T4 非幂等（行数 $rows4）：$(printf '%s' "$d4" | tr '\n' ' ')"
+    fi
+    # T4b 负控：把上面这条 diff 判据套在「被人改了一行数据」的副本上 ⇒ 必须非空
+    #   （防「忽略生成时间」被误写成「什么都忽略」= 判据恒真）
+    cp "$T/b1.tsv" "$T/b4mut.tsv"
+    awk -F'\t' -v OFS='\t' '!/^#/ && !done { $2 = $2 + 1; done = 1 } { print }' \
+        "$T/b4mut.tsv" > "$T/b4mut2.tsv" && mv "$T/b4mut2.tsv" "$T/b4mut.tsv"
+    if [ -n "$(diff <(grep -v '^# 生成时间：' "$T/b4mut.tsv") <(grep -v '^# 生成时间：' "$T/b1.tsv") | head -2)" ]; then
+        ok "T4b 负控：数据行被改动 ⇒ 同一条 diff 判据仍能报出差异（T4 不是恒真）"
+    else
+        bad "T4b 判据恒真：改了一行数据仍判相同 ⇒ T4 的绿没有意义"
     fi
 
     # T5 覆盖缺口 ⇒ rc=1 且指名（另起一套干净夹具，不污染 T1 的结论）

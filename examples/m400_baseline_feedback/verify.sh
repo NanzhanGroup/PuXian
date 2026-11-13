@@ -127,14 +127,15 @@ fi
 "$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --no-fresh > "$TMP/n1b.log" 2>&1
 [ "$?" = 0 ] && ok "N1b 正控：完整基线 ⇒ P6 绿（红确实来自缺失）" || bad "N1b 正控失败：$(grep '❌' "$TMP/n1b.log" | head -1)"
 
-# ── N2 P7 负控：造一个更新的「已完成」链 ⇒ 必红；正控：拿掉 ⇒ 绿 ─
+# ── N2 P7 负控：造一个更新的「已完成且判绿」链 ⇒ 必红；正控：拿掉 ⇒ 绿 ─
 mkdir -p "$TMP/md/shard-20991231-000000"
 printf 'chain_ts=20991231-000000\nok=1\n' > "$TMP/md/shard-20991231-000000/CHAIN-COMPLETE.txt"
+printf 'GATE-VERDICT=GREEN\n' > "$TMP/md/shard-20991231-000000/GATE-VERDICT"
 printf 'gX\tOK\t5\t-\n' > "$TMP/md/shard-20991231-000000/shard1.times.tsv"
 "$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --measured-dir "$TMP/md" > "$TMP/n2.log" 2>&1
 rc=$?
 if [ "$rc" = 1 ] && grep -q '未回灌' "$TMP/n2.log" && grep -q '20991231-000000' "$TMP/n2.log"; then
-    ok "N2 负控：有更新的已完成链未回灌 ⇒ P7 判红且指名链号"
+    ok "N2 负控：有更新的已完成且判绿链未回灌 ⇒ P7 判红且指名链号"
 else
     bad "N2 负控失败 rc=$rc：$(grep '❌' "$TMP/n2.log" | head -2 | tr '\n' ' ')"
 fi
@@ -142,6 +143,21 @@ fi
 rm -f "$TMP/md/shard-20991231-000000/CHAIN-COMPLETE.txt"
 "$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --measured-dir "$TMP/md" > "$TMP/n2b.log" 2>&1
 [ "$?" = 0 ] && ok "N2b 未完成的链不计入（否则判据会读自己）" || bad "N2b 未完成链被计入 ⇒ P7 会自激"
+# ── N2d 红链不算「该回灌的实测」（M400 首跑 r2 的锁死形态：红链永不发布 ⇒ 永不回灌）──
+printf 'chain_ts=20991231-000000\nok=1\n' > "$TMP/md/shard-20991231-000000/CHAIN-COMPLETE.txt"
+printf 'GATE-VERDICT=RED reason=no-go\n' > "$TMP/md/shard-20991231-000000/GATE-VERDICT"
+"$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --measured-dir "$TMP/md" > "$TMP/n2d.log" 2>&1
+rc=$?
+if [ "$rc" = 0 ] && grep -q '跳过 1 条已完成但未判绿' "$TMP/n2d.log"; then
+    ok "N2d 负控：已完成但未判绿的链不要求回灌（链不会自锁死）"
+else
+    bad "N2d 红链被当成该回灌的实测 rc=$rc：$(grep '❌' "$TMP/n2d.log" | head -1)"
+fi
+# N2e 前提自证：同夹具改回 GREEN ⇒ 必须重新判红（证明 N2d 的绿确有来源）
+printf 'GATE-VERDICT=GREEN\n' > "$TMP/md/shard-20991231-000000/GATE-VERDICT"
+"$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --measured-dir "$TMP/md" > "$TMP/n2e.log" 2>&1
+[ "$?" = 1 ] && ok "N2e 前提自证：改回 GREEN ⇒ 重新判红（N2d 的绿来自 RED 标记）" \
+             || bad "N2e 前提自证失败：改回 GREEN 仍绿 ⇒ N2d 不是由标记驱动"
 rm -rf "$TMP/md"
 "$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --measured-dir "$TMP/md" > "$TMP/n2c.log" 2>&1
 [ "$?" = 0 ] && ok "N2c 正控：目录不存在 ⇒ P7 只 ℹ️ 不判红（异机/CI 可用）" || bad "N2c 目录缺失时判红"

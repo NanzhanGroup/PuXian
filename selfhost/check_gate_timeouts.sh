@@ -19,9 +19,13 @@
 #   P5 **规模锚点**：门清单 ≥150 · 基线 ≥150 行 · 声明 ≥1 条（否则判红 —— 提取器坏了不能装绿）。
 #   P6 **覆盖**（M400）：门清单里每扇门都必须有基线行（否则 P2/P3 对它**根本判不到** ⇒ 静默绿）。
 #      M400 实测：门清单 274 / 基线 233 ⇒ 41 门从生下来就没被 P2 看过一眼。
-#   P7 **回灌新鲜度**（M400）：/data/gatevm 下有「已完成」（含 CHAIN-COMPLETE.txt）的链比
-#      基线的最新来源标签还新 ⇒ 红（有实测没回灌）。
+#   P7 **回灌新鲜度**（M400）：/data/gatevm 下有「已完成且判绿」（含 CHAIN-COMPLETE.txt **且**
+#      GATE-VERDICT=GREEN）的链比基线的最新来源标签还新 ⇒ 红（有实测没回灌）。
 #      ⚠️ 正在跑的链**没有** CHAIN-COMPLETE.txt ⇒ 天然不计 —— 否则会「判据读自己」。
+#      ⚠️ 红链不算数据（M400 首跑 r2 教训）：回灌只在判绿后由 release_postupgrade 触发，
+#         红链永不发布 ⇒ 永不回灌。若只认 CHAIN-COMPLETE，一条红链会让之后**每一轮** P7 都红，
+#         判据索要一件不会发生的事 ⇒ 链自锁死（实测：链 20261113-183554 红后 r2 必红）。
+#         判据与动作必须同口径：**只数「该回灌的」= 已判绿的完成链**。
 #      这条是「基线靠人手跑」的机器兜底：忘了回灌，下一轮就会在这里被当场拦下。
 #
 # 输入：
@@ -216,29 +220,41 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
         fi
     fi
 
-    # ── P7 回灌新鲜度（M400）：有「已完成」的链比基线新 ⇒ 有实测没回灌 ──
-    #   口径：只认含 CHAIN-COMPLETE.txt 的 stamp 目录（正在跑的链没有它）⇒ 不会判据读自己。
+    # ── P7 回灌新鲜度（M400）：有「已完成**且判绿**」的链比基线新 ⇒ 有实测没回灌 ──
+    #   口径：只认含 CHAIN-COMPLETE.txt + GATE-VERDICT=GREEN 的 stamp 目录
+    #     · 正在跑的链没有 CHAIN-COMPLETE.txt ⇒ 不会判据读自己
+    #     · 红链没有 GREEN 标记 ⇒ 不计（红链永不发布 ⇒ 永不回灌，数它等于自锁死）
     echo "── P7 回灌新鲜度（有已完成实测未回灌 ⇒ 红）──"
     if [ "$FRESH_ON" = 0 ]; then
         info "P7 已被 --no-fresh 关闭（仅自证用）"
     elif [ ! -d "$MDIR" ]; then
         info "目录不存在：$MDIR ⇒ 新鲜度不可判（异机/CI 场景跳过，不装作有数据）"
     else
-        local newest_done base_stamp
+        local newest_done base_stamp skipped
+        # 已判绿的完成链（名字本身是时间序 ⇒ sort 后取最后一个）
         newest_done="$(for x in "$MDIR"/shard-*; do
                            [ -f "$x/CHAIN-COMPLETE.txt" ] || continue
+                           grep -q 'GATE-VERDICT=GREEN' "$x/GATE-VERDICT" 2>/dev/null || continue
                            basename "$x" | sed 's/^shard-//'
                        done | sort | awk 'END{print}')"
+        # 已完成但未判绿（红链 / 旧目录缺标记）的条数：只做提示，不参与判红
+        skipped="$(for x in "$MDIR"/shard-*; do
+                       [ -f "$x/CHAIN-COMPLETE.txt" ] || continue
+                       grep -q 'GATE-VERDICT=GREEN' "$x/GATE-VERDICT" 2>/dev/null && continue
+                       echo x
+                   done | grep -c . || true)"
+        [ -z "$skipped" ] && skipped=0
+        [ "$skipped" -gt 0 ] && info "跳过 $skipped 条已完成但未判绿（或缺 GATE-VERDICT）的链 ⇒ 它们不构成「该回灌的实测」"
         base_stamp="$(printf '%s\n' "$base_rows" | cut -f4 | grep -oE '20[0-9]{6}-[0-9]{6}' | sort | awk 'END{print}')"
         if [ -z "$newest_done" ]; then
-            info "没有已完成的链（缺 CHAIN-COMPLETE.txt）⇒ 新鲜度不可判"
+            info "没有已判绿的完成链（缺 CHAIN-COMPLETE.txt 或 GATE-VERDICT≠GREEN）⇒ 新鲜度不可判"
         elif [ -z "$base_stamp" ]; then
             info "基线没有任何带日期的来源标签 ⇒ 新鲜度不可判（先回灌一次）"
         elif [ "$newest_done" \> "$base_stamp" ]; then
             bad "有已完成的全量门实测**未回灌**：链 $newest_done ＞ 基线最新 $base_stamp"
             echo "     修法：./selfhost/refresh_gate_baseline.sh --commit --push"
         else
-            ok "基线已回灌到最新已完成链（$base_stamp）"
+            ok "基线已回灌到最新已判绿链（$base_stamp）"
         fi
     fi
 
@@ -361,21 +377,24 @@ EOS
     fi
     COV_ON=0
 
-    # ── S10 P7 新鲜度：有「已完成」的链比基线标签新 ⇒ 红；标签追平 ⇒ 绿 ──
+    # ── S10 P7 新鲜度：有「已完成且判绿」的链比基线标签新 ⇒ 红；标签追平 ⇒ 绿 ──
     FRESH_ON=1
     local MD="$W/md"; rm -rf "$MD"; mkdir -p "$MD/shard-20260101-000000" "$MD/shard-20260102-000000"
     touch "$MD/shard-20260101-000000/CHAIN-COMPLETE.txt"
+    printf 'GATE-VERDICT=GREEN\n' > "$MD/shard-20260101-000000/GATE-VERDICT"
     # 第二个目录**故意不放** CHAIN-COMPLETE.txt（模拟正在跑的链）⇒ 不算数据
     { for i in $(seq 1 160); do printf 'g%s\t10\tOK\tchain-20260101-000000\n' "$i"; done; } > "$W/base_fresh.tsv"
     local _m0=$MDIR; MDIR="$MD"
     if check_all "$W/reg_ok.sh" "$W/base_fresh.tsv" "$W/list.txt" > "$W/s10.log" 2>&1; then
-        st_ok "S10 已回灌（基线=最新已完成链）⇒ 绿；且未完成的 s20160102 未计入"
+        st_ok "S10 已回灌（基线=最新已判绿链）⇒ 绿；且未完成的 s20160102 未计入"
     else
         st_no "S10 已回灌却判红：$(grep '❌' "$W/s10.log" | head -1)"
     fi
-    touch "$MD/shard-20260103-000000/CHAIN-COMPLETE.txt" 2>/dev/null || { mkdir -p "$MD/shard-20260103-000000"; touch "$MD/shard-20260103-000000/CHAIN-COMPLETE.txt"; }
+    mkdir -p "$MD/shard-20260103-000000"
+    touch "$MD/shard-20260103-000000/CHAIN-COMPLETE.txt"
+    printf 'GATE-VERDICT=GREEN\n' > "$MD/shard-20260103-000000/GATE-VERDICT"
     if check_all "$W/reg_ok.sh" "$W/base_fresh.tsv" "$W/list.txt" > "$W/s10b.log" 2>&1; then
-        st_no "S10b 有更新已完成链未回灌却判绿（P7 没牙）"
+        st_no "S10b 有更新已完成且判绿的链未回灌却判绿（P7 没牙）"
     else
         grep -q '有已完成的全量门实测\*\*未回灌\*\*：链 20260103-000000' "$W/s10b.log" \
             && st_ok "S10b 未回灌判红且指名链号" || st_no "S10b 红但没指名"
@@ -386,6 +405,23 @@ EOS
         st_ok "S10c 正控：标签追平最新链 ⇒ 绿（红确实来自落后）"
     else
         st_no "S10c 正控失败：标签追平仍红"
+    fi
+    # ── S10d 红链不算「该回灌的实测」（M400 首跑 r2 的锁死形态）──
+    #   红链永不发布 ⇒ 永不回灌；若 P7 仍数它，之后每一轮都必红。夹具：最新链已完成但 GATE-VERDICT=RED
+    printf 'GATE-VERDICT=RED reason=no-go\n' > "$MD/shard-20260103-000000/GATE-VERDICT"
+    if check_all "$W/reg_ok.sh" "$W/base_fresh.tsv" "$W/list.txt" > "$W/s10d.log" 2>&1; then
+        grep -q '跳过 1 条已完成但未判绿' "$W/s10d.log" \
+            && st_ok "S10d 负控：红链（已完成未判绿）不要求回灌 ⇒ 不再锁死" \
+            || st_no "S10d 绿但没提示跳过红链（口径不可见）"
+    else
+        st_no "S10d 红链被当成该回灌的实测仍判红 ⇒ 链自锁死未修好"
+    fi
+    # S10e 前提自证：把该目录改回 GREEN ⇒ 同一夹具下必须重新判红（证明 S10d 的绿来自 RED 标记）
+    printf 'GATE-VERDICT=GREEN\n' > "$MD/shard-20260103-000000/GATE-VERDICT"
+    if check_all "$W/reg_ok.sh" "$W/base_fresh.tsv" "$W/list.txt" > "$W/s10e.log" 2>&1; then
+        st_no "S10e 前提自证失败：改回 GREEN 仍绿 ⇒ S10d 不是由 RED 标记驱动的"
+    else
+        st_ok "S10e 前提自证：同夹具改回 GREEN ⇒ 重新判红（S10d 的绿确有来源）"
     fi
     MDIR="$_m0"; FRESH_ON=0
 
