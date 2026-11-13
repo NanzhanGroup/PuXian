@@ -12,9 +12,7 @@ issue28_b1
 issue28_b2
 m101_s2
 m102_s2
-m103_s2a
 m103_s2b
-m103_s2d
 m125_alloc_fail
 m126_signal_isolate
 m127_unwind_lock
@@ -32,13 +30,11 @@ m83_s5
 m83_s6
 m84_s1_http_ct
 m84_s2_hmac
-m84_s3_dns
 m85_s1
 m85_s2
 m86_s0
 m86_s1
 m86_s2
-m90_s1
 m91_s1
 m93_s3
 m94_s2

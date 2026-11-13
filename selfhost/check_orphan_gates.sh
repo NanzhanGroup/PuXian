@@ -43,7 +43,7 @@ REG="${ORPHAN_REGISTRY:-selfhost/gates.registry.sh}"
 CI="${ORPHAN_CI:-.github/workflows/ci.yml}"
 BASE="${ORPHAN_BASELINE:-selfhost/orphan_gates.txt}"
 # 基线规模上限 —— 写死常量（**只许缩小**：要扩充就得改这个数字，留下痕迹）
-ORPHAN_MAX="${ORPHAN_MAX:-10}"
+ORPHAN_MAX="${ORPHAN_MAX:-15}"
 
 SELFTEST=0
 for a in "$@"; do

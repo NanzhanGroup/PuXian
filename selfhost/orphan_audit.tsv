@@ -16,3 +16,7 @@ m89_s3d	起服务	0	16	FAIL	已登记：VM 堆回落未达成（base=5676 · idl
 m93_s2	需 Go,起服务	0	25	FAIL	已登记：thr_count=17 > 9（spawn/coro 线程上限写于 M93 当时语义）⇒ M404 定基
 m98_s2	起服务	0	17	FAIL	已登记：[S2a] 线程峰值 22 > 18（池 2 + coro ≤8 + 主/accept）⇒ 同族阈值，M404 定基
 m99_s2	起服务	0	22	FAIL	已登记：[S2] 线程峰值 24 > 20（40 空闲连接不占 worker）⇒ 同族阈值，M404 定基
+m103_s2a	需外网(UDP:53)	0	13	SKIP	环境：分片网隔离下 UDP:53 不可达 ⇒ [585-SKIP-LOUD] 外网档跳过；单独跑绿属环境差异，不算覆盖
+m103_s2d	需 Go	0	0	FAIL	已登记：分片内 `go gen` 失败（无 go / GOCACHE 未带）⇒ 需改预生成夹具（M404）
+m84_s3_dns	需外网(DNS)	0	3	SKIP	环境：无网络时 S3-public 段 SKIP（仅本地确定性断言）⇒ 分片不算覆盖
+m90_s1	需残留产物	0	8	SKIP	环境：缺 selfhost/build/compiler_new 即 SKIP；单独跑绿是**仓库残留产物**所致（M304 同款）⇒ 需改成自备前提（M404）
