@@ -2094,3 +2094,21 @@ run m397_bytes_ops bash examples/m397_bytes_ops/verify.sh
 #        · T6【类别 A 不误判】（改 value.px ⇒ 类别 B 必须为空 = 缺陷 761 的收口点）
 #        · T8 旧格式基准兼容 · T9 收尾自证（工作树复原 / 真二进制未被替换）
 run m398_freeze_deps bash examples/m398_freeze_deps/verify.sh
+
+# ── m400_baseline_feedback（M400 · 缺陷 763 收口）──────────────────────
+#   病史（M400 实测）：门耗时基线的**输入回路没接上**。
+#     · gate_time_baseline.tsv 上次生成 10-26 14:30（18 天前），233 行 / 门清单 274 门
+#       ⇒ 41 门 check_gate_timeouts 的 P2 从来判不到（静默绿）
+#     · 生成器口径完备但**全仓无人调用**（docs 写着「手工跑」）
+#     · 每轮 shardN.times.tsv 都产出、从不消费；release_preflight.sh 的计时表跑完就 rm
+#       —— 而历史最高占用恰恰只在被删的那张表里（m187 754s/900s = 83%）
+#   本轮口径：回灌自动化（refresh_gate_baseline.sh，窗口=最近 3 个已完成链）
+#     + preflight 计时表落盘 + 生成器丢 rc=124（砍断值不是耗时）+ --retain 只补缺不取最大
+#     + check_gate_timeouts 新增 P6 覆盖 / P7 回灌新鲜度
+#   判据：T1 回灌器 8 条自证 · T2 守卫 15 条自证（含 P6/P7 的正控+负控）
+#        · T3 覆盖锚点（基线行数 == 门清单数，且基线不含门清单以外的行）
+#        · T4 rc=124 端到端（唯一一行是砍断值 ⇒ 沿旧值，绝不写 899；--keep-timeout-rows 必须变 899）
+#        · T5 幂等（跨秒数据行逐字节相同，且先证文件真生成，防 cmp 两缺失文件假绿）
+#        · N1 删门 ⇒ P6 红且指名 / N1b 正控 · N2 造假「已完成」stamp ⇒ P7 红且指名
+#        · N2b 未完成的链不计入（否则判据读自己）· N2c 目录缺失只 ℹ️ · N3 两条判据互不顶替
+run m400_baseline_feedback bash examples/m400_baseline_feedback/verify.sh

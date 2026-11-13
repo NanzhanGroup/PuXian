@@ -92,27 +92,69 @@ S6 规模锚点 · S7 缺输入 ⇒ rc=3（不许当绿）· **S8 动态**（假
 
 ## 5 基线：`selfhost/gate_time_baseline.tsv`（生成物，不许手改）
 
-口径：
+口径（M400 起）：
 
 - 只收 `状态 != SKIP` 的行（SKIP 是「这轮没跑」，不是「耗时 0」）；
+- **丢掉 `rc=124` 的行**（M400）：124 = 被上限**砍断**时的秒数，不是「这门需要多少」。
+  把它当实测喂进来 ⇒ 基线直接等于上限 ⇒ 下一轮 P2 自己判绿，缺陷被自己的基线掩盖。
 - 同一门出现在多份输入 ⇒ 取 **elapsed 最大**的那行（最坏情况）；
-- 每行带 **来源列**（哪一份 TSV），可逐行追溯。
+- 每行带 **来源列**（哪一份 TSV），可逐行追溯；
+- **`--retain <旧基线>` 只补缺、不参与取最大**：否则「已修好的门」永远停在旧的最大值
+  （M400 实测：m187 从 476s→261s，取全历史最大就永远显示 476s）。
 
-刷新流程（**门的实际工作量变了**就要刷，例如上游用例 128→238）：
+### 5.1 刷新 = 自动的（M400 起，缺陷 763）
 
-```bash
-# 1) 跑一次串行全量门（权威档），拿到 GATE_TSV
-selfhost/run_gates.sh                       # 默认写到 /tmp/m116_gates.times.tsv
-# 2) 重新生成基线（可多份输入，各带 label）
-selfhost/gate_time_baseline.sh \
-    --from /tmp/m116_gates.times.tsv --label serial-20261018
-# 3) 形态自检 + 守卫
-selfhost/gate_time_baseline.sh --check
-selfhost/check_gate_timeouts.sh
+**不再手工跑。** M400 的病史是「输入回路没接上」：
+
+| 事实（M400 实测） | 值 |
+|---|---|
+| 基线上次生成 | 2026-10-26 14:30（18 天前） |
+| 基线行数 / 门清单 | 233 / 274 ⇒ **41 门 P2 从来判不到** |
+| 生成器被谁调用 | **全仓无人调用**（只有本文写着「手工跑」） |
+| 每轮 `shardN.times.tsv` | 都产出，**从未被消费** |
+| 提交前门的计时表 | `mktemp` 后 `rm -f` —— 历史最高占用恰在那张被删的表里（m187 754s/900s = 83%） |
+
+现在的回路：
+
+```
+全量门（8 分片 + quiet 车道）→ /data/gatevm/shard-<stamp>/*.times.tsv
+提交前门（release_preflight.sh --gates）→ /data/gatevm/preflight-<stamp>.times.tsv（**不再 rm**）
+        ↓  判绿后由 packaging/chain/release_postupgrade.sh 调
+selfhost/refresh_gate_baseline.sh          # 窗口 = 最近 3 个「已完成」链（含 CHAIN-COMPLETE.txt）
+        ↓  自动 commit + push（chore 提交，tree 脏则跳过不代你提交）
+selfhost/gate_time_baseline.tsv            # 门清单有多少门，基线就有多少行
+        ↓
+check_gate_timeouts.sh  P2 裕度 · **P6 覆盖** · **P7 回灌新鲜度**
 ```
 
-⚠️ **分段跑出来的 TSV 也能用**（每段一份，各自 `--label`），合并时取 max —— 但要在 `--label` 里写清是哪一段，
-否则日后无法判断「这个 963s 是哪台机器、有没有并发负载」。
+两条新判据（都在 `--self-test` 里有负控+正控）：
+
+- **P6 覆盖**：门清单里每扇门都必须有基线行 —— 否则 P2 对它**根本判不到**（静默绿）。
+- **P7 回灌新鲜度**：`/data/gatevm` 下存在比基线最新来源标签更晚的**已完成**链 ⇒ 红。
+  「已完成」= 目录里有 `CHAIN-COMPLETE.txt`；正在跑的链没有这个文件 ⇒ **天然不计**
+  （否则判据会读自己，把正在跑的这一轮当成「未回灌」）。
+
+### 5.2 窗口语义（为什么是 3 轮）
+
+取 max 会被「修复前的旧最大」永久钉住（M400 前 m187 476s 永不下降）。所以回灌只吃
+**最近 N 个已完成链**（默认 3），下界随轮次滑动：某门修好后，等旧最大值滑出窗口，
+基线就自动降下来 —— 不需要任何人「记得去改一个数」。
+
+代价（如实登记）：修复的效果要**等 N 轮**才在基线里体现。这期间基线偏保守（偏高），
+方向是安全的（不会漏报），只是数字旧。要立刻反映：`--stamps 1` 手跑一次。
+
+### 5.3 新门首次入册（唯一需要人动手的场景）
+
+新增门会让 P6 立刻变红（它还没有任何实测行）。补法 = 量一次再回灌：
+
+```bash
+GATE_TSV=/tmp/newgate.tsv ./selfhost/run_gates.sh --only <新门名> --allow-dirty
+./selfhost/refresh_gate_baseline.sh --extra-tsv /tmp/newgate.tsv bootstrap-$(date +%Y%m%d) --commit
+```
+
+> 为什么不做「新门自动豁免」：豁免名单会腐烂，而「量一次」是 10 秒的事。
+> 这条口径与 M212 缺陷 288 一致：**判据的输入必须可复算**，不许凭空补一个数。
+
 
 ---
 

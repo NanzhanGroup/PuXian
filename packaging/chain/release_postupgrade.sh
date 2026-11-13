@@ -68,8 +68,7 @@ run_pu() {
         if [ -f "$STAMP" ] && [ "$(stat -c %Y "$STAMP" 2>/dev/null || echo 0)" -ge $((start - GRACE)) ] \
            && grep -q 'CHAIN-VERDICT=GREEN' "$STAMP" 2>/dev/null; then
             say "① GREEN（STAMP mtime 在容差内 ${GRACE}s）"; break
-        fi
-        # 本轮 STAMP 含 NO-GO ⇒ 等用户/东月修完重跑，本单元不退出（这正是 M392 的漏）
+        fi        # 本轮 STAMP 含 NO-GO ⇒ 等用户/东月修完重跑，本单元不退出（这正是 M392 的漏）
         [ "$(date +%s)" -ge "$deadline" ] && {   # -ge：--max-hours 0 首轮即到点（N1 钉这条；-gt 会死循环）
             alert "m${MS}-postupgrade-timeout" "M${MS} 升级等待超时（${MAXH}h）" \
                 "STAMP=$STAMP 未出现本轮 GREEN；本机未升级。"
@@ -77,6 +76,31 @@ run_pu() {
         }
         sleep "$INTERVAL"
     done
+
+    # ①' M400（缺陷 763）：判绿后把这一轮的实测耗时**回灌**进基线。
+    #   为什么挂在这里而不是 publish 里：publish 要求树净，回灌会产生一个 chore 提交；
+    #   而这一步本来就在「发布已完成」之后，多一个提交不影响 tag（tag 打的是发布提交）。
+    #   失败**不挡升级**（升级是本单元的主职）：告警 + 让下一轮 gate_timeouts 的 P7 出面。
+    baseline_refresh() {
+        local repo="${PU_REPO:-/data/code/puxian}"
+        local rf="$repo/selfhost/refresh_gate_baseline.sh"
+        if [ ! -x "$rf" ]; then say "①' 跳过基线回灌（$rf 不存在或不可执行）"; return 0; fi
+        if [ "$DRY" = "1" ]; then
+            say "①' DRY-RUN 基线回灌（只报不动）"
+            "$rf" --repo "$repo" --dry-run >> "$LOG" 2>&1 || say "①' DRY-RUN 回灌报错（不影响）"
+            return 0
+        fi
+        if "$rf" --repo "$repo" --commit --push >> "$LOG" 2>&1; then
+            say "①' 基线回灌 OK"
+        else
+            say "①' 基线回灌 FAIL（下一轮 gate_timeouts 的 P7 会当场拦下）"
+            alert "m${MS}-baseline-refresh" "M${MS} 基线回灌失败" \
+                "下一轮 gate_timeouts 的 P7 会判红；手工：$rf --commit --push"
+        fi
+        return 0
+    }
+
+    baseline_refresh     # ①' 判绿后立刻回灌（在等镜像之前做：不依赖镜像，早做早收口）
 
     # ② 等镜像齐
     while :; do
@@ -142,6 +166,9 @@ STUB
     chmod +x "$T/notify"
     export STUB_ALERTS="$T/alerts.txt"; : > "$STUB_ALERTS"
     export DY_NOTIFY_BIN="$T/notify" PU_LOG="$T/pu.log" PU_INTERVAL=0
+    # 自测不许碰真仓库：PU_REPO 指向不存在的目录 ⇒ ①' 走「跳过回灌」分支
+    #   （既隔离，又顺带证明「缺件不挡升级」）
+    export PU_REPO="$T/norepo"
     n=0; FAIL=0
     ok()  { n=$((n+1)); echo "  ✅ $*"; }
     bad() { n=$((n+1)); FAIL=$((FAIL+1)); echo "  ❌ $*"; }

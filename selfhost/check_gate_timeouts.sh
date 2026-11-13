@@ -17,6 +17,12 @@
 #   P3 **声明裕度**：声明了超时的门必须给出 ≥1.5× 基线实测的裕度（否则「声明了也不够」）。
 #   P4 **声明无基线** ⇒ ℹ️（不装作有数据）；**基线里有、门清单里没有** ⇒ ℹ️（改名/删门的残留）。
 #   P5 **规模锚点**：门清单 ≥150 · 基线 ≥150 行 · 声明 ≥1 条（否则判红 —— 提取器坏了不能装绿）。
+#   P6 **覆盖**（M400）：门清单里每扇门都必须有基线行（否则 P2/P3 对它**根本判不到** ⇒ 静默绿）。
+#      M400 实测：门清单 274 / 基线 233 ⇒ 41 门从生下来就没被 P2 看过一眼。
+#   P7 **回灌新鲜度**（M400）：/data/gatevm 下有「已完成」（含 CHAIN-COMPLETE.txt）的链比
+#      基线的最新来源标签还新 ⇒ 红（有实测没回灌）。
+#      ⚠️ 正在跑的链**没有** CHAIN-COMPLETE.txt ⇒ 天然不计 —— 否则会「判据读自己」。
+#      这条是「基线靠人手跑」的机器兜底：忘了回灌，下一轮就会在这里被当场拦下。
 #
 # 输入：
 #   --registry <file>   默认 selfhost/gates.registry.sh
@@ -24,6 +30,8 @@
 #   --list-file <file>  门清单（自证用；默认调 `run_gates.sh --list`，该入口**零副作用**）
 #   --default <秒>      默认上限（默认 900，与 run_gates.sh 的 GATE_TIMEOUT_DEFAULT 同源口径）
 #   --no-near / --no-headroom   仅**自证/负控**用（关掉对应判据以证明「红确实来自它」）
+#   --measured-dir <dir>  已完成的链实测目录（默认 /data/gatevm；不存在则 P7 只 ℹ️，便于异机跑）
+#   --no-coverage / --no-fresh   同上，仅自证/负控用
 #   --self-test         跑内置自证（含**动态**：假注册源声明 2s ⇒ 真被运行器执行）
 # 退出码：0 绿 / 1 有违例 / 2 用法错 / 3 前提不成立（输入缺失/解析不出）
 # ============================================================
@@ -36,6 +44,9 @@ LISTF=""
 DEFTMO=900
 NEAR_ON=1
 HEAD_ON=1
+COV_ON=1
+FRESH_ON=1
+MDIR="${PX_MEASURED_DIR:-/data/gatevm}"
 SELFTEST=0
 
 while [ $# -gt 0 ]; do
@@ -46,6 +57,9 @@ while [ $# -gt 0 ]; do
         --default)    DEFTMO="${2:-}"; shift 2 ;;
         --no-near)    NEAR_ON=0; shift ;;
         --no-headroom) HEAD_ON=0; shift ;;
+        --no-coverage) COV_ON=0; shift ;;
+        --no-fresh)   FRESH_ON=0; shift ;;
+        --measured-dir) MDIR="${2:-}"; shift 2 ;;
         --self-test)  SELFTEST=1; shift ;;
         -h|--help)    sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "未知参数: $1（--help 看用法）" >&2; exit 2 ;;
@@ -181,6 +195,53 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
     done <<< "$base_rows"
     [ "$stale" = 0 ] && ok "基线 ⇄ 门清单：无残留"
 
+    # ── P6 覆盖（M400）：门清单的每扇门都要有基线行 ──
+    #   为什么：P2 只遍历基线行 ⇒ 基线里没有的门，P2 连看一眼的机会都没有（静默绿）。
+    #   M400 实测：274 门 / 233 行 ⇒ 41 门从未被 P2 判过；其中包含新增门（生下来就 900s 也无人知）。
+    echo "── P6 覆盖（每扇门都要有基线行）──"
+    if [ "$COV_ON" = 0 ]; then
+        info "P6 已被 --no-coverage 关闭（仅自证用）"
+    else
+        local missing
+        missing="$(comm -23 <(printf '%s\n' "$glist" | sort -u) \
+                            <(printf '%s\n' "$base_rows" | cut -f1 | grep -v '^$' | sort -u) 2>/dev/null)"
+        if [ -n "$missing" ]; then
+            local nmiss; nmiss=$(printf '%s\n' "$missing" | grep -c . || true)
+            bad "基线缺 $nmiss / $ng 门的实测行 ⇒ 这些门的 P2 判不到（静默绿）："
+            printf '%s\n' "$missing" | awk 'NR<=10' | sed 's/^/       · /'
+            [ "$nmiss" -gt 10 ] && echo "       · …（共 $nmiss 门）"
+            echo "     修法：./selfhost/refresh_gate_baseline.sh --commit --push（自动回灌最近 3 轮实测）"
+        else
+            ok "$ng 门全部有基线行（P2 对每门都可判）"
+        fi
+    fi
+
+    # ── P7 回灌新鲜度（M400）：有「已完成」的链比基线新 ⇒ 有实测没回灌 ──
+    #   口径：只认含 CHAIN-COMPLETE.txt 的 stamp 目录（正在跑的链没有它）⇒ 不会判据读自己。
+    echo "── P7 回灌新鲜度（有已完成实测未回灌 ⇒ 红）──"
+    if [ "$FRESH_ON" = 0 ]; then
+        info "P7 已被 --no-fresh 关闭（仅自证用）"
+    elif [ ! -d "$MDIR" ]; then
+        info "目录不存在：$MDIR ⇒ 新鲜度不可判（异机/CI 场景跳过，不装作有数据）"
+    else
+        local newest_done base_stamp
+        newest_done="$(for x in "$MDIR"/shard-*; do
+                           [ -f "$x/CHAIN-COMPLETE.txt" ] || continue
+                           basename "$x" | sed 's/^shard-//'
+                       done | sort | awk 'END{print}')"
+        base_stamp="$(printf '%s\n' "$base_rows" | cut -f4 | grep -oE '20[0-9]{6}-[0-9]{6}' | sort | awk 'END{print}')"
+        if [ -z "$newest_done" ]; then
+            info "没有已完成的链（缺 CHAIN-COMPLETE.txt）⇒ 新鲜度不可判"
+        elif [ -z "$base_stamp" ]; then
+            info "基线没有任何带日期的来源标签 ⇒ 新鲜度不可判（先回灌一次）"
+        elif [ "$newest_done" \> "$base_stamp" ]; then
+            bad "有已完成的全量门实测**未回灌**：链 $newest_done ＞ 基线最新 $base_stamp"
+            echo "     修法：./selfhost/refresh_gate_baseline.sh --commit --push"
+        else
+            ok "基线已回灌到最新已完成链（$base_stamp）"
+        fi
+    fi
+
     # ⚠️ 判据函数的返回码必须反映「本轮有没有新增失败」——
     #   否则自证会全绿（每个 fixture 都"通过"），而那正是 M289/M290 记过的「判据恒真」形态。
     [ "$FAILN" -gt "$fail0" ] && return 1
@@ -190,6 +251,10 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
 # ---------- 自证 ----------
 selftest() {
     local W; W="$(mktemp -d /tmp/m311tmo.XXXXXX)" || exit 3
+    # P6/P7 是 M400 加的：本自证前半段的 fixture 故意只给「部分门」的基线（为单点测 P2/P3），
+    # 所以先关掉；S9/S10/S11 各自**显式打开**来证这两条有牙（不打开就永远绿，等于没测）。
+    local _cov0=$COV_ON _fresh0=$FRESH_ON
+    COV_ON=0; FRESH_ON=0
     #   ⚠️ 自证会**复用** check_all ⇒ 它会改全局 PASS/FAILN。必须存/还原，
     #      否则自证的"失败 fixture"会被算进真判的汇总（首版实测：汇总 22/6 而真判其实全绿）。
     local _p0=$PASS _f0=$FAILN
@@ -280,7 +345,52 @@ EOS
         st_no "S8 动态：声明没被执行器采用（见 $W/s8.log）"
     fi
 
+    # ── S9 P6 覆盖：缺一门 ⇒ 红；补齐 ⇒ 绿（正控+负控成对，不吃「文件变了」那套自证）──
+    COV_ON=1
+    awk -F'\t' '$1 != "g7"' "$W/base_ok.tsv" > "$W/base_gap.tsv"
+    if check_all "$W/reg_ok.sh" "$W/base_gap.tsv" "$W/list.txt" > "$W/s9.log" 2>&1; then
+        st_no "S9 覆盖缺口应判红（160 门清单 / 159 行基线）"
+    else
+        grep -q '基线缺 1 / 160 门' "$W/s9.log" && st_ok "S9 覆盖缺口判红且报数" || st_no "S9 红但没报缺口数"
+        grep -q '· g7' "$W/s9.log" && st_ok "S9 缺口指名 g7" || st_no "S9 没指名缺哪门"
+    fi
+    if check_all "$W/reg_ok.sh" "$W/base_ok.tsv" "$W/list.txt" > "$W/s9b.log" 2>&1; then
+        st_ok "S9b 正控：补回 g7 ⇒ 覆盖绿"
+    else
+        st_no "S9b 正控失败：补齐后仍红（说明 S9 的红不只来自覆盖）"
+    fi
+    COV_ON=0
+
+    # ── S10 P7 新鲜度：有「已完成」的链比基线标签新 ⇒ 红；标签追平 ⇒ 绿 ──
+    FRESH_ON=1
+    local MD="$W/md"; rm -rf "$MD"; mkdir -p "$MD/shard-20260101-000000" "$MD/shard-20260102-000000"
+    touch "$MD/shard-20260101-000000/CHAIN-COMPLETE.txt"
+    # 第二个目录**故意不放** CHAIN-COMPLETE.txt（模拟正在跑的链）⇒ 不算数据
+    { for i in $(seq 1 160); do printf 'g%s\t10\tOK\tchain-20260101-000000\n' "$i"; done; } > "$W/base_fresh.tsv"
+    local _m0=$MDIR; MDIR="$MD"
+    if check_all "$W/reg_ok.sh" "$W/base_fresh.tsv" "$W/list.txt" > "$W/s10.log" 2>&1; then
+        st_ok "S10 已回灌（基线=最新已完成链）⇒ 绿；且未完成的 s20160102 未计入"
+    else
+        st_no "S10 已回灌却判红：$(grep '❌' "$W/s10.log" | head -1)"
+    fi
+    touch "$MD/shard-20260103-000000/CHAIN-COMPLETE.txt" 2>/dev/null || { mkdir -p "$MD/shard-20260103-000000"; touch "$MD/shard-20260103-000000/CHAIN-COMPLETE.txt"; }
+    if check_all "$W/reg_ok.sh" "$W/base_fresh.tsv" "$W/list.txt" > "$W/s10b.log" 2>&1; then
+        st_no "S10b 有更新已完成链未回灌却判绿（P7 没牙）"
+    else
+        grep -q '有已完成的全量门实测\*\*未回灌\*\*：链 20260103-000000' "$W/s10b.log" \
+            && st_ok "S10b 未回灌判红且指名链号" || st_no "S10b 红但没指名"
+    fi
+    # 正控：把基线标签改成最新链 ⇒ 必须转绿（证明红来自「标签落后」而非恒红）
+    sed 's/chain-20260101-000000/chain-20260103-000000/' "$W/base_fresh.tsv" > "$W/base_fresh2.tsv"
+    if check_all "$W/reg_ok.sh" "$W/base_fresh2.tsv" "$W/list.txt" > "$W/s10c.log" 2>&1; then
+        st_ok "S10c 正控：标签追平最新链 ⇒ 绿（红确实来自落后）"
+    else
+        st_no "S10c 正控失败：标签追平仍红"
+    fi
+    MDIR="$_m0"; FRESH_ON=0
+
     echo "══ 自证：$st_pass 通过 / $st_fail 失败 ══"
+    COV_ON=$_cov0; FRESH_ON=$_fresh0
     PASS=$_p0; FAILN=$_f0      # 还原：自证不参与真判的计数
     rm -rf "$W"
     trap - EXIT

@@ -104,11 +104,23 @@ gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错
     t0=$SECONDS
     log="$(mktemp)"
     tsv="$log.tsv"
+    # 落盘目标（M400）：目录不可写 ⇒ 空 ⇒ 行为退回旧样（只记日志，不让它挡住发布）
+    local tsdir tep=""
+    tsdir="${PX_PREFLIGHT_TSVDIR:-/data/gatevm}"
+    if mkdir -p "$tsdir" 2>/dev/null && [ -w "$tsdir" ]; then
+        tep="$tsdir/preflight-$(date +%Y%m%d-%H%M%S).times.tsv"
+    fi
     # 不用管道接 runner：rc 必须是门自己的 rc（缺陷 696 的形状：管道吞掉对侧状态）
     # GATE_TSV 指到临时文件：下面要用「台账行数」证明**这几门真的跑了**，
     #   因为实测 run_gates.sh 对不存在的门名会 rc=0 + 「跳过 267 门」⇒ rc=0 不足以证明跑过。
     GATE_TSV="$tsv" bash "$runner" --only "$(IFS=,; echo "${PRECHECK_GATES[*]}")" >"$log" 2>&1
     rc=$?
+    # ── M400 · 缺陷 763：这张表**不许再删** ───────────────────────────
+    #   病史：本档的 11 门用的是同一套 900s 配额，而历史上最高的占用就在这张表里
+    #   （m187 提交前门 747~755s / 900s = 83~84%，同时它在分片里只有 675~704s）。
+    #   过去跑完就 `rm -f "$tsv"` ⇒ 判据的输入被删掉 ⇒ 基线永远是 10 月的手抄值。
+    #   现在落盘到 $PX_PREFLIGHT_TSVDIR（默认 /data/gatevm），由 refresh_gate_baseline.sh 回灌。
+    [ -n "$tep" ] && cp -f "$tsv" "$tep" 2>/dev/null && echo "计时表已落盘：$tep"
     tail -30 "$log"
     echo "PREFLIGHT-GATES $( [ "$rc" = 0 ] && echo OK || echo FAIL ) rc=$rc 门数=${#PRECHECK_GATES[@]} 耗时=$((SECONDS-t0))s"
     if [ "$rc" != 0 ]; then
@@ -140,6 +152,9 @@ gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错
 
 if [ "$SELF" = 1 ]; then
     T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+    # 自测的计时表必须落在夹具目录：否则 stub 产出的 g1..g8 会污染真 /data/gatevm，
+    # 再被 refresh_gate_baseline.sh 当成真门回灌进基线（M400 首次自测就会踩）。
+    export PX_PREFLIGHT_TSVDIR="$T/tsv"
     mk() {  # mk <dir> <milestone> <version>
         mkdir -p "$1/tools"
         printf '## M%s：夹具\n\n正文\n' "$2" > "$1/CHANGELOG.md"
@@ -196,6 +211,14 @@ STUB
     grep -q 'PREFLIGHT-GATES OK' "$T/g1.out" && ok "G-P1 汇总行 = OK" || bad "G-P1 缺 OK 汇总行"
     grep -q 'stub-called' "$T/g1.stub.used" 2>/dev/null && ok "G-P1 前提自证：stub runner 真被调用" \
                                         || bad "G-P1 前提缺失：stub 没被调用（判据不成立）"
+
+    # M400：计时表必须**落盘**（过去跑完就 rm，最高占用只存在于被删的临时表里）
+    local pf_t; pf_t="$(ls "$PX_PREFLIGHT_TSVDIR"/preflight-*.times.tsv 2>/dev/null | awk 'END{print}')"
+    if [ -n "$pf_t" ] && [ "$(grep -c . "$pf_t")" = "$NG" ]; then
+        ok "G-P2 计时表落盘：$(basename "$pf_t") 有 $NG 行"
+    else
+        bad "G-P2 计时表没落盘或行数不对（${pf_t:-无}）—— 基线回灌将拿不到提交前门的实测"
+    fi
 
     gmkrepo "$T/g2"
     rc="$(ga "$T/g2" 1 "$NG" "$T/g2.out")"
