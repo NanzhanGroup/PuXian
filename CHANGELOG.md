@@ -1,3 +1,30 @@
+## M397 补1：全量门 1 红收口（codegen golden 漏重定基 · 缺陷 761 的下游面）
+
+> **一句话**：head=eeb4a28 的全量门判 RED 1 门 —— `diff_codegen` 的 `v01_value`。根因是**基准没重定基**，
+> 不是产品缺陷：M397 改了 `value.px`（v_arith +6 行 bytes 分支），而「重定基三件套」
+> （docs/ROADMAP.md:190）只做了 `golden/compiler.c` / `compiler.bc.dump` / `emitc_freeze --freeze`，
+> **漏了第三件 `selfhost/golden/*.c`**。
+
+```
+证据  /data/gatevm/m397-chain-20261113-075451.log（head=eeb4a28 · 绿 272 红 1 · 清单 273）
+      红门 /data/gatevm/shard-20261113-075453/red/shard8_gate_diff_codegen.log
+现场  v01_value C 源码有差异：closure 形参临时量 _v151→_v152、_v152→_v153（整体 +1）
+定性  把两版 golden 的 _v/_t/_il/px_srcline/closure 编号全部归一后逐行比：
+      **只剩 7 行新增代码** —— 正是 M397 的 bytes + bytes 分支；
+      其余 367 行差异全是「临时变量编号后移 + srcline 平移」。
+      后移的机制：v01_value.py 一个字节没改，但它 import value.px，v_arith 在编译单元前部
+      多了分支 ⇒ 全局临时计数器后移 ⇒ 同族于缺陷 761（冻结门的 src 指纹不含 import 闭包）。
+修法  ./bootstrap/pxc build selfhost/cases/v01_value.px | norm_c > selfhost/golden/v01_value.c
+      （只改基准文件，**不动判据**；差异已先证明是预期的发射变化，不是橡皮图章）
+复验  ./selfhost/diffcheck.sh --codegen → 19 例全部一致
+      ./selfhost/diffcheck.sh --value   → v01..v04 全 PASS
+副作用 仅 selfhost/golden/v01_value.c 一个文件；无产品代码 / 配置 / 服务变更
+回滚  git checkout HEAD~1 -- selfhost/golden/v01_value.c
+遗留  缺陷 761（冻结门 src 指纹不含 import 闭包）仍开着，本轮不修；它让 --freeze
+      对「改公共模块」无感 ⇒ 更容易漏掉第三件。下一轮若动 cg_*.px 或公共模块，按
+      ROADMAP:190 三件套逐条打勾后再提交。
+```
+
 ## M397：bytes 运算符面收口（PX-021 · 缺陷 760）
 
 > **一句话**：`bytes + bytes` ⇒ **bytes**（二进制安全拼接，内嵌 NUL 原样、长度按字节计）；
