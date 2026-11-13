@@ -1,0 +1,49 @@
+# M403 · 孤儿门复活清单（39 扇）—— 由 examples/m403_orphan_batch/verify.sh 逐条串行跑
+# 来历：这 39 扇门都有 examples/<名>/verify.sh，但**没有任何运行器收录**（selfhost/orphan_gates.txt
+#       的孤儿基线）。M251 只做过一次性体检，之后再没人跑过；M401 实锤「判据存在 ≠ 判据在执行」
+#       （m90_s1 就是其中一扇，M401 的语言缺陷正是它本该挡下的）。
+# M403 处置：一次性实测 46 扇（2026-11-14 05:30–05:44，见 CHANGELOG M403）：
+#       OK 39 → 复活（进本清单）· 异常 7 → 留孤儿基线并写明今天实测的 rc/门限，排 M404
+#       （其中 m85_s1 首测 120s 超时、放宽到 420s 后 10s 通过 = 冷缓存，故并入复活；m66_proc 虽 rc=0
+#         但 [6/6] 是 SKIP（缺 pyzipper）⇒ **不复活**：SKIP 当绿正是本轮要治的病）
+# 纪律：本清单与 selfhost/orphan_gates.txt **必须不相交**（同一扇门不能既"已收录"又"孤儿"）；
+#       verify.sh 必须在同一次运行里打印逐条 verdict —— 任一条红 ⇒ 整门红（不许静默 SKIP 当绿）。
+issue28_b1
+issue28_b2
+m101_s2
+m102_s2
+m103_s2a
+m103_s2b
+m103_s2d
+m125_alloc_fail
+m126_signal_isolate
+m127_unwind_lock
+m45_pkgdemo
+m62_langfix
+m64_bench
+m64_doc
+m64_test
+m69_registry
+m83_s1_http_body_nul
+m83_s2_archive_gaps
+m83_s3_ed25519
+m83_s4
+m83_s5
+m83_s6
+m84_s1_http_ct
+m84_s2_hmac
+m84_s3_dns
+m85_s1
+m85_s2
+m86_s0
+m86_s1
+m86_s2
+m90_s1
+m91_s1
+m93_s3
+m94_s2
+m94_s3
+m95_s2
+m95_s4
+m96_s2
+m96_s3

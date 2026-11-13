@@ -3,57 +3,19 @@
 # 格式：<门名>|<理由>
 #
 # 纪律：
-#   ① **只许缩小**（总数 ≤ 51）—— 新增孤儿一律判红（债不许扩大）；
+#   ① **只许缩小**（总数 ≤ 10）—— 新增孤儿一律判红（债不许扩大）；
 #   ② 条目一旦被某个运行器收录 ⇒ **必须从这里移除**（否则「过期基线」判红）；
-#   ③ 每条必须带理由（≥8 字）。
+#   ③ 每条必须带理由（≥8 字），且必须写明**最近一次实测**（日期 + rc）+ 处置去向。
 #
-# **M251 已完成逐条实测**（50 门：46 OK · 3 SKIP · 1 FAIL，见 selfhost/orphan_audit.tsv）——
-#   理由统一记为「存量」，逐条实测（跑一遍看 rc / 依赖是否还在）放 M250。
+# **M403（2026-11-14）一次性实测全部 46 扇**（此前只有 M251 的一次性体检，之后无人复跑）：
+#   39 扇 rc=0 且无 SKIP ⇒ 复活，进 selfhost/orphan_revived.txt，由 examples/m403_orphan_batch 跑；
+#   7 扇异常 ⇒ 留在本表，理由写成「今天实测到什么 + 排哪一轮」。
 #   已修好并纳入运行器的：`m63_langfix`（见 CHANGELOG M249）——故不在本表。
 #
-issue28_b1|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-issue28_b2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m100|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m101_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m102_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m103_s2a|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m103_s2b|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m103_s2c|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m103_s2d|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m125_alloc_fail|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m126_signal_isolate|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m127_unwind_lock|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m45_pkgdemo|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m62_langfix|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m64_bench|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m64_doc|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m64_test|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m66_proc|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m69_registry|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m83_s1_http_body_nul|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m83_s2_archive_gaps|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m83_s3_ed25519|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m83_s4|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m83_s5|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m83_s6|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m84_s1_http_ct|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m84_s2_hmac|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m84_s3_dns|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m85_s1|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m85_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m86_s0|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m86_s1|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m86_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m89_s3d|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m90_s1|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m91_s1|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m93_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m93_s3|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m94_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m94_s3|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m95_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m95_s4|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m96_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m96_s3|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m98_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
-m99_s2|M251 已逐条体检（实测记录见 selfhost/orphan_audit.tsv）· 不在任何运行器里，保留为历史资产；新增孤儿仍由本守卫挡下
+m66_proc|M403 实测 rc=0 但 [6/6] 是 **SKIP**（缺 python 模块 pyzipper，本机与 CI 都无 pip3、dnf 无此包）⇒ 「SKIP 判绿」正是本轮要治的病，故不复活；处置：装依赖或改用 zipfile 造夹具后复活（排 M404）
+m100|M403 实测 rc=1：[M100S2] 线程峰值 22 > 阈值 20（阈值写于旧 coro 池口径；同族 m93_s2/m98_s2/m99_s2 一起看，疑似 coro 池语义变更或线程泄漏）⇒ 先定性再定基（排 M404）
+m103_s2c|M403 实测 rc=1：px 断言里 `check(...)` 传 3 个实参，而 check 现在 arity=2（M197/M199 面）⇒ 用例过期；修用例或退役（排 M404）
+m89_s3d|M403 实测 rc=1：VM 堆回落未达成（base=5676 · idle=273988）⇒ 判据与 GC 触发策略强相关，需确认是判据过期还是真泄漏（排 M404）
+m93_s2|M403 实测 rc=1：thr_count=17 > 9（spawn/coro 线程上限，写于 M93 当时语义）⇒ 阈值过期候选，与 m100/m98_s2/m99_s2 同族（排 M404）
+m98_s2|M403 实测 rc=1：[S2a] 线程峰值 22 > 18（池 2 + coro ≤8 + 主/accept）⇒ 同族阈值判据（排 M404）
+m99_s2|M403 实测 rc=1：[S2] 线程峰值 24 > 20（40 空闲连接不占 worker）⇒ 同族阈值判据（排 M404）

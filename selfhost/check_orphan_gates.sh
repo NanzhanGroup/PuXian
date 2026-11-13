@@ -43,7 +43,7 @@ REG="${ORPHAN_REGISTRY:-selfhost/gates.registry.sh}"
 CI="${ORPHAN_CI:-.github/workflows/ci.yml}"
 BASE="${ORPHAN_BASELINE:-selfhost/orphan_gates.txt}"
 # 基线规模上限 —— 写死常量（**只许缩小**：要扩充就得改这个数字，留下痕迹）
-ORPHAN_MAX="${ORPHAN_MAX:-50}"
+ORPHAN_MAX="${ORPHAN_MAX:-10}"
 
 SELFTEST=0
 for a in "$@"; do
@@ -105,6 +105,30 @@ run g_comment bash examples/g_comment/verify.sh" ""
     out="$(runfix cov)"; rc=$?
     chk "N3 正控：真「run」行收录 ⇒ 该门不再算孤儿（基线为空仍绿）" "$rc" 0
 
+    # N4/N4b（M403）：批量复活清单只有在**消费者已注册且脚本在盘**时才算收录 ——
+    #   否则清单就成了「把孤儿洗白」的新后门（M401 缺陷 766 是注释洗白，这是清单洗白）。
+    preprint() {   # 在 $1 夹具里加：一扇 g_revive + 一份清单
+        mkdir -p "$F/$1/examples/g_revive" "$F/$1/examples/m403_orphan_batch"
+        : > "$F/$1/examples/g_revive/verify.sh"
+        : > "$F/$1/examples/m403_orphan_batch/verify.sh"
+        printf 'g_revive\n' > "$F/$1/selfhost/orphan_revived.txt"
+    }
+    mkfix rv "$BASE_OK" "$REG_OK
+run m403_orphan_batch bash examples/m403_orphan_batch/verify.sh"
+    preprint rv
+    out="$(runfix rv)"; rc=$?
+    chk "N4 正控：清单 + 消费者已注册且脚本在盘 ⇒ 清单内门算已收录（g_comment 仍在基线 ⇒ 绿）" "$rc" 0
+
+    mkfix rv2 "$BASE_OK" "$REG_OK"
+    preprint rv2
+    out="$(runfix rv2)"; rc=$?
+    chk "N4b 负控：清单在但消费者未注册 ⇒ 不算收录（新增孤儿必判红）" "$rc" 1
+    #   点名判据用「输出里出现 g_revive」而不是计数：夹具里 m403_orphan_batch 自身也是一个
+    #   example 目录（未注册时同样算孤儿）⇒ 计数会随夹具形状变，名字不会。
+    grep -q 'g_revive' <<< "$out" \
+        && { echo "  ✅ N4c 负控红得有名字（g_revive 被点为新增孤儿）"; sp=$((sp+1)); } \
+        || { echo "  ❌ N4c 判红了但没点名"; sf=$((sf+1)); }
+
     echo "── check_orphan_gates --self-test：通过 $sp · 失败 $sf"
     [ "$sf" = 0 ]
 }
@@ -133,6 +157,25 @@ grep -vE '^[[:space:]]*#' "$CI" 2>/dev/null \
     | grep -oE 'examples/[A-Za-z0-9_-]+/verify\.sh' \
     | sed 's|examples/||; s|/verify\.sh||' | sort -u > "$T/ci.txt"
 cat "$T/reg.txt" "$T/ci.txt" | sort -u > "$T/covered.txt"
+
+# ── 1b 批量复活清单（M403）：清单里的门由 examples/m403_orphan_batch **串行实跑** ──
+#   与「注释里写一句路径就算收录」的区别（M401 缺陷 766 的教训）：清单要被算作**收录**，
+#   必须先证明**消费者真的注册并存在**（registry 有 `run m403_orphan_batch … examples/m403_orphan_batch/verify.sh`，
+#   且该脚本文件在盘上）；否则清单一律不算数 —— 那些门照旧按孤儿判红。
+#   （负控见 examples/m403_orphan_batch 的 C4/C5，以及本文件 --self-test 的 N4：清单在而消费者不在 ⇒ 仍判红。）
+REVIVE="${ORPHAN_REVIVED:-selfhost/orphan_revived.txt}"
+CONSUMER="m403_orphan_batch"
+if [ -f "$REVIVE" ]; then
+    if grep -qE "^[[:space:]]*run[[:space:]]+${CONSUMER}[[:space:]]+.*examples/${CONSUMER}/verify\.sh" "$REG" \
+       && [ -f "$EX_DIR/$CONSUMER/verify.sh" ]; then
+        grep -vE '^[[:space:]]*(#|$)' "$REVIVE" | tr -d '[:blank:]' | grep . | sort -u > "$T/revived.txt" || true
+        cat "$T/revived.txt" >> "$T/covered.txt"
+        sort -u -o "$T/covered.txt" "$T/covered.txt"
+        ok "批量复活清单（$(wc -l < "$T/revived.txt") 条 · 消费者 ${CONSUMER} 已注册且脚本在盘）"
+    else
+        echo "  ⚠️ 复活清单存在但消费者未注册/缺脚本 ⇒ 清单不算收录（其中门仍按孤儿判）"
+    fi
+fi
 
 NA=$(wc -l < "$T/all.txt")
 NR=$(wc -l < "$T/reg.txt")
@@ -236,7 +279,10 @@ else
         if [ "$FIXTURE" = 1 ]; then
             echo "  ⏭  夹具模式：台账规模锚点跳过"
         else
-            [ "$NX" -ge 40 ] && ok "台账规模下限（≥40，实测 $NX）" || bad "台账只 $NX 条 —— 体检没跑？"
+            # M403：孤儿基线从 46 → 7（39 扇复活、进 orphan_revived.txt 由 m403_orphan_batch 跑），
+            #   故台账规模锚点同步下调到 ≥5 —— 锚点只防「空台账 ⊇ 空基线」的假绿，
+            #   真正的一一对应由上面 3e 的 comm 双向差集保证（漏记/过期都判红）。
+            [ "$NX" -ge 5 ] && ok "台账规模下限（≥5，实测 $NX）" || bad "台账只 $NX 条 —— 体检没跑？"
         fi
     fi
 

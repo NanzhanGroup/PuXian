@@ -1868,6 +1868,16 @@ jobs:
           bash examples/m401_default_args/verify.sh > /tmp/v_m401.log 2>&1 || { echo "❌ m401_default_args 门失败（默认参数求值位置）"; tail -40 /tmp/v_m401.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m401_default_args（三轨逐字节 + 前提自证 + 判据自证）PASS"
 
+      - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
+        # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
+        # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交
+        #   · C5 清单里的门不得已被 registry 单独收录 · N1 必败夹具判红并指名 · N2 必过夹具判绿
+        if: always()
+        run: |
+          set +e
+          bash examples/m403_orphan_batch/verify.sh > /tmp/v_m403.log 2>&1 || { echo "❌ m403_orphan_batch 门失败（孤儿门批量复活）"; tail -60 /tmp/v_m403.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m403_orphan_batch（39 扇孤儿门逐条实跑 + 正负控）PASS"
+
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

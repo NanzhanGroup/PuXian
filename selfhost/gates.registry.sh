@@ -2143,3 +2143,17 @@ run m400_baseline_feedback bash examples/m400_baseline_feedback/verify.sh
 #        · P 前提自证（v0.2.400 的 bootstrap/pxi 必须在本用例上 R1001）
 #        · K1 已知缺口（缺陷 765 前向引用：VM 静默 null）—— SKIP 不计失败，但响亮报告
 run m401_default_args bash examples/m401_default_args/verify.sh
+
+# ── m403_orphan_batch（M403 · 缺陷 428 的存量收口）──────────────────────────
+#   病史：M249 建孤儿守卫时实测「55 扇门写好了、但没有任何运行器跑它」；M251 体检过一遍**再没跑过**。
+#     M401 实锤这条债的代价：语言缺陷（形参默认值前向引用）本该由 m90_s1 挡下，而那扇门就在孤儿名单里。
+#   M403（2026-11-14 05:30–05:44）一次性实测全部 46 扇：
+#     · 39 扇 rc=0 且**无 SKIP** ⇒ 复活，清单 selfhost/orphan_revived.txt，由本门逐条串行跑
+#     · 7 扇异常/SKIP ⇒ 留 selfhost/orphan_gates.txt，理由写明今天实测的 rc 与旧阈值（排 M404）
+#   ⚠️ m66_proc 虽 rc=0，但 [6/6] 是 SKIP（缺 pyzipper）⇒ **不复活**：SKIP 判绿正是本轮要治的病。
+#   判据：C1 清单每条必有 verify.sh · C2 rc=0 · C3 日志不许出现独立 SKIP
+#        · C4 清单 ⇄ 孤儿基线不相交 · C5 清单里的门不得已被 registry 单独收录（防同一门跑两遍）
+#        · N1 必败夹具 ⇒ 判红并指名 · N2 必过夹具 ⇒ 判绿（证明 N1 的红来自失败本身）
+#   ⚠️ 本门是「孤儿门算不算已收录」的唯一消费者：check_orphan_gates 只在**本门已注册且脚本在盘**时
+#     才把清单里的门算作已收录（否则清单一律不算数）—— 清单不能成为洗白孤儿的新后门。
+run m403_orphan_batch bash examples/m403_orphan_batch/verify.sh
