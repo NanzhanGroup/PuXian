@@ -1351,3 +1351,41 @@ bash examples/m253_bcorpus/verify.sh --neg-skip # CI 用（负控要重编两轨
 真值来源：`examples/m253_bcorpus/truth/gen_truth.go`（Go 标准库 `crypto/aes` + `crypto/cipher` +
 `syscall`）⇒ 与实现（C + mbedtls）**跨语言、零代码共享**。
 ⚠️ 本仓 CI **没有 Go 步骤**（口径同 m136/m138）⇒ CI 只用已入库的 `aes_truth.tsv` / `errno_truth.tsv`。
+
+### 6.22 M402（缺陷 765）：**形参默认值的前向引用 —— 三轨的第三种命运：静默 null**
+
+#### 6.22.1 症状（同一份合法源码，三种命运）
+
+```
+def fw(a = b, b = 1):
+    return a
+  px run（解释轨）      R1001 未定义变量: 'b'        rc=1
+  px build --c（C 轨）  编译错（b 尚未声明）          rc=1
+  px build（VM 轨）     **静默 print null**          rc=0   ← 错值直接往下游走
+```
+
+#### 6.22.2 定性：这是**静态可判**的语言规则，不是运行时问题
+
+默认表达式只在**调用帧**求值，可见环境 = 前序形参 + 全局 ⇒ **后声明的形参在任何轨道都取不到值**。
+修前 VM 的 `bc_emit_default_fill` 把默认表达式求值进形参槽，而槽初值是 null ⇒ 静默错值。
+（同族纪律见 `docs/DICT_STRICT_MIGRATION.md`：**静默的错值比报错危险得多**。）
+
+#### 6.22.3 修法：解析层统一拒绝（三轨共用一份 parser）
+
+```
+selfhost/parser.px · parse_params() 末尾 → param_check_defaults()
+  对每个带默认值的形参 i：递归收集其默认表达式里的 Var 名，命中 i 之后的形参名 ⇒ 报错
+报错文本：E2018: 形参默认值不得引用后声明的形参 '<名>'（默认值只能引用声明序在前的形参、全局或函数）
+```
+
+语义收紧（`docs/MINI_SUBSET.md` 限制表第 13 条）：`let b = 5; def f(a = b, b = 1)` 从此报错 ——
+修前它对三轨本就是三种结果（interp 取全局 5 / C 编译错 / VM null），收紧是为了让「读到哪个 b」不再由**轨道**决定。
+
+#### 6.22.4 判据（`examples/m401_default_args/`）
+
+```
+K1  三轨必须同一句 E2018 拒绝（rc≠0 + 报文 sort -u 只剩一行：逐字比对，不是「都报错就算」）
+N2  判据自证（反）：合法写法 def fw(b = 1, a = b) 必须**不被**判红
+P2  前提自证：v0.2.401 的 bootstrap/pxi 在同一文件上必须报 R1001（旧口径）
+实测：8 通过 / 0 失败；全仓 1689 个 .px 扫描命中 0 处（正控：临时写 def g(a = zz, zz = 1) ⇒ 双红）
+```

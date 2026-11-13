@@ -859,6 +859,44 @@ def parse_case_body():
     var expr = parse_expr()
     let pos = node_pos(expr)
     return [["ExprStmt", expr, pos]]
+# ---------- 默认参数求值位置的静态判据（M402 · 缺陷 765）----------
+#   默认表达式在**调用帧**求值，可见环境 = 前序形参 + 全局；引用**后**声明的形参在
+#   任何轨道里都取不到值 —— 修前实测三轨三种命运：
+#     interp → R1001「未定义变量」/ C 轨 → 编译错（未声明）/ VM → **静默 null**（错值）。
+#   静默的错值比报错危险得多（DICT_STRICT 同一条口径）⇒ 在解析层统一拒绝：三轨共用
+#   本文件（compiler.px / interp.px / bc 轨都 import 它）⇒ 同一份源码同一条错。
+#   ⚠️ 语义收紧（写进 MINI_SUBSET 限制表）：`let b = 5; def f(a = b, b = 1)` 这种
+#     「本意取全局、恰好与后序形参同名」从此报错 —— 请改形参名。修前三轨对它本就三种结果。
+def param_collect_vars(node, out):
+    if type(node) != "list":
+        return
+    if len(node) > 0 and type(node[0]) == "string" and node[0] == "Var":
+        out.append(node[1])
+        return
+    var i = 0
+    while i < len(node):
+        param_collect_vars(node[i], out)
+        i += 1
+def param_check_defaults(params):
+    var i = 0
+    while i < len(params):
+        let dflt = params[i][3]
+        if dflt != null:
+            let used = []
+            param_collect_vars(dflt, used)
+            var j = i + 1
+            while j < len(params):
+                let later = params[j][1]
+                var k = 0
+                while k < len(used):
+                    if used[k] == later:
+                        let disp = later[1:len(later) - 1]
+                        let p = params[j][4]
+                        print_err(str(p[0]) + ":" + str(p[1]) + ": 语法错误 E2018: 形参默认值不得引用后声明的形参 '" + disp + "'（默认值只能引用声明序在前的形参、全局或函数）")
+                        exit(1)
+                    k += 1
+                j += 1
+        i += 1
 # ---------- 参数 ----------
 def parse_params():
     expect("(", "'('")
@@ -881,6 +919,7 @@ def parse_params():
                 continue
             break
     expect(")", "')'")
+    param_check_defaults(params)
     return params
 # ---------- 表达式（Pratt 解析） ----------
 def parse_expr():

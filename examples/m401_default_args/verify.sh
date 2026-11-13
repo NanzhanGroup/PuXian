@@ -166,9 +166,11 @@ else
     echo "  ⏭  P 前提自证跳过（本地无标签 $BASE_TAG 的 bootstrap/pxi）"
 fi
 
-# ── K1：已知缺口（缺陷 765）—— 前向引用默认值，三轨未统一 ─────────────────
-#   本项**不计失败**：VM 侧要动字节码入口哨兵序列（独立一轮）。但必须**响亮报告**，
-#   不能静默放过 —— 口径同 m158 的「已知缺口报告（SKIP 不计失败）」。
+# ── K1（M402 起为**硬判据** · 缺陷 765）：默认值前向引用 —— 三轨必须同一句错 ──────
+#   修前实测三轨三种命运：interp `R1001 未定义变量`（运行时）/ C 轨编译错「未声明」/
+#   VM **静默给 null**（rc=0，错值）。默认表达式只在**调用帧**求值，可见环境 =
+#   前序形参 + 全局 ⇒ 后声明形参在任何轨道都取不到值。M402 起在**解析层**统一拒绝
+#   （E2018，三轨共用 selfhost/parser.px）⇒ 一份源码同一条错、同一 rc。
 cat > "$TMP/fwd.px" <<'PXEOF'
 def fw(a = b, b = 1):
     return a
@@ -177,17 +179,71 @@ def main():
     print(fw())
 main()
 PXEOF
-FWD_IP=0; FWD_C=0; FWD_VM=0
-"$PX" run "$TMP/fwd.px" > "$TMP/fwd.i.out" 2> "$TMP/fwd.i.err" || FWD_IP=$?
-run_track c "$TMP/fwd.px" "$TMP/fwd.c.out" 2>/dev/null; FWD_C=$?
-run_track vm "$TMP/fwd.px" "$TMP/fwd.vm.out" 2>/dev/null; FWD_VM=$?
-if [ "$FWD_IP" != 0 ] && [ "$FWD_C" != 0 ] && [ "$FWD_VM" = 0 ]; then
-    echo "  ⏭  K1 已知缺口（缺陷 765）：前向引用默认值 —— interp/C 报错(rc=$FWD_IP/$FWD_C)，"
-    echo "      VM 静默给 null(rc=0，输出 $(head -1 "$TMP/fwd.vm.out" | cut -c1-20))。VM 侧独立一轮修。"
-elif [ "$FWD_IP" = 0 ] || [ "$FWD_C" = 0 ]; then
-    bad "K1 形态变了：interp/C 至少一轨接受了前向引用（rc=$FWD_IP/$FWD_C）—— 缺陷 765 定性要重做"
-elif [ "$FWD_VM" != 0 ]; then
-    ok "K1 缺陷 765 已被修掉（三轨同报错 rc=$FWD_IP/$FWD_C/$FWD_VM）—— 请把本项升级为硬判据"
+
+# 判据函数：0 = 三轨都按 E2018 拒绝**且报文逐字一致**；1 = 否则（并打印原因）
+#   $2=0 ⇒ 用作负控时**闭麦**（期望它返回 1，不该把「没拒绝」当错误打印出来）
+fwd_rejected() {
+    local f="$1" verbose="${2:-1}" msgf="$TMP/fwd.msg" bad_t=0 t rc out msg
+    : > "$msgf"
+    for t in interp vm c; do
+        rc=0
+        case "$t" in
+        interp) out="$("$PX" run "$f" 2>&1)"      || rc=$? ;;
+        vm)     out="$("$PX" build "$f" 2>&1)"    || rc=$? ;;
+        c)      out="$("$PX" build --c "$f" 2>&1)" || rc=$? ;;
+        esac
+        if [ "$rc" = 0 ] || ! printf '%s' "$out" | grep -q 'E2018'; then
+            [ "$verbose" = 0 ] || echo "      · $t 轨未按 E2018 拒绝（rc=$rc）：$(printf '%s' "$out" | head -1 | cut -c1-70)"
+            bad_t=1
+            continue
+        fi
+        msg="$(printf '%s' "$out" | grep -o 'E2018: .*' | head -1)"
+        printf '%s\t%s\n' "$t" "$msg" >> "$msgf"
+    done
+    [ "$bad_t" = 0 ] || return 1
+    if [ "$(cut -f2 "$msgf" | sort -u | wc -l)" != 1 ]; then
+        [ "$verbose" = 0 ] || echo "      · 三轨报文不一致：$(cut -f2 "$msgf" | sort -u | tr '\n' '|')"
+        return 1
+    fi
+    return 0
+}
+
+if fwd_rejected "$TMP/fwd.px"; then
+    ok "K1 三轨同一句 E2018 拒绝（$(head -1 "$TMP/fwd.msg" | cut -f2)）"
+else
+    bad "K1 前向引用未被三轨一致拒绝（缺陷 765 未修好）"
+fi
+
+# ── N2 判据自证：合法写法（引用**前**序形参）必须不被判红 ⇒ 判据不是恒红 ────────
+cat > "$TMP/fwd_ok.px" <<'PXEOF'
+def fw(b = 1, a = b):
+    return a
+
+def main():
+    print(fw())
+main()
+PXEOF
+if fwd_rejected "$TMP/fwd_ok.px" 0; then
+    bad "N2 判据自证失败：合法写法（引用前序形参）也被判红 ⇒ 判据过头"
+else
+    ok "N2 判据自证：合法写法不被判红（判据能分辨前向引用，不是恒红）"
+fi
+
+# ── P2 前提自证：v0.2.401 的运行时在 fwd.px 上必须是旧口径（R1001），不是 E2018 ──
+P2_TAG="${PX_RULE_BASE_TAG:-v0.2.401}"
+if git cat-file -e "$P2_TAG:bootstrap/pxi" 2>/dev/null; then
+    git show "$P2_TAG:bootstrap/pxi" > "$TMP/pxi_401" 2>/dev/null
+    chmod +x "$TMP/pxi_401"
+    out401="$("$TMP/pxi_401" "$TMP/fwd.px" 2>&1)"
+    if printf '%s' "$out401" | grep -q 'E2018'; then
+        bad "P2 前提自证失败：$P2_TAG 的运行时也报 E2018 ⇒ 本门没测到 M402 的改动"
+    elif printf '%s' "$out401" | grep -q 'R1001'; then
+        ok "P2 前提自证：$P2_TAG 报 R1001（旧口径）⇒ E2018 由本轮的解析层判据引入"
+    else
+        bad "P2 前提自证：$P2_TAG 既非 E2018 也非 R1001（$(printf '%s' "$out401" | head -1 | cut -c1-60)）"
+    fi
+else
+    echo "  ⏭  P2 前提自证跳过（本地无标签 $P2_TAG 的 bootstrap/pxi）"
 fi
 
 echo "── m401_default_args：通过 $pass · 失败 $fail"
