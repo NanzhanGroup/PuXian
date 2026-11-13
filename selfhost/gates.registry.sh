@@ -2077,3 +2077,15 @@ run m396_dict_index bash examples/m396_dict_index/verify.sh
 #        · N2 负控 `1 in bytes` 必须 R1002 且文案与实际接受的类型集合一致
 #        · P 前提自证：v0.2.396 的 bootstrap/pxi（内嵌旧 runtime + 旧解释器）必须拒绝。
 run m397_bytes_ops bash examples/m397_bytes_ops/verify.sh
+
+# ── m398_freeze_deps（M398 · 缺陷 761 收口）─────────────────────────────
+#   旧口径 emitc_freeze.sh 的 src 只哈希**入口文件** ⇒ 改被 import 的模块（value.px /
+#   stdlib/*.px）时，入口 src 不变而产物变 ⇒ 一律判【类别 B · 必须查】（误报）。
+#   实测影响面：524 入口里 50 个有传递依赖，stdlib/strings.px 被 18 个入口依赖。
+#   新口径 dep = 入口 sha + 递归 import 闭包 sha + 未解析 import 字面量（selfhost/freeze_deps.py）。
+#   判据：T1 幂等 · T2 传递性有牙（改 value.px ⇒ src 不变 / dep 变）
+#        · T3 无 import 入口也有牙（入口必须计入 dep，防常量假绿）
+#        · T4 未解析 import 字面量计入 · T5【类别 B 必须红】（wrapper 篡改产物、源码不动）
+#        · T6【类别 A 不误判】（改 value.px ⇒ 类别 B 必须为空 = 缺陷 761 的收口点）
+#        · T8 旧格式基准兼容 · T9 收尾自证（工作树复原 / 真二进制未被替换）
+run m398_freeze_deps bash examples/m398_freeze_deps/verify.sh

@@ -1825,6 +1825,17 @@ jobs:
           set +e
           bash examples/m397_bytes_ops/verify.sh > /tmp/v_bops.log 2>&1 || { echo "❌ m397_bytes_ops 门失败（bytes 运算符）"; tail -40 /tmp/v_bops.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m397_bytes_ops（+ 拼接 / in 子串 三轨一致 + 负控）PASS"
+      - name: m398_freeze_deps（发射冻结门传递依赖指纹 · M398 · 缺陷 761）
+        # 判据：T1 幂等 · T2 改被 import 的 value.px ⇒ 入口 src 不变 / dep 变
+        #   · T3 无 import 入口也有牙（防 dep 退化成常量）· T4 未解析 import 字面量计入
+        #   · T5【类别 B 必须红】wrapper 篡改产物而源码不动 ⇒ rc=1 且落在类别 B
+        #   · T6【类别 A 不误判】改 value.px ⇒ 落在类别 A 且类别 B 为空（缺陷 761 的收口点）
+        #   · T8 旧格式基准兼容 · T9 收尾自证（工作树复原 / 真二进制未被替换）
+        if: always()
+        run: |
+          set +e
+          bash examples/m398_freeze_deps/verify.sh > /tmp/v_fdep.log 2>&1 || { echo "❌ m398_freeze_deps 门失败（传递依赖指纹）"; tail -40 /tmp/v_fdep.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m398_freeze_deps（类别 A/B 分界正确 + 负控 + 旧格式兼容）PASS"
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。
         #   刻意**不**量 40ms：回环 ACK 即时，有无 NODELAY gap 恒 0ms（量墙钟会假绿）。

@@ -46,7 +46,7 @@
 | [`GATE_FLAKINESS_AUDIT.md`](GATE_FLAKINESS_AUDIT.md) | **时序敏感性盘点**（M341）：哪些门「拿一次观测下生死」的风险最高（**是可复核名单，不下结论**） | 同上；准备做重跑实验的人 |
 | [`GATE_FLAKE_FREQ.md`](GATE_FLAKE_FREQ.md) | **窄口径门的动态重跑结果**（M342）：126 次运行 / 0 次命中，以及它**如何否掉原来的方法假设** | 想「再跑几遍就能定性」的人（先读这份） |
 | [`GUARDS_SURFACE.md`](GUARDS_SURFACE.md) | **守卫扫描面体检表**（M326）：同一缺陷族的第 3 次复发不是判据错，而是**扫描面**比判据更容易错 | 写 `selfhost/check_*` 的人 |
-| [`EMITC_FREEZE_DEPS.md`](EMITC_FREEZE_DEPS.md) | **发射冻结门 · 类别 B 的已知盲区**：传递依赖（改 registry 模块会让进口它的用例被判「发射回归」） | 遇到「我只改了库，怎么用例红了」的人 |
+| [`EMITC_FREEZE_DEPS.md`](EMITC_FREEZE_DEPS.md) | **发射冻结门的传递依赖指纹**：M313 的盲区记录 + M398 收口（`dep` 闭包指纹 / 类别 A·B 分界 / 归因提示） | 遇到「我只改了库，怎么用例红了」的人；改 emitc_freeze 的人 |
 
 ### A4 协议与连接口径
 

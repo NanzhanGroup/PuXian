@@ -1,3 +1,131 @@
+## M398：发射冻结门升级为**传递依赖指纹**（缺陷 761 收口）
+
+> **一句话**：旧口径的 `src` 只哈希**入口文件**，改被 import 的模块（`selfhost/value.px`、
+> `stdlib/strings.px` …）时入口 src 不变而产物变 ⇒ 一律判【类别 B · 必须查】。
+> 现改为 `dep` = 入口 + 递归 import 闭包 + 未解析 import 字面量 的合并指纹，
+> 并把「差异文件 → 闭包清单 + git 最近一次提交」的归因提示接进判红输出。
+
+```
+令源   用户 2026-11-13 11:52「好的，开始 M398 吧」
+基线   95566f4（M397 已闭环：全量门 273/273 绿 · tag v0.2.397 已推 · 镜像 11:48 同步
+       · 本机 rpm 0.2.397 · 树净 · ahead 0）
+选型   剩余清单里挑「判据缺陷」而不是「产品缺口」——理由是它两天内造成两次误判：
+       · M397 前：改 value.px ⇒ --freeze 只重定基了入口，漏了下游 golden（另起事故）
+       · M397 r1：改 value.px ⇒ v01_value 判【类别 B】，人工对照实验才证明是预期发射变化
+       判据骗人的成本最终超过修判据的成本。
+       *不*选：缺陷 759（m128 C7 偶发，整门 4 次 + 单用例加压 60 次均不复现，追它大概率空轮）；
+       缺陷 757（gcroot 派生器 loose 档收紧会**缩小** GC 触发集 ⇒ 内存安全面，须独立 A/B 一轮）。
+```
+
+### 一 先量（改判据前的影响面，全部实测）
+
+```
+门口径：ls selfhost/cases/*.px examples/*/*.px           ⇒ 524 个入口
+闭包 >1（有传递依赖）                                     50 个
+被依赖最多的公共模块                                      stdlib/strings.px（18 个入口）
+                                                          stdlib/gfx.px（5）· stdlib/pxml.px（4）
+                                                          selfhost/value.px（v01_value 等）
+解析不到的 import                                         10 条（c/xxx C 库绑定 / Python 风格多名
+                                                          import / 生成代码的拼接 import）
+⇒ 改 stdlib/strings.px 一行，旧口径会让 **18 个入口**同时落进「必须查」
+```
+
+### 二 改了什么
+
+```
+新增  selfhost/freeze_deps.py           依赖闭包解析 + 合并指纹（--mode sig / --mode explain）
+                                        解析规则**照抄编译器** cg_module.px:cg_find_module_path
+                                        （相对路径 / std.* → stdlib/x/y.px|mod.px / .px_modules）
+改    selfhost/emitc_freeze.sh          gen() 改用 freeze_deps；基准行加 dep 列；
+                                        类别分界由 dep 决定（A=dep 变+产物变 / B=dep 未变+产物变）；
+                                        判红输出归因段（explain：闭包 + 各文件 git 最近提交）；
+                                        旧格式基准（无 dep）退回入口 sha 分类，不崩不假红，提示升级；
+                                        新增三个**门专用** env（EMITC_FREEZE_FILES/GOLDEN/EMITC_BIN）
+新增  examples/m398_freeze_deps/verify.sh  门（23 条判据，见三）
+改    selfhost/golden/emitc_freeze.sha   重定基 524 行（加 dep 列）
+改    selfhost/gates.registry.sh + .github/workflows/ci.yml   注册
+改    docs/EMITC_FREEZE_DEPS.md          追加「M398 收口」六节（含诚实边界）
+改    docs/README.md                     索引行描述从「已知盲区」改为「已收口 + 怎么读 A/B」
+```
+
+三条设计要点，每条各对应一次实测踩坑：
+
+```
+① 入口必须计入 dep（不只是依赖）——否则「零 import 的入口」dep 退化成常量，源码一改就被判
+   【B · 源码未变而产物变】，等于把误报从「有依赖的文件」平移到「无依赖的文件」。门内 T3 专测。
+② 解析不到的 import 把**字面量**拼进指纹 —— c/xxx 是 C 库绑定（M42 不加载 .px），生成代码的
+   拼接 import 也解析不到，但改一个字也该让指纹变。保守方向：宁可多算不可少算。
+③ 不自己发明解析规则 —— 照抄 cg_module.px，否则门与编译器对「同一文件」会有两种说法。
+```
+
+### 三 门 m398_freeze_deps（23 条 · 首跑 23/23 绿）
+
+```
+T1 幂等            同一入口两次 sig 完全一致
+T2 传递性有牙      注入 selfhost/value.px ⇒ v01_value.px 的 src **不变** / dep **变**
+                   （实测 1ad4aec9… → 25a89a4f…，src 恒为 3b49797916ac6cb9）
+T3 无依赖有牙      注入 s01_arith.px（零 import）⇒ 它自己的 dep 变（f3d20721… → ba421338…）
+T4 未解析 import   改字面量 ⇒ dep 变（b7ad5429… → b80fdda5…）
+T5 【B 必须红】    wrapper 篡改 v01_value 的 --emit-c 输出、**源码一行不动**
+                   ⇒ rc=1 · 报【类别 B · 发射行为回归】· 该文件落在 B 段 · A 段为空 · 有归因段
+                   前提自证：wrapper 产物 735a44dc… → cf71edc0…，且对其余入口透明（s01 不变）
+T6 【A 不误判】    注入 value.px ⇒ rc=1 · 落在 A 段 · **B 段为空**（缺陷 761 的收口点）
+T8 旧格式兼容      基准缺 dep 列 ⇒ rc=0（不假红）+ 打印升级提示（不静默降级）
+T9 收尾自证        value.px / s01_arith.px 已还原 · bootstrap/pxc_vm 未被替换
+约束     全程**不替换** bootstrap/pxc_vm（用 EMITC_BIN 指向 wrapper）——替换真二进制在中断时
+         会毁掉工具链；注入前先备份、trap 恢复、结束校验还原。
+```
+
+门自己的负控自证（开发期实测，日志 `/data/autodrive/m398-gate-selfproof.txt`）：
+
+```
+把 freeze_deps.py 的依赖循环改成空（== 旧口径）⇒ 门 rc=1，红 3 条：
+  ❌ dep 未变 —— 传递依赖没被算进去
+  ❌ 未落在类别 A
+  ❌ 类别 B 非空（依赖变了却被判回归 ⇒ 缺陷 761 未收口）
+⇒ 本门确实测的是缺陷 761 的缺口，不是恒绿。
+```
+
+判据被自己的提示文案骗过一次（第一版 `grep -q '类别 A'` 命中了脚本末尾的提示语
+「类别 B 为空（无回归嫌疑）」和 explain 段的「判【类别 A】」⇒ 假红 2 条）。
+已改为只认**完整标题**（`【类别 A · 源码闭包已变】` / `【类别 B · 发射行为回归】`）——
+CRITERIA ⑥「注释/提示里的字样也算代码」的现场实例。
+
+### 四 重定基自证（不是橡皮图章）
+
+```
+改前全量 --check（旧基准 524 行）：✅ 524 个文件产物逐字节一致 + 正确提示「缺 dep 列」
+                                    ⇒ 证明新脚本的**判据**与旧口径等价（只加分类信息）
+--freeze 升级：524 行 · 524 个唯一 dep（无一行重复）
+自证：新基准去掉 dep 列后与旧基准 diff = **空** ⇒ rc/out/err 一字未动，只多一列
+改后全量 --check：✅ 524 个文件与**新基准**逐字节一致
+版本 bump + 重烘后再 --check：✅ 仍全绿（版本串不进 --emit-c 产物 ⇒ 无需二次 freeze）
+```
+
+### 五 收尾
+
+```
+版本    0.2.398（9 处字面量，含 2 份自举基准）· packaging/bump_version.sh
+版本门  check_version_drift VERSION-DRIFT=OK · check_version_golden VERSION-GOLDEN-OK
+        （bootstrap/pxc --version = bootstrap/pxi --version = 0.2.398）
+重烘    rebake_bin.sh --rebake-all 成功 12 失败 0 · --check-all **14/14 与源码一致**
+注册    check_gate_registry 13/13 绿（含「脚本门」类别 49 个双向一致）
+```
+
+### 六 诚实边界
+
+```
+不做「差异行 → 所属模块」的**逐行**归因：那要编译器在 emit-c 时携带「本行来自哪个模块」的
+  元信息，属发射路径改动（会改全部 524 个产物）。本轮给的是**文件级**归因（闭包清单 +
+  git 最近提交），对「我只改了一个文件」的场景够用。
+三个 env 是**门专用可测性接缝**，生产/CI 一律不设；误设后果是「门只看子集」，
+  由 check_gate_registry 与全量门口径（不设任何 env）共同约束。
+闭包解析是文本级，不跟进条件 import / 运行时拼路径（仓内实测不存在；若将来出现，
+  指纹只会偏保守 = 更容易判 A，不会漏）。
+本轮**不改**产品源码（runtime/ 与 selfhost/*.px 的语义零改动）；唯一的 .px 改动是
+  版本字面量（compiler.px / interp.px 的 PXC_VER/PXI_VER 与 tools/*.px 打印串）。
+```
+
 ## M397 补1：全量门 1 红收口（codegen golden 漏重定基 · 缺陷 761 的下游面）
 
 > **一句话**：head=eeb4a28 的全量门判 RED 1 门 —— `diff_codegen` 的 `v01_value`。根因是**基准没重定基**，
