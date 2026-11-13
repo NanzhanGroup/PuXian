@@ -206,6 +206,14 @@ jobs:
         run: |
           bash selfhost/check_gate_paths.sh --self-test
           bash selfhost/check_gate_paths.sh
+      - name: 孤儿门守卫（有 verify.sh 却没有任何运行器跑它 · M249 缺陷 428 · M401 加固 766）
+        #   判据：每个 examples/*/verify.sh 必须被 registry 或 ci.yml **真正登记**；
+        #   两个运行器都没提的，必须在 selfhost/orphan_gates.txt 里带理由（基线只许缩小）。
+        #   M401 加固：注释里提到路径**不算收录**（原全文件 grep ⇒ 一句注释就能把孤儿洗白）。
+        #   ⚠️ 本门在 M401 之前**自身不在任何运行器里**（它当时判红 3 条过期基线，无人知）。
+        run: |
+          bash selfhost/check_orphan_gates.sh --self-test
+          bash selfhost/check_orphan_gates.sh
       - name: 被 import 的模块必须有 __main__ 守卫（M247 · 缺陷 418 机械化）
         #   M246 实锤：`pair_check.py` 写了 `from three_tracks import …`，而那份 three_tracks.py
         #   末尾是**模块级** `sys.exit(main())` ⇒ import 动作本身跑完了整个对拍并终止调用方进程
@@ -1847,6 +1855,18 @@ jobs:
           set +e
           bash examples/m400_baseline_feedback/verify.sh > /tmp/v_m400.log 2>&1 || { echo "❌ m400_baseline_feedback 门失败（基线输入回路）"; tail -40 /tmp/v_m400.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m400_baseline_feedback（P6/P7 正负控 + 基线覆盖锚点）PASS"
+
+      - name: m401_default_args（默认参数求值位置 · M401 · 缺陷 764）
+        # 判据：T1 常量 · T2 前序参数（二级引用）· T3 全局 · T4 多默认部分提供
+        #   · T5 别名间接调用缺参 · T6 方法 self 默认 · T7 每次调用求值（改全局后必须变）
+        #   · X1 三轨（interp/vm/c）stdout 逐字节 · N1 判据自证（期望值改错一位必红）
+        #   · P 前提自证（v0.2.400 的 bootstrap/pxi 必须在本用例上 R1001 —— 证明门测到修复）
+        #   · K1 已知缺口（缺陷 765 前向引用默认值：VM 静默 null）—— SKIP 不计失败。
+        if: always()
+        run: |
+          set +e
+          bash examples/m401_default_args/verify.sh > /tmp/v_m401.log 2>&1 || { echo "❌ m401_default_args 门失败（默认参数求值位置）"; tail -40 /tmp/v_m401.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m401_default_args（三轨逐字节 + 前提自证 + 判据自证）PASS"
 
       - name: m313_accept_nodelay（accept 侧 TCP_NODELAY · M313 · 缺陷 539）
         # 判据：静态（设置点 / 调用点 ≥5 / 无裸 accept 旁路）+ 动态（accept 后 tcp_opt 回读 nodelay=true）。

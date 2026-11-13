@@ -42,8 +42,9 @@
 #   - chain-20261113-221613 = /data/gatevm/shard-20261113-221613/shard6.times.tsv（275 行）
 #   - chain-20261113-221613 = /data/gatevm/shard-20261113-221613/shard7.times.tsv（275 行）
 #   - chain-20261113-221613 = /data/gatevm/shard-20261113-221613/shard8.times.tsv（275 行）
+#   - bootstrap-m401 = /tmp/m401_boot.times.tsv（2 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-13 23:46:12 +0800
+# 生成时间：2026-11-14 00:17:05 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261113-202819
@@ -277,6 +278,7 @@ m396_dict_index	7	OK	chain-20261113-183554
 m397_bytes_ops	9	OK	chain-20261113-202819
 m398_freeze_deps	5	OK	chain-20261113-202819
 m400_baseline_feedback	228	OK	chain-20261113-221613
+m401_default_args	6	OK	bootstrap-m401
 m63_langfix	6	OK	chain-20261113-183554
 m64_fmt	1	OK	chain-20261113-183554
 m64_lint	1	OK	chain-20261113-221613
@@ -292,6 +294,7 @@ m97_s2_http_keepalive	4	OK	chain-20261113-183554
 m97_s3_http_keepalive_long	4	OK	chain-20261113-202819
 neg_residue	1	OK	chain-20261113-202819
 onnx_load_coverage	1	OK	chain-20261113-202819
+orphan_gates	1	OK	bootstrap-m401
 pkg_guard_monotonic	1	OK	chain-20261113-202819
 pkg_install_rpm	1	OK	chain-20261113-202819
 pkg_latest_guard	2	OK	chain-20261113-183554

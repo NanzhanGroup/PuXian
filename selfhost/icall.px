@@ -68,7 +68,16 @@ def i_call_function(fd, args, selfv, pos):
         else:
             let dflt = p[3]
             if dflt != null:
-                let dvr = i_eval_expr(dflt, fd["closure"])
+                # M401（缺陷 764）：默认表达式必须在**本帧**求值，不是定义处的闭包环境。
+                #   修前：i_eval_expr(dflt, fd["closure"]) ⇒ `def g(a, b = a + 1)` 里 `a`
+                #   在闭包里查不到 ⇒ R1001「未定义变量: 'a'」。而 VM 轨（bc_emit_default_fill
+                #   在帧入口逐参求值）与 C 轨（codegen 生成 (nargs > i) ? args[i] : default_c，
+                #   default_c 在声明序里引用前参）两轨都是 **调用时、函数帧内**求值。
+                #   ⇒ 同一份合法源码（spec 明列默认参数 · m90_s1/cmpsem.px 就在语料里）
+                #   解释轨报错、编译两轨跑出 34 —— 三轨分裂。
+                #   口径：call_env 链 fd["closure"] ⇒ 前序形参（已 env_define 进本帧）、self、
+                #   全局三类引用一并成立，与编译两轨同一条真相。
+                let dvr = i_eval_expr(dflt, call_env)
                 if dvr.is_err():
                     let e = dvr.err()
                     if e.has("__prop__"):

@@ -45,6 +45,20 @@ step "门路径卫生（不许写死开发机绝对路径 —— M213 缺陷 300
 #   ⇒ 本机全绿、**CI 红**（CI 仓库在 /home/runner/work/... 下）。⚠️ 「干净导出复现」抓不到
 #   这类缺陷：写死的路径在**本机依然存在**。⇒ 只能靠静态守卫 + CI。门自带 3 条自证。
 run check_gate_paths bash selfhost/check_gate_paths.sh
+step "孤儿门守卫（有 verify.sh 却没有任何运行器跑它 —— M249 缺陷 428 · M401 加固缺陷 766）"
+#   M249 建立时实测：179 个 verify.sh ⇄ registry 124 / ci.yml 127 ⇒ **55 扇门没人跑**；
+#   而「两边都没提到」的门**不在 check_gate_registry 的任何差集里** ⇒ 那半条判据看不见。
+#   **孤儿门 = 判据腐烂的温床**（没人跑 ⇒ 没人发现 ⇒ 没人修），实锤 m63_langfix 恒红多年。
+#   M401 加固（缺陷 766）：原提取器是**全文件任意位置**匹配 `examples/<名>/verify.sh`，
+#   于是一句**注释**「覆盖它的门 examples/xxx/verify.sh 不在任何运行器里」竟把 xxx 记成
+#   **已收录** ⇒ 孤儿集变小 ⇒ 判据假绿。本轮实锤：我在 registry 写这句注释，m90_s1 当场从
+#   孤儿变成「已收录」，守卫反倒报「基线已过期」。
+#   口径改与 check_gate_registry.sh 同源：registry 只认行首 `run <名> bash examples/…`，
+#   ci.yml 只认非注释行；`--self-test` 6 条（注释提及 / 真收录 正负控成对 + 新增/过期负控）。
+#   ⚠️ M401 前它**自身不在任何运行器里**（判红 3 条过期基线而无人知）—— 本行就是把它接进来；
+#      接之前先修那 3 条（m123_http_conn_alive / m97_s2 / m97_s3 已被收录）与台账同步，
+#      否则一登记就红（M400 r1 的形状：新门生下来就漏注册）。
+run orphan_gates bash selfhost/check_orphan_gates.sh
 step "被 import 的模块必须有 __main__ 守卫（缺陷 418 机械化 —— M247）"
 #   M246 实锤：`pair_check.py` 写了 `from three_tracks import …`，而那份 three_tracks.py
 #   末尾是**模块级** `sys.exit(main())` ⇒ **import 动作本身**跑完了整个对拍并终止调用方进程
@@ -2112,3 +2126,20 @@ run m398_freeze_deps bash examples/m398_freeze_deps/verify.sh
 #        · N1 删门 ⇒ P6 红且指名 / N1b 正控 · N2 造假「已完成」stamp ⇒ P7 红且指名
 #        · N2b 未完成的链不计入（否则判据读自己）· N2c 目录缺失只 ℹ️ · N3 两条判据互不顶替
 run m400_baseline_feedback bash examples/m400_baseline_feedback/verify.sh
+
+# ── m401_default_args（M401 · 缺陷 764 收口 / 缺陷 765 登记）──────────────
+#   病史（M401 实测）：默认参数的**求值位置**三轨分裂。
+#     `def g(a, b = a + 1)` 是 spec 明列、且 examples/m90_s1/cmpsem.px 就在语料里的
+#     **合法**写法：VM 轨 34 · C 轨 34 · 解释轨 R1001「未定义变量: 'a'」。
+#     根因一行：selfhost/icall.px 把默认表达式放进 fd["closure"]（定义处闭包）求值，
+#     而前序形参绑在**本帧** call_env ⇒ 查不到。VM（bc_emit_default_fill 帧入口逐参）
+#     与 C（(nargs > i) ? args[i] : default_c，声明序里可引用前参）都是「调用时、帧内」。
+#   ⚠️ 它能藏到今天的真正原因：覆盖它的门 examples/m90_s1/verify.sh **不在任何运行器里**
+#     （孤儿门，实测恒 SKIP：缺 M89/M90 期手工重链的 compiler_new）⇒ 判据写好了、没人跑。
+#     本门把那份语义所有权接过来（m90_s1 目录仍在：其 .px 语料被 gcstress_progress 消费）。
+#   判据：T1 常量 · T2 前序参数（二级引用）· T3 全局 · T4 多默认部分提供（0/1/2/3 实参）
+#        · T5 别名间接调用缺参 · T6 方法 self 默认 · T7 每次调用求值（改全局后必须变）
+#        · X1 三轨 stdout 逐字节 · N1 判据自证（期望值改错一位必红）
+#        · P 前提自证（v0.2.400 的 bootstrap/pxi 必须在本用例上 R1001）
+#        · K1 已知缺口（缺陷 765 前向引用：VM 静默 null）—— SKIP 不计失败，但响亮报告
+run m401_default_args bash examples/m401_default_args/verify.sh
