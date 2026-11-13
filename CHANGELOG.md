@@ -75,8 +75,9 @@ K1 已知缺口（缺陷 765 · SKIP 不计失败但响亮报告）：默认值*
 ### 五 收束与边界
 
 ```
-版本   0.2.400 → 0.2.401（check_version_drift 的 7 处字面量：tools/px · compiler.px ·
-       interp.px · pxlsp.px · pxmcp.px ×2 · pxfmt.px）
+版本   0.2.400 → 0.2.401（9 文件 10 处：tools/px · tools/pxc · compiler.px · interp.px ·
+       pxlsp.px · pxmcp.px ×2 · pxfmt.px + **两份自举基准** golden/compiler.c ·
+       golden/compiler.bc.dump —— 版本字面量在自举链上，基准不同步则 prove 必红）
 重烘   --rebake-all 后 --check-all **14/14** 与源码一致（改 selfhost/*.px ⇒ 指纹必须重算）
 登记   gates.registry.sh 2 行（orphan_gates 守卫 + m401 门）· ci.yml 2 步 · 两侧门数对齐
 没做   缺陷 765（前向引用默认值，VM 静默 null）—— 要动字节码入口哨兵，独立一轮
@@ -108,6 +109,11 @@ M400 把「基线靠人手抄」接成回路 —— 本轮再往前一层：
    过期基线，就会「一登记就判红」（M400 r1 的形状）。本轮顺序：修 3 条 → 入册 → 复跑 12/12。
 ③ 门清单 275 → **277**（+orphan_gates +m401_default_args），基线同步 277 行 · P6 缺 0 ·
    守卫 11 通过 / 0 失败 · 孤儿基线 46 条（只许缩小，上限 50）。
+④ **提交前 11 门首跑红了一门**：version_golden —— 我手改版本时漏了**两份自举基准**
+   （golden/compiler.c · golden/compiler.bc.dump；tools/pxc 其实就是 tools/px 同一份）。
+   仓里有 packaging/bump_version.sh 一条命令改 **9 文件 10 处**并校验，我没用它、
+   手改了 7 处 ⇒ 门当场抓住（这正是 M250 建它的理由：手改 7 处 = 早晚漏一处）。
+   修：补两份基准 + bump_version.sh --check 9/9 对齐 ⇒ VERSION-GOLDEN-OK。重跑 11 门见下。
 ```
 
 ## M400：门耗时基线的**输入回路**（缺陷 763 收口）
