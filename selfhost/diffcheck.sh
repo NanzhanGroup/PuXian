@@ -168,6 +168,17 @@ check_codegen_file() {
     else
         echo "    ❌ $base C 源码有差异"
         diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -10
+        # ── M399（缺陷 761 的残留面）：判红输出补**归因段**，判定口径一字不动 ──
+        #   只多打一段「本入口的 import 闭包 + 各文件 git 最近一次提交」。
+        #   为什么：M397 r1 红的就是这一门，裸 diff 只有一行「变量编号平移」，要靠人工
+        #   做「只换被 import 文件的新旧、其余全不变」的对照实验才敢定性（花了两小时）。
+        #   ⚠️ 归因**不参与判定**：拿不到就打印一行说明，绝不因此改判红/判绿。
+        if [ -f "$(dirname "$0")/freeze_deps.py" ]; then
+            python3 "$(dirname "$0")/freeze_deps.py" --mode explain "$f" 2>&1 \
+                | sed 's/^/      ⤷ /' | head -20
+        else
+            echo "      ⤷ （缺 selfhost/freeze_deps.py，跳过归因）"
+        fi
         return 1
     fi
 }

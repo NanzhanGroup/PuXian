@@ -18,16 +18,21 @@
 #     digest 兼容（单文件包 = 入口 sha256，与 M45 lock **逐字节兼容**；
 #     多文件包 = 各「文件名:内容」串接 sha256 —— 旧格式下不存在多文件包 ⇒ 无历史 lock 受影响）。
 #
-# 判据（四层正判据 + 三道负控）：
+# 判据（四层正判据 + 两颗新牙 + 五道负控）：
 #  ① `registry/THIRD_PARTY.md` 的表**逐行重算 sha256 / 文件数**与磁盘对拍（防漂移）；
-#  ② **每个**引入包：`pxpkg add` → `install` → `import <pkg>` 解释轨跑通（**98 包全量** —— 判据是"表里每一包都装得上"，不写死数字）；
+#  ② **每个**引入包：`pxpkg add` → `install` → `import <pkg>` 解释轨跑通（**全量**，不写死数字 ——
+#     M399 实测：335 表行 / 195 去重包名）；M399 起再加两条：**每包 add 均成功**、**合并清单覆盖齐全**
+#     （旧版 add 失败只 echo 不判红，靠 install 目录数间接兜 ⇒ 现在直接判）；
 #  ③ 抽样（含**全部多文件包** + 二进制/解析族）**双轨编译**跑通（VM + C）；
 #  ④ 多文件包语义：两文件包三轨跑通 + `--locked` 能查到**辅助文件**被篡改（修前只查入口）。
 # 负控（各自独立判红；源逐字节还原）：
 #  A 篡改包入口一个字节 ⇒ ① 红（表与磁盘不符）  B 篡改 THIRD_PARTY.md 的 sha ⇒ ① 红
 #  C 删多文件包的辅助文件 ⇒ ③ 红（该包编译/导入失败）
+#  E 造未登记补丁文件 ⇒ 补丁列审计红   F 删表里一行 ⇒ 反向对拍红
+#  G 非法依赖值 ⇒ ②「每包 add 均成功」红   H 合并少一条 ⇒ ②「覆盖齐全」红（G/H 各配正控）
 #
 # 用法：bash examples/m187_registry_import/verify.sh [--neg-skip] [--smoke-limit N]
+#       深检档（§[2x] · 串行参照与并行合并逐字节 cmp，约 +240s）：M187_SERIAL_EQV=1
 # 退出码：0 = 绿，1 = 红，2 = 门自身前置自查失败。
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -143,20 +148,110 @@ chk "[1] 补丁列 ⇔ 补丁文件 双向一致（登记 $NPAT_ROW 行 · 文�
     "[ '$NPAT_UNREG' = 0 ] && [ '$NPAT_MISS' = 0 ] && [ '$NPAT_FILE' -ge 1 ]"
 chk "[1] 补丁列 + 空补丁列 == 表行数（守恒 $((NPAT_ROW+NPAT_EMPTY)) == $N）" \
     "[ $((NPAT_ROW+NPAT_EMPTY)) = $N ]"
-echo "=== [2] 全量：每包 pxpkg 装 + import 解释轨跑通（$N 包）"
+# ════════════════════════════════════════════════════════════════
+# [2] 全量：每包 pxpkg 装 + import 解释轨跑通
+# ── M399：本段旧版实测 **524s** = 整门 713s 的 73%。分解（空机）：add 循环 335 次**串行**
+#    482s（1.44s/次 = ≈400ms pxi 解释器启动 + 随 px.toml 已有依赖数线性增长：
+#    deps=3 → 584ms / deps=200 → 2414ms）· install 40s · 335 次 `pxi run` 41s
+#    ⇒ 68% 的门时间花在「同一个解释器启动 335 遍」上，不是在测东西。
+# ── 新结构（**覆盖面不降**：去重后每个包名仍各走一次 pxpkg add）
+#    [2a] 链头 24 包在**同一工程**连续 add —— 保留「已有依赖时继续追加」路径（O(n) 增长在这）
+#    [2b] 其余包分 8 组、各自独立工程**并行** add（组内仍串行，保表序）
+#    [2c] 把各工程**自己写下的** [dependencies] 行按首现序合并 → 一次 install
+#         ⚠️ 必须从各组 px.toml 读、不能拿 UNIQ 重写：「add 报成功但没落盘」只有前者抓得到
+# ════════════════════════════════════════════════════════════════
+echo "=== [2] 全量：每包 pxpkg 装 + import 解释轨跑通"
 APP="$W/app"; mkdir -p "$APP"; cd "$APP"
 export PX_REGISTRY="$REG"
-# M188-DIAG：这三步的输出原来被吞掉 / 只打 5 行 ⇒ CI 上根因不可见（job 日志 403、
-#   注解只能看到"目录数=0"）。现在**无条件**把关键输出打进 stdout（含 ❌/FAIL 便于注解抓取）。
-"$ROOT/tools/pxpkg" init --name m187app > "$W/init.log" 2>&1 || { echo "❌ pxpkg init 失败（rc=$?）"; tail -10 "$W/init.log"; }
-echo "  --- init：px.toml 前 5 行 ---"; head -5 px.toml 2>&1
-okc=0; errlist=""; addfail=""
+UNIQ=(); declare -A SEEN=()
 for i in $(seq 0 $((N-1))); do
     p="${PKGS[$i]}"
-    if ! "$ROOT/tools/pxpkg" add "$p@0.1.0" > "$W/add_$p.log" 2>&1; then addfail="$addfail $p"; fi
+    [ -n "${SEEN[$p]:-}" ] && continue
+    SEEN[$p]=1; UNIQ+=("$p")
 done
-[ -n "$addfail" ] && echo "❌ pxpkg add 失败 $(( $(echo $addfail | wc -w) )) 包：$addfail"
-[ -n "$addfail" ] && { echo "  --- 首个失败包的 add 输出 ---"; tail -15 "$W/add_$(echo $addfail | awk '{print $1}').log"; }
+NU=${#UNIQ[@]}; NPKG=$NU
+CHAIN=24; NGRP=8; ADDFAIL=""; MERGED=(); MERGED_MISS=""; okc=0; errlist=""
+add_one() {   # $1=工程目录 $2=包名 $3=版本值（默认 0.1.0）→ rc=0 成功
+    local d="$1" p="$2" v="${3:-0.1.0}"
+    ( cd "$d" && "$ROOT/tools/pxpkg" add "$p@$v" ) > "$W/add_$p.log" 2>&1
+}
+# M188-DIAG / M195：关键输出无条件进 stdout 并落 $W/diag.txt（CI 注解是唯一可读通道）
+"$ROOT/tools/pxpkg" init --name m187app > "$W/init.log" 2>&1 || { echo "❌ pxpkg init 失败（rc=$?）"; tail -10 "$W/init.log"; }
+echo "  --- init：px.toml 前 5 行 ---"; head -5 px.toml 2>&1
+echo "  [2a] 串行链：前 $CHAIN 包在同一工程连续 add（表 $N 行 / 去重 $NU 包名）"
+chain_n=$(( NU < CHAIN ? NU : CHAIN ))
+if [ "$chain_n" -gt 0 ]; then
+    for i in $(seq 0 $((chain_n-1))); do
+        add_one "$APP" "${UNIQ[$i]}" || ADDFAIL="$ADDFAIL ${UNIQ[$i]}"
+    done
+fi
+nrest=$((NU-chain_n)); ngrp=$NGRP; [ "$nrest" -lt "$NGRP" ] && ngrp=$nrest
+echo "  [2b] 并行扇出：其余 $nrest 包分 $ngrp 组（独立工程 · 组内串行保表序）"
+if [ "$ngrp" -gt 0 ]; then
+    base=$((nrest/ngrp)); rem=$((nrest%ngrp)); lo=$chain_n; pids=()
+    for g in $(seq 0 $((ngrp-1))); do
+        cnt=$base; [ "$g" -lt "$rem" ] && cnt=$((cnt+1))
+        hi=$((lo+cnt-1))
+        ( d="$W/g$g"; mkdir -p "$d"
+          ( cd "$d" && "$ROOT/tools/pxpkg" init --name "m187g$g" ) > "$W/g$g.init.log" 2>&1
+          bad=""
+          for k in $(seq $lo $hi); do
+              add_one "$d" "${UNIQ[$k]}" || bad="$bad ${UNIQ[$k]}"
+          done
+          printf '%s\n' "$bad" > "$W/g$g.bad" ) &
+        pids+=($!)
+        lo=$((hi+1))
+    done
+    for pid in "${pids[@]}"; do wait "$pid"; done
+    for g in $(seq 0 $((ngrp-1))); do
+        b="$(cat "$W/g$g.bad" 2>/dev/null || true)"; [ -n "$b" ] && ADDFAIL="$ADDFAIL $b"
+    done
+fi
+# [2c] 合并（首现序 = 表序：链头工程在前，各组按组序接在后面）
+merge_deps() {
+    local f
+    for f in "$APP/px.toml" "$W"/g*/px.toml; do
+        [ -f "$f" ] || continue
+        awk '/^\[dependencies\]/{ind=1;next} /^\[/{ind=0} ind && /^[ \t]*[A-Za-z0-9_.-]+[ \t]*=/ {k=$0; sub(/[ \t]*=.*/,"",k); gsub(/[ \t]/,"",k); if(k!="") print k}' "$f"
+    done | awk '!seen[$0]++'
+}
+while IFS= read -r k; do [ -n "$k" ] && MERGED+=("$k"); done < <(merge_deps)
+# ⚠️ 覆盖判据抽成函数是为了**给它加牙**：NC-H 用同一份逻辑、只去掉一条 ⇒ 必须判红
+merge_missing() {   # $@=候选依赖清单 → 打印「去重包名里没被覆盖的」（空格分隔）
+    local p out=""
+    for p in "${UNIQ[@]}"; do
+        case " $* " in *" $p "*) ;; *) out="$out $p" ;; esac
+    done
+    printf '%s' "$out"
+}
+MERGED_MISS="$(merge_missing "${MERGED[@]}")"
+{ printf '[package]\nname = "m187app"\nversion = "0.1.0"\n\n[dependencies]\n'
+  for p in "${MERGED[@]}"; do printf '%s = "0.1.0"\n' "$p"; done; } > "$APP/px.toml.new"
+mv -f "$APP/px.toml.new" "$APP/px.toml"
+echo "  [2c] 合并依赖 $(( ${#MERGED[@]} )) 条（期望 $NU）· 缺 $(( $(echo $MERGED_MISS | wc -w) )) 条"
+chk "[2] 每包 pxpkg add 均成功（去重 $NU 包名；旧版只 echo 不判红）$ADDFAIL" "[ -z \"$ADDFAIL\" ]"
+chk "[2] 合并依赖清单 == 去重包名集合（$(( ${#MERGED[@]} ))/$NU；缺条/丢条即红）$MERGED_MISS" "[ ${#MERGED[@]} -eq $NU ] && [ -z \"$MERGED_MISS\" ]"
+if [ -n "$ADDFAIL" ]; then
+    echo "  --- 首个失败包的 add 输出 ---"; tail -15 "$W/add_$(echo $ADDFAIL | awk '{print $1}').log"
+fi
+# ── M399 深检档（opt-in：M187_SERIAL_EQV=1）──
+#   串行参照 vs 并行合并 **逐字节 cmp**。
+#   为什么默认不跑：串行 195 次 add 实测 ≈240s，正是本轮要消灭的那笔成本；
+#   但它必须**随时可复现** —— 否则「并行没改变语义」就只是我的一句话。
+if [ "${M187_SERIAL_EQV:-0}" = 1 ]; then
+    echo "=== [2x] 深检：串行参照清单 vs 并行合并清单（逐字节）"
+    EQ="$W/eqv"; rm -rf "$EQ"; mkdir -p "$EQ"
+    ( cd "$EQ" && "$ROOT/tools/pxpkg" init --name m187app ) > "$W/eqv_init.log" 2>&1
+    eq_bad=""
+    for p in "${UNIQ[@]}"; do add_one "$EQ" "$p" || eq_bad="$eq_bad $p"; done
+    if [ -z "$eq_bad" ] && cmp -s "$EQ/px.toml" "$APP/px.toml"; then
+        chk "[2x] 串行参照清单 == 并行合并清单（逐字节 · $NU 条）" "true"
+    else
+        echo "  --- diff（串行参照 → 并行合并）前 20 行 ---"; diff "$EQ/px.toml" "$APP/px.toml" | head -20
+        echo "  --- 参照侧 add 失败：$eq_bad ---"
+        chk "[2x] 串行参照清单 == 并行合并清单（逐字节）" "false"
+    fi
+fi
 # M193-DIAG：CI（run for 1a8b28c）上本步 `pxpkg install` 中断于第 22 个包（functools），
 #   而本地全量门同一步**绿** ⇒ 环境相关（CI runner 资源/时序）。当时注解只拿到
 #   stdout 尾巴，看不到 rc 与 stderr ⇒ 这里把 **rc / stderr / 装了几个** 全部无条件打出
@@ -179,7 +274,7 @@ echo "  --- px.toml 依赖段 ---"; grep -c '=' px.toml 2>/dev/null
 # ⚠️ M214：`.px_modules` 以**包名**为键，而 THIRD_PARTY.md 以 **`<name>/<version>`** 为一行
 #   ⇒ 首次出现「同包多版本」（本轮：`fsnotify 0.2.0` / `xlsx 0.2.0`）时，目录数 = **去重包名数**
 #   而非表行数。判据据此分开：① 目录数 = 去重包名数；② 表行数 ≥ 包名数（多版本 = 正常）。
-NPKG=$(printf '%s\n' "${PKGS[@]}" | sort -u | wc -l)
+NPKG=$NU   # M399：去重包名数在 [2a] 之前已算好（同一口径，不再重复 sort -u）
 n_inst="$(ls .px_modules 2>/dev/null | wc -l)"
 echo "  ℹ️ 表行数 N=$N · 去重包名数 NPKG=$NPKG · .px_modules 目录数=$n_inst"
 chk "[2] pxpkg 一次装齐 $NPKG 个包名（.px_modules 目录数 = 去重包名数；表 $N 行含 $((N-NPKG)) 个同包多版本行）" \
@@ -197,14 +292,28 @@ for i in $(seq 0 $((N-1))); do
     n_reg=$((n_reg + $(ls "$REG/$p/$v"/*.px 2>/dev/null | wc -l)))
 done
 chk "[2] 安装的 .px 文件总数 = registry 侧总数（$n_files = $n_reg；多文件包不丢件）" "[ $n_files = $n_reg ]"
-for i in $(seq 0 $((N-1))); do
-    p="${PKGS[$i]}"
-    printf 'import %s\n\ndef main():\n    print("ok")\n' "$p" > main.px
-    if timeout 60 "$ROOT/bootstrap/pxi" run main.px > "$W/imp_$p.out" 2>&1 && grep -qx 'ok' "$W/imp_$p.out"; then
-        okc=$((okc+1))
+# ── M399：[2] 的解释轨 335 次 `pxi run` 实测 41s（0.12s/次）⇒ 8 路并行 ≈ 6s ──
+#   ⚠️ 每次必须**独立文件名**（main_<下标>.px / imp_<下标>.out）：335 行里有 140 行是同包
+#      多版本 ⇒ 按包名命名会被并行写坏（旧版全串行才没暴露这个坑）
+imp_one() {
+    local i="$1" p="${PKGS[$1]}"
+    printf 'import %s\n\ndef main():\n    print("ok")\n' "$p" > "$APP/main_$i.px"
+    if ( cd "$APP" && timeout 60 "$ROOT/bootstrap/pxi" run "main_$i.px" ) > "$W/imp_$i.out" 2>&1 && grep -qx 'ok' "$W/imp_$i.out"; then
+        : > "$W/impok_$i"
     else
-        errlist="$errlist $p"
+        : > "$W/impbad_$i"
     fi
+}
+rm -f "$W"/impok_* "$W"/impbad_*
+i=0
+while [ "$i" -lt "$N" ]; do
+    lim=$((i+8)); [ "$lim" -gt "$N" ] && lim=$N
+    for j in $(seq $i $((lim-1))); do imp_one "$j" & done
+    wait
+    i=$lim
+done
+for i in $(seq 0 $((N-1))); do
+    if [ -f "$W/impbad_$i" ]; then errlist="$errlist ${PKGS[$i]}"; else okc=$((okc+1)); fi
 done
 chk "[2] $N 包全部 import 成功（解释轨）$errlist" "[ $okc = $N ]"
 
@@ -342,6 +451,38 @@ if [ "$NEG" = 1 ]; then
     # NC-F（M377 反向对拍的牙）：删掉表里 checksum 那一行 ⇒ 磁盘有、表无 ⇒ locrows_ok 必须判红
     patch_droploc() { grep -vE '^\| *checksum *\|' "$BACK/THIRD_PARTY.md" > "$PROV"; }
     neg F "! locrows_ok" patch_droploc "$PROV" "$P0"
+    # ── NC-G / NC-H（M399 新增两条判据的牙）──────────────────────────
+    #   ⚠️ 这两条**不改文件**，所以不吃 neg() 的「文件哈希变了」前提自证；
+    #      改用**正控 + 负控成对**：同一函数换个输入，必须由绿转红 ——
+    #      只有负控会在「判据恒红」时骗人（那等于没有判据）。
+    nc_addfail() {      # 负控：非法依赖值 ⇒ 必须被 add_one 咬住（ADDFAIL 非空 ⇒ 判据红）
+        local save="$ADDFAIL"; ADDFAIL=""
+        add_one "$APP" "zz_nc_bogus" "!!" || ADDFAIL=" zz_nc_bogus"
+        local r=1; [ -n "$ADDFAIL" ] && r=0
+        ADDFAIL="$save"; return $r
+    }
+    nc_addfail_pos() {  # 正控（前提自证）：同一函数 + 合法值 ⇒ 必须成功（判据不是恒红）
+        local save="$ADDFAIL"; ADDFAIL=""
+        add_one "$APP" "collections" "0.1.0" || ADDFAIL=" collections"
+        local r=1; [ -z "$ADDFAIL" ] && r=0
+        ADDFAIL="$save"; return $r
+    }
+    nc_merge_drop() { [ -n "$(merge_missing "${MERGED[@]:1}")" ]; }   # 负控：少一条 ⇒ 必红
+    nc_merge_full() { [ -z "$(merge_missing "${MERGED[@]}")" ]; }     # 正控：不删 ⇒ 必绿
+    if ! nc_addfail_pos; then
+        echo "  FAIL 负控 G：前提自证失败（合法值也判红 ⇒ 判据恒红，无意义）"; fail=$((fail+1))
+    elif nc_addfail; then
+        echo "  PASS 负控 G：add 失败被咬住（符合预期）"; pass=$((pass+1))
+    else
+        echo "  FAIL 负控 G：add 失败未被判红（没有牙）"; fail=$((fail+1))
+    fi
+    if ! nc_merge_full; then
+        echo "  FAIL 负控 H：前提自证失败（不删也判红 ⇒ 判据恒红，无意义）"; fail=$((fail+1))
+    elif nc_merge_drop; then
+        echo "  PASS 负控 H：合并丢条被咬住（符合预期）"; pass=$((pass+1))
+    else
+        echo "  FAIL 负控 H：合并丢条未被判红（没有牙）"; fail=$((fail+1))
+    fi
     restore_all
     [ "$(sha_v)" = "$V0" ] && [ "$(sha_p)" = "$P0" ] && [ "$(sha_a)" = "$A0" ] || { echo "  FAIL 源未逐字节还原"; fail=$((fail+1)); }
 else
