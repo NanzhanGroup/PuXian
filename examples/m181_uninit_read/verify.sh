@@ -27,7 +27,8 @@
 #   [3] 负控 3 道（默认跑，`--neg-skip` 跳过；**各自独立判红** + sha256 逐字节还原 + 复绿）：
 #       NC-A runtime/vm.c 的 `PXOP_UNINIT` 变 no-op ⇒ 哨兵不写入 ⇒ [2] 的 VM 轨变红
 #       NC-B selfhost/codegen.px 的 hoist 初值退回 `px_null()` ⇒ [2] 的 C 轨变红
-#       NC-C selfhost/icall.px 跳过 `env_mark_unbound` ⇒ [2] 的解释轨变红（回到 env 链）
+#       NC-C selfhost/icall.px 跳过 `env_mark_unbound` ⇒ [2] 的**遮蔽例 e6** 解释轨变红（回到 env 链给 99）；
+#            e1 不是判别例（模块层也没有 x ⇒ env 链走到头仍是同一码同一消息体，M405 r1 实测）
 #       纪律（R50 教训）：每道负控前先 restore 再 snapshot（各自干净起点）；trap 兜底还原。
 # 用法：./examples/m181_uninit_read/verify.sh [--neg-skip]
 # 退出码：0 = 绿，1 = 红，2 = 门自身前置自查失败。
@@ -176,8 +177,15 @@ if [ "$NEG" = "1" ]; then
     if (cd "$ROOT" && ./tools/px build selfhost/interp.px > "$W/ncc_build.log" 2>&1) && [ -x "$DEV_PXI" ]; then
         "$DEV_PXI" "$D/e1_read_before_decl.px" > "$W/ncc1.out" 2> "$W/ncc1.err"; r1=$?
         "$DEV_PXI" "$D/e6_shadow_module.px" > "$W/ncc6.out" 2> "$W/ncc6.err"; r6=$?
-        chk "NC-C 解释轨变红（e1 rc=0）" "[ $r1 = 0 ]"
-        chk "NC-C 解释轨变红（e6 遮蔽例回到 99）" "[ $r6 = 0 ] && grep -q '^99$' $W/ncc6.out"
+        # M405 r1（缺陷 779 的第二层）：NC-C 原来断言「e1 rc=0」，**从写下那天起就没跑过**（上一段
+        #   的 C 注释事故），一跑就红。实测真因不是回归，是这条判据本就不成立：
+        #   e1 的 ``x`` 在模块层也不存在 ⇒ 去掉 env_mark_unbound 后 env 链走到头仍是
+        #   `R1001 未定义变量: 'x'`（同码同消息体、仅行号不同）⇒ e1 **不是**该变异的判别例。
+        #   判别例只有 e6（模块层有 99 ⇒ 变异后 rc=0 且打印 99 ⇒ 门 [2] 的 R1001 断言必红）。
+        #   故把 e1 降为「前提自证：对它不敏感」，红/绿只由 e6 决定。
+        chk "NC-C 前提自证：e1 对该变异不敏感（模块层无 x ⇒ 同码同消息体，仍 rc≠0 + R1001）" \
+            "[ $r1 != 0 ] && grep -q 'R1001' $W/ncc1.err"
+        chk "NC-C 解释轨变红（e6 遮蔽例回到 99 ⇒ 门 [2] 的 R1001 断言必红）" "[ $r6 = 0 ] && grep -q '^99$' $W/ncc6.out"
     else
         echo "  FAIL NC-C（dev 解释器构建失败，见 $W/ncc_build.log）—— 负控没跑，不许当绿"
         tail -3 "$W/ncc_build.log" 2>/dev/null | sed 's/^/     /'

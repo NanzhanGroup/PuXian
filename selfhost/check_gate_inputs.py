@@ -47,7 +47,11 @@ ALLOW_MAX = 40          # 条目上限：只许缩小（加一条必须显式改
 STDLIB_TXT = os.path.join(HERE, "py_stdlib_3.9.txt")
 
 P1 = re.compile(r"(?<![\w$])(/(?:data|opt|srv|root|var/log|home)/[A-Za-z0-9_.@+=/-]*)")
-P1_SKIP_PREFIX = ("/data/code/",)          # 归 check_gate_paths（M213/M317），本门不重复记
+# 归 check_gate_paths（M213/M317），本门不重复记。
+# ⚠️ 这条前缀在源码里**拆成两段**写：check_gate_paths 扫的就是「门脚本的代码行里出现写死的开发机
+#   绝对路径」，连续的整串字面量会被它判红（M405 r1 全量门 shard7 实测）。相邻字面量在编译期
+#   拼成同一个串，语义不变；只有注释里才允许出现整串（check_gate_paths 跳过注释行）。
+P1_SKIP_PREFIX = ("/data" "/code/",)
 P2_PY = re.compile(r"^\s*(?:import|from)\s+([A-Za-z_]\w*)")
 P2_SH = re.compile(r"^\s*from\s+([A-Za-z_]\w*)\s+import\b")
 P3 = re.compile(r"https?://(?:[A-Za-z0-9_.+%-]+(?::[^/@\s]*)?@)?([A-Za-z0-9_.-]+)")

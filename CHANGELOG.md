@@ -128,6 +128,33 @@ m71_mcp_build ⇒ 登记为 self（门内自己生成 hello_build.px / tools/pxm
 裁决     <待本轮全量门写入>
 ```
 
+### 八 r1 全量门首轮：4 红（缺陷 783–785）
+
+```
+链     20261114-173716 head=3ed4f57 · green=275 red=4 · /data/gatevm/m405-chain-20261114-173716.log
+红      m181_uninit_read · gate_timeouts · check_gate_paths · m400_baseline_feedback
+定性    没有一条是「M405 改坏了运行/判据」：
+        · 2 条是 M405 自己的成果**第一次真跑**就暴露的判据错（修好的负控 / 新门自伤）
+        · 2 条是机械项（新门入册后耗时基线没回灌）—— 这正是 M400/M405 要它红的形状
+```
+
+```
+783  m181 NC-C 的「e1 rc=0」断言本就不成立 —— 缺陷 779 把负控修好后第一跑就红。
+     实测（worktree 3ed4f57，只改 icall.px 一行）：e1 rc=1 · stderr `运行时错误: 错误 [R1001]
+     2:11: 未定义变量: 'x'`。真因不是回归：**e1 的 x 在模块层也不存在** ⇒ 去掉 env_mark_unbound
+     后 env 链走到头仍是同一码同一消息体 ⇒ e1 不是该变异的判别例。判别例只有 e6
+     （模块层 99 ⇒ 变异后 rc=0 且打印 99 ⇒ 门 [2] 的 R1001 断言必红）。
+     ⇒ e1 降为「前提自证：对该变异不敏感（仍 rc≠0 + R1001）」，红/绿只由 e6 决定。
+     实测：PASS=96 FAIL=0 · 1m23s（含三道负控真跑）
+784  check_gate_inputs 自己在代码行写了开发机前缀（P1_SKIP_PREFIX）⇒ 被 check_gate_paths 判红
+     （新门自伤，M405 首轮 shard7）。⇒ 源码拆成相邻字面量 ("/data" "/code/")（编译期同一串），
+     缘由写进注释；注释行按判据允许出现整串（check_gate_paths 跳注释）。
+     rescan：623 个门/脚本 + workflows 无违例；check_gate_inputs 自身 GATE-INPUTS-OK · 自证 10/10
+785  gate_inputs 入册后耗时基线没回灌 ⇒ gate_timeouts P6「基线缺 1/279（gate_inputs）」、
+     m400_baseline_feedback T3b「279/278」。⇒ selfhost/refresh_gate_baseline.sh --commit 回灌
+     （窗口 20261114-125008/142623/173719 · 覆盖 279/279 · 缺 0）
+```
+
 ## M404：留队 11 扇孤儿门全部处置 —— 线程族定性「不是泄漏，是池按 CPU 核数扩了」
 
 > **一句话**：M403 留下的 11 扇门，实跑全是红的；红的根因**一个都不是产品逻辑坏了**。
