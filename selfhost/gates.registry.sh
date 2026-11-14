@@ -2180,3 +2180,19 @@ run m403_orphan_batch bash examples/m403_orphan_batch/verify.sh
 #        · N2 合法写法（默认引用全局函数 + 命名/位置混合）必须不被判红 ⇒ 判据不是恒红
 #        · P 前提自证（v0.2.405 的 bootstrap/pxi 在本用例上必须报 E2001「结构体字段默认值尚未实现」）
 run m406_struct_field_default bash examples/m406_struct_field_default/verify.sh
+
+# ── m407_rt_error_format（M407 · 运行时错误报文三轨统一 · 缺陷 186 族）──────────
+#   病史：缺陷 186「诊断三轨不同」登记多年，21 扇门里写着「属 186 族 ⇒ 不判」。M407 实测三条：
+#     ① 三种前缀：interp `运行时错误: 错误 [R1002] 2:14: ` / VM·C `运行时错误 [f 行2]: R1002: `
+#     ② **C 轨归因错误**：被调函数返回后 g_px_src_func 停在 callee ⇒ main 里的错报成 [helper 行6]
+#     ③ 顶层 C 轨无函数名（`[行1]`），VM 轨有（`[<top> 行1]`）；闭包三轨三种名字
+#   M407 定稿（docs/ERROR_CODES.md §0）：`运行时错误 [<fn> 行<N>]: <CODE>: <msg>`
+#     · <fn> = 出错语句**所在**函数；顶层 <top>；匿名闭包 <closure>（不带序号）；
+#       具名帧内 def = def 名；**不打列号**（编译两轨字节码无列信息）
+#     · C 轨语句级发 px_srcpos(<fn>, 行)（不再只在函数入口发 px_srcfunc）
+#     · `?` 传播（TRY/FORCE）在报错前重发本语句位置（修前停在刚返回的被调函数）
+#   判据：A 三轨 stdout/stderr/rc 逐字节（**不再归一化**）· B 门侧手写期望表逐字比对
+#        · C 覆盖度自证（≥6 错误码 · 4 种归因形态：顶层/具名/具名嵌套 def/匿名闭包 · 无「行0」）
+#        · N1 期望扰动 ⇒ B 必红（M407_NC=ref）· N2 合法程序三轨 stderr 皆空（判据不是恒红）
+#        · P 前提自证（v0.2.406 的 bootstrap/pxi 必须给旧格式 `运行时错误: 错误 [R`）
+run m407_rt_error_format bash examples/m407_rt_error_format/verify.sh

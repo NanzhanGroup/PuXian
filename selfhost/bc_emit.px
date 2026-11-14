@@ -32,6 +32,9 @@
 # ============================================================
 # ---------- 模块级当前状态（bc_emit_program 设置；helper 引用） ----------
 var g_bcm = null  # 当前 BCModule dict
+# M407（缺陷 797）：**当前语句源行** —— `?`（TRY/FORCE）失败时要在指令前重发 SRCLINE，
+#   否则位置停在刚返回的被调函数里（实测顶层 `let v = f()?` VM 报「行2」、解释轨/C 轨报「行4」）。
+var g_bc_cur_line = 0
 # M169（缺陷 181）：**模块绑定名集合**（模块体，含嵌套块；不进 def / 闭包体）——
 #   「帧内赋值式绑定」与「帧内 hoist 预扫描」的判定用它，而不用惰性登记的
 #   `bc_is_global`（后者顺序敏感：任何一次读未知名都会把它变成全局）。
@@ -700,6 +703,9 @@ def bc_emit_expr(expr, dst, func):
         var topmark = 0
         if func["is_top"]:
             topmark = 1
+        # M407（缺陷 797）：报错前把位置贴回本语句（TRY 失败会打现场，行号须是本语句的）
+        if g_bc_cur_line > 0:
+            bc_emit_inst(func, "SRCLINE", 0, g_bc_cur_line, 0)
         bc_emit_inst(func, "TRY", d, topmark, 0)
         return d
     if ty == "ForceUnwrap":
@@ -708,6 +714,9 @@ def bc_emit_expr(expr, dst, func):
         if d < 0:
             d = bc_tmp(func)
         bc_emit_expr(expr[1], d, func)
+        # M407（缺陷 797）：同上，FORCE 失败打现场前重发本语句行号
+        if g_bc_cur_line > 0:
+            bc_emit_inst(func, "SRCLINE", 0, g_bc_cur_line, 0)
         bc_emit_inst(func, "FORCE", d, 0, 0)
         return d
     if ty == "List" or ty == "Tuple":
@@ -1257,9 +1266,13 @@ def bc_emit_methodcall_slot(func, obj_slot, mname, args, dst):
     return dst
 # 无捕获 lambda（对齐 cg_gen_lambda）：param_names + body 表达式 → PxVMFunc 入
 #   funcs 返回下标（LOADK PXK_FUNC 引用；'<' 名不注册全局）
-def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited, params_full = null):
-    let name = "<closure" + str(g_bcm["nclosure"]) + ">"
+def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited, params_full = null, dispname = ""):
+    # M407（缺陷 796）：**具名**帧内 `def` 的展示名用真名（解释轨按名字调用，C 轨 dispname 同名）；
+    #   匿名 lambda 仍按 `<closureN>` 命名（N 是发射序，与解释轨运行期序无关 ⇒ 打印时剥成 `<closure>`）。
+    var name = "<closure" + str(g_bcm["nclosure"]) + ">"
     g_bcm["nclosure"] = g_bcm["nclosure"] + 1
+    if dispname != "":
+        name = dispname
     # M301（缺陷 518）：闭包同样支持**默认参数**（修前 arity = len(param_names)、ndefault 恒 0
     #   ⇒ 带默认值的闭包「少给」被误判参数不足，且默认表达式从不求值 —— 与解释轨/C 轨分叉）。
     var arity = len(param_names)
@@ -1345,7 +1358,7 @@ def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited, params_fu
 # M160（缺陷 159）：闭包发射（Closure 表达式 / 函数体内 def 共用）。
 #   caps = 自由变量 ∩ 本帧局部名（**顺序同 cg_closure_caps**，两侧同源）
 #   无捕获 ⇒ LOADK PXK_FUNC；有捕获 ⇒ 先把外层 cell 搬到连续临时槽，再 MKCLO。
-def bc_emit_closure(params, body, dst, func):
+def bc_emit_closure(params, body, dst, func, dispname = ""):
     let pnames = []
     var pi = 0
     while pi < len(params):
@@ -1359,7 +1372,7 @@ def bc_emit_closure(params, body, dst, func):
         if func["smap"].has(cn):
             caps.append(cn)
         ci += 1
-    let fidx = bc_emit_push_lambda(pnames, body, caps, bc_inited_copy(func), params)
+    let fidx = bc_emit_push_lambda(pnames, body, caps, bc_inited_copy(func), params, dispname)
     if len(caps) == 0:
         let k = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
         bc_emit_inst(func, "LOADK", dst, k, 0)
@@ -2092,13 +2105,13 @@ def bc_emit_stmt_inner(stmt, func):
             #   （实测 `if true: def f(): 41` + `def g(): return f()+1` ⇒ 解释轨 42、
             #    VM 轨「未定义变量: f」）；与顶层 `var` 同一条真相 ⇒ 走 SETG。
             let dt = bc_tmp(func)
-            bc_emit_closure(stmt[2], ["Block", stmt[4]], dt, func)
+            bc_emit_closure(stmt[2], ["Block", stmt[4]], dt, func, dname)
             let gd = bc_g_add(g_bcm["globals"], dname)
             bc_emit_inst(func, "SETG", gd, dt, 0)
             return
         let ds = bc_slot(func, dname)
         let dt2 = bc_tmp(func)
-        bc_emit_closure(stmt[2], ["Block", stmt[4]], dt2, func)
+        bc_emit_closure(stmt[2], ["Block", stmt[4]], dt2, func, dname)
         bc_store_var(func, dname, ds, dt2)
         # M181（缺陷 193）：帧内 def 执行完成 ⇒ 该名已初始化（其后读不必检查）
         func["inited"][dname] = 1
@@ -2192,6 +2205,12 @@ def bc_emit_stmt(stmt, func):
             line = p[0]
     if line > 0:
         bc_emit_inst(func, "SRCLINE", 0, line, 0)
+        # M407（缺陷 797）：`?` 发射点要用「本语句的行」重发 SRCLINE（见 g_bc_cur_line）
+        let saved_line = g_bc_cur_line
+        g_bc_cur_line = line
+        bc_emit_stmt_inner(stmt, func)
+        g_bc_cur_line = saved_line
+        return
     bc_emit_stmt_inner(stmt, func)
 def bc_emit_stmts(stmts, func):
     var i = 0

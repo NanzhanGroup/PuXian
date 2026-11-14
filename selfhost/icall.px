@@ -61,7 +61,15 @@ def i_call_value(cv, args, pos):
         return Err(i_r1004("枚举类型 " + cv["name"] + " 不能直接调用（用 " + cv["name"] + ".Variant）", pos))
     return Err(i_r1004("值不可调用: " + i_to_str(cv), pos))
 # ---------- 调用用户函数（对齐 call_function） ----------
+# M407（缺陷 793）：解释轨函数名跟踪 wrapper —— 运行时错误带 [<fn> 行<N>]，
+#   与编译两轨逐字节同形。压/弹包住 inner 的**全部** return 路径（inner 有 15+ 处 return），
+#   故用 wrapper 而非在每个 return 前手插 i_fn_pop（漏一处 = 错误归因漂到上一个函数）。
 def i_call_function(fd, args, selfv, pos):
+    i_fn_push(fd["name"])
+    let r = i_call_function_inner(fd, args, selfv, pos)
+    i_fn_pop()
+    return r
+def i_call_function_inner(fd, args, selfv, pos):
     let call_env = env_new(fd["closure"])
     # M181（缺陷 193）：帧入口先登记**本帧声明式绑定**为「已声明、尚未执行」——
     #   读到即 R1001（与编译两轨的 hoist 槽哨兵同一条真相）。**必须先于形参定义**

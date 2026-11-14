@@ -4596,6 +4596,12 @@ __thread int g_px_src_line = 0;
 __thread const char* g_px_src_func = NULL;
 void px_srcline(int line) { g_px_src_line = line; }
 void px_srcfunc(const char* name) { g_px_src_func = name; }
+// M407（缺陷 794/795）：函数名 + 行号**一次写入**。cg 现按「每语句」发 px_srcpos("<fn>", 行)，
+//   函数名由 codegen 静态已知，故不需要运行时栈、也没有额外开销（仍是一次 TLS 写）。
+//   旧版只在函数入口发 px_srcfunc ⇒ 被调函数返回后 g_px_src_func 仍停在 callee，
+//   调用者里的错误被归因成 callee（实测：main 第 6 行 `v + "s"` 报 `[helper 行6]`），
+//   而 VM 轨按帧切换名字是对的 ⇒ C 与 VM 在同一份源码上给出**两个不同的函数名**。
+void px_srcpos(const char* fn, int line) { g_px_src_func = fn; g_px_src_line = line; }
 // M72-S3（Issue 10 D2）：spawn 协程错误捕获边界（TLS per-thread）——spawn_thread 在
 // 调 fn 前 setjmp；协程内 px_error 打印现场后 longjmp 回捕获点 → 该协程安全退出
 // （走 GC 注销路径），宿主进程继续。主线程不设捕获 → 顶层错误保持 exit(1)。
@@ -4779,8 +4785,14 @@ void px_error(const char* fmt, ...) {
     // M72-S2（Issue 10 D1）：运行时错误带 .px 源位置（编译产物路径；pxi 解释器
     // 走 i_err line:col 不受影响）。无追踪位置（native 初始化期）→ 原样前缀。
     if (g_px_src_line > 0) {
-        if (g_px_src_func && g_px_src_func[0])
-            fprintf(stderr, "运行时错误 [%s 行%d]: ", g_px_src_func, g_px_src_line);
+        if (g_px_src_func && g_px_src_func[0]) {
+            // M407（缺陷 796）：闭包序号（`<closureN>`）在编译两轨是**生成期发射序**、
+            //   在解释轨是**运行期创建序** ⇒ 循环/条件创建时两者天然不同，序号不能进契约。
+            //   展示名统一剥成 `<closure>`（三轨逐字节相等）。
+            const char* disp_fn = g_px_src_func;
+            if (strncmp(disp_fn, "<closure", 8) == 0) disp_fn = "<closure>";
+            fprintf(stderr, "运行时错误 [%s 行%d]: ", disp_fn, g_px_src_line);
+        }
         else
             fprintf(stderr, "运行时错误 [行%d]: ", g_px_src_line);
     } else {

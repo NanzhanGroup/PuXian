@@ -1783,7 +1783,7 @@ enum Shape:
 
 def area(s: Shape) -> float:
     match s:
-        case Shape.Circle(r):            # 位置绑定（命名绑定尚未实现）
+        case Shape.Circle(r):            # 位置绑定（M407 复核：**命名绑定同样已实现**，见 §3.8）
             return 3.14159 * r * r
         case Shape.Rect(w, h):
             return w * h
@@ -2095,14 +2095,13 @@ print(lam())
   「宿主提供名」（`i_eval_expr` / `LAYOUT` / `QUIC 内建` 等由 `compiler.px` / `interp.px`
   import 链合入），M64 起即留档。项目级守护 = `pxlint selfhost/compiler.px`（import 链合并后 0/0）。
   M171 把仓库总体从 151 文件 3651 条降到 21 文件 801 条，**这 774 条属已知边界、非误报**。
-- **缺陷 195（未修 · 已实测）· 算术/比较运算的「错误码 + 措辞」三轨不同**：
-  `1 + "a"` 解释轨 `错误 [R1002] 2:9: + 不支持: int + string`（**带码**），
-  编译轨 `运行时错误 [<top> 行2]: 无法相加: int + string`（**无码**）。
-  M172 只统一了「未定义变量」一族（本节的第 1–2 条），**运算族未及**。
-  取证用例 = `examples/m178_iterable_args/err_sum_str.px`（`sum` 收 str 后成员相加必然类型不符
-  ⇒ 三轨都**响亮**报错，但措辞/码不同）。修法方向：runtime 各算术出口补 `R1002:` 码 + 统一措辞
-  （在解释轨 `+ 不支持: a + b` 与 runtime `无法相加: a + b` 之间**选一套**）；
-  代价 = 一批诊断文本的门要重定基。**归 M179**。
+- **缺陷 195（M407 部分收口 · 措辞面转 798）· 算术/比较运算的「错误码 + 措辞」三轨不同**：
+  ~~解释轨 `错误 [R1002] 2:9: + 不支持: int + string`（带码），编译轨 `运行时错误 [<top> 行2]: 无法相加: int + string`（无码）~~
+  —— **M407 实测：前缀与 R 码已三轨统一**（`运行时错误 [<fn> 行<N>]: R1002: …`，门 = m407_rt_error_format）。
+  **仍分叉的是「消息体措辞」**（缺陷 798，实测 `examples/m178_iterable_args/err_sum_str.px`：
+  解释轨 `sum 参数需要 list/tuple/生成器，实际是 string` vs 编译两轨 `无法相加: int + string`，
+  码与位置一致、文本不同）。修法方向：在「门侧谓词」（只判码 + 关键词）与
+  「统一到一套措辞」之间**选一条**；代价 = 一批诊断文本的门要重定基。**归下一轮**。
 
 ### 17.10 运行期 GC 根面（M170）
 

@@ -87,9 +87,16 @@ def i_register_builtins():
 def i_bridge_dispatch(fnvalue, args):
     let r = i_call_value(fnvalue, args, 0)
     if r.is_err():
-        print_err("运行时错误: " + i_err_display(r.err()))
+        print_err(i_err_rt(r.err()))
         return null
     return r.unwrap()
+# M407（缺陷 797）：语句源位置（parser 约定：语句末位是 pos [line, col]）；未知时退回 [0,0]
+def i_stmt_pos(st):
+    if len(st) > 0:
+        let p = st[len(st) - 1]
+        if type(p) == "list" and len(p) >= 2 and type(p[0]) == "int":
+            return [p[0], p[1]]
+    return [0, 0]
 # ---------- 程序入口（对齐 run_program） ----------
 def i_run_program(prog):
     let items = prog[1]
@@ -99,7 +106,9 @@ def i_run_program(prog):
         if r.is_err():
             let e = r.err()
             if e.has("__prop__"):
-                return Err(i_r1004("顶层不能使用错误传播 ?（仅函数内可用）", [0, 0]))
+                # M407（缺陷 797）：用**本语句**的真实位置。修前恒 [0,0] ⇒ 打印「行0」，
+                #   与编译两轨的真实行号不一致（缺陷 186 族里唯一还带**假位置**的一条）。
+                return Err(i_r1004("顶层不能使用错误传播 ?（仅函数内可用）", i_stmt_pos(items[i])))
             return Err(e)
         let fl = r.unwrap()
         if fl != null and type(fl) == "dict" and fl.has("__flow__"):
@@ -146,7 +155,7 @@ def i_run_program(prog):
 # ---------- 入口 ----------
 # 版本：与 tools/pxc（SELFHOST_VER/SELFHOST_MILESTONE）保持一致。
 # 发布包版本号由 tools/make_release.sh 按 tag 派生（见其"版本来源"段）。
-let PXI_VER = "0.2.406"
+let PXI_VER = "0.2.407"
 let PXI_MS = "M-B9a"
 def main():
     let a = args()
@@ -194,6 +203,8 @@ def main():
         let e = r.err()
         # M172（缺陷 186）：运行期诊断统一到 **stderr**（原先 print ⇒ 走 stdout，
         #   与编译轨的 stderr、以及 Issue 45/51「诊断不得混进产物通道」相悖）。
-        print_err("运行时错误: " + i_err_display(e))
+        # M407（缺陷 793）：前缀行改由 i_err_rt 渲染 —— 与编译两轨逐字节同形
+        #   （旧形 `运行时错误: 错误 [CODE] L:C: msg` 三轨各一套，缺陷 186 族的主要成员）。
+        print_err(i_err_rt(e))
         return 1
     return g_exit_code

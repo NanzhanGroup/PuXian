@@ -71,6 +71,12 @@ var cg_globals = []
 #     发射模块体语句期间为 true，函数体（cg_gen_func_named）与闭包体（cg_gen_closure）
 #     内一律 false（= 帧）。
 var cg_topbody = false
+# M407（缺陷 794）：**当前正在生成的 .px 函数名** —— cg_gen_stmt 每条语句发
+#   px_srcpos("<fn>", 行) 时用；顶层模块体 = "<top>"。函数生成期保存/恢复（支持嵌套 def）。
+var cg_cur_fn = "<top>"
+# M407（缺陷 797）：**当前语句的源行号** —— `?` 传播失败时要在 goto 前把位置改回**本语句**
+#   （否则 g_px_src_* 仍停在刚返回的被调函数上，实测顶层 `let v = f()?` 报成 `[f 行2]`）。
+var cg_cur_line = 0
 # M169（缺陷 181）：**模块绑定名集合**（模块体，含嵌套块；不进 def / 闭包体）。
 #   帧内「赋值式绑定」（`x = …` 无声明）命中此集 ⇒ 写**模块全局**；否则提升为帧局部。
 #   与 VM 轨 `g_topnames`（bc_emit.px）同源、同一条真相。
@@ -778,6 +784,10 @@ def cg_gen_func_named(f, cname):
     # M72-S2（Issue 10 D1）：函数入口标记 .px 函数名（px_error 现场带函数上下文；
     # 与 cg_gen_stmt 每语句 px_srcline 配套 → "错误 [函数 行N]"）
     s += "    px_srcfunc(\"" + rust_unescape(f[1]) + "\");\n"
+    # M407（缺陷 794）：语句级位置标注的「当前函数名」（入口 px_srcfunc 只覆盖首语句之前；
+    #   被调函数返回后名字会停在被调方 ⇒ 必须按语句重写）。保存/恢复以支持嵌套 def。
+    let saved_cur_fn = cg_cur_fn
+    cg_cur_fn = rust_unescape(f[1])
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_cells = cg_dict_copy(cg_cells)
@@ -910,6 +920,7 @@ def cg_gen_func_named(f, cname):
     cg_inited = saved_inited  # M181（缺陷 193）：还原外层帧的初始化集
     cg_try_depth = saved_try_depth  # M392：还原外层（生成期）try 深度
     cg_loop_try = saved_loop_try
+    cg_cur_fn = saved_cur_fn  # M407（缺陷 794）：还原外层函数的名字（嵌套 def）
     return s
 # ---------- generate 主流程 ----------
 def cg_generate(prog):

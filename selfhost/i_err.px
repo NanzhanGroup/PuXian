@@ -6,8 +6,32 @@
 #   传播     {"__prop__": v}   （用户代码 ? 遇 Err/null 的传播值）
 # 渲染对齐 LxError Display：错误 [code] line:col: msg
 # ============================================================
+# M407（缺陷 793/794/795）：三轨运行时错误报文**统一** —— 规范见 docs/ERROR_CODES.md §统一前缀：
+#     运行时错误 [<fn> 行<N>]: <CODE>: <msg>
+#   <fn> = 出错语句**所在**函数名（不是上一个被调函数）；顶层语句 = <top>
+#   <N>  = 该语句在 .px 源中的行号；**不打列号**（编译两轨字节码无列信息，三轨须逐字节相等）
+# 解释轨没有天然的「当前函数」概念 ⇒ 用 g_i_fn_stack 跟踪：icall.i_call_function 入口压、
+#   exit 弹（wrapper 形式，保证 inner 的每条 return 路径都被覆盖）。i_err 在**构造时刻**
+#   取栈顶写入 e["fn"]（错误对象随栈展开传播，事后查栈会拿到已弹掉的帧）。
+var g_i_fn_stack = []
+def i_fn_push(name):
+    g_i_fn_stack.append(name)
+def i_fn_pop():
+    if len(g_i_fn_stack) > 0:
+        g_i_fn_stack.pop()
+def i_cur_fn():
+    let n = len(g_i_fn_stack)
+    if n == 0:
+        return "<top>"
+    return g_i_fn_stack[n - 1]
 def i_err(code, msg, pos):
-    return {"__err__": code, "msg": msg, "line": pos[0], "col": pos[1]}
+    return {"__err__": code, "msg": msg, "line": pos[0], "col": pos[1], "fn": i_cur_fn()}
+# 运行时错误前缀行（解释轨唯一出口，格式与 runtime.px_error 逐字节同形）
+def i_err_rt(e):
+    var fname = "<top>"
+    if e.has("fn"):
+        fname = e["fn"]
+    return "运行时错误 [" + fname + " 行" + str(e["line"]) + "]: " + e["__err__"] + ": " + e["msg"]
 def i_prop(v):
     return {"__prop__": v}
 # ---- 常用错误构造（对齐 interp.rs LxError 辅助） ----

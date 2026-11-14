@@ -670,6 +670,8 @@ int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
 // 各协程独立追踪当前位置，S3 隔离用）。
 void px_srcline(int line);
 void px_srcfunc(const char* name);
+// M407（缺陷 794）：语句级「函数名 + 行号」一次写入（见 runtime.c 注释）
+void px_srcpos(const char* fn, int line);
 
 // M116（qg-issue 71 D7）：handler/middleware 运行时错误的标准 500 响应值
 //   （dict {status:500, body:...}，route_normalize 认得）。kind=3 → middleware 文案。
