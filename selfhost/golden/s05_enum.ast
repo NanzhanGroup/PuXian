@@ -45,6 +45,7 @@ Program {
                             col: 11,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 8,
                         col: 5,
@@ -59,6 +60,7 @@ Program {
                             col: 12,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 9,
                         col: 5,

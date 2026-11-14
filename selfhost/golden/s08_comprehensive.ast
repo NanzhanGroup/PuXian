@@ -79,6 +79,7 @@ Program {
                             col: 8,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 12,
                         col: 5,
@@ -93,6 +94,7 @@ Program {
                             col: 8,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 13,
                         col: 5,

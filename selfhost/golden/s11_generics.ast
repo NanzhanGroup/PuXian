@@ -280,6 +280,7 @@ Program {
                             col: 12,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 19,
                         col: 5,
@@ -294,6 +295,7 @@ Program {
                             col: 10,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 20,
                         col: 5,
@@ -320,6 +322,7 @@ Program {
                             col: 8,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 23,
                         col: 5,
@@ -334,6 +337,7 @@ Program {
                             col: 8,
                         },
                     ),
+                    default: None,
                     pos: Pos {
                         line: 24,
                         col: 5,
