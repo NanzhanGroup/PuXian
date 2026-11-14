@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# M405（缺陷 780）：go 的缓存/家目录**自备** —— 门不许靠「这台机器恰好有 HOME」。
+#   分片档（netns 隔离 + 私 TMPDIR）里 HOME 可能不存在，M404 的 m103_s2c/m103_s2d 就是这么红的。
+export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/px-gocache}"
+export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/px-gopath}"
+export HOME="${HOME:-${TMPDIR:-/tmp}/px-home}"
 # M147 验证：定点小数文本 native `fmt_float_dec(x[, dec])`
 # ---------------------------------------------------------------
 # 门做四件事：

@@ -206,6 +206,13 @@ jobs:
         run: |
           bash selfhost/check_gate_paths.sh --self-test
           bash selfhost/check_gate_paths.sh
+      - name: 门的仓外输入（不许靠「这台机器恰好有什么」· M405 缺陷 782；同族 767/768/775）
+        #   三次实锤同一形状：m90_s1 被编译残留骗绿 · 分片无 HOME 让 go build 红 ·
+        #   scene.png 在 .gitignore 里 ⇒ 每个 worktree 都没有。判据五类：主机路径 / 第三方包 /
+        #   外网 / go 的 HOME 依赖 / 非仓库产物 —— 必须门内自备或在 gate_inputs_allow.tsv 登记。
+        run: |
+          python3 selfhost/check_gate_inputs.py --self-test
+          python3 selfhost/check_gate_inputs.py
       - name: 孤儿门守卫（有 verify.sh 却没有任何运行器跑它 · M249 缺陷 428 · M401 加固 766）
         #   判据：每个 examples/*/verify.sh 必须被 registry 或 ci.yml **真正登记**；
         #   两个运行器都没提的，必须在 selfhost/orphan_gates.txt 里带理由（基线只许缩小）。

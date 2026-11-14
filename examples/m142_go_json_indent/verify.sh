@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# M405（缺陷 780）：go 的缓存/家目录**自备** —— 门不许靠「这台机器恰好有 HOME」。
+#   分片档（netns 隔离 + 私 TMPDIR）里 HOME 可能不存在，M404 的 m103_s2c/m103_s2d 就是这么红的。
+export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/px-gocache}"
+export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/px-gopath}"
+export HOME="${HOME:-${TMPDIR:-/tmp}/px-home}"
 # M142 验证：Go `encoding/json` 的 Indent / Compact / Marshal 转义路径 / HTMLEscape 逐字节复刻
 #             + `quoteChar(byte)` 全 256 取值 + 畸形 UTF-8 下的「字符定义唯一性」（缺陷 111/112）
 #

@@ -1,0 +1,41 @@
+# selfhost/gate_inputs_allow.tsv —— 门的「仓外输入」登记表（M405 · 缺陷 767/768/775）
+# 判据：selfhost/check_gate_inputs.py（--self-test 10 条）
+# 列：文件<TAB>类别<TAB>主体<TAB>处置<TAB>理由
+#   处置 self      = 门内自备前提（自己能造出这个输入）
+#        skiploud  = 显式 [585-SKIP-LOUD] 跳过（文件里有行首跳过行时必须带标记，否则判「洗白」）
+#        host      = 只有本机/真机档才有（CI 不跑这一面）；**不是**「可以随便依赖」
+# ⚠️ 只许缩小：条目上限 ALLOW_MAX=40（本表满则 29），加一条要显式改上限并说明。
+# ⚠️ 表里有、实测扫不到 ⇒ 判过期红（同 check_gate_paths 的口径）。
+# ── P1 主机绝对路径 ──────────────────────────────────────────────────────────
+examples/m157_onnx_exec/verify.sh	P1	/data/app/ws/models/embed/model.onnx	skiploud	真模型 102MB 只在本机；未开启时 skip() 打 [585-SKIP-LOUD]（M405 补）
+examples/m159_hostarch/verify.sh	P1	/opt/px-multiarch	host	多架构构建产物树，仅本机交叉编译后存在
+examples/m216_float_to_int/platform_proof.sh	P1	/opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc	host	交叉工具链，仅本机装
+examples/m267_perf/s5_remote_baseline.sh	P1	/opt/puxian-s5	host	远程基线（另一台机器上的工作树），本机路径
+examples/m278_release_reconcile/verify.sh	P1	/data/pat.md	host	GitHub 令牌只在宿主机；CI 无令牌，本门这一层跳过
+examples/m299_wake_channel/verify.sh	P1	/data/app/ws/.env	host	宿主 .env（DY_WAKE_ENVF 兜底值），CI 无此文件
+examples/m304_patch_primitive/diffcheck.py	P1	/data/app/ws/tools/wst-edit	host	对照用的宿主编辑工具
+examples/m304_patch_primitive/verify.sh	P1	/data/app/ws/tools/wst-edit	host	同上
+examples/m306_onnx_quant/verify.sh	P1	/data/app/ws/models/embed/model.onnx	host	真 int8 模型（102MB），仅本机
+examples/m309_pxpkg_sync/verify.sh	P1	/data/app/ws/data/notes/M309_W1_VERIFY.md	host	仅作「真对端复核到此一游」的引用，不是门输入
+examples/m311_real_model/ref_onnxruntime.py	P1	/opt/fw	host	参考实现所在宿主目录
+examples/m311_real_model/verify.sh	P1	/data/app/ws/models/embed/model.onnx	host	生产模型资产，仅本机
+examples/m311_real_model/verify.sh	P1	/opt/fw	host	同上
+examples/m315_onnx_ort_kernel/verify.sh	P1	/opt/fw	host	真机档参考实现目录（与 m311 同源）
+examples/m388_publish_chain/selftest.sh	P1	/data/autodrive	host	发布链自测要读宿主自驱目录
+# ── P2 第三方 python 包 ─────────────────────────────────────────────────────
+examples/m311_real_model/compare.py	P2	numpy	host	数值对拍要 numpy；CI 不装 ⇒ 该面只在真机档跑
+examples/m311_real_model/ref_onnxruntime.py	P2	numpy	host	同上
+examples/m311_real_model/ref_onnxruntime.py	P2	onnxruntime	host	参考实现要 onnxruntime；CI 不装
+examples/m315_onnx_ort_kernel/check_truth.py	P2	numpy	host	真值生成要 numpy
+examples/m315_onnx_ort_kernel/check_truth.py	P2	onnxruntime	host	同上
+examples/m315_onnx_ort_kernel/gen_devices.py	P2	numpy	host	同上
+examples/m315_onnx_ort_kernel/gen_devices.py	P2	onnx	host	要 onnx 读写模型
+examples/m315_onnx_ort_kernel/ort_version_probe.py	P2	numpy	host	同上
+examples/m315_onnx_ort_kernel/ort_version_probe.py	P2	onnxruntime	host	同上
+# ── P3 外网 ─────────────────────────────────────────────────────────────────
+examples/m267_perf/s5_remote_baseline.sh	P3	soft.xiusoft.cn	host	远程基线取自发布站（真机档）
+examples/m282_registry_020/verify.sh	P3	github.com	skiploud	[7] 上游逐字对拍需 GitHub 检出；无检出时 skipped() 打 [585-SKIP-LOUD]
+examples/m388_publish_chain/selftest.sh	P3	soft.xiusoft.net	host	发布链自测打真站（.net 为历史域）
+# ── P5 非仓库产物 ───────────────────────────────────────────────────────────
+examples/m71_mcp_build/mcp_client.py	P5	examples/m71_mcp_build/hello_build.px	self	门内自己生成的构建样例（同一门前后步骤）
+examples/m71_mcp_build/verify.sh	P5	examples/m71_mcp_build/tools/pxmcp.px	self	同上：门内生成后即用

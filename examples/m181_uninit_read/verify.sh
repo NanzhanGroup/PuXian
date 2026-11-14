@@ -36,6 +36,10 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD
+# M405（缺陷 779）：selfhost/build/ 被 .gitignore 覆盖 ⇒ 分片 worktree 里**没有这个目录**，
+#   而下面的 dev 编译器/解释器负控要往那儿落盘 ⇒ 构建失败被写成 SKIP ⇒ 负控**从不跑**却报绿。
+#   ⇒ 门自备目录，且构建失败一律判红（见下面三处 SKIP→FAIL）。
+mkdir -p "$ROOT/selfhost/build"
 D=examples/m181_uninit_read
 RT="$ROOT/runtime/runtime.c"
 VM_C="$ROOT/runtime/vm.c"
@@ -135,7 +139,7 @@ if [ "$NEG" = "1" ]; then
     # NC-A：VM 的 UNINIT 变 no-op ⇒ 哨兵不写入 ⇒ e1 的 VM 轨应回到 rc=0
     restore_all; snapshot
     perl -0pi -e 's/(case PXOP_UNINIT:[^\n]*\n)\s*slots\[in\.a\] = px_uninit\(\);\n\s*break;/$1            \/* M181-NC-A no-op *\/ break;/' "$VM_C"
-    grep -q 'M181-NC-A no-op' "$VM_C" || { echo "  SKIP NC-A（锚点未命中）"; }
+    grep -q 'M181-NC-A no-op' "$VM_C" || { echo "  FAIL NC-A（锚点未命中：vm.c 形态变了 ⇒ 负控没牙）"; fail=$((fail+1)); }
     run_tracks e1_read_before_decl
     chk "NC-A VM 轨变红（不再报 R1001 ⇒ rc=0）" "[ \"$(cat $W/e1_read_before_decl.vm.rc)\" = 0 ]"
     restore_all
@@ -150,17 +154,24 @@ if [ "$NEG" = "1" ]; then
             "$W/ncb.bin" > "$W/ncb.out" 2> "$W/ncb.err"; echo $? > "$W/ncb.rc"
             chk "NC-B C 轨变红（不再报 R1001 ⇒ rc=0）" "[ \"$(cat $W/ncb.rc)\" = 0 ]"
         else
-            echo "  SKIP NC-B（链接失败，见 $W/ncb.link.log）"
+            echo "  FAIL NC-B（链接失败，见 $W/ncb.link.log）—— 负控没跑，不许当绿"
+            tail -3 "$W/ncb.link.log" 2>/dev/null | sed 's/^/     /'
+            fail=$((fail+1))
         fi
     else
-        echo "  SKIP NC-B（dev 编译器构建失败，见 $W/ncb_build.log）"
+        echo "  FAIL NC-B（dev 编译器构建失败，见 $W/ncb_build.log）—— 负控没跑，不许当绿"
+        tail -3 "$W/ncb_build.log" 2>/dev/null | sed 's/^/     /'
+        fail=$((fail+1))
     fi
     restore_all
     chk "NC-B 还原后 codegen.px 逐字节一致" "cmp -s $CG $BAK/codegen.px"
 
     # NC-C：解释轨跳过 env_mark_unbound ⇒ 重编 dev 解释器 ⇒ e1/e6 应回到 rc=0
     restore_all; snapshot
-    perl -0pi -e 's/^(\s*)env_mark_unbound\(call_env, decls\[di\]\)\s*$/$1\/* M181-NC-C: 不登记 *\//m' "$IC"
+    # M405（缺陷 779 的真因）：原替换串把该行换成 C 风格 `/* … */` 注释 —— **px 不认**，
+    #   interp.px 必然编译失败 E2001（意外 token: /）⇒ 负控**从写下那天起就没跑过**，
+    #   而失败被下面的 else 分支吞成一行 SKIP。改成 px 的 `#` 注释后负控才真跑。
+    perl -0pi -e 's/^(\s*)env_mark_unbound\(call_env, decls\[di\]\)\s*$/$1# M181-NC-C: 不登记/m' "$IC"
     grep -q 'M181-NC-C' "$IC" || echo "  ⚠️ NC-C 锚点未命中（icall.px 形态变了？）"
     if (cd "$ROOT" && ./tools/px build selfhost/interp.px > "$W/ncc_build.log" 2>&1) && [ -x "$DEV_PXI" ]; then
         "$DEV_PXI" "$D/e1_read_before_decl.px" > "$W/ncc1.out" 2> "$W/ncc1.err"; r1=$?
@@ -168,7 +179,9 @@ if [ "$NEG" = "1" ]; then
         chk "NC-C 解释轨变红（e1 rc=0）" "[ $r1 = 0 ]"
         chk "NC-C 解释轨变红（e6 遮蔽例回到 99）" "[ $r6 = 0 ] && grep -q '^99$' $W/ncc6.out"
     else
-        echo "  SKIP NC-C（dev 解释器构建失败，见 $W/ncc_build.log）"
+        echo "  FAIL NC-C（dev 解释器构建失败，见 $W/ncc_build.log）—— 负控没跑，不许当绿"
+        tail -3 "$W/ncc_build.log" 2>/dev/null | sed 's/^/     /'
+        fail=$((fail+1))
     fi
     restore_all
     chk "NC-C 还原后 icall.px 逐字节一致" "cmp -s $IC $BAK/icall.px"

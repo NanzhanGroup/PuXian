@@ -156,7 +156,7 @@ echo "--- VM / C 两轨输出逐字节一致（归一字段：走钟 dt · INFO 
 NORM_EXPR=(
   -e 's/^(INFO [A-Z]\.)dt dt=[0-9]+ms/\1dt dt=<ms>/'
   -e 's/^(INFO [FGH]\.rounds recv 轮数=)[0-9]+/\1<n>/'
-  -e '/^SKIP A4-A6 超时语义 /d'
+  -e '/^SKIP (\[585-SKIP-LOUD\] )?A4-A6 超时语义 /d'
   -e 's/^(PASS A4 )(超时被遵守|不可达即失败).*/\1<A4>/'
   -e 's/^(PASS A5 )(未远超超时|不是 refused).*/\1<A5>/'
   -e 's/^(PASS A6 )(errno=ETIMEDOUT\(110\)|err 文案非空).*/\1<A6>/'
@@ -212,7 +212,7 @@ INFO I.reply reply=got 100000
 M149_ASSERT: 53P/0F/0S
 SEOFT1
 cat > "$ST/c1" <<'SEOFT2'
-SKIP A4-A6 超时语义 —— 本机对该网段直达不可达（errno=101，非丢包）⇒ 试不到 ETIMEDOUT
+SKIP [585-SKIP-LOUD] A4-A6 超时语义 —— 本机对该网段直达不可达（errno=101，非丢包）⇒ 试不到 ETIMEDOUT
 PASS A4 不可达即失败（≤2500ms）
 PASS A5 不是 refused（101/113，非 111）
 PASS A6 err 文案非空
@@ -311,7 +311,7 @@ PY
     cp /tmp/m149_runtime_keep.c "$RT"
     if [ "$verdict" = "green" ]; then
         if [ "$tag" = "A" ] && [ "$aerr" != "110" ]; then
-            echo "   SKIP 负控 A：本环境 A 段走 errno=${aerr:-?}（不可达分支）⇒ 篡改「忽略 timeout_ms」不可观测"
+            echo "   SKIP [585-SKIP-LOUD] 负控 A：本环境 A 段走 errno=${aerr:-?}（不可达分支）⇒ 篡改「忽略 timeout_ms」不可观测"
             echo "        （与主判据的 SKIP A4-A6 同口径：**如实跳过，不算通过**；该面由 110 分支覆盖）"
         else
             echo "FAIL 负控 $tag：篡改后门仍绿（该面没被覆盖）"

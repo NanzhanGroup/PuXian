@@ -30,7 +30,8 @@ def ck(name, cond):
 
 def skip(name, why):
     SKIP = SKIP + 1
-    print("SKIP " + name + " —— " + why)
+    # M405：跳过必须**响亮**（主运行器口径：行首 SKIP 无 [585-SKIP-LOUD] ⇒ 判红）
+    print("SKIP [585-SKIP-LOUD] " + name + " —— " + why)
 
 def info(name, text):
     print("INFO " + name + " " + text)

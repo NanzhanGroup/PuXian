@@ -29,7 +29,7 @@ FAIL=0
 SKIP=0
 ok()   { printf '  ✅ %s\n' "$1"; }
 bad()  { printf '  ❌ %s\n' "$1"; FAIL=$((FAIL + 1)); }
-skip() { printf '  ⏭️  %s（SKIP：不计入 PASS）\n' "$1"; SKIP=$((SKIP + 1)); }
+skip() { printf '  ⏭️  %s（SKIP：不计入 PASS · [585-SKIP-LOUD] 覆盖缺口已登记 M405/缺陷 777）\n' "$1"; SKIP=$((SKIP + 1)); }
 
 echo "── M157 门 · ONNX 执行面（张量/算子/执行器）──"
 

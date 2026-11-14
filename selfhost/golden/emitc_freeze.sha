@@ -65,7 +65,7 @@ examples/m147_fmt_dec/fidelity.px src=597625c918f90bb5 dep=d60978c2bf09ab6b rc=0
 examples/m148_ieee_div/fidelity.px src=2e978b70cf37da2f dep=f9946a4d944dc2b1 rc=0 out=8e8944cb5db8f71b0d6b976d0d113fb3 err=e3b0c44298fc1c14
 examples/m149_tcp_deadline/interp_smoke.px src=d1f09baedd412321 dep=130fd18c8b348cdb rc=0 out=eeed31902741e5286542fb72a056b34c err=e3b0c44298fc1c14
 examples/m149_tcp_deadline/m149_server.px src=8d5386dcaba15bbb dep=131983473694ca58 rc=0 out=d4e90fd241c836e47cefcdb66a10ce20 err=e3b0c44298fc1c14
-examples/m149_tcp_deadline/tcp_deadline.px src=e6092d7ee428ffc2 dep=e87ee714a412da1e rc=0 out=b7ff85cb79539762be4e25f4ed35f803 err=e3b0c44298fc1c14
+examples/m149_tcp_deadline/tcp_deadline.px src=2cf5891e807849ed dep=f7519472be7a0d60 rc=0 out=fe120e5457f054535fbef0b50703ff93 err=e3b0c44298fc1c14
 examples/m150_tls_crypto/fidelity.px src=0a8cdf01f7358428 dep=3799103c49d95921 rc=0 out=ab4cb3d25056e98696bfa3898fcddd1b err=e3b0c44298fc1c14
 examples/m150_tls_crypto/interp_smoke.px src=d307dcd70980e723 dep=cd328f722dea81b8 rc=0 out=5e4322e8c19a45514d62f60c9819d506 err=e3b0c44298fc1c14
 examples/m150_tls_crypto/tls_probe.px src=831e12fce0e093e4 dep=cea8ea5613cee149 rc=0 out=33e0440bad5958de08cd04962f7e399c err=e3b0c44298fc1c14

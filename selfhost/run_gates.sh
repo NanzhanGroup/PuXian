@@ -42,6 +42,7 @@
 # ============================================================
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
+GATE_ROOT="$(pwd)"   # M405：门内判据要用绝对路径（门自己的 cwd 不受影响，各自在子 shell 里跑）
 export LC_ALL=C LANG=C
 
 # ── M320（缺陷 555）：运行器**自给**构建缓存目录，不吃调用者的 HOME ─────────
@@ -180,7 +181,7 @@ run() {  # $1=名 $2..=命令
     if [ -n "${!tmo_var:-}" ]; then tmo="${!tmo_var}"; tmo_src="env"; fi
     if timeout -k 20 "$tmo" "$@" > "/tmp/gate_$name.log" 2>&1; then
         local el=$((SECONDS-t0))
-        if _gate_adjudicate_ok_rc "$name" "$el"; then
+        if _gate_adjudicate_ok_rc "$name" "$el" && _gate_adjudicate_skips "$name" "$el"; then
             printf '%s\tOK\t%d\t-\n' "$name" "$el" >> "$GATE_TSV"
             echo "✅ $name（${el}s）"
             # M311：**配额告警**（用掉 ≥80% 生效上限）—— 不判红，只点名。
@@ -231,6 +232,28 @@ _gate_adjudicate_ok_rc() {   # $1=门名 $2=耗时
     echo "❌ $name（rc=0 但**末行判红** · ${el}s）"
     echo "     末行：$ll"
     echo "     ⇒ 门自身没把 FAIL 反映到退出码（缺陷 506 家族：结尾无条件 exit 0）"
+    echo "     （完整日志：$(gate_log_path "$name")）"
+    FAIL=$((FAIL+1))
+    _maybe_fail_fast
+    return 1
+}
+
+# ── M405（缺陷 776）：rc=0 且末行不判红之后，再查**静默跳过** ──
+#   为什么：M404 r3 判绿那轮，385 份门日志里有 **12 扇注册门**出现行首 SKIP，
+#   其中 **0 扇**带 [585-SKIP-LOUD]。它们被记成绿，但绿的理由是断言被跳过。
+#   口径落在 selfhost/gate_skip_loud.sh（自带 10 条自证），本函数只负责记账。
+#   返回 0 = 放过；返回 1 = 已按失败记账。
+_gate_adjudicate_skips() {   # $1=门名 $2=耗时
+    local name="$1" el="$2" out="" rc=0
+    out=$(bash "$GATE_ROOT/selfhost/gate_skip_loud.sh" "/tmp/gate_$name.log" 2>&1); rc=$?
+    [ "$rc" = 0 ] && return 0
+    if [ "$rc" = 2 ]; then
+        echo "⚠️ $name 跳过判据用法错（rc=2）：$out —— 按失败记账（不许当绿）"
+    fi
+    printf '%s\tFAIL\t%d\tskip\n' "$name" "$el" >> "$GATE_TSV"
+    echo "❌ $name（rc=0 但**静默跳过** · ${el}s）"
+    echo "$out" | sed 's/^/     /'
+    echo "     ⇒ 断言没跑却记绿；要么让门自备前提，要么把跳过点写成 [585-SKIP-LOUD] 并写明缺口"
     echo "     （完整日志：$(gate_log_path "$name")）"
     FAIL=$((FAIL+1))
     _maybe_fail_fast

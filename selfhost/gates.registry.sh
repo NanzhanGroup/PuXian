@@ -45,6 +45,11 @@ step "门路径卫生（不许写死开发机绝对路径 —— M213 缺陷 300
 #   ⇒ 本机全绿、**CI 红**（CI 仓库在 /home/runner/work/... 下）。⚠️ 「干净导出复现」抓不到
 #   这类缺陷：写死的路径在**本机依然存在**。⇒ 只能靠静态守卫 + CI。门自带 3 条自证。
 run check_gate_paths bash selfhost/check_gate_paths.sh
+step "门的仓外输入（不许靠「这台机器恰好有什么」 —— M405 缺陷 782；同族 767/768/775）"
+#   三次实锤同一形状：M403 m90_s1 被编译残留骗绿· M404 m103_s2c/s2d 分片无 HOME·
+#   M404 r2 scene.png 在 .gitignore 里 ⇒ 8 个 worktree 都没有。判据：五类输入
+#   （主机路径 / 第三方包 / 外网 / go 的 HOME 依赖 / 非仓库产物）必须登记或被门内自备。
+run gate_inputs python3 selfhost/check_gate_inputs.py
 step "孤儿门守卫（有 verify.sh 却没有任何运行器跑它 —— M249 缺陷 428 · M401 加固缺陷 766）"
 #   M249 建立时实测：179 个 verify.sh ⇄ registry 124 / ci.yml 127 ⇒ **55 扇门没人跑**；
 #   而「两边都没提到」的门**不在 check_gate_registry 的任何差集里** ⇒ 那半条判据看不见。
@@ -1758,7 +1763,10 @@ run selfwake_guard bash selfhost/check_no_selfwake.sh
 #   CI 用 --neg-skip（负控 A 需 devbuild 重建，约 3 分钟）。
 # ═══════════════════════════════════════════════════════════════════════════
 run m311_real_model bash examples/m311_real_model/verify.sh
-run m312_gc_lock_order bash examples/m312_gc_lock_order/verify.sh --neg-skip
+# M405（缺陷 781）：原行尾带 --neg-skip，而注释写着「本地全量门跑负控，CI 用 --neg-skip」——
+#   但本文件就是本地全量门的唯一清单 ⇒ **本机从未跑过这两扇门的负控**（实测 m312 带负控 rc=0、
+#   14 通过 0 失败，耗时只多约 2–3 分钟）。⇒ 本地去掉 --neg-skip；CI 仍保留（时间预算）。
+run m312_gc_lock_order bash examples/m312_gc_lock_order/verify.sh
 # ── M313（第 184 轮 · 第 185 轮起沿用）：mysql 驱动三处握手缺陷 + 读无界（缺陷 536–538）──
 #   来历：半山 2026-10-19 报障「连 MySQL 5.7 永久阻塞 + 服务器日志 Bad handshake」，附补丁。
 #   ① soff = ver[1] + 1（my_cstr_at 已返回终止符之后的偏移）② CONNECT_WITH_DB 误用 0x800
@@ -1791,7 +1799,7 @@ run m315_onnx_ort_kernel bash examples/m315_onnx_ort_kernel/verify.sh
 #   缺陷面三处（bi_http_request · bi_http_unix · sse_cli_connect_slot 的 Host 漏判）；
 #   判据只看**线上字节**（原始请求头 hex），负控撤回 ⇒ 双 Host 必须复现。
 run m316_http_dup_host bash examples/m316_http_dup_host/verify.sh
-run m317_gc_time_trigger bash examples/m317_gc_time_trigger/verify.sh --neg-skip
+run m317_gc_time_trigger bash examples/m317_gc_time_trigger/verify.sh
 # M318（第 190 轮）：内存分层可观测性（gc_diagnose / live_bytes / slab 单一实现）。
 #   三层模型：① 活对象 ② 分配器 ③ 非 GC 内存 —— 修前「RSS 涨了」无法分解到层。
 #   判据：静态 13 条 + 三轨契约一致 + 编译轨分层（live≤4MB/slab≤16MB/比值≥3）

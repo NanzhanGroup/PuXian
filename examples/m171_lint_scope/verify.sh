@@ -53,9 +53,13 @@ chk "bad_undefined 报 L002" "echo \"\$o1\" | grep -q \"E L002.*no_such_thing\""
 chk "bad_unused 报 L001"    "echo \"\$o2\" | grep -q \"W L001.*never_read\""
 
 echo "=== [3] 仓库实战回归：曾被误报的真实文件 → 0 错误"
-REPO_FILES="stdlib/collections.px examples/fib.px examples/m30_comp.px examples/m31_vhost.px examples/m23c_http_adv.px examples/webapp/index.px examples/m69_registry/app/main.px examples/m160_closure/closure_test.px"
+# M405（缺陷 778）：原清单里有 examples/m69_registry/app/main.px —— 该目录被 .gitignore:22
+#   覆盖（由 m69 自己生成）⇒ **跨门前置**：本门的绿取决于 m69 有没有在这台机器上先跑过。
+#   在分片 worktree 里它必然不在盘上，而门只打一行 SKIP 就继续 ⇒ 静默降覆盖。
+#   ⇒ 从清单移除；该文件的 lint 覆盖归 m69 自己（它生成它，也该验它）。
+REPO_FILES="stdlib/collections.px examples/fib.px examples/m30_comp.px examples/m31_vhost.px examples/m23c_http_adv.px examples/webapp/index.px examples/m160_closure/closure_test.px"
 for f in $REPO_FILES; do
-    [ -f "$f" ] || { echo "  SKIP $f（不在盘上）"; continue; }
+    [ -f "$f" ] || { echo "  FAIL 清单里的仓库文件不在盘上：$f（清单过期 ⇒ 判红，不许静默跳过）"; fail=$((fail+1)); continue; }
     o=$("$ROOT/bootstrap/pxlint" "$f" 2>&1 | tail -1)
     chk "$f 0 错误" "echo \"\$o\" | grep -q '0 错误,'"
 done

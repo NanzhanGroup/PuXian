@@ -1,4 +1,8 @@
 #!/bin/bash
+# M405（缺陷 780）：go 的缓存/家目录**自备** —— 门不许靠「这台机器恰好有 HOME」。
+export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/px-gocache}"
+export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/px-gopath}"
+export HOME="${HOME:-${TMPDIR:-/tmp}/px-home}"
 # ============================================================
 # M97-S3 verify.sh —— qg-issue 32（服务端 http_serve_unix keep-alive 长连生命周期）验证门
 # ------------------------------------------------------------

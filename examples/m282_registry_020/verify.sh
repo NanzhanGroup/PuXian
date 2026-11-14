@@ -58,7 +58,7 @@ W=/tmp/m282_gate
 rm -rf "$W"; mkdir -p "$W"
 pass=0; fail=0; skip=0
 chk() { if ( eval "$2" ) >/dev/null 2>&1; then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL $1"; fail=$((fail+1)); fi; }
-skipped() { echo "  SKIP $1 —— $2"; skip=$((skip+1)); }
+skipped() { echo "  SKIP [585-SKIP-LOUD] $1 —— $2"; skip=$((skip+1)); }
 
 echo "══ M282 门：上游 0.2.0 全量再引入 + 凭据泄漏守卫 ══"
 

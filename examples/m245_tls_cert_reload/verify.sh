@@ -328,7 +328,9 @@ echo "────────────────────────�
 # 现场留存（缺陷 590/602 的教训）：判据失败时把现场从 /tmp 搬到持久目录，
 #   否则下一轮一跑就覆盖掉，只剩一行结论——「未证」正是这么来的。
 if [ "$fail" != 0 ]; then
-    KEEP=/data/gatevm/m245-cases/$(date +%Y%m%d-%H%M%S)
+    # M405（缺陷 776）：默认落 /tmp（宿主可删），要留证请设 PX_EVID_DIR —— 写死 /data/gatevm 在建
+    #   分片 worktree / CI 里目录不存在 ⇒ 证据静默丢失（缺陷 590/602 的同样形状，只是换了一面）。
+    KEEP="${PX_EVID_DIR:-${TMPDIR:-/tmp}/px-evidence}/m245-cases/$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$KEEP" 2>/dev/null && cp -f "$W"/*.res "$W"/*.srv.log "$W"/*.codes "$W"/*.log "$KEEP"/ 2>/dev/null && \
         echo "现场已留存：$KEEP"
 fi

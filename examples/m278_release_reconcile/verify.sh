@@ -126,7 +126,7 @@ if [ -n "${GH_TOKEN:-}" ]; then
         ng "实网对账判红（有该有发布却没有的 tag）"
     fi
 else
-    echo "     ⏭ SKIP：未设置 GH_TOKEN —— 实网对账需要 GitHub API 令牌"
+    echo "     ⏭ SKIP [585-SKIP-LOUD]：未设置 GH_TOKEN —— 实网对账需要 GitHub API 令牌（本机设了就跑，CI 不跑）"
     echo "        本机：GH_TOKEN=\$(cat /data/pat.md) bash $0 ；CI：不设（本层按 SKIP 处理）"
 fi
 

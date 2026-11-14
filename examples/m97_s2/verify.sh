@@ -60,9 +60,11 @@ if [ -n "$OKN" ] && [ "$OKN" -lt 30 ] && grep -q "M97S2_CLIENT_FAILS_" /tmp/m97s
     chk "旧 runtime 复现失败（ok=$OKN/30 <30 → 奇偶失败 bug 实锤）" 0
     grep -E 'ok=|req#' /tmp/m97s2_pxi.out | head -6
 elif grep -q "M97S2_CLIENT_ALL_OK_" /tmp/m97s2_pxi.out; then
-    echo "  SKIP pxi 轨也全过（pxi 与 VM 轨 http 路径差异，不影响 VM 轨修复结论）"
+    # M405：这里不是 SKIP —— pxi 轨**跑通了且全过**，只是不参与本门判定。
+    #   原写法把「跑通了」写成「SKIP」，让主运行器的跳过口径读成「零覆盖」（误报）。
+    echo "  INFO pxi 轨也全过（不计入本门判定：pxi 与 VM 轨 http 路径不同）"
 else
-    echo "  SKIP pxi 未产出判定（rc=$PRC, ok=$OKN, up_accept=$UPN2）：$(tail -2 /tmp/m97s2_pxi.out | head -1)"
+    echo "  SKIP [585-SKIP-LOUD] pxi 未产出判定（rc=$PRC, ok=$OKN, up_accept=$UPN2）：$(tail -2 /tmp/m97s2_pxi.out | head -1)"
 fi
 cleanup
 

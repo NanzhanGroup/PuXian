@@ -120,11 +120,15 @@ run_track() {   # $1=标签；其余为编译前置（env 形式）
         kill -0 "$srv" 2>/dev/null && grep -q M131_READY "$SRVLOG" 2>/dev/null && break
         # 缺陷 572：READY 是 http_serve 之前打的，绑失败也照样出现 ⇒ 单纯等 READY 无牙。
         # M364（缺陷 632）留现场：旧版只 tail -5，且日志在 /tmp 会被负控覆盖 ⇒ 红过之后无证可查。
-        # 失败即把「服务端全量输出 + 退出码 + 端口归属」落盘 /data/gatevm/，并原样打印。
+        # 失败即把「服务端全量输出 + 退出码 + 端口归属」落盘，并原样打印。
+        # M405（缺陷 776）：原先写死 /data/gatevm/（宿主目录）—— CI 与分片 worktree 里它不存在，
+        #   失败时连证据都落不下（重定向失败会静默丢现场）。⇒ 默认 /tmp，可用 PX_EVID_DIR 指到持久盘。
+        local evid_dir="${PX_EVID_DIR:-${TMPDIR:-/tmp}/px-evidence}"
+        mkdir -p "$evid_dir" 2>/dev/null || true
         local srv_rc=0
         kill -0 "$srv" 2>/dev/null && { echo "  （进程存活但未就绪 ⇒ 收掉）" >&2; kill "$srv" 2>/dev/null; }
         wait "$srv" 2>/dev/null; srv_rc=$?
-        local evid="/data/gatevm/m131_fail_$(date +%Y%m%d-%H%M%S)_${attempt}.log"
+        local evid="$evid_dir/m131_fail_$(date +%Y%m%d-%H%M%S)_${attempt}.log"
         {
             echo "label=$label attempt=$attempt port=$PORT srv_rc=$srv_rc ready=$(grep -c M131_READY "$SRVLOG" 2>/dev/null || true)"
             echo "--- 服务端全量输出 ---"; cat "$SRVLOG" 2>/dev/null
