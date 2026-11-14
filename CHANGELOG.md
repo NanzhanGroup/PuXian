@@ -194,6 +194,32 @@ check_orphan_gates   13/0 绿 · --self-test 9/0 绿（含零孤儿态新锚点�
 结果：`examples/m403_orphan_batch/verify.sh` 在 **--net 隔离 + 私 /tmp + taskset 2 核**（分片同构）
 复跑 ⇒ **通过 9 · 失败 0**（46 条子门全绿）。
 
+### 九·2 全量门第 3 轮（链② bccc5f7）唯一红：门吃「非仓库产物」（缺陷 775）
+
+```
+链② /data/gatevm/m404-chain-20261114-125006.log  head=bccc5f7  绿 277 · 红 1（门清单 278）
+  shard3 红：m403_orphan_batch → 子门 m103_s2d 判红（rc=1 · 1s）
+  子门日志（§774 新加的「判红留尾部」当场见效，正是它把根因印了出来）：
+    == [1/4] Go gen（参照图 + JPEG 输入）==
+    ERR open ../m61_gfx/scene.png: no such file or directory
+    FAIL go gen
+```
+
+775  m103_s2d 读 `../m61_gfx/scene.png`（640×480）作参照图，而该文件是 m61_gfx/demo_scene.px 的
+     渲染产物、被 `.gitignore:50 examples/m61_gfx/*.png` 覆盖 ⇒ **不在仓库里**。分片跑在独立
+     worktree（8 片各建 wt1..wt8 @ bccc5f7），m61 门若没在同一片里先跑，本门必红 —— 与产品逻辑无关。
+     复现（干净 worktree，未打补丁）：`/data/gatevm/wt3/examples/m103_s2d` 直接 `bash verify.sh`
+     ⇒ 同一行 `ERR open ../m61_gfx/scene.png` ⇒ **确定性红，不是抖动**。
+     修：`go_img.go` 增 `ensureScene()` —— 缺图时按确定性图案就地合成 640×480 PNG 写入该路径
+     （门内自给，不改 img_test.px 的断言、不动发射冻结集）。
+     正控（--net 隔离 + 私 TMPDIR/GOCACHE/GOPATH/HOME，分片同构）：`RC=0`，`IMG_TEST: 20P/0F`，
+     `px=19381B go_ref=19399B 同量级`。负控：同一环境去掉补丁 ⇒ `FAIL go gen`（上条复现）。
+
+> 纠正上一轮 §774 的结论：当时判「原 0s 红不可复现，是 8 分片 ×2 job 并发的一次性抖动」——
+> **错的**。复跑之所以绿，是在**主工作树**里跑（`examples/m61_gfx/scene.png` 早就被历次 m61 门渲染
+> 出来躺在那里）；分片环境建的是干净 worktree，产物不存在。教训：门的复跑环境必须与红的环境同构，
+> 「我这跑绿了」本身不是证据。
+
 遗留（**产品侧，未修**）：`m208` ⑤ 的 `R1003 迭代期间被迭代容器长度变化` 属
 `docs/GATE_ISOLATION.md` §11.2 / §11.4 已登记的开放缺陷（GC 压力 × 协程时序边缘；
 12 路并发 2/12 红 · 空闲单跑 20/20 绿）。本轮没动任何判据，只在隔离下复测计数（见台账）。

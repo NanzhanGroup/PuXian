@@ -1,9 +1,11 @@
 // M103-S2d (Issue 30 GAP-IMG) 参照：Go image 解码/resize/JPEG（avatar.go 语义对拍）
-//   gen   (1) 读 ../m61_gfx/scene.png → image.Decode → 双线性等比 512×384 → jpeg q70
-//            → go_ref.jpg（px 产物尺寸/体积量级对拍基准）
-//        (2) 生成 200×150 渐变 JPEG → go_input.jpg（供 px 验证 JPEG 输入解码）
-//   check 读 px_out.jpg → image.Decode 验格式合法 + 尺寸 512×384 + 与 go_ref.jpg
-//         体积同量级（0.3×~3×，JPEG 编码器差异允许）
+//
+//	gen   (1) 读 ../m61_gfx/scene.png → image.Decode → 双线性等比 512×384 → jpeg q70
+//	         → go_ref.jpg（px 产物尺寸/体积量级对拍基准）
+//	     (2) 生成 200×150 渐变 JPEG → go_input.jpg（供 px 验证 JPEG 输入解码）
+//	check 读 px_out.jpg → image.Decode 验格式合法 + 尺寸 512×384 + 与 go_ref.jpg
+//	      体积同量级（0.3×~3×，JPEG 编码器差异允许）
+//
 // 依赖：go 标准库（image/png、image/jpeg）；用法：go build -o build/go_img . && ./go_img gen|check
 package main
 
@@ -74,10 +76,61 @@ func lerp(a, b uint32, t float64) uint32 {
 	return uint32(float64(a) + (float64(b)-float64(a))*t + 0.5)
 }
 
+// scenePath 参照图路径（m61_gfx 渲染产物；被 .gitignore 的 *.png 覆盖 ⇒ 不在仓库里）
+func scenePath() string { return filepath.Join("..", "m61_gfx", "scene.png") }
+
+// ensureScene（缺陷 775 · M404 链②）：本门读 ../m61_gfx/scene.png（640×480），
+// 该文件是 m61_gfx/demo_scene.px 的渲染产物且被 .gitignore(*) 覆盖 ⇒ **不是仓库产物**。
+// 分片/工作树环境里若 m61 门未先跑，本门必红（"open ../m61_gfx/scene.png: no such file"），
+// 与产品逻辑无关。门内自给：缺失时按确定性图案就地合成 640×480 PNG，
+// 保证「PNG decode → 等比缩放 → JPEG q70 → Go 反向解码」这条链路的前提恒成立。
+func ensureScene() error {
+	p := scenePath()
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
+	const w, h = 640, 480
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			// 确定性图案：水平/垂直渐变 + 对角条纹 + 三原色块（覆盖纯色/渐变/边缘，利于缩放对拍）
+			cx, cy := x*255/(w-1), y*255/(h-1)
+			stripe := uint8(0)
+			if ((x/16)+(y/16))%2 == 0 {
+				stripe = 64
+			}
+			if x < w/5 && y < h/5 {
+				cx, cy = 255, 0 // 红块
+			} else if x > w-w/5 && y < h/5 {
+				cx, cy = 0, 255 // 绿块
+			} else if x < w/5 && y > h-h/5 {
+				cx, cy = 0, 0 // 蓝块
+			}
+			img.Set(x, y, color.RGBA{uint8(cx), uint8(cy), uint8((cx+cy)/2%256) + stripe, 255})
+		}
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "NOTE scene.png 缺失（非仓库产物）⇒ 门内合成 640x480 参照图: %s\n", p)
+	return nil
+}
+
 func gen() {
 	os.MkdirAll("artifacts", 0755)
+	if err := ensureScene(); err != nil {
+		fatal(err)
+	}
 	// (1) scene.png → 512×384 jpeg q70
-	in, err := os.Open(filepath.Join("..", "m61_gfx", "scene.png"))
+	in, err := os.Open(scenePath())
 	if err != nil {
 		fatal(err)
 	}
