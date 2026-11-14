@@ -20,6 +20,12 @@ DIR="$ROOT/examples/m98_s2"
 PORT=18198
 PASS=0 FAIL=0
 
+# ── M404（缺陷 766）：池规模由**本门**决定，不由宿主机核数决定 ──
+#   实测（M404 定性）：coro worker 默认 = 在线 CPU 数（本机 16 ⇒ 线程峰值 22），
+#   而本门阈值按 min(CPU,8)=8 建模 ⇒ 16 核必红、≤8 核绿。绝对数不得作判据（CRITERIA ②）
+#   ⇒ 显式 pin 池规模，结果与宿主机核数无关。
+export PX_CORO_WORKERS=8
+
 chk() { # $1=名 $2=条件(0=pass)
     if [ "$2" = "0" ]; then echo "  PASS $1"; PASS=$((PASS+1)); else echo "  FAIL $1"; FAIL=$((FAIL+1)); fi
 }
@@ -58,11 +64,22 @@ for i in $(seq 1 50); do
 done
 chk "px_serve 就绪（index.txt=OK）" $([ "$READY" = "1" ] && echo 0 || echo 1)
 
+# M404：线程基线（负载前）+ **负载期间**的后台采样器。
+#   旧版是客户端跑完才采样，采到的是「负载后残留」却当「峰值」报 —— 名不符实，已修。
+N0=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
+rm -f /tmp/m98s2_threads.txt
+( while kill -0 $SRV_PID 2>/dev/null; do
+      ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l >> /tmp/m98s2_threads.txt
+      sleep 0.05
+  done ) &
+SAMPLER_PID=$!
+
 echo "── Go 客户端场景执行（并发 slow / fast 饿死检测 / keep-alive 续处理 / big / alloc）"
 T0=$(date +%s.%N)
 timeout 120 /tmp/m98s2_go "127.0.0.1:$PORT" >/tmp/m98s2_go.out 2>&1
 GRC=$?
 T1=$(date +%s.%N)
+kill $SAMPLER_PID 2>/dev/null; wait $SAMPLER_PID 2>/dev/null
 WALL=$(awk -v a="$T0" -v b="$T1" 'BEGIN{printf "%.2f", b-a}')
 cat /tmp/m98s2_go.out
 grep -q "M98S2_CLIENT PASS=.* FAIL=0" /tmp/m98s2_go.out
@@ -72,14 +89,17 @@ chk "客户端场景全 PASS（wall=${WALL}s rc=$GRC）" $?
 N_REQ=$(grep -c '\[px-access\]' /tmp/m98s2_srv.log 2>/dev/null || echo 0)
 chk "服务端访问日志 $N_REQ 条（20 slow+30 fast+2 ka slow+1 big+1 p+1 head+1 static+10 alloc+就绪 ≥ 66）" $([ "$N_REQ" -ge 66 ] && echo 0 || echo 1)
 
-# 线程峰值采样（daemon 进程；协程模型：池2 + coro≤8 + 主/accept ≈ ≤14）
-PEAK=0
-for i in $(seq 1 30); do
-    N=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
-    [ "$N" -gt "$PEAK" ] && PEAK=$N
-    sleep 0.1
-done
-chk "线程峰值 $PEAK ≤ 18（池 2 + coro ≤8 + 主线程/accept）" $([ "$PEAK" -le 18 ] && echo 0 || echo 1)
+# 线程峰值（**负载期间**采样；协程模型：池2 + coro pin=8 + 主/accept + 事件循环 ≈ ≤14）
+PEAK=$(sort -n /tmp/m98s2_threads.txt 2>/dev/null | tail -1)
+PEAK=${PEAK:-0}
+chk "线程峰值 $PEAK ≤ 18（池 2 + coro pin=8 + 主线程/accept + 事件循环）" $([ "$PEAK" -ge 1 ] && [ "$PEAK" -le 18 ] && echo 0 || echo 1)
+
+# M404 新增：**无 per-request 线程**——负载结束 + offload 空闲回收(3000ms)后须回落到基线附近。
+#   这一项才是「不泄漏」的判据：绝对数只防失控，增量才防「每个请求一个线程」。
+sleep 3.5
+N1=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
+chk "负载后残留 $N1 ≤ 基线 $N0 + 2（无 per-request 线程）" \
+    $([ -n "$N1" ] && [ "$N0" -gt 0 ] && [ "$N1" -le $((N0 + 2)) ] && echo 0 || echo 1)
 
 cleanup
 

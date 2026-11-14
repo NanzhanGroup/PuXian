@@ -10,7 +10,7 @@ examples/m103_s2a/dns_txt_offline.px src=2dd4384b74420aea dep=28ba99ec52147233 r
 examples/m103_s2a/dns_txt_stub.px src=2998bf2d9126d3f5 dep=1f715ede5b6803ac rc=0 out=841e76c06ab9b774805f88ed8c0ea41b err=e3b0c44298fc1c14
 examples/m103_s2a/dns_txt_test.px src=09d99ee3ed87b335 dep=8382bcc0ac84f978 rc=0 out=d70bfc5d158bb1992a8dc107e7aec162 err=e3b0c44298fc1c14
 examples/m103_s2b/keygen_test.px src=39e466498034a549 dep=7f0667aa0f422bec rc=0 out=ba2c9a9176a618b0379db5f0fe78b23a err=e3b0c44298fc1c14
-examples/m103_s2c/yaml_stringify_test.px src=24e819d0e5148b40 dep=2d54760456f067d7 rc=0 out=8bf3c7a0dd4268d935e40fc9da29abd1 err=e3b0c44298fc1c14
+examples/m103_s2c/yaml_stringify_test.px src=e91263dfd2743786 dep=7586ad2277490276 rc=0 out=e1a0e2a06c1e1e871aaf902e362b7fb1 err=e3b0c44298fc1c14
 examples/m103_s2d/img_test.px src=42d0202d4338bc99 dep=4684201b4ab0dfe1 rc=0 out=bd395905ba632155cdf556c3ceef546c err=e3b0c44298fc1c14
 examples/m108_lock/m108_lock_daemon.px src=b18b1c7d6991f29e dep=10ae5f8d46a47f37 rc=0 out=36b75c3c7b086c04cf2af529ff7da0c6 err=e3b0c44298fc1c14
 examples/m108_s0/hs_stall_server.px src=1243168d68cc7f8e dep=2eec79178061cd4c rc=0 out=001f9ad649c102fe2f0ecd0f8f9edfb9 err=e3b0c44298fc1c14
@@ -459,6 +459,7 @@ examples/m89_s3d/gen_gc_stress.px src=edf2ee5a096e599e dep=3b32c14aab6ffacf rc=0
 examples/m89_s3d/vm_conc_gc_stress.px src=4af45fe07c87bc72 dep=fa90275b741fa11c rc=0 out=fcc524289ac5dcc8c2abdd7e8427ceb5 err=e3b0c44298fc1c14
 examples/m89_s3d/vm_conc_gen_stress.px src=7eb5c6c5422f67ad dep=34f2444272fb02cf rc=0 out=0dde236a8170c85eb9cb4ec86bfab1fe err=e3b0c44298fc1c14
 examples/m89_s3d/vm_spawn_smoke.px src=7d31366ff7452f76 dep=0f59a78aacb924f3 rc=0 out=c3b2078b4741c5720675309a8adcc774 err=e3b0c44298fc1c14
+examples/m89_s3d/wave_settle.px src=518bf6573c4d8f3a dep=900e0f8e41b5b1ad rc=0 out=dddc7fd0f5e9dc59bc0fa8fd546c16e6 err=e3b0c44298fc1c14
 examples/m90_s1/cmpsem.px src=d266163f874b1d34 dep=af4c167a0075a6cd rc=0 out=2c81285a7ad3a41f13f9c5799282e713 err=e3b0c44298fc1c14
 examples/m90_s1/default_args.px src=cee6d50c4d440539 dep=d201f4adfab3af5a rc=0 out=510ae31fe13bd0f1b59e8e4c9a88dad7 err=e3b0c44298fc1c14
 examples/m90_s1/seg11.px src=4eccc2432bf1b53b dep=e3ab90e4e5a1e6ef rc=0 out=6e86c36f562d8cdbd646f4f2b56f3274 err=e3b0c44298fc1c14

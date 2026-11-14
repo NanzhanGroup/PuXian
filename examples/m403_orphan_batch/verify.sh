@@ -64,8 +64,23 @@ run_manifest() {
             RM_BAD=$((RM_BAD + 1))
             continue
         fi
-        if grep -qE '(^|[^A-Za-z])SKIP([^A-Za-z]|$)' "$TMP/$name.log"; then
-            echo "  ❌ C3 $name 打印了 SKIP（SKIP 不算绿）：$(grep -E '(^|[^A-Za-z])SKIP' "$TMP/$name.log" | head -1 | cut -c1-80)"
+        # ── C3 SKIP 口径（M404 细化）────────────────────────────────────────
+        #   实测依据：m103_s2a / m84_s3_dns 的「外网档」是**设计性观察项**，离线段照跑
+        #   且有正向断言；旧口径一刀切判死 = 把「离线可验证的门」也钉在孤儿名单上。
+        #   ① 未带 [585-SKIP-LOUD] 标记的 SKIP ⇒ 红（静默跳过 = 零观测）；
+        #   ② 带标记但日志里**没有任何正向断言** ⇒ 红（整门零覆盖，SKIP 当绿）；
+        #   ③ 带标记 + 有正向断言 ⇒ 允许（观察项缺失不等于门没干活）。
+        local sk_all sk_loud positive
+        sk_all=$(grep -cE '(^|[^A-Za-z])SKIP' "$TMP/$name.log" 2>/dev/null || true)
+        sk_loud=$(grep -cE '\[585-SKIP-LOUD\]' "$TMP/$name.log" 2>/dev/null || true)
+        positive=$(grep -cE 'PASS|✅|OK|[0-9]+P/[0-9]+F' "$TMP/$name.log" 2>/dev/null || true)
+        if [ "${sk_all:-0}" -gt "${sk_loud:-0}" ]; then
+            echo "  ❌ C3 $name 静默 SKIP（缺 [585-SKIP-LOUD] 标记）：$(grep -E '(^|[^A-Za-z])SKIP' "$TMP/$name.log" | head -1 | cut -c1-80)"
+            RM_BAD=$((RM_BAD + 1))
+            continue
+        fi
+        if [ "${sk_loud:-0}" -gt 0 ] && [ "${positive:-0}" -lt 1 ]; then
+            echo "  ❌ C3 $name 整门 SKIP（带标记但无任何正向断言 ⇒ 零覆盖）"
             RM_BAD=$((RM_BAD + 1))
             continue
         fi
@@ -116,6 +131,27 @@ else
     bad "C5 缺清单或 registry（无法判）"
 fi
 
+# ── C6：门不得依赖**非仓库产物**（M404 加）────────────────────────────────
+#   病史：m89_s3d / m90_s1 都要求 selfhost/build/compiler_new（M89/M90 期手工重链，
+#   不在仓库、devbuild.sh 也不生成）⇒ 缺它 SKIP 判绿、有残留才真跑
+#   ＝「门绿不绿取决于谁的机器上有什么残留」（M304 同款）。此类前提一律要求自备。
+echo "── C6 门不得依赖非仓库产物（手工重链 compiler_new 等残留）──"
+# ⚠️ 两条自证纪律（第一版就踩了）：
+#   ① **注释不算代码**（CRITERIA ⑥）：逐行去掉整行注释再匹配，否则"病史说明"会被当成依赖；
+#   ② **判据不算自己**：本门自己的检查逻辑里必然出现这个字面量 ⇒ 必须排除本门。
+C6_BAD=""
+for _f in examples/*/verify.sh; do
+    case "$_f" in examples/m403_orphan_batch/*) continue ;; esac
+    if sed 's/^[[:space:]]*#.*$//' "$_f" | grep -q 'selfhost/build/compiler_new'; then
+        C6_BAD="$C6_BAD $_f"
+    fi
+done
+if [ -z "$C6_BAD" ]; then
+    ok "没有任何门依赖手工重链产物（compiler_new）"
+else
+    bad "以下门仍依赖非仓库产物：$C6_BAD"
+fi
+
 # ── N1/N2 判据自证（临时夹具：一条必过 + 一条必败）──────────────────────────
 echo "── N1/N2 判据自证（临时夹具）──"
 FX="$TMP/fx"; mkdir -p "$FX/examples/fx_ok" "$FX/examples/fx_bad"
@@ -138,6 +174,38 @@ if [ "$rcN2" = 0 ] && grep -q 'fx_ok OK' "$TMP/n2.out"; then
     ok "N2 正控：只留必过夹具 ⇒ 判绿（证明 N1 的红来自失败本身）"
 else
     bad "N2 正控失败：必过夹具被判红（rc=$rcN2）：$(head -2 "$TMP/n2.out" | tr '\n' ' ')"
+fi
+
+# ── N3/N4/N5：C3 SKIP 新口径的负控 + 正控（M404 加）────────────────────────
+echo "── N3/N4/N5：SKIP 口径自证（静默 SKIP 必红 / 整门 SKIP 必红 / 带标记且有正向断言必绿）──"
+mkdir -p "$FX/examples/fx_silent_skip" "$FX/examples/fx_all_skip" "$FX/examples/fx_loud_skip"
+printf '#!/usr/bin/env bash\necho "PASS 本地断言一条"\necho "SKIP: 某外部依赖缺失"\nexit 0\n' \
+    > "$FX/examples/fx_silent_skip/verify.sh"
+printf '#!/usr/bin/env bash\necho "[585-SKIP-LOUD] 外网档跳过"\nexit 0\n' \
+    > "$FX/examples/fx_all_skip/verify.sh"
+printf '#!/usr/bin/env bash\necho "PASS 本地断言一条"\necho "[585-SKIP-LOUD] 外网档跳过（设计性观察项）"\nexit 0\n' \
+    > "$FX/examples/fx_loud_skip/verify.sh"
+chmod +x "$FX/examples/fx_silent_skip/verify.sh" "$FX/examples/fx_all_skip/verify.sh" "$FX/examples/fx_loud_skip/verify.sh"
+printf 'fx_silent_skip\n' > "$FX/silent.txt"
+printf 'fx_all_skip\n'    > "$FX/allskip.txt"
+printf 'fx_loud_skip\n'   > "$FX/loudskip.txt"
+run_manifest "$FX/silent.txt"  0 "$FX" > "$TMP/n3.out" 2>&1; rcN3=$?
+run_manifest "$FX/allskip.txt" 0 "$FX" > "$TMP/n4.out" 2>&1; rcN4=$?
+run_manifest "$FX/loudskip.txt" 0 "$FX" > "$TMP/n5.out" 2>&1; rcN5=$?
+if [ "$rcN3" != 0 ] && grep -q '静默 SKIP' "$TMP/n3.out"; then
+    ok "N3 负控：静默 SKIP（无标记）⇒ 判红"
+else
+    bad "N3 负控失败：静默 SKIP 未被判红（rc=$rcN3）：$(head -2 "$TMP/n3.out" | tr '\n' ' ')"
+fi
+if [ "$rcN4" != 0 ] && grep -q '整门 SKIP' "$TMP/n4.out"; then
+    ok "N4 负控：带标记但零正向断言 ⇒ 判红（零覆盖不能算绿）"
+else
+    bad "N4 负控失败：整门 SKIP 未被判红（rc=$rcN4）：$(head -2 "$TMP/n4.out" | tr '\n' ' ')"
+fi
+if [ "$rcN5" = 0 ] && grep -q 'fx_loud_skip OK' "$TMP/n5.out"; then
+    ok "N5 正控：带标记 + 有正向断言 ⇒ 判绿（证明 N3/N4 的红来自口径本身）"
+else
+    bad "N5 正控失败：合法观察项被判红（rc=$rcN5）：$(head -2 "$TMP/n5.out" | tr '\n' ' ')"
 fi
 
 echo "── m403_orphan_batch：通过 $pass · 失败 $fail ──"

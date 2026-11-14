@@ -18,43 +18,24 @@ set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"
 PX="$ROOT/tools/px"
-CN="$ROOT/selfhost/build/compiler_new"
+# （M404：原 CN=compiler_new 前提已移除，改用 tools/px build 自备构建）
 RT="$ROOT/runtime"
 DIR="$ROOT/examples/m90_s1"
 OUT=/tmp/m90_s1_verify
 mkdir -p "$OUT"
+# M404（缺陷 768）：构建前提改为**仓库自备**（tools/px build）。
+#   旧版要求 M89/M90 期手工重链的 compiler_new（不在仓库、devbuild.sh 不生成）⇒ 缺它即 SKIP(exit 0)，
+#   本机有残留产物时才真跑 —— 「门绿不绿取决于谁的机器上有什么残留」（M304 同款）。
+# （M404：$CN 变量已随 compiler_new 前提一并移除 —— 本门不再引用任何非仓库产物）
+# M404：不再需要手工 rtcache —— 构建前提由 tools/px build 自备（见 emit_and_link）
 
-[ -x "$CN" ] || {
-    # M251 体检：这是 M89/M90 期**手工重链**的 VM 轨编译器，不在仓库里
-    #   （selfhost/build/ 只保留重烘中间件），当前构建体系（devbuild.sh）也不生成它。
-    #   ⇒ 本门**无法自动跑通**。处置 = 明确 SKIP（不静默、不误红）。
-    echo "SKIP: 缺前置 selfhost/build/compiler_new（M89/M90 期手工重链的 VM 轨编译器）"
-    echo "      该产物不在仓库里，devbuild.sh 也不生成 ⇒ 本门无法自动跑通"
-    echo "      验证面（VM 轨 emit-c → gcc 链 rtcache）现由 m216 / m220 等现代门覆盖"
-    echo "      恢复办法：用 devbuild.sh --vm 产出的 VM 轨编译器替换 CN 即可"
-    exit 0
-}
-CACHE=""
-for d in $(ls -dt "$ROOT"/.rtcache/*/ 2>/dev/null); do
-    [ -f "$d/.complete" ] && [ -f "$d/vm.o" ] && CACHE="$d" && break
-done
-[ -n "$CACHE" ] || { echo "❌ 未找到含 vm.o 的 rtcache" >&2; exit 1; }
-echo "── rtcache: $CACHE"
-
-emit_and_link() { # $1=px文件 $2=输出名 → /tmp/<out>（VM 轨：compiler_new emit-c → gcc 链 rtcache）
-    local src="$1" name="$2"
-    ( ulimit -v 10000000; "$CN" --emit-c "$src" > "$OUT/${name}.c" 2>"$OUT/${name}.emit.log" ) || {
-        echo "  ❌ emit-c 失败: $src"; tail -3 "$OUT/${name}.emit.log"; return 1; }
-    gcc -c -O2 -I"$CACHE" -I"$RT" "$OUT/${name}.c" -o "$OUT/${name}.o" 2>"$OUT/${name}.cc.log" || {
-        echo "  ❌ C 编译失败: $src"; tail -5 "$OUT/${name}.cc.log"; return 1; }
-    local objs="" f
-    for f in "$CACHE"/*.o; do objs="$objs $f"; done
-    gcc -static -O2 -pthread -o "$OUT/${name}" "$OUT/${name}.o" $objs \
-        "$RT/third_party/sqlite3/sqlite3.o" \
-        "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
-        "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
-        "$RT/third_party/openssl/lib/libssl.a" "$RT/third_party/openssl/lib/libcrypto.a" \
-        "$RT/third_party/zlib/lib/libz.a" -lm -ldl -lpthread || return 1
+emit_and_link() { # $1=px文件 $2=输出名 → $OUT/<输出名>（VM 轨：tools/px build）
+    local src="$1" name="$2" bin
+    "$PX" build --no-quic "$src" > "$OUT/${name}.build.log" 2>&1 || {
+        echo "  ❌ build 失败: $src"; tail -5 "$OUT/${name}.build.log"; return 1; }
+    bin="$(dirname "$src")/build/$(basename "$src" .px)"
+    [ -x "$bin" ] || { echo "  ❌ 产物不存在: $bin"; return 1; }
+    cp "$bin" "$OUT/${name}" || return 1
     return 0
 }
 
@@ -76,9 +57,15 @@ else
 fi
 
 echo "── 2) capability.px BC 编译门（F1 直击：此前 rc=1 默认参数 panic）"
-timeout 300 "$CN" bc selfhost/capability.px >"$OUT/cap.bc.dump" 2>"$OUT/cap.bc.log"; crc=$?
-if [ $crc -eq 0 ] && [ -s "$OUT/cap.bc.dump" ]; then
-    echo "  PASS capability.px BC 编译成功（dump $(wc -l <"$OUT/cap.bc.dump") 行）"
+# M404（缺陷 768）：改用仓库自带工具链（px build --vm = VM/BC 轨）⇒ 前提自备、可复现。
+#   旧版调 $CN bc（手工重链的 compiler_new）dump 字节码；该二进制不在仓库里，
+#   依赖它就等于「本机恰好有残留才绿」。现改为：编译 capability.px 并检查其生成的
+#   字节码镜像 C（px build 产物同目录的 .c）里 NARGS 指令是否落地。
+"$PX" build --no-quic --vm selfhost/capability.px >"$OUT/cap.bc.log" 2>&1; crc=$?
+BC_C="$(dirname selfhost/capability.px)/build/capability.c"
+if [ $crc -eq 0 ] && [ -s "$BC_C" ]; then
+    cp "$BC_C" "$OUT/cap.bc.dump"
+    echo "  PASS capability.px BC 编译成功（镜像 $(wc -l <"$OUT/cap.bc.dump") 行）"
     PASS=$((PASS+1))
 else
     echo "  FAIL capability.px BC 编译（rc=$crc）"; tail -5 "$OUT/cap.bc.log"; FAIL=$((FAIL+1))

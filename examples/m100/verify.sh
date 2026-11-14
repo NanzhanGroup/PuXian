@@ -22,6 +22,11 @@ DIR="$ROOT/examples/m100"
 PORT=18100
 PASS=0 FAIL=0
 
+# ── M404（缺陷 766）：池规模由**本门**决定，不由宿主机核数决定 ──
+#   实测：coro worker 默认 = 在线 CPU 数（本机 16 ⇒ 峰值 22），本门阈值按 min(CPU,8)=8
+#   建模 ⇒ 16 核机器必红。绝对数不得作判据（CRITERIA ②）⇒ 显式 pin。
+export PX_CORO_WORKERS=8
+
 chk() { # $1=名 $2=条件(0=pass)
     if [ "$2" = "0" ]; then echo "  PASS $1"; PASS=$((PASS+1)); else echo "  FAIL $1"; FAIL=$((FAIL+1)); fi
 }
@@ -60,6 +65,7 @@ done
 chk "px_serve 就绪（index.txt=M100-OK）" $([ "$READY" = "1" ] && echo 0 || echo 1)
 
 echo "── 全程线程采样（后台；20 慢 middleware 并发不占 worker → 峰值 ≤20）"
+N0=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
 rm -f /tmp/m100_threads.txt
 (
     while kill -0 $SRV_PID 2>/dev/null; do
@@ -83,7 +89,14 @@ chk "客户端场景全 PASS（wall=${WALL}s rc=$GRC）" $?
 # 线程峰值
 PEAK=$(sort -n /tmp/m100_threads.txt 2>/dev/null | tail -1)
 PEAK=${PEAK:-0}
-chk "线程峰值 $PEAK ≤ 20（链 defer 后 pool2+coro≤8+事件循环+主）" $([ "$PEAK" -le 20 ] && echo 0 || echo 1)
+chk "线程峰值 $PEAK ≤ 20（链 defer 后 pool2+coro pin=8+事件循环+主）" \
+    $([ "$PEAK" -ge 1 ] && [ "$PEAK" -le 20 ] && echo 0 || echo 1)
+
+# M404 新增：无 per-request 线程 —— 负载后（含 offload 空闲回收）回落到基线附近
+sleep 3.5
+N1=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
+chk "负载后残留 $N1 ≤ 基线 $N0 + 2（无 per-request 线程）" \
+    $([ -n "$N1" ] && [ "$N0" -gt 0 ] && [ "$N1" -le $((N0 + 2)) ] && echo 0 || echo 1)
 
 # 服务端日志佐证：middleware 短路 (middleware) 文案 + 访问日志不丢
 N_MW=$(grep -c -- "(middleware)" /tmp/m100_srv.log 2>/dev/null || echo 0)

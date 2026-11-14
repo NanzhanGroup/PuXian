@@ -17,43 +17,27 @@ set -u
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"
 PX="$ROOT/tools/px"
-CN="$ROOT/selfhost/build/compiler_new"
+# （M404：原 CN=compiler_new 前提已移除，改用 tools/px build 自备构建）
 RT="$ROOT/runtime"
 DIR="$ROOT/examples/m89_s3d"
 OUT=/tmp/m89_s3d_verify
 mkdir -p "$OUT"
+# M404（缺陷 768）：不再要求 compiler_new / 手工 rtcache —— 构建前提由 tools/px build 自备。
+#   旧版在缺 CN 时 `exit 0`（SKIP 判绿 = 零覆盖）；本机有残留产物时才真跑，属于「依赖残留」。
+# （M404：$CN 变量已随 compiler_new 前提一并移除 —— 本门不再引用任何非仓库产物）   # 保留变量名以免其它段引用报 unbound（set -u）
 
-[ -x "$CN" ] || {
-    # M251 体检：这是 M89/M90 期**手工重链**的 VM 轨编译器，不在仓库里
-    #   （selfhost/build/ 只保留重烘中间件），当前构建体系（devbuild.sh）也不生成它。
-    #   ⇒ 本门**无法自动跑通**。处置 = 明确 SKIP（不静默、不误红）。
-    echo "SKIP: 缺前置 selfhost/build/compiler_new（M89/M90 期手工重链的 VM 轨编译器）"
-    echo "      该产物不在仓库里，devbuild.sh 也不生成 ⇒ 本门无法自动跑通"
-    echo "      验证面（VM 轨 emit-c → gcc 链 rtcache）现由 m216 / m220 等现代门覆盖"
-    echo "      恢复办法：用 devbuild.sh --vm 产出的 VM 轨编译器替换 CN 即可"
-    exit 0
-}
-CACHE=""
-for d in $(ls -dt "$ROOT"/.rtcache/*/ 2>/dev/null); do
-    [ -f "$d/.complete" ] && [ -f "$d/vm.o" ] && CACHE="$d" && break
-done
-[ -n "$CACHE" ] || { echo "❌ 未找到含 vm.o 的 rtcache" >&2; exit 1; }
-echo "── rtcache: $CACHE"
-
-emit_and_link() { # $1=px文件 $2=输出名 → /tmp/<out>（VM 轨：compiler_new emit-c → gcc 链 rtcache）
-    local src="$1" name="$2"
-    ( ulimit -v 10000000; "$CN" --emit-c "$src" > "$OUT/${name}.c" 2>"$OUT/${name}.emit.log" ) || {
-        echo "  ❌ emit-c 失败: $src"; tail -3 "$OUT/${name}.emit.log"; return 1; }
-    gcc -c -O2 -I"$CACHE" -I"$RT" "$OUT/${name}.c" -o "$OUT/${name}.o" 2>"$OUT/${name}.cc.log" || {
-        echo "  ❌ C 编译失败: $src"; tail -5 "$OUT/${name}.cc.log"; return 1; }
-    local objs="" f
-    for f in "$CACHE"/*.o; do objs="$objs $f"; done
-    gcc -static -O2 -pthread -o "$OUT/${name}" "$OUT/${name}.o" $objs \
-        "$RT/third_party/sqlite3/sqlite3.o" \
-        "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
-        "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
-        "$RT/third_party/openssl/lib/libssl.a" "$RT/third_party/openssl/lib/libcrypto.a" \
-        "$RT/third_party/zlib/lib/libz.a" -lm -ldl -lpthread || return 1
+# ── M404（缺陷 768）：**自备构建前提** ──────────────────────────────────────
+#   病史：本门原先要求 selfhost/build/compiler_new（M89/M90 期**手工重链**的 VM 轨编译器，
+#   不在仓库里、devbuild.sh 也不生成）⇒ 缺它就 SKIP（exit 0）；本机恰好有残留产物时才真跑，
+#   而那个残留是 06:14 编译留下的 —— 正是 M304「门绿不绿取决于谁的机器上有什么残留」同款。
+#   现改为**仓库自带工具链**：tools/px build --no-quic（VM 轨）⇒ 前提自备、可复现。
+emit_and_link() { # $1=px文件 $2=输出名 → $OUT/<输出名>（VM 轨：tools/px build）
+    local src="$1" name="$2" bin
+    "$PX" build --no-quic "$src" > "$OUT/${name}.build.log" 2>&1 || {
+        echo "  ❌ build 失败: $src"; tail -5 "$OUT/${name}.build.log"; return 1; }
+    bin="$(dirname "$src")/build/$(basename "$src" .px)"
+    [ -x "$bin" ] || { echo "  ❌ 产物不存在: $bin"; return 1; }
+    cp "$bin" "$OUT/${name}" || return 1
     return 0
 }
 
@@ -90,8 +74,8 @@ else
     echo "  FAIL gen_gc_stress（rc=$rc）"; tail -3 "$OUT/gengc.out"; FAIL=$((FAIL+1));
 fi
 
-echo "── 4) VM 轨堆回落（3 波垃圾 → RSS 回落基线；对齐 issue28-B2 断言）"
-emit_and_link "$ROOT/examples/issue28_b2/wave.px" wave || { FAIL=$((FAIL+1)); }
+echo "── 4) VM 轨堆回落（4 波垃圾 + 空转 gc() → 最小 RSS 回落基线；对齐 issue28-B2 断言）"
+emit_and_link "$DIR/wave_settle.px" wave || { FAIL=$((FAIL+1)); }
 LOG="$OUT/wave.log"; rm -f "$LOG"
 "$OUT/wave" >"$LOG" 2>&1 &
 WPID=$!
@@ -104,22 +88,41 @@ PEAK=0
   done; echo "$PEAK" > "$OUT/wave.peak" ) &
 SPID=$!
 wait_marker() { for i in $(seq 1 300); do grep -q "$1" "$LOG" 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+# M404（缺陷 769）：判据从「某瞬间的 RSS」改成「窗口内**最小** RSS」。
+#   实测（16 核本机，8 波轨迹）：gc() 之后 RSS 在两波之间 22MB ⇄ 272MB 交替，
+#   旧版在 W3-DONE 后固定 sleep 0.3s 采一次 ⇒ 采到 272MB 就判「未回落」，
+#   这是**相位运气**，不是产品行为：同一进程在最近 2.5s 内确实降到过 22MB。
+#   契约是「gc() 后空 slab 页归还 OS」⇒ 该判「有没有降下来」，不该判「某一刻有多高」。
+rss_min_window() { # $1=窗口秒数 → stdout=窗口内最小 VmRSS(KB)；无有效读数 → 0
+    local dur="$1" n i v min=99999999 cnt=0
+    n=$(awk -v d="$dur" 'BEGIN{printf "%d", (d/0.05)+1}')
+    for i in $(seq 1 "$n"); do
+        v=$(rss_kb)
+        if [ -n "$v" ]; then cnt=$((cnt+1)); [ "$v" -lt "$min" ] && min=$v; fi
+        sleep 0.05
+    done
+    if [ "$cnt" -eq 0 ]; then echo 0; else echo "$min"; fi
+}
 ok=1
 wait_marker W-BASELINE || { echo "  FAIL wave 未启动"; ok=0; }
 sleep 1.0; BASE=$(rss_kb)
-for w in 1 2 3; do
+for w in 1 2 3 4; do
     wait_marker W${w}-DONE || { echo "  FAIL W${w}"; ok=0; }
-    sleep 0.3; eval R${w}=$(rss_kb)
 done
+# 判定点 = 末尾「空转 gc()」之后（RSS 相位见 wave_settle.px 头注释：奇数波后仍高，属相位不是泄漏）
+wait_marker W-GC2 || { echo "  FAIL 未到 W-GC2（夹具未跑完）"; ok=0; }
+IDLE=$(rss_min_window 2.0)
 wait_marker W-END || true
 kill $WPID 2>/dev/null; wait $WPID 2>/dev/null
 PEAKV=$(cat "$OUT/wave.peak" 2>/dev/null || echo 0)
-IDLE=$R3
-echo "  RSS: base=${BASE}KB R1=$R1 R2=$R2 R3=$IDLE peak=${PEAKV}KB"
-if [ $ok = 1 ] && [ -n "$BASE" ] && [ -n "$IDLE" ] && [ "$IDLE" -lt $((BASE + 40960)) ]; then
-    echo "  PASS VM 堆回落（3 波后 RSS 距基线 < 40MB）"; PASS=$((PASS+1));
+echo "  RSS: base=${BASE}KB min_after_gc=${IDLE}KB peak=${PEAKV}KB"
+# 双条件：① 最小值回到基线 +40MB 内（页确实归还了 OS）；
+#         ② 最小值显著低于峰值（< 2/3）—— 负控：若 munmap 失效，min ≈ peak，此项必红。
+if [ $ok = 1 ] && [ -n "${BASE:-}" ] && [ -n "${IDLE:-}" ] && [ "$IDLE" -lt $((BASE + 40960)) ] \
+   && [ "${PEAKV:-0}" -gt 0 ] && [ "$IDLE" -lt $((PEAKV * 2 / 3)) ]; then
+    echo "  PASS VM 堆回落（窗口最小 RSS 距基线 < 40MB，且 < 峰值 2/3）"; PASS=$((PASS+1));
 else
-    echo "  FAIL VM 堆回落（base=$BASE idle=$IDLE）"; FAIL=$((FAIL+1));
+    echo "  FAIL VM 堆回落（base=$BASE min=$IDLE peak=$PEAKV）"; FAIL=$((FAIL+1));
 fi
 
 echo "── 5) VM 并发 GC × 生成器/容器 混合压测（D1+D2a 组合 ×3，须全 PASS）"

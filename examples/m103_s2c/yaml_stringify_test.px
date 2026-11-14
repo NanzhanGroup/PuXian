@@ -53,7 +53,9 @@ def rt(v):
 # ---- A. api-server 形状（llm_providers / purpose_map / 嵌套 map/list）----
 var exp = json_parse("{\"llm_providers\":[{\"name\":\"qwen\",\"base_url\":\"https://dashscope.aliyuncs.com/compatible-mode/v1\",\"model\":\"qwen-max\",\"enabled\":true,\"priority\":1},{\"name\":\"openai\",\"base_url\":\"https://api.openai.com/v1\",\"model\":\"gpt-4o\",\"enabled\":false}],\"purpose_map\":{\"chat\":{\"provider\":\"qwen\",\"model\":\"qwen-max\"},\"embedding\":{\"provider\":\"bge\",\"model\":\"bge-large-zh\"}},\"upstream\":\"https://up.example.com\",\"cache_ttl_seconds\":7200,\"debug\":false,\"ratio\":0.85,\"tags\":[\"llm\",\"gateway\"],\"note\":null}")
 let ra = rt(exp)
-check("A roundtrip", ra["ok"], ra["err"])
+if not ra["ok"]:
+    print("A roundtrip err:", ra["err"])
+check("A roundtrip", ra["ok"])
 let out_a = yaml_stringify(exp)
 check("A 含 llm_providers", contains(out_a, "llm_providers:"))
 check("A 含 seq map", contains(out_a, "- name: qwen"))
@@ -124,7 +126,9 @@ d3.set("f4", 100.0)
 d3.set("t", true)
 d3.set("n", null)
 let rd = rt(d3)
-check("D 标量保型 roundtrip", rd["ok"], rd["err"])
+if not rd["ok"]:
+    print("D 标量保型 err:", rd["err"])
+check("D 标量保型 roundtrip", rd["ok"])
 
 # ---- E. Go 写 → px 读（go_out.yaml 由 verify.sh [1/4] Go gen 先行落盘）----
 if exists("artifacts/go_out.yaml"):
@@ -133,7 +137,7 @@ if exists("artifacts/go_out.yaml"):
     var gerr = ""
     if not gr["ok"]:
         gerr = gr["error"]
-    check("E go yaml parse ok", gr["ok"], gerr)
+    check("E go yaml parse ok", gr["ok"])
     if gr["ok"]:
         let gv = gr["value"]
         check("E name", gv["name"] == "qg-api")

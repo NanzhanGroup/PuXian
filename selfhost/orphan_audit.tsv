@@ -1,22 +1,32 @@
-# 孤儿门体检台账（M251 建立 · M403 全量复测）
+# 孤儿门体检台账（M251 建立 · M403 全量复测 · M404 清零）
 # =============================================================================
-# 格式：<门名> <TAB> <依赖分类> <TAB> <0> <TAB> <实测秒> <TAB> <OK|SKIP|FAIL|TIMEOUT> <TAB> <说明>
+# 格式：<门名> TAB <依赖分类> TAB <0> TAB <实测秒> TAB <OK|SKIP|FAIL|TIMEOUT> TAB <说明>
 # 判据（selfhost/check_orphan_gates.sh 3e）：台账 ⇄ 基线**必须一一对应**（漏记/过期都判红）；
 #   非 OK 条目必须带定性处置（说明里要有 已修 / 已登记 / 环境 / 设计性 之一）。
 #
-# M403（2026-11-14 05:30–05:44）一次性实测全部 46 扇孤儿门：
-#   39 扇 rc=0 且无 SKIP ⇒ 复活，移出基线，改由 examples/m403_orphan_batch 跑（清单 selfhost/orphan_revived.txt）
-#   7 扇异常/SKIP ⇒ 留基线，本台账按**今天实测的数值**逐条记录（此前台账是 M251 的旧体检）
-#   要点：m66_proc 虽 rc=0，但 [6/6] 是 SKIP（缺 pyzipper）——「SKIP 判绿」正是本轮要治的病，故不复活。
+# ⚠️ M404（2026-11-14）之后：**孤儿基线 = 0**，故本台账的数据行为空（有行即「过期」判红）。
+#    留队 11 扇的实测与处置归档于此（历史记录，不参与解析），逐条对应 CHANGELOG M404：
 #
-m66_proc	需 pyzipper	0	9	SKIP	已登记：缺 python 模块 pyzipper（本机与 CI 均无 pip3、dnf 无此包）⇒ [6/6] 恒 SKIP；不复活，M404 装依赖或改用 zipfile 造夹具
-m100	需 Go,起服务	0	5	FAIL	已登记：[M100S2] 线程峰值 22 > 阈值 20；与 m93_s2/m98_s2/m99_s2 同族（阈值写于旧 coro 池口径）⇒ M404 先定性（真泄漏 or 判据过期）再定基
-m103_s2c	需 Go	0	3	FAIL	已登记：px 断言里 check(...) 传 3 实参，而 check 现 arity=2（M197/M199 面）⇒ 用例过期；M404 修用例或退役
-m89_s3d	起服务	0	16	FAIL	已登记：VM 堆回落未达成（base=5676 · idle=273988）⇒ 判据与 GC 触发策略强相关，M404 定性（判据过期 or 真未回落）
-m93_s2	需 Go,起服务	0	25	FAIL	已登记：thr_count=17 > 9（spawn/coro 线程上限写于 M93 当时语义）⇒ M404 定基
-m98_s2	起服务	0	17	FAIL	已登记：[S2a] 线程峰值 22 > 18（池 2 + coro ≤8 + 主/accept）⇒ 同族阈值，M404 定基
-m99_s2	起服务	0	22	FAIL	已登记：[S2] 线程峰值 24 > 20（40 空闲连接不占 worker）⇒ 同族阈值，M404 定基
-m103_s2a	需外网(UDP:53)	0	13	SKIP	环境：分片网隔离下 UDP:53 不可达 ⇒ [585-SKIP-LOUD] 外网档跳过；单独跑绿属环境差异，不算覆盖
-m103_s2d	需 Go	0	0	FAIL	已登记：分片内 `go gen` 失败（无 go / GOCACHE 未带）⇒ 需改预生成夹具（M404）
-m84_s3_dns	需外网(DNS)	0	3	SKIP	环境：无网络时 S3-public 段 SKIP（仅本地确定性断言）⇒ 分片不算覆盖
-m90_s1	需残留产物	0	8	SKIP	环境：缺 selfhost/build/compiler_new 即 SKIP；单独跑绿是**仓库残留产物**所致（M304 同款）⇒ 需改成自备前提（M404）
+#   M404 实测（处置后全部 rc=0，由 selfhost/orphan_revived.txt → m403_orphan_batch 逐条跑）：
+#   m66_proc   需 pyzipper       ⇒ 已修：自写 make_aes_fixture.py（纯标准库 + openssl 拼 AE-2 包）
+#                                    + 错误口令负控 ⇒ [6/6] 不再 SKIP
+#   m100       起服务            ⇒ 已修：线程峰值超限的根因 = coro worker 池按在线 CPU 数(16)开，
+#                                    而文档/阈值按 min(CPU,8) 建模；门内 pin PX_CORO_WORKERS=8
+#                                    + 新增「负载后残留 ≤ 基线+池上限」判据（阈值未改）
+#   m98_s2     起服务            ⇒ 已修：同上；另修「客户端跑完才采样却名为峰值」→ 负载期间后台采样
+#   m99_s2     起服务            ⇒ 已修：同上 + 新增「连接结束后残留 ≤ 基线+4」判据
+#   m93_s2     起服务            ⇒ 已修：同上（thr_count 17 = 16 worker + 主）
+#   m103_s2c   需 Go             ⇒ 已修：check() 3 实参 → 2 实参（用例过期，3 处）⇒ 46P/0F
+#   m103_s2d   需 Go             ⇒ 已修：门内自备 GOCACHE/GOPATH/HOME（分片无 HOME ⇒ go build 失败）
+#   m103_s2a   需外网(UDP:53)    ⇒ 已修：外网档=设计性观察项，统一 [585-SKIP-LOUD] 标记；
+#                                    批量运行器口径改为「带标记 + 有正向断言」才算绿
+#   m84_s3_dns 需外网(DNS)       ⇒ 已修：同上（S1/S2/S4 离线照跑）+ 自备 go 环境
+#   m89_s3d    起服务            ⇒ 已修：前提从手工重链 compiler_new → tools/px build；
+#                                    RSS 判据从「固定 0.3s 采一次」→「空转 gc() 后窗口最小 RSS」，
+#                                    修的是相位运气（实测：8 波 RSS 呈 22MB ⇄ 272MB 周期 2 交替）
+#   m90_s1     需残留产物        ⇒ 已修：compiler_new bc → tools/px build --vm（BC 镜像含 OP_NARGS）
+#
+#   （以下为 M403 当时的原始实测记录，供追溯，已全部由 M404 处置）
+#   m66_proc  SKIP 9s   · m100 FAIL 5s  · m103_s2c FAIL 3s · m89_s3d FAIL 16s
+#   m93_s2    FAIL 25s  · m98_s2 FAIL 17s · m99_s2 FAIL 22s · m103_s2a SKIP 13s
+#   m103_s2d  FAIL 0s   · m84_s3_dns SKIP 3s · m90_s1 SKIP 8s

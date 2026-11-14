@@ -19,16 +19,23 @@ mkdir -p artifacts build
 rm -f artifacts/net_on artifacts/go_*.txt
 
 echo "== [1/4] Go oracle（net.LookupIP）现算期望 + 网络探测 =="
+# M404：自备 go 构建环境（分片/无人值守环境 HOME 可能未设、GOCACHE 不可写）
+export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/m404-gocache-s3dns}"
+export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/m404-gopath-s3dns}"
+export HOME="${HOME:-${TMPDIR:-/tmp}}"
+mkdir -p "$GOCACHE" "$GOPATH"
 if go build -o "$GOBIN" go_s3.go; then
     "$GOBIN" gen artifacts
 else
-    echo "WARN: go build 失败，S3 公网项将跳过"
+    echo "[585-SKIP-LOUD] go build 失败 ⇒ S3 公网对拍零观测（本地断言不受影响）"
 fi
 if timeout 6 getent ahostsv4 www.qq.com >/dev/null 2>&1 && [ -s artifacts/go_v4_qq.txt ]; then
     touch artifacts/net_on
     echo "网络可用：公网对拍开启"
 else
-    echo "网络不可用/解析失败：S3 公网项跳过（仅本地断言）"
+    # M404：把「设计性跳过」显式打上仓内统一标记 —— 门级批量运行器只接受**带标记**的 SKIP，
+    #   且要求同日志内仍有正向断言（S1-localhost / S2-err / S4-robust 三段离线照跑）。
+    echo "[585-SKIP-LOUD] 网络不可用/解析失败：S3 公网项跳过（仅本地断言 S1/S2/S4 仍执行）"
 fi
 echo "artifacts: $(ls artifacts/ 2>/dev/null | tr '\n' ' ')"
 

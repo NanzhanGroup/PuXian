@@ -9,7 +9,13 @@ set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc
 GOBIN=./build/go_img
-mkdir -p build artifacts
+# M404：**自备 go 构建环境** —— 分片/无人值守环境里 HOME 可能未设、GOCACHE 不可写 ⇒
+#   `go build` 报 "neither GOCACHE nor HOME is defined"，看着像门红其实是环境缺口
+#   （M403 分片实测就是这个形状：本机绿、分片红）。门内自给自足，不靠宿主机残留。
+export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/m404-gocache-s2d}"
+export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/m404-gopath-s2d}"
+export HOME="${HOME:-${TMPDIR:-/tmp}}"
+mkdir -p "$GOCACHE" "$GOPATH" build artifacts
 rm -f artifacts/*.jpg
 
 echo "== [1/4] Go gen（参照图 + JPEG 输入）=="

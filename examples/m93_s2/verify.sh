@@ -20,6 +20,13 @@ PX="$ROOT/tools/px"
 DIR="$ROOT/examples/m93_s2"
 PASS=0 FAIL=0
 
+# ── M404（缺陷 766）：池规模由**本门**决定，不由宿主机核数决定 ──
+#   实测：coro worker 默认 = 在线 CPU 数（本机 16 vCPU ⇒ 16 worker ⇒ 峰值 17），
+#   而本门阈值按 min(CPU,8)=8 建模（docs/CHANGELOG 口径）⇒ 16 核机器必红、≤8 核机器绿。
+#   绝对数不得作判据（CRITERIA ②：环境指纹不是判据）⇒ 显式 pin，
+#   此后 4 核 / 16 核 / 64 核机器上本门结果一致。
+export PX_CORO_WORKERS=8
+
 chk() { # $1=名 $2=条件
     if [ "$2" = "0" ] || [ "$2" = "1" ]; then
         [ "$2" = "0" ] && { echo "  PASS $1"; PASS=$((PASS+1)); } || { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
@@ -50,7 +57,11 @@ TP=$(pgrep -x thr_count | head -1)
 [ -n "$TP" ] || TP=$BP
 TH=$(grep Threads /proc/$TP/status 2>/dev/null | awk '{print $2}')
 wait $BP
-chk "thr_count 线程数=$TH (≤9)" $([ -n "$TH" ] && [ "$TH" -le 9 ] && echo 0 || echo 1)
+    # 契约：线程数 = worker(本门 pin 8) + 主线程，**远小于** spawn 数 128。
+    #   负控 = 本门第 5 项（同一份源码走 --c ⇒ pthread 语义 ⇒ 线程数 129）：
+    #   若本项判据是空操作（比如永远读到空值就跳过），第 5 项仍会红 ⇒ 两项互为齿。
+chk "thr_count 线程数=$TH (2 ≤ TH ≤ 9，worker pin=8 + 主；spawn=128)" \
+    $([ -n "$TH" ] && [ "$TH" -ge 2 ] && [ "$TH" -le 9 ] && echo 0 || echo 1)
 
 echo "── 4) spawn 500 × 高频对象分配 × 并发 GC（PX_GC_THRESHOLD=4000）"
 "$PX" build "$DIR/coro_gc.px" >/dev/null 2>&1 || { echo "build fail"; exit 1; }

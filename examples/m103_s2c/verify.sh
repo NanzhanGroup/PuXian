@@ -10,6 +10,13 @@ set -u
 cd "$(dirname "$0")"
 PX=../../tools/pxc
 GOBIN=./build/go_s2c
+# M404：**自备 go 构建环境** —— 分片/无人值守环境里 HOME 可能未设、GOCACHE 不可写，
+#   那时 `go build` 会以「neither GOCACHE nor HOME is defined」失败，
+#   而这不是门的判据红、是环境缺口（M403 实测：同一门本机绿、分片红）。⇒ 门内自给自足。
+export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/m404-gocache-s2c}"
+export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/m404-gopath-s2c}"
+export HOME="${HOME:-${TMPDIR:-/tmp}}"
+mkdir -p "$GOCACHE" "$GOPATH"
 mkdir -p build artifacts
 rm -f artifacts/*.yaml
 

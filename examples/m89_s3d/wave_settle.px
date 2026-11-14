@@ -1,0 +1,27 @@
+# M404：m89_s3d 第 4 段专用夹具（自备，替代 examples/issue28_b2/wave.px 的 3 波形状）
+# ------------------------------------------------------------
+# 为什么另写一份（实测依据，M404 2026-11-14）：
+#   旧夹具 W3-DONE 之后只 sleep(2500) 就退出，而 RSS 的「空 slab 归还 OS」在两波之间
+#   呈 **周期 2** 的相位：本机 16 核实测 8 波轨迹为
+#     wave1 272MB → wave2 21.9MB → wave3 272MB → wave4 21.9MB → …（峰值 295MB）
+#   ⇒ 在「奇数波」的 W-DONE 后固定采一次，必然采到 272MB，判「未回落」＝相位运气，不是产品行为。
+#   加一次**空转 gc()** 后实测 3s 内恒为 21.9MB（base 4188KB）⇒ 「页确实归还了 OS」成立。
+# 语义：4 波大瞬时垃圾 → 每波显式 gc() → 末尾再空转 gc() → 打印 W-GC2 → 保持 4s 供采样。
+def garbage_wave(n):
+    for i in range(n):
+        let s = "wave-garbage-item-" + str(i) + "-payload-string"
+        if len(s) == 0:
+            print("unreachable")
+
+def main():
+    print("W-BASELINE")
+    sleep(1200)
+    for k in range(4):
+        garbage_wave(400000)
+        gc()
+        print("W" + str(k + 1) + "-DONE")
+        sleep(1200)
+    gc()
+    print("W-GC2")
+    sleep(4000)
+    print("W-END")

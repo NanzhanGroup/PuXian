@@ -44,27 +44,18 @@ rm -rf /tmp/m66_zc1_out && mkdir -p /tmp/m66_zc1_out
 grep -q "hello zipcrypto 中文内容" /tmp/m66_zc1_out/a.txt || { echo "FAIL zipcrypto 内容不符"; exit 1; }
 grep -q "secret-data" /tmp/m66_zc1_out/sub/b.txt || { echo "FAIL zipcrypto 子目录内容不符"; exit 1; }
 echo "== [6/6] WinZip AES-256 密码解包 =="
-# M251 体检：本段需要 python 模块 pyzipper 来**造** WinZip AES-256 测试包。
-#   本机（dongyue）与 CI 都没有 pip3；pyzipper 不在 dnf 仓库 ⇒ 长期无法满足。
-#   处置：**明确 SKIP（不静默）** —— 打印缺什么、怎么装、跳过哪一段。
-#   若将来环境补齐，本段会自动恢复执行（前置检查是唯一闸门）。
-if ! python3 -c 'import pyzipper' 2>/dev/null; then
-    echo "SKIP: 缺 python 模块 pyzipper ⇒ 无法造 WinZip AES-256 测试包"
-    echo "      装法（任选）：pip3 install pyzipper   /   dnf install python3-pyzipper"
-    echo "      覆盖面：本段验证 zip_test 对 WinZip AES-256 加密包的解包（zipcrypto 段 [5/6] 不受影响）"
-    echo "m66_proc verify done（5/6 段通过 · [6/6] SKIP 前置缺失）"
-    exit 0
-fi
-python3 - <<'PYEOF'
-import pyzipper
-with pyzipper.AESZipFile("/tmp/m66_aes.zip", "w", compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zf:
-    zf.setpassword(b"m66aes-pass")
-    zf.writestr("a.txt", "hello aes-256 中文\n")
-    zf.writestr("sub/c.txt", "aes-secret\n")
-print("aes zip written")
-PYEOF
+# M404（缺陷 767）：改为**自备夹具**，不再依赖第三方 python 包 pyzipper。
+#   长期病史：本机与 CI 都无 pip3、dnf 也无 python3-pyzipper ⇒ [6/6] 恒 SKIP，
+#   「SKIP 判绿」= AES 解密路径零覆盖。现在 make_aes_fixture.py 用纯标准库 + openssl CLI
+#   直接按 APPNOTE 6.3 拼 AE-2 包（salt/pv/CTR/HMAC 全按规范），夹具可复算、无外部依赖。
+python3 ./make_aes_fixture.py /tmp/m66_aes.zip || { echo "FAIL 生成 AES-256 夹具"; exit 1; }
 rm -rf /tmp/m66_aes_out && mkdir -p /tmp/m66_aes_out
 ./build/zip_test /tmp/m66_aes.zip /tmp/m66_aes_out m66aes-pass; RC=$?
 [ $RC -eq 0 ] || { echo "FAIL aes rc=$RC"; exit 1; }
 grep -q "hello aes-256 中文" /tmp/m66_aes_out/a.txt || { echo "FAIL aes 内容不符"; exit 1; }
+# 负控：口令错误必须**失败**。否则「解包成功」可能是空操作（没验口令也没解真数据）。
+rm -rf /tmp/m66_aes_bad && mkdir -p /tmp/m66_aes_bad
+if ./build/zip_test /tmp/m66_aes.zip /tmp/m66_aes_bad wrong-password >/tmp/m66_aes_bad.log 2>&1; then
+    echo "FAIL 负控：错误口令竟解包成功（判据是空操作）"; exit 1
+fi
 echo "ALL PASS"

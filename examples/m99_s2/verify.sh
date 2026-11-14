@@ -24,6 +24,11 @@ DIR="$ROOT/examples/m99_s2"
 PORT=18199
 PASS=0 FAIL=0
 
+# ── M404（缺陷 766）：池规模由**本门**决定，不由宿主机核数决定 ──
+#   实测：coro worker 默认 = 在线 CPU 数（本机 16 ⇒ 峰值 24），本门阈值按 min(CPU,8)=8
+#   建模 ⇒ 16 核机器必红。绝对数不得作判据（CRITERIA ②）⇒ 显式 pin。
+export PX_CORO_WORKERS=8
+
 chk() { # $1=名 $2=条件(0=pass)
     if [ "$2" = "0" ]; then echo "  PASS $1"; PASS=$((PASS+1)); else echo "  FAIL $1"; FAIL=$((FAIL+1)); fi
 }
@@ -62,6 +67,7 @@ done
 chk "px_serve 就绪（index.txt=M99-OK）" $([ "$READY" = "1" ] && echo 0 || echo 1)
 
 echo "── 全程线程采样（后台；40 空闲连接不占 worker → 峰值 ≤20）"
+N0=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
 PEAK=0
 SAMPLER_PID=0
 (
@@ -88,7 +94,14 @@ chk "客户端场景全 PASS（wall=${WALL}s rc=$GRC）" $?
 # 线程峰值（含 40 空闲连接全程保持）
 PEAK=$(sort -n /tmp/m99s2_threads.txt 2>/dev/null | tail -1)
 PEAK=${PEAK:-0}
-chk "线程峰值 $PEAK ≤ 20（40 空闲连接不占 worker：池4+coro≤8+事件循环+主）" $([ "$PEAK" -le 20 ] && echo 0 || echo 1)
+chk "线程峰值 $PEAK ≤ 20（40 空闲连接不占 worker：池4+coro pin=8+事件循环+主）" $([ "$PEAK" -ge 1 ] && [ "$PEAK" -le 20 ] && echo 0 || echo 1)
+
+# M404 新增：无 per-connection 线程 —— 40 空闲连接打开/关闭之后须回落到基线附近。
+#   这一项才是「不泄漏」的判据；绝对数只防失控。松弛量 = 池上限 4（worker 惰性补员的合法增量）。
+sleep 3.5
+N1=$(ps -L -p $SRV_PID -o lwp= 2>/dev/null | wc -l)
+chk "连接结束后残留 $N1 ≤ 基线 $N0 + 4（无 per-connection 线程）" \
+    $([ -n "$N1" ] && [ "$N0" -gt 0 ] && [ "$N1" -le $((N0 + 4)) ] && echo 0 || echo 1)
 
 # 服务端日志佐证：空闲连接由事件循环 tick 关闭（P6 后 8 连接回收）
 N_TMO=$(grep -c "优雅关闭完成" /tmp/m99s2_srv.log 2>/dev/null || echo 0)

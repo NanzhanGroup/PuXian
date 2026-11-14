@@ -43,7 +43,13 @@ REG="${ORPHAN_REGISTRY:-selfhost/gates.registry.sh}"
 CI="${ORPHAN_CI:-.github/workflows/ci.yml}"
 BASE="${ORPHAN_BASELINE:-selfhost/orphan_gates.txt}"
 # 基线规模上限 —— 写死常量（**只许缩小**：要扩充就得改这个数字，留下痕迹）
-ORPHAN_MAX="${ORPHAN_MAX:-15}"
+# M404：孤儿基线 46 → 11 → **0**（留队 11 扇全部实测处置）。上限随之 15 → 0：
+#   此后任何新增孤儿门都会直接判红，而不是"允许 15 个以内"。
+ORPHAN_MAX="${ORPHAN_MAX:-0}"
+# M404：夹具模式（--self-test）里基线是 1~3 条的小夹具，而真库上限已收紧到 0 ⇒
+#   规模判据会把夹具判红（T1/N4 期望绿）。夹具只验「提取/标定/收录」逻辑，不验规模，
+#   故夹具模式放开上限（真实规模锚点由 3d 在非夹具模式判）。
+if [ "${ORPHAN_SELFTEST:-0}" = 1 ]; then ORPHAN_MAX=99; fi
 
 SELFTEST=0
 for a in "$@"; do
@@ -278,11 +284,15 @@ else
         # 3e-3 规模锚点（防「空台账 ⊇ 空基线」的假绿）
         if [ "$FIXTURE" = 1 ]; then
             echo "  ⏭  夹具模式：台账规模锚点跳过"
+        elif [ "$NB" -eq 0 ]; then
+            # M404：孤儿基线已清零（46 → 11 → 0，留队 11 扇全部实测处置）。
+            #   此时「台账空 ⊇ 基线空」是真命题，不是假绿；但仍要防「两处都空 ⇒ 提取器坏了也看不出」
+            #   ⇒ 锚点改用**复活清单非空**（那些门由 examples/m403_orphan_batch 真实跑着）。
+            NR=$(grep -vcE '^[[:space:]]*(#|$)' "selfhost/orphan_revived.txt" 2>/dev/null || true)
+            [ "${NR:-0}" -ge 1 ] && ok "零孤儿态锚点：复活清单非空（$NR 扇由 m403_orphan_batch 跑）" \
+                                 || bad "零孤儿态但复活清单也空 —— 提取器坏了？"
         else
-            # M403：孤儿基线从 46 → 7（39 扇复活、进 orphan_revived.txt 由 m403_orphan_batch 跑），
-            #   故台账规模锚点同步下调到 ≥5 —— 锚点只防「空台账 ⊇ 空基线」的假绿，
-            #   真正的一一对应由上面 3e 的 comm 双向差集保证（漏记/过期都判红）。
-            [ "$NX" -ge 5 ] && ok "台账规模下限（≥5，实测 $NX）" || bad "台账只 $NX 条 —— 体检没跑？"
+            [ "$NX" -ge "$NB" ] && ok "台账规模锚点（$NX ≥ 基线 $NB）" || bad "台账只 $NX 条 < 基线 $NB"
         fi
     fi
 
