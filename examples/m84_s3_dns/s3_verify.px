@@ -60,7 +60,7 @@ def main():
         assert(share_any(res_pub, gv6), "px 与 Go net.LookupIP 共享 ≥1 IPv6（AAAA 域）")
         print("S3-public-go-interop OK " + str(res_pub))
     else:
-        print("S3-public SKIP（无网络：仅本地确定性断言）")
+        print("[585-SKIP-LOUD] S3-public SKIP（无网络：仅本地确定性断言）")
 
     # ---- S4 健壮性：重复调用稳定 ----
     r2 = dns_lookup("localhost")

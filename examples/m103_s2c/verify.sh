@@ -13,6 +13,9 @@ GOBIN=./build/go_s2c
 # M404：**自备 go 构建环境** —— 分片/无人值守环境里 HOME 可能未设、GOCACHE 不可写，
 #   那时 `go build` 会以「neither GOCACHE nor HOME is defined」失败，
 #   而这不是门的判据红、是环境缺口（M403 实测：同一门本机绿、分片红）。⇒ 门内自给自足。
+# M404（缺陷 773）：GOPATH 指到 /tmp 后 GOMODCACHE 是空的 ⇒ `go build` 必须**联网**下 yaml.v3，
+#   而分片是 netns 隔离的 ⇒ 必红（实测 M404 全量门 shard3：0s 报 FAIL go build）。
+#   ⇒ 模块源码入仓（vendor/）：`go build` 自动 -mod=vendor，离线可跑；更新依赖走 `go mod vendor`。
 export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/m404-gocache-s2c}"
 export GOPATH="${GOPATH:-${TMPDIR:-/tmp}/m404-gopath-s2c}"
 export HOME="${HOME:-${TMPDIR:-/tmp}}"

@@ -61,6 +61,10 @@ run_manifest() {
         el=$(( $(date +%s) - t0 ))
         if [ "$rc" != 0 ]; then
             echo "  ❌ C2 $name 判红（rc=$rc · ${el}s · $(grep -iE 'FAIL|❌|错误' "$TMP/$name.log" | head -1 | cut -c1-90)）"
+            # M404 缺陷 771：子门日志原本只在 $TMP 里，函数退出即删 ⇒ 红只剩一行摘要，
+            #   真因（go 的真实报错 / 断言原文）无从查证。红必须自带证据 ⇒ 留尾部 6 行。
+            echo "     ── 子门日志尾部（$name · 共 $(grep -c . "$TMP/$name.log" 2>/dev/null || echo 0) 行）──"
+            tail -6 "$TMP/$name.log" 2>/dev/null | sed 's/^/       /'
             RM_BAD=$((RM_BAD + 1))
             continue
         fi

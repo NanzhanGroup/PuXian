@@ -114,8 +114,16 @@ wait_marker W-GC2 || { echo "  FAIL 未到 W-GC2（夹具未跑完）"; ok=0; }
 IDLE=$(rss_min_window 2.0)
 wait_marker W-END || true
 kill $WPID 2>/dev/null; wait $WPID 2>/dev/null
+# M404（缺陷 772）：**等采样器把峰值落盘**。原版紧跟 `wait $WPID` 就读 wave.peak，
+#   而采样器是在 `kill -0` 循环里发现自己被杀后才写盘（≥ 一个 0.04s 周期）⇒ 读到空文件 ⇒ peak=0
+#   ⇒ 条件②（min < 2/3 peak）恒假 ⇒ 假红。实测：M404 全量门 shard3 与隔离复现各一次，
+#   形态完全一致（base≈4MB · min≈21.7MB · peak=0）。poll 到文件非空再读（3s 上限），不靠时序运气。
+SPIN=0
+while [ ! -s "$OUT/wave.peak" ] && [ "$SPIN" -lt 150 ]; do sleep 0.02; SPIN=$((SPIN + 1)); done
+wait $SPID 2>/dev/null || true
 PEAKV=$(cat "$OUT/wave.peak" 2>/dev/null || echo 0)
 echo "  RSS: base=${BASE}KB min_after_gc=${IDLE}KB peak=${PEAKV}KB"
+[ "${PEAKV:-0}" -gt 0 ] || echo "  ❌ 测量失败：峰值采样未落盘（wave.peak 空/为 0）—— 这是采样问题，不是产品判据"
 # 双条件：① 最小值回到基线 +40MB 内（页确实归还了 OS）；
 #         ② 最小值显著低于峰值（< 2/3）—— 负控：若 munmap 失效，min ≈ peak，此项必红。
 if [ $ok = 1 ] && [ -n "${BASE:-}" ] && [ -n "${IDLE:-}" ] && [ "$IDLE" -lt $((BASE + 40960)) ] \

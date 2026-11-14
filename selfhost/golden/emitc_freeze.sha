@@ -424,7 +424,7 @@ examples/m83_s5/smtp_test.px src=2053517885af434e dep=396b019d8b06568d rc=0 out=
 examples/m83_s6/serve_sse_daemon.px src=55ca3bedb54573ec dep=1a95b0d051b4bdb3 rc=0 out=e7babee0d47c146e6f4f1a4ede4aadc4 err=e3b0c44298fc1c14
 examples/m84_s1_http_ct/http_ct_client.px src=48c461b4114ff684 dep=03459e555b18ffde rc=0 out=9ce37511fe195aa9d6b4e85758e0b724 err=e3b0c44298fc1c14
 examples/m84_s2_hmac/s2_verify.px src=df1f84a201ac4239 dep=9cb4194dcd25360f rc=0 out=bdc88c0f162a9f399abace9dcad3c1ad err=e3b0c44298fc1c14
-examples/m84_s3_dns/s3_verify.px src=9074e8e249678545 dep=186d8267d3fff909 rc=0 out=df98850a6fead668be93b0b10fc5dfd4 err=e3b0c44298fc1c14
+examples/m84_s3_dns/s3_verify.px src=abe454da10623016 dep=a7be4ab70dd54090 rc=0 out=708e74c4f5d398d11ce453986fbc2b9e err=e3b0c44298fc1c14
 examples/m85_s1/hello.px src=426be06f15239139 dep=3a4d6d1240256452 rc=0 out=a953fb4e58af41e749ba1d265c66e22d err=e3b0c44298fc1c14
 examples/m85_s1/http_dep.px src=1ea5acf04125c4e9 dep=51cf418f7e8a29a5 rc=0 out=e6d2b0ae4dff4ba6c5c6597255767865 err=e3b0c44298fc1c14
 examples/m85_s1/sqlite_dep.px src=3bfa59e7ec8c68e1 dep=2c53d778065d4e85 rc=0 out=49b22f95f706e653e7e6169b2fea00a7 err=e3b0c44298fc1c14

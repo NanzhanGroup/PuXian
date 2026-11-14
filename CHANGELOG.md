@@ -161,7 +161,44 @@ check_orphan_gates   13/0 绿 · --self-test 9/0 绿（含零孤儿态新锚点�
 ③ 并行跑 m89_s3d 与 m90_s1 撞上 gate_lock（门级互斥）⇒ 后起的门直接拒跑
    ⇒ 门必须串行跑，这条是锁在替我守纪律。
 ```
-## M403：46 扇**从没被跑过**的孤儿门，一次性清账（缺陷 428 存量收口）
+### 九 M404 修 · 全量门第 2 轮收口（2026-11-14 12:2x–13:0x）
+
+```
+现场  /data/gatevm/m404-chain-20261114-104155.log · head=4daf810 · 绿 276 / 红 2（门清单 278）
+      红① m403_orphan_batch（shard3, rc=1, 417s）—— 46 条子门里 4 条红
+           m103_s2c FAIL go build(0s) · m103_s2d FAIL go build(0s)
+           m89_s3d  FAIL VM 堆回落（base=3972 min=21692 peak=0）
+           m84_s3_dns 静默 SKIP（缺 [585-SKIP-LOUD] 标记）
+      红② m208_vm_c_local_roots（quiet 独占, rc=1, 213s）—— ⑤ coro_gc_block 压力档 R1003（30 → 25）
+```
+
+根因与处置（逐条实测，负控/复现见下）：
+
+```
+771  m103_s2c：M404 把 GOPATH 指到 /tmp 后 GOMODCACHE 为空 ⇒ go build 必须联网下 yaml.v3，
+     而分片是 netns 隔离 ⇒ 必红。修：模块源码入仓 examples/m103_s2c/vendor/（368K），
+     go 自动 -mod=vendor。负控：去掉 vendor + --net 隔离 ⇒ FAIL go build（复现）；
+     加 vendor 后同一隔离环境 ⇒ 46P/0F、rc=0。
+772  m89_s3d：峰值采样器是在 kill -0 循环里发现进程被杀后才写 wave.peak，而主线
+     `wait $WPID` 后立刻读 ⇒ 读到空 ⇒ peak=0 ⇒ 条件②（min < 2/3 peak）恒假 ⇒ 假红。
+     隔离复现 1/1：base=4000 min=21720 peak=0。修：poll wave.peak 非空（≤3s）+ wait 采样器，
+     peak=0 额外打「这是采样问题不是产品判据」。修后隔离连跑 2/2 绿（peak=295052KB）。
+773  m84_s3_dns：px 侧 S3-public SKIP 那行没带 [585-SKIP-LOUD] 标记，而 C3 口径是
+     「SKIP 行数 > 带标记行数 ⇒ 红」。修：s3_verify.px 该行补标记。修后 --net 隔离
+     跑门 rc=0（两条 SKIP 全带标记 + M84-S3-VERIFY-OK 正向断言）。
+774  m403_orphan_batch：子门日志只在 $TMP，函数退出即删 ⇒ 红只剩一行摘要（m103_s2d 的
+     go 真实报错就是这样丢的）。修：判红时留子门日志尾部 6 行。m103_s2d 本轮隔离单跑 rc=0、
+     整批复跑 rc=0 ⇒ 原 0s 红不可复现（8 分片 ×2 job 并发下的一次性环境抖动，证据已能自证）。
+```
+
+结果：`examples/m403_orphan_batch/verify.sh` 在 **--net 隔离 + 私 /tmp + taskset 2 核**（分片同构）
+复跑 ⇒ **通过 9 · 失败 0**（46 条子门全绿）。
+
+遗留（**产品侧，未修**）：`m208` ⑤ 的 `R1003 迭代期间被迭代容器长度变化` 属
+`docs/GATE_ISOLATION.md` §11.2 / §11.4 已登记的开放缺陷（GC 压力 × 协程时序边缘；
+12 路并发 2/12 红 · 空闲单跑 20/20 绿）。本轮没动任何判据，只在隔离下复测计数（见台账）。
+
+
 
 > **一句话**：`examples/*/verify.sh` 有 46 扇门，**没有任何运行器跑它们**。M249 建守卫时量过、
 > M251 体检过一次，之后再没人复跑。M401 已经用一条语言缺陷证明过这条债的代价 ——
