@@ -78,7 +78,7 @@ let LAYOUT = {
     "Match": ["Match", [["subject", "n"], ["arms", "lma"], ["pos", "p"]]],
     "Constructor": ["Constructor", [["name", "s"], ["args", "l"], ["pos", "p"]]],
     "Param": ["Param", [["name", "s"], ["ty", "o"], ["default", "o"], ["pos", "p"]]],
-    "StructField": ["StructField", [["name", "s"], ["ty", "n"], ["pos", "p"]]],
+    "StructField": ["StructField", [["name", "s"], ["ty", "n"], ["default", "o"], ["pos", "p"]]],
     "EnumVariant": ["EnumVariant", [["name", "s"], ["fields", "tl"], ["pos", "p"]]],
     "EnumField": ["EnumField", [["name", "s"], ["ty", "n"], ["pos", "p"]]],
     "TypeConstItem": ["TypeConstItem", [["name", "s"], ["value", "n"], ["pos", "p"]]],
@@ -630,11 +630,16 @@ def parse_struct_def():
         let fname = expect_ident("字段名")
         expect(":", "':'")
         let fty = parse_type()
-        fields.append(["StructField", qstr(fname), fty, fpos])
-        # M365：spec §3.7 示例里写了字段默认值 `timeout: int = 30`，实现没有 ⇒
-        #   修前报 `E2001 结构体字段后期望换行`（指不到真因）。改为可执行指引。
+        # M406：字段默认值 `timeout: int = 30`（spec §3.7 承诺、M365 起一直拒绝）。
+        #   AST 第 4 元素 = 默认表达式节点 / null。求值语义见 docs/spec.md §3.7：
+        #   ① 求值环境 = **模块顶层**（看不到其他字段、看不到 self、看不到调用点局部）
+        #   ② 求值时机 = 构造时、实参全部求值之后，按字段声明顺序
+        #   ③ 缺字段解析顺序：位置参 → 命名参 → 默认值 → 仍缺 ⇒ 原 R2001（报文不变）
+        var fdef = null
         if chk("="):
-            perr("E2001", "结构体字段默认值尚未实现（spec §3.7 计划中）—— 请去掉 `= 默认值`，在构造处显式给值")
+            adv()
+            fdef = parse_expr()
+        fields.append(["StructField", qstr(fname), fty, fdef, fpos])
         if not chk("换行") and not chk("去缩进"):
             perr("E2001", "结构体字段后期望换行")
     if chk("EOF"):

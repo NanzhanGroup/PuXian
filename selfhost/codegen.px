@@ -36,6 +36,11 @@ var p_brack = 0  # M119：括号深度（parse 前重置）
 # ---------- codegen 全局状态 ----------
 var cg_closures = ""
 var cg_structs = {"_": 0}
+# M406：结构体字段默认表达式表（name → [默认节点或 null]，与 cg_structs 的字段表等长）
+var cg_struct_defaults = {"_": 0}
+# M406：为 true 时 Var 一律按**全局名**生成（px_get_global），跳过本帧局部 ——
+#   仅用于结构体字段默认表达式的生成（spec §3.7① 求值环境 = 模块顶层）。
+var cg_default_scope = false
 var cg_enums = {"_": 0}
 # M372（data enum 载荷）：类型 → 变体 → 字段名表（声明序；旧写法字段名 = 位置序号）。
 #   与 cg_enums（变体名列表）并列而不是替换：既有 20+ 处 contains 判据一个不用改
@@ -588,11 +593,15 @@ def cg_collect_types(prog):
         let ty = st[0]
         if ty == "StructDef":
             let fnames = []
+            let dflts = []
             var fi = 0
             while fi < len(st[2]):
-                fnames.append(rust_unescape(st[2][fi][1]))
+                let fnode = st[2][fi]
+                fnames.append(rust_unescape(fnode[1]))
+                dflts.append(fnode[3])
                 fi += 1
             cg_structs[rust_unescape(st[1])] = fnames
+            cg_struct_defaults[rust_unescape(st[1])] = dflts
         elif ty == "EnumDef":
             let vnames = []
             let vf = cg_new_dict()
@@ -907,6 +916,8 @@ def cg_generate(prog):
     var out = "/* 由普贤 (PuXian) 编译器自动生成 — px build */\n#include \"runtime.h\"\n#include <string.h>\n#include <stdio.h>\n\n"
     cg_closures = ""
     cg_structs = cg_new_dict()
+    cg_struct_defaults = cg_new_dict()  # M406：与 cg_structs 一起复位（防跨编译残留）
+    cg_default_scope = false
     cg_enums = cg_new_dict()
     cg_enum_fields = cg_new_dict()  # M372：与 cg_enums 一起全量复位（防跨编译残留）
     cg_impls = cg_new_dict()

@@ -28,13 +28,34 @@ def i_call_value(cv, args, pos):
             # M237（缺陷 367）：修前**缺字段静默填 null** —— `Point(1)` 造出 x=1、y=null 的
             #   「成功」结构体；而 VM/C 两轨报错 ⇒ 同一份源码「静默错值 / 响亮拒绝」两种命运。
             #   定稿：数量必须**恰等**，与编译两轨同码同文（R2001）。
-            if len(args) != len(sdef["fields"]):
-                return Err(i_r2001("结构体 " + name + " 需要 " + str(len(sdef["fields"])) + " 个字段，给出 " + str(len(args)), pos))
+            # M406：有了字段默认值之后，「恰等」放宽为「给出 ≤ 字段数，且缺的字段都有默认值」——
+            #   装配算法与报文走 argmap.px 的同一份 argmap_struct_d（三轨共用）。
+            let flds = sdef["fields"]
+            let nf = len(flds)
+            let fnames = []
+            let hasd = []
+            var fi0 = 0
+            while fi0 < nf:
+                fnames.append(flds[fi0]["name"])
+                hasd.append(flds[fi0]["default"] != null)
+                fi0 += 1
+            let am = argmap_pos_d(fnames, hasd, len(args), name)
+            if am[0] != null:
+                return Err(i_r2001(am[0], pos))
             let fields = it_new_dict()
             var fi = 0
-            while fi < len(sdef["fields"]):
-                let fname = sdef["fields"][fi]["name"]
-                fields[fname] = args[fi]
+            while fi < nf:
+                let fname = flds[fi]["name"]
+                let oi = am[1][fi]
+                if oi == -2:
+                    # M406：默认表达式在**模块顶层环境**（g_globals）求值 —— 看不到本帧局部、
+                    #   看不到其他字段/self；引用它们是 R1001 未定义变量（与 VM/C 两轨同一真相）。
+                    let dr = i_eval_expr(flds[fi]["default"], g_globals)
+                    if dr.is_err():
+                        return Err(dr.err())
+                    fields[fname] = dr.unwrap()
+                else:
+                    fields[fname] = args[oi]
                 fi += 1
             return Ok(it_struct(name, fields))
         return Err(i_r1004("枚举类型 " + cv["name"] + " 不能直接调用（用 " + cv["name"] + ".Variant）", pos))

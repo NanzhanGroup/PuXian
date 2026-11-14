@@ -1072,6 +1072,15 @@ def bc_emit_methodcall(obj, mname, arg_list, dst, func):
     func["bc"].push(["CALLM", argc, d, cslot, nn])
     return d
 # ---------- B2：struct/enum 构造发射 ----------
+# M406：字段默认表达式 —— **模块顶层作用域**求值（spec §3.7①）。
+#   做法：发射期间临时把本帧 smap 换成空表 ⇒ 表达式里每个 Var 都走 GETG（全局表），
+#   看不到调用点局部/其他字段/self；名字不存在时运行期 GETG 报 R1001「未定义变量」，
+#   与解释轨（g_globals 求值）同码同文。发射完立即还原。
+def bc_emit_default(expr, dst, func):
+    let saved = func["smap"]
+    func["smap"] = bc_new_dict()
+    bc_emit_expr(expr, dst, func)
+    func["smap"] = saved
 # Point(1,2)：字段值连续槽 base..base+n-1（声明序）→ NEWSTRUCT dst, 元数据idx, base
 def bc_emit_struct_new(cname, sti, args, dst, func):
     let sd = g_bcm["structs"][sti]
@@ -1081,17 +1090,26 @@ def bc_emit_struct_new(cname, sti, args, dst, func):
         d = bc_tmp(func)
     # M237（缺陷 366）：不再 panic（编译期失败）—— 改发射运行期 R2001，
     #   与解释轨 / C 轨**同阶段同码同文**（修前：VM 编译期失败 · 解释轨静默 · C 轨生成非法 C）。
-    if len(args) != n:
-        let mn = bc_n_add(g_bcm["n_pool"], "R2001: 结构体 " + cname + " 需要 " + str(n) + " 个字段，给出 " + str(len(args)))
+    # M406：装配与报文改走 argmap_struct_d（有默认值的字段可缺省）；order[i] = -2 ⇒ 用默认表达式。
+    #   sd["has_default"] 全 false 时，报文与行为与修前**逐字节相同**（M365 回归判据）。
+    let am = argmap_struct_d(sd["fnames"], sd["has_default"], args, cname)
+    if am[0] != null:
+        let mn = bc_n_add(g_bcm["n_pool"], "R2001: " + am[0])
         bc_emit_inst(func, "RAISE", 0, mn, 0)
         return d
     let base = bc_tmp(func)
     while func["next_slot"] < base + n:
         bc_tmp(func)
+    # §3.7②：实参先按书写顺序求值（位置路径即声明序），全部求值完再按声明序填默认值
     var ai = 0
-    while ai < n:
+    while ai < len(args):
         bc_emit_expr(args[ai], base + ai, func)
         ai += 1
+    var fi0 = 0
+    while fi0 < n:
+        if am[1][fi0] == -2:
+            bc_emit_default(sd["defaults"][fi0], base + fi0, func)
+        fi0 += 1
     bc_emit_inst(func, "NEWSTRUCT", d, sti, base)
     return d
 # M365：命名参数的结构体构造 —— 先按**书写顺序**求值到临时槽，再按字段序 MOV。
@@ -1103,7 +1121,7 @@ def bc_emit_struct_named(cname, sti, written_args, dst, func):
     var d = dst
     if d < 0:
         d = bc_tmp(func)
-    let am = argmap_struct(sd["fnames"], written_args, cname)
+    let am = argmap_struct_d(sd["fnames"], sd["has_default"], written_args, cname)
     if am[0] != null:
         let mn = bc_n_add(g_bcm["n_pool"], "R2001: " + am[0])
         bc_emit_inst(func, "RAISE", 0, mn, 0)
@@ -1123,7 +1141,11 @@ def bc_emit_struct_named(cname, sti, written_args, dst, func):
         ai += 1
     var fi = 0
     while fi < n:
-        bc_emit_inst(func, "MOV", base + fi, temps[am[1][fi]], 0)
+        if am[1][fi] == -2:
+            # M406：缺省字段 ⇒ 默认表达式按声明序求值；求值环境 = 模块顶层（见 bc_emit_default）
+            bc_emit_default(sd["defaults"][fi], base + fi, func)
+        else:
+            bc_emit_inst(func, "MOV", base + fi, temps[am[1][fi]], 0)
         fi += 1
     bc_emit_inst(func, "NEWSTRUCT", d, sti, base)
     return d
@@ -2577,11 +2599,19 @@ def bc_emit_program(prog):
             let sd = bc_new_dict()
             sd["name"] = rust_unescape(st[1])
             let fnames = []
+            # M406：字段默认值（AST 第 4 元素）—— 收集成与 fnames 等长的两张表
+            let dflts = []
+            let hasd = []
             var fi = 0
             while fi < len(st[2]):
-                fnames.append(rust_unescape(st[2][fi][1]))
+                let fnode = st[2][fi]
+                fnames.append(rust_unescape(fnode[1]))
+                dflts.append(fnode[3])
+                hasd.append(fnode[3] != null)
                 fi += 1
             sd["fnames"] = fnames
+            sd["defaults"] = dflts
+            sd["has_default"] = hasd
             m["structs"].push(sd)
         elif ty == "EnumDef":
             let vnames = []

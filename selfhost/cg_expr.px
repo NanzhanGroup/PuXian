@@ -405,6 +405,66 @@ def cg_seq_wrap(decls, fin):
     if decls == null:
         return fin
     return "({ " + decls + fin + "; })"
+# ---------- M406：结构体字段默认值（C 轨生成器） ----------
+# defaults 表缺失（老编译单元/未收集）⇒ 返回 null，装配退化为「无默认」
+def cg_struct_defaults_of(cname):
+    if cg_struct_defaults.has(cname):
+        return cg_struct_defaults[cname]
+    return null
+# 结构体构造的统一生成器（位置 / 命名 / Constructor 三条入口共用一份）
+#   fields：字段名表 · defaults：与 fields 等长的默认表达式表（null = 无默认）
+#   顺序口径（§3.7②）：实参先按**书写顺序**求值 → 再按**字段声明序**求值缺省字段的默认值
+#   → px_struct 装配。用 cg_seq_join 把这些表达式串成一个显式序列（M165 同一手法）。
+def cg_struct_call(cname, fields, defaults, args):
+    let nf = len(fields)
+    let fnames = []
+    let hasd = []
+    var i = 0
+    while i < nf:
+        fnames.append(fields[i])
+        var dv = null
+        if defaults != null:
+            dv = defaults[i]
+        hasd.append(dv != null)
+        i += 1
+    let am = argmap_struct_d(fnames, hasd, args, cname)
+    if am[0] != null:
+        return cg_err_expr("R2001: " + am[0])
+    let vnodes = []
+    let parts = []
+    var ai = 0
+    while ai < len(args):
+        var vn = args[ai]
+        if vn[0] == "NamedArg":
+            vn = vn[2]
+        vnodes.append(vn)
+        parts.append(cg_gen_expr(vn))
+        ai += 1
+    var kk = len(args)
+    var fi = 0
+    while fi < nf:
+        if am[1][fi] == -2:
+            # 默认表达式在**模块顶层作用域**生成：cg_default_scope ⇒ Var 一律 px_get_global
+            let old0 = cg_default_scope
+            cg_default_scope = true
+            parts.append(cg_gen_expr(defaults[fi]))
+            cg_default_scope = old0
+            vnodes.append(defaults[fi])
+            am[1][fi] = kk
+            kk += 1
+        fi += 1
+    let sj = cg_seq_join(vnodes, parts)
+    let fq = []
+    var fi2 = 0
+    while fi2 < nf:
+        fq.append("\"" + fields[fi2] + "\"")
+        fi2 += 1
+    let vals = []
+    var oi = 0
+    while oi < nf:
+        vals.append(sj[1][am[1][oi]])
+        oi += 1
+    return cg_seq_wrap(sj[0], "px_struct(\"" + cname + "\", (char*[]){" + join(", ", fq) + "}, (LXValue[]){" + join(", ", vals) + "}, " + str(nf) + ")")
 def cg_gen_expr(expr):
     let ty = expr[0]
     if ty == "Int":
@@ -460,6 +520,10 @@ def cg_gen_expr(expr):
         return s
     if ty == "Var":
         let name = rust_unescape(expr[1])
+        # M406：结构体字段默认表达式按**模块顶层作用域**生成 —— 跳过本帧局部，
+        #   一律 px_get_global（未定义名由 px_get_global 报 R1001，与解释轨同一条词条）。
+        if cg_default_scope:
+            return "px_get_global(\"" + name + "\")"
         let v = cg_var_of(name)
         if v != null:
             # M129（缺陷 21）：本帧局部若是闭包捕获目标 → 已装箱成 cell，读须解引用
@@ -549,32 +613,9 @@ def cg_gen_expr(expr):
                 owner = rust_unescape(callee[1])
             if owner == null or not cg_structs.has(owner):
                 return cg_err_expr("R2001: " + argmap_reject(owner))
+            # M406：位置 / 命名统一走 cg_struct_call（装配 + 默认值 + 报文一份算法）
             let fields0 = cg_structs[owner]
-            let am0 = argmap_struct(fields0, args, owner)
-            if am0[0] != null:
-                return cg_err_expr("R2001: " + am0[0])
-            let vnodes = []
-            let parts = []
-            var ai0 = 0
-            while ai0 < len(args):
-                var vnode = args[ai0]
-                if vnode[0] == "NamedArg":
-                    vnode = vnode[2]
-                vnodes.append(vnode)
-                parts.append(cg_gen_expr(vnode))
-                ai0 += 1
-            let sj0 = cg_seq_join(vnodes, parts)
-            let fnames0 = []
-            var fi0 = 0
-            while fi0 < len(fields0):
-                fnames0.append("\"" + fields0[fi0] + "\"")
-                fi0 += 1
-            let vals0 = []
-            var oi0 = 0
-            while oi0 < len(am0[1]):
-                vals0.append(sj0[1][am0[1][oi0]])
-                oi0 += 1
-            return cg_seq_wrap(sj0[0], "px_struct(\"" + owner + "\", (char*[]){" + join(", ", fnames0) + "}, (LXValue[]){" + join(", ", vals0) + "}, " + str(len(fields0)) + ")")
+            return cg_struct_call(owner, fields0, cg_struct_defaults_of(owner), args)
         if callee[0] == "Var":
             let cname = rust_unescape(callee[1])
             # M42：extern def → FFI 调用（统一走 ffi_call C 桥，双模式一致）
@@ -603,21 +644,8 @@ def cg_gen_expr(expr):
                 return "px_rwlock_create()"
             # 结构体/枚举构造
             if cg_structs.has(cname):
-                let fields = cg_structs[cname]
-                if len(fields) != len(args):
-                    return cg_err_expr("R2001: 结构体 " + cname + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args)))
-                let parts = []
-                var ai = 0
-                while ai < len(args):
-                    parts.append(cg_gen_expr(args[ai]))
-                    ai += 1
-                let fnames = []
-                var fi = 0
-                while fi < len(fields):
-                    fnames.append("\"" + fields[fi] + "\"")
-                    fi += 1
-                let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
-                return cg_seq_wrap(sj[0], "px_struct(\"" + cname + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(fields)) + ")")
+                # M406：默认值 + 装配 + 报文统一走 cg_struct_call
+                return cg_struct_call(cname, cg_structs[cname], cg_struct_defaults_of(cname), args)
             if cg_enums.has(cname):
                 return cg_enum_ctor(cname, args)
         # 方法调用
@@ -866,21 +894,8 @@ def cg_gen_expr(expr):
         let name = rust_unescape(expr[1])
         let args = expr[2]
         if cg_structs.has(name):
-            let fields = cg_structs[name]
-            if len(fields) != len(args):
-                return cg_err_expr("R2001: 结构体 " + name + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args)))
-            let parts = []
-            var ai = 0
-            while ai < len(args):
-                parts.append(cg_gen_expr(args[ai]))
-                ai += 1
-            let fnames = []
-            var fi = 0
-            while fi < len(fields):
-                fnames.append("\"" + fields[fi] + "\"")
-                fi += 1
-            let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
-            return cg_seq_wrap(sj[0], "px_struct(\"" + name + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(fields)) + ")")
+            # M406：与 Call 路径同一份生成器（默认值装配不因入口不同而分叉）
+            return cg_struct_call(name, cg_structs[name], cg_struct_defaults_of(name), args)
         if cg_enums.has(name):
             return cg_enum_ctor(name, args)
         let parts = []

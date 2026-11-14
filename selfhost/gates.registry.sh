@@ -2165,3 +2165,18 @@ run m401_default_args bash examples/m401_default_args/verify.sh
 #   ⚠️ 本门是「孤儿门算不算已收录」的唯一消费者：check_orphan_gates 只在**本门已注册且脚本在盘**时
 #     才把清单里的门算作已收录（否则清单一律不算数）—— 清单不能成为洗白孤儿的新后门。
 run m403_orphan_batch bash examples/m403_orphan_batch/verify.sh
+
+# ── m406_struct_field_default（M406 · spec §3.7 字段默认值）──────────────────
+#   病史：docs/spec.md §3.7 从第一版就写 `timeout: int = 30`，而 M365 起 parser 明确拒绝
+#     （E2001「结构体字段默认值尚未实现」）—— 与 M362/M365 同族的「文档承诺、实现拒绝」。
+#   M406 定稿（三轨共用 selfhost/argmap.px 的 argmap_fields_d 一份装配算法）：
+#     ① 求值环境 = **模块顶层**：看不到其他字段 / self / 调用点局部 ⇒ R1001（三轨同码同文）
+#     ② 求值时机 = 构造时、**实参全部求值之后**，缺省字段按**字段声明序**求值（副作用可观测）
+#     ③ 缺字段解析顺序：位置参 → 命名参 → 默认值 → 仍缺 ⇒ 原 R2001（报文与 M365 逐字节相同）
+#   判据：A 三轨 stdout 逐字节 · B 门侧独立参考（§3.7 手推 9 行，不调实现）
+#        · C 6 类错误三轨同码同文 + 关键词谓词（缺失/字段引用/局部引用/超量/未知字段/命名缺字段）
+#        · D 覆盖度自证（T1/T2/T3/T4/T6/T8 六形态齐）
+#        · N1 期望值扰动 1 处 ⇒ B 必红（M406_NC=ref 触发）
+#        · N2 合法写法（默认引用全局函数 + 命名/位置混合）必须不被判红 ⇒ 判据不是恒红
+#        · P 前提自证（v0.2.405 的 bootstrap/pxi 在本用例上必须报 E2001「结构体字段默认值尚未实现」）
+run m406_struct_field_default bash examples/m406_struct_field_default/verify.sh

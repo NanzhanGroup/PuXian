@@ -1875,6 +1875,19 @@ jobs:
           bash examples/m401_default_args/verify.sh > /tmp/v_m401.log 2>&1 || { echo "❌ m401_default_args 门失败（默认参数求值位置）"; tail -40 /tmp/v_m401.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m401_default_args（三轨逐字节 + 前提自证 + 判据自证）PASS"
 
+      - name: m406_struct_field_default（结构体字段默认值 · M406 · spec §3.7）
+        # 判据：A 三轨 stdout 逐字节 · B 门侧独立参考（§3.7 手推 9 行）
+        #   · C 6 类错误三轨同码同文 + 关键词谓词 · D 覆盖度自证（T1/T2/T3/T4/T6/T8）
+        #   · N1 期望扰动必红（M406_NC=ref）· N2 合法写法不被判红
+        #   · P 前提自证（v0.2.405 的 bootstrap/pxi 必须报 E2001「结构体字段默认值尚未实现」）
+        if: always()
+        run: |
+          set +e
+          bash examples/m406_struct_field_default/verify.sh > /tmp/v_m406.log 2>&1 || { echo "❌ m406_struct_field_default 门失败（结构体字段默认值三轨对拍）"; tail -40 /tmp/v_m406.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m406.log | tail -6
+          M406_NC=ref bash examples/m406_struct_field_default/verify.sh > /tmp/v_m406_nc.log 2>&1 && { echo "❌ m406 负控失败：期望值扰动后门仍判绿（判据无鉴别力）"; exit 1; }
+          echo "✅ m406_struct_field_default（三轨逐字节 + 6 类错误同码同文 + 判据/前提自证）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

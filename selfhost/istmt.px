@@ -313,13 +313,13 @@ def i_bind_typeref(env, name, kind):
     return Ok(null)
 # ---------- struct 定义 ----------
 def i_exec_struct(stmt, env):
-    # ["StructDef", name, fields, pos]  fields: [["StructField", name, ty, pos]]
+    # ["StructDef", name, fields, pos]  fields: [["StructField", name, ty, default, pos]]（M406 起 4 元素）
     let name = rust_unescape(stmt[1])
     let fields = []
     var i = 0
     while i < len(stmt[2]):
         let f = stmt[2][i]
-        fields.append({"name": rust_unescape(f[1]), "ty": f[2]})
+        fields.append({"name": rust_unescape(f[1]), "ty": f[2], "default": f[3]})
         i += 1
     g_structs[name] = {"fields": fields}
     i_bind_typeref(env, name, "struct")

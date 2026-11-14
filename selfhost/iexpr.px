@@ -379,12 +379,16 @@ def i_eval_call(node, env):
         if callee[0] != "Var" or not g_structs.has(owner):
             return Err(i_r2001(argmap_reject(owner), pos))
         let sdef = g_structs[owner]
+        let sfl = sdef["fields"]
         let fnames = []
+        let hasd = []
         var fi = 0
-        while fi < len(sdef["fields"]):
-            fnames.append(sdef["fields"][fi]["name"])
+        while fi < len(sfl):
+            fnames.append(sfl[fi]["name"])
+            hasd.append(sfl[fi]["default"] != null)
             fi += 1
-        let am = argmap_struct(fnames, args, owner)
+        # M406：装配走 argmap_struct_d（允许有默认值的字段缺省）——与位置路径 / 编译两轨同一份算法
+        let am = argmap_struct_d(fnames, hasd, args, owner)
         if am[0] != null:
             return Err(i_r2001(am[0], pos))
         let vals = []
@@ -401,7 +405,14 @@ def i_eval_call(node, env):
         let ordered = []
         var oi = 0
         while oi < len(am[1]):
-            ordered.append(vals[am[1][oi]])
+            if am[1][oi] == -2:
+                # M406：字段默认值 —— 模块顶层环境求值，按字段声明序（实参已全部求值完）
+                let dr1 = i_eval_expr(sfl[oi]["default"], g_globals)
+                if dr1.is_err():
+                    return Err(dr1.err())
+                ordered.append(dr1.unwrap())
+            else:
+                ordered.append(vals[am[1][oi]])
             oi += 1
         let cr0 = i_eval_expr(callee, env)
         if cr0.is_err():

@@ -80,6 +80,90 @@ def argmap_fields(field_names, args, owner, kind):
             return [kind + " " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
         fi2 += 1
     return [null, order]
+# ============================================================
+# M406：**结构体字段默认值**的装配算法（三轨共用这一份）
+# ------------------------------------------------------------
+# 与 argmap_fields 的差别只有两处：
+#   ① 允许「有默认值的字段」缺省 —— order[i] = -2 表示「该字段用默认表达式填」
+#   ② 缺省判定顺序：位置参 → 命名参 → 默认值 → 仍缺 ⇒ 原 R2001（**报文逐字节不变**）
+# has_default[i]：第 i 个字段是否有默认值（true/false）
+# ⚠️ has_default 全 false 时，本算法必须与 argmap_fields **逐字节同行为**（M365 不受影响）。
+# ============================================================
+def argmap_struct_d(field_names, has_default, args, owner):
+    return argmap_fields_d(field_names, has_default, args, owner, "结构体")
+# 解释轨专用：实参**已求值**（只剩个数，没有 AST）时的位置装配。
+#   ⚠️ 不能用 argmap_struct_d：它按 AST 判 NamedArg，而解释轨的 i_call_value 收到的是值。
+#   报文与 argmap_fields_d 的位置路径**逐字节同一句**（三轨同一真相）。
+def argmap_pos_d(field_names, has_default, nargs, owner):
+    let nf = len(field_names)
+    let order = []
+    var i = 0
+    while i < nf:
+        order.append(-1)
+        i += 1
+    if nargs > nf:
+        return ["结构体 " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(nargs), order]
+    var k = 0
+    while k < nf:
+        if k < nargs:
+            order[k] = k
+        else:
+            if not has_default[k]:
+                return ["结构体 " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(nargs), order]
+            order[k] = -2
+        k += 1
+    return [null, order]
+def argmap_fields_d(field_names, has_default, args, owner, kind):
+    let nf = len(field_names)
+    let order = []
+    var i = 0
+    while i < nf:
+        order.append(-1)
+        i += 1
+    if not argmap_has_named(args):
+        # 位置路径：给出多于字段数 ⇒ 原句（与 M365 逐字节）
+        if len(args) > nf:
+            return [kind + " " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+        var k0 = 0
+        while k0 < nf:
+            if k0 < len(args):
+                order[k0] = k0
+            else:
+                if not has_default[k0]:
+                    # 缺的字段没有默认值 ⇒ **原句**（大小/措辞一个字不改：M365 回归判据）
+                    return [kind + " " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+                order[k0] = -2
+            k0 += 1
+        return [null, order]
+    var pend = 0
+    var ai = 0
+    while ai < len(args):
+        let a = args[ai]
+        if a[0] == "NamedArg":
+            let nm = rust_unescape(a[1])
+            let fi = argmap_field_index(field_names, nm)
+            if fi < 0:
+                return [kind + " " + owner + " 没有字段「" + nm + "」", order]
+            if order[fi] != -1:
+                return [kind + " " + owner + " 字段「" + nm + "」重复给出", order]
+            order[fi] = ai
+        else:
+            while pend < nf and order[pend] != -1:
+                pend += 1
+            if pend >= nf:
+                return [kind + " " + owner + " 需要 " + str(nf) + " 个字段，给出 " + str(len(args)), order]
+            order[pend] = ai
+            pend += 1
+        ai += 1
+    var fi2 = 0
+    while fi2 < nf:
+        if order[fi2] == -1:
+            if has_default[fi2]:
+                order[fi2] = -2
+            else:
+                return [kind + " " + owner + " 缺少字段「" + field_names[fi2] + "」", order]
+        fi2 += 1
+    return [null, order]
 # M374：模式侧具名检测 —— 子模式列表里出现 NamedArg 即为具名解构。
 #   与构造侧共用 argmap_fields 装配算法（含「未知字段 / 重复字段 / 缺少字段」三报文），
 #   保证「写的时候怎么校验，读的时候就怎么校验」（三轨同码同文）。
