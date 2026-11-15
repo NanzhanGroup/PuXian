@@ -6298,7 +6298,30 @@ static const char* px_ctr_type_name_raw(int t) {
         default:       return "unknown";
     }
 }
+// M409（缺陷 267 · S2 取证档）：命中时不止报「类型不符」，还要回答「谁还指着它」。
+//   默认关（PX_GC_DIAG=1 才开）：走 px_dbg_obj_refs（调用栈 + VM 帧槽 + 协程帧槽 + 各线程槽），
+//   判据价值：**有帧槽指向它** ⇒ 帧面漏扫；**无任何帧槽** ⇒ 只活在 C 局部（漏 PX_KEEP）。
+static int px_ctr_diag_on(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("PX_GC_DIAG");
+        cached = (v && v[0] && v[0] != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
 static void px_ctr_guard_fail(LXObject* o, int want, const char* what) {
+    if (px_ctr_diag_on()) {
+        char dbg[288];
+        int dn = snprintf(dbg, sizeof(dbg),
+            "\n[PX_GC_DIAG] 失效容器操作现场：%s 实际=%d(%s) 期望=%d(%s) ptr=%p\n"
+            "  用户源码位置：%s 行 %d · 本线程 tid=%lx roots_n=%d marks_n=%d tmp_root=%p\n",
+            what, (int)o->type, px_ctr_type_name_raw((int)o->type), want, px_ctr_type_name_raw(want), (void*)o,
+            g_px_src_func ? g_px_src_func : "?", g_px_src_line, (unsigned long)pthread_self(),
+            g_px_roots_n, g_px_root_marks_n, (void*)g_tmp_root);
+        if (dn > 0) (void)write(2, dbg, (size_t)dn);
+        px_dbg_obj_refs((const void*)o);
+    }
     if (g_ctr_guard_hits < 8) {
         char b[352];
         int n = snprintf(b, sizeof(b),
