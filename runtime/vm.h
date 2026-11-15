@@ -307,6 +307,14 @@ PxVmState*  px_vm_unbind(void);                 // M93-S2：解绑（返回当�
 // ctx 必须是 PxVMFunc*（px_func 构造 PX_FUNC 时传入）。
 LXValue px_vm_entry(LXValue* args, int nargs, void* ctx);
 
+// M408 修（缺陷 809）：**受保护调用的帧栈回收** —— runtime 的 `__guard_call` 用 setjmp 捕获
+//   px_error，但 longjmp 会**跳过 vm_run_loop**，被中断的调用在帧栈里留下的帧不会被弹；
+//   若原样返回，外层 VM 循环会拿错乱的 nframes 继续跑（实测：错误被吞、语句接着执行）。
+//   用法：调 px_call 前 `int d = px_vm_frame_depth();`，错误路径 `px_vm_unwind_to(d);`。
+//   ⚠️ runtime.c 以**弱符号**引用本对（C 轨产物不链 vm.o ⇒ 指针为空、直接跳过）。
+int  px_vm_frame_depth(void);                   // 当前线程已绑定的 VM 状态帧数；无状态 ⇒ 0
+void px_vm_unwind_to(int depth);                // 弹帧到 depth（只回收被 longjmp 跳过的帧）
+
 // M160（缺陷 159）：闭包入口 —— ctx = &func.env（px_func_env 约定，LXValue*）。
 //   所属 PxVMFunc* 由 env 的保留键携带（见 vm.c）；压帧时把 env 里的 cell 绑到 upvalue 槽。
 LXValue px_vm_closure_entry(LXValue* args, int nargs, void* ctx);

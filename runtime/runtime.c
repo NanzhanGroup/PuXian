@@ -13645,7 +13645,14 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
 //   ③ longjmp 不展开 C 帧 ⇒ 被跳过的 px_root_push 登记成野根；与 px_native_call_capture
 //      同范式：进函数记根水位、落点归还（px_root_iso_mark_deep / px_root_restore_iso）。
 //   ④ 与 M392 的 try 帧共用 t_try_top 链 ⇒ 天然嵌套：错误先落**最近一层**。
+//   ⑤ **VM 轨必须回收帧栈**（M408 修 · 缺陷 809）：longjmp 会**跳过 vm_run_loop**，
+//      被中断的调用在 `st->frames[]` 里留下的帧不会被弹 ⇒ 本函数返回后外层 VM 循环拿着
+//      错乱的 `nframes` 继续跑（实测症状：错误被吞、语句接着执行、末尾才补一条报错）。
+//      故进函数记帧水位、错误路径弹回。弱符号：C 轨产物不链 vm.o（无 VM 帧栈，天然为空）。
 // 为什么用内部名（`__` 前缀）：它服务于解释器自身，不是用户面 API（同 __iter_len 口径）。
+extern int px_vm_frame_depth(void) __attribute__((weak));
+extern void px_vm_unwind_to(int depth) __attribute__((weak));
+
 static LXValue bi_guard_call(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[1].type != PX_LIST)
@@ -13657,27 +13664,34 @@ static LXValue bi_guard_call(LXValue* args, int nargs, void* ctx) {
     LXValue* av = (n <= 8) ? sbuf : (LXValue*)xmalloc(sizeof(LXValue) * (size_t)n);
     for (int i = 0; i < n; i++) av[i] = lo->as.list.items[i];   // 栈数组 ⇒ 保守 GC 可见（根）
     PxTryFrame tf;
+    int vm0 = px_vm_frame_depth ? px_vm_frame_depth() : 0;   // 口径⑤：VM 帧水位（见下）
     px_root_iso_mark_deep();
     px_try_push(&tf);
     if (setjmp(tf.jb) == 0) {
         LXValue r = px_call(fn, n ? av : NULL, n);
         px_try_pop();                       // 口径②：仅成功路径弹
         if (av != sbuf) xfree(av);
+        // M408 修（缺陷 809）：`r` 必须**在** `px_dict()` 这个分配点**之前**挂根 ——
+        //   否则 GC 在 px_dict 里触发时 r 可能已被回收（M209 S13：登记必须原子）。
+        px_root_push_keep(r);
         LXValue d = px_dict();
-        px_root_push();
-        PX_KEEP(d);
+        px_root_push_keep(d);
         px_dict_set(d, "ok", px_bool(1));
         px_dict_set(d, "val", r);
         px_root_pop();
+        px_root_pop();
         return d;
     }
+    // M408 修（缺陷 809）：VM 轨必须**先抄文案、再回收帧**，顺序反了拿到的就是空串。
+    char emsg[512];
+    snprintf(emsg, sizeof(emsg), "%s", px_try_msg());
+    if (px_vm_unwind_to) px_vm_unwind_to(vm0);   // 口径⑤：见函数头注
     px_root_restore_iso();                  // 口径③：归还被 longjmp 跳过的根登记
     if (av != sbuf) xfree(av);
     LXValue d2 = px_dict();
-    px_root_push();
-    PX_KEEP(d2);
+    px_root_push_keep(d2);
     px_dict_set(d2, "ok", px_bool(0));
-    px_dict_set(d2, "err", px_str(px_try_msg()));
+    px_dict_set(d2, "err", px_str(emsg));
     px_root_pop();
     return d2;
 }

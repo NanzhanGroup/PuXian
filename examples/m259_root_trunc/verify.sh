@@ -129,11 +129,16 @@ grep -q 'M259（缺陷 462）' "$ROOT/runtime/runtime.c" && ok '[5] 缺陷 462 �
     || bad2 '[5] 缺陷 462 标记缺失'
 grep -q 'M259（决策项' "$ROOT/runtime/runtime.c" && ok '[5] 决策项 A 标记在位' \
     || bad2 '[5] 决策项 A 标记缺失'
-# 判据四：**两类隔离点必须分开** —— `_deep` 入口已定义，且**恰好**被 2 个桥级调用点使用
+# 判据四：**两类隔离点必须分开** —— `_deep` 入口已定义，且**恰好**被 3 个桥级调用点使用
 grep -q 'void px_root_iso_mark_deep(void)' "$ROOT/runtime/runtime.c" \
     && ok '[5] _deep 入口已定义（桥级专用）' || bad2 '[5] _deep 入口缺失'
+# ⚠️ M408（缺陷 809）：调用点 2 → **3** —— 新增 `bi_guard_call`（`__guard_call`：
+#   解释轨 try/catch 的受保护调用桥）。它满足本门的前提「只被**桥级**调用」：
+#   它是 native 内建（LXFuncPtr），执行期间 `yield_ok=0`（与 px_native_call_capture 同口径），
+#   作用域内不会有别的执行流 push 条目；且它同样在错误路径 `px_root_restore_iso()`
+#   （longjmp 跳过的登记必须归还）。⇒ 这是**扩面**，不是放宽：数量仍钉死（3），多一/少一都判红。
 n_deep=$(grep -c 'px_root_iso_mark_deep();' "$ROOT/runtime/runtime.c" || true)
-chk '[5] 桥级调用点数量（必须恰好 2：bi_json_parse_opt + px_native_call_capture）' "$n_deep" 2
+chk '[5] 桥级调用点数量（必须恰好 3：bi_json_parse_opt + px_native_call_capture + bi_guard_call[M408]）' "$n_deep" 3
 
 echo "══ [6] 负控 3 道（各自独立判红 · 源逐字节还原）════"
 if [ "$NEG" = 0 ]; then

@@ -1273,6 +1273,29 @@ LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) {
     return px_vm_run_func(px_vm_state(), f, args, nargs);
 }
 
+// ---- M408 修（缺陷 809）：受保护调用的帧栈回收（见 vm.h / runtime.c 的 __guard_call）----
+//   为什么需要：`__guard_call` 在 C 侧 setjmp 捕获 px_error，longjmp **跳过** vm_run_loop，
+//     被中断的调用在 st->frames[] 里留下的帧不会被弹。原样返回后，外层 VM 循环拿着错乱的
+//     nframes 继续跑 —— 实测症状是「错误被吞、该停的语句接着执行、末尾才补一条报错」，
+//     且只在 VM 轨出现（C 轨无帧栈，bootstrap/pxi 正常）。
+//   ⚠️ 只回收被跳过的帧，**不碰** try 链：能落到 C 帧的 setjmp ⇒ 出错点上方不可能还有
+//     未弹的 .px try 帧（有的话 px_error 会先弹它并跳回 vm_run_loop 的 TRYENTER）⇒
+//     这里把 ntry 回退到该帧的 try_base 只是防御性对齐，避免误弹外层帧。
+int px_vm_frame_depth(void) {
+    PxVmState* st = g_vm_state;   // 只看已绑定的状态：不懒建（本函数可能在无 VM 的线程被调）
+    return st ? st->nframes : 0;
+}
+
+void px_vm_unwind_to(int depth) {
+    PxVmState* st = g_vm_state;
+    if (!st) return;
+    while (st->nframes > depth) {
+        PxFrame* fr = &st->frames[st->nframes - 1];
+        st->ntry = fr->try_base;
+        vm_frame_pop(st);
+    }
+}
+
 // ---- M160（缺陷 159）：闭包 trampoline（ctx=&env；PX_FUNC.env 字段，px_func_env 建）----
 //   px→px 的闭包调用在解释循环里走 vm_frame_push_clo（不回 C 递归）；本入口覆盖
 //   px_call 路径（native 回调拿到的闭包、CALLM/with 等），语义与之一致。

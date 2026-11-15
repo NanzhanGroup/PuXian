@@ -34,6 +34,7 @@ examples/m315_onnx_ort_kernel/ort_version_probe.py	P2	numpy	host	同上
 examples/m315_onnx_ort_kernel/ort_version_probe.py	P2	onnxruntime	host	同上
 # ── P3 外网 ─────────────────────────────────────────────────────────────────
 examples/m267_perf/s5_remote_baseline.sh	P3	soft.xiusoft.cn	host	远程基线取自发布站（真机档）
+examples/m408_proxy_connect/verify.sh	P3	www.example.com	self	[A] 的 URL 只作 CONNECT 目标字面量：门内自备代理直接 403 应答，不出网、不解析该域名
 examples/m282_registry_020/verify.sh	P3	github.com	skiploud	[7] 上游逐字对拍需 GitHub 检出；无检出时 skipped() 打 [585-SKIP-LOUD]
 examples/m388_publish_chain/selftest.sh	P3	soft.xiusoft.net	host	发布链自测打真站（.net 为历史域）
 # ── P5 非仓库产物 ───────────────────────────────────────────────────────────
