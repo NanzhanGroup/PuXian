@@ -33,7 +33,9 @@
 # 负控（各自独立判红，源逐字节还原）：
 #  A runtime `bi_bytes_get` 越界退回 `return px_null();`      ⇒ ③ n1 红（rc 由 1 变 0）
 #  B runtime `bi_bytes_set` 越界文案退回旧文               ⇒ ③ n2 红（词条与 b[i] 不同）
-#  C selfhost `ibuiltin.px` 删掉 bytes_get 前置校验        ⇒ ③ n1 红（解释轨丢掉用户行号）
+#  C selfhost `ibuiltin.px` 删掉 bytes_get 前置校验        ⇒ 解释轨丢掉用户原值（2^32 被 int 截断成 0）
+#    ⚠️ M408 r3（缺陷 814）：旧靶心「解释轨丢掉用户行号」已被 M408 的内置错误桥（__guard_call
+#      按调用点归因）**吸收** ⇒ 靶心改为前置校验至今独有的「64 位索引原值保真」。
 #  D runtime `bi_bytes_get` 索引校验退回 `int_val`          ⇒ ③ n5/n6 红（**文案分叉**）
 #    ⚠️ M216（第 95 轮 · 缺陷 308）把 `int_val` 对 float 的**静默截断**改成响亮
 #      （`R1002: 期望整数，实际是 float`）⇒ 本负控原来的「静默截断」那半条判据
@@ -171,6 +173,17 @@ for t in interp vm c; do
 done
 chk "[3] n3_neg_oob：三轨均报**原值** -9 且无归一化 -7（缺陷 345）" "[ $n3ok = 1 ]"
 
+# ── M408 r3（缺陷 814/815）· 64 位索引的原值保真 ──
+#  `bytes_get(b, 4294967296)`（2^32）：**解释轨**必须报用户原值（前置校验走 i_as_index = int64）；
+#  VM/C 两轨当前报 `索引越界: 0`（原生 bi_bytes_get 的 `int m230_raw = (int)i` 截断）
+#  ⇒ 那是**缺陷 815（登记未修）**，故本处只断言解释轨；编译轨的截断差异不在本门判红。
+#  这一条同时是负控 C 的正向对照（负控打桩后此断言消失 ⇒ 负控才有牙）。
+d7="$W/bn7pos"; rm -rf "$d7"; mkdir -p "$d7"; cp "$HERE/neg/n7_bigidx.px" "$d7/"
+( cd "$d7" && timeout 120 "$INTERP_BIN" n7_bigidx.px ) > "$W/n7pos.interp.out" 2>&1
+echo $? > "$W/n7pos.interp.rc"
+chk "[3+] n7_bigidx：解释轨 2^32 索引报**用户原值**（int64 保真）" \
+    "[ \"\$(cat $W/n7pos.interp.rc)\" != 0 ] && grep -q '索引越界: 4294967296 (len=3)' $W/n7pos.interp.out"
+
 if [ "$NEG" = 1 ]; then
     echo "=== [4] 负控（各自独立；源逐字节还原）"
     neg() {   # neg <名> <判据函数> <打桩函数> <源文件>
@@ -255,13 +268,28 @@ PY
         run3 "$HERE/neg/n2_set_oob.px" ncB
         ! grep -q '索引越界: 3 (len=3)' "$W/ncB.vm.out"
     }
-    chk_C_red() {   # 解释轨丢掉用户行号（用当前 selfhost 源码重编解释器）
+    # ⚠️ M408 r3（缺陷 814）：**负控 C 的旧靶心被 M408 自己的内置错误桥吸收了**。
+    #   旧靶心 = 「删掉前置校验 ⇒ 解释轨丢掉用户行号（`行4`）」。M408 的 `__guard_call`
+    #   （bi_guard_call，缺陷 804-808）让 native 内置报错**按调用点归因** ⇒ 打桩版与未打桩版
+    #   在 6 个拒绝例上 rc/词条/行号**逐字节相同**（实测 /data/autodrive/m408-ncc-probe/）
+    #   ⇒ 旧判据永远为绿（负控没有牙）。这是 M183 记过、M216（缺陷 308）踩过的老坑**第二次**发生。
+    #   新靶心 = 前置校验**至今独有**的那一半：**64 位索引的原值保真**。
+    #   原生 bi_bytes_get 的 m230_raw 是 `int`（32 位）⇒ 2^32 截断成 0，报「索引越界: 0」；
+    #   前置校验走 i_as_index（int64）⇒ 未打桩报「索引越界: 4294967296（len=3）」。
+    #   （该截断本身已登记为缺陷 815，未在本轮改运行时 —— 改运行时需重烘+全量链，留作后续里程碑。）
+    chk_C_red() {   # 解释轨丢掉 64 位索引的原值（用当前 selfhost 源码重编解释器）
         ( cd "$ROOT" && ./tools/px build selfhost/interp.px ) > "$W/ncc_build.log" 2>&1
         [ -x "$ROOT/selfhost/build/interp" ] || return 1
-        ( cd "$W/bn_n1_get_oob" && timeout 120 "$ROOT/selfhost/build/interp" n1_get_oob.px ) > "$W/ncc.out" 2>&1
+        # ⚠️ 目录必须自己铺（M408 r3 踩过：只 cd 不铺 ⇒ cd 失败 ⇒ rc=1 + 无输出
+        #    被当成「判据已判红」= **假绿**，与 M185 记的反向分支同款）
+        local d="$W/bn7"; rm -rf "$d"; mkdir -p "$d"; cp "$HERE/neg/n7_bigidx.px" "$d/"
+        ( cd "$d" && timeout 120 "$ROOT/selfhost/build/interp" n7_bigidx.px ) > "$W/ncc.out" 2>&1
         local rc=$?
         rm -rf "$ROOT/selfhost/build"
-        [ "$rc" != 0 ] && ! grep -qE '运行时错误 \[[^]]+ 行4\]: R100[23]: ' "$W/ncc.out"
+        # 前置自证：真跑了（有 "before" 输出）—— 否则一律算判据失效，不给 PASS
+        grep -q '^before' "$W/ncc.out" || return 1
+        # 负控生效（返回 0）的判据：必须 rc≠0（越界仍响亮），且**不得**报出用户原值 2^32
+        [ "$rc" != 0 ] && ! grep -qE '索引越界: 4294967296 \(len=' "$W/ncc.out"
     }
     chk_D_red() {   # n5/n6：**词条分叉**（M216 起「float 静默截断」那一半已被吸收）
         run3 "$HERE/neg/n5_badidx.px" ncD

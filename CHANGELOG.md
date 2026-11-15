@@ -1,4 +1,48 @@
-## M408：清歌余留（PX-002 / PX-003 / PX-017）—— 坏输入不再打死解释器进程，代理补齐 CONNECT
+## M408 r3 修：m189 负控 C 的靶心被 M408 自己的内置错误桥吸收（缺陷 814–815）
+
+> **一句话**：全量链按 head=774e607 重跑 **282/283 绿**，唯一红门 `m189_bytes_bounds` 报的是
+> 「负控 C：判据仍为绿（负控没有牙）」—— **不是产品回退**，而是 M408 新上的 `__guard_call`
+> 把旧靶心「删掉前置校验 ⇒ 解释轨丢掉用户行号」**吸收**了（M183 记过、M216/缺陷 308 踩过的老坑
+> **第二次**发生）。本轮判据侧改靶 + 补正向对照；**运行时一行未动、未重烘**。
+
+### 证据（head=774e607 · /data/gatevm/m408-chain-20261115-175150.log · green=282 red=1）
+
+```
+m189_bytes_bounds   FAIL [4] 负控 C：判据仍为绿（负控没有牙）
+  打桩（删 selfhost/ibuiltin.px 的 bytes_get 前置校验）后用当前源码重编解释器，
+  6 个拒绝例实测（/data/autodrive/m408-ncc-probe/）：
+    n1_get_oob / n2_set_oob / n3_neg_oob / n4_type / n5_badidx / n6_floatidx
+    ⇒ rc / 词条 / 行号与未打桩版**逐字节相同** ⇒ 旧判据（要求「丢失 行4」）恒不成立
+  根因：缺陷 804-808（native 内置错误按调用点归因）让解释轨也拿得到用户行号
+```
+
+### 修法（判据侧，不动运行时）
+
+```
+814 负控 C 无牙   [4] 负控 C 靶心改为「**64 位索引原值保真**」：
+                 前置校验走 i_as_index（int64）；删掉后原生 bi_bytes_get 的 `int m230_raw = (int)i`
+                 把 2^32 截断成 0 ⇒ 打桩版报「索引越界: 0」、未打桩报「4294967296」⇒ 判据可判红
+                 + **前置自证**（ncc.out 必须含 before；防「cd 失败 ⇒ rc≠0」被误当判红 = 假绿，
+                   本轮初版就踩了这个假绿一次，见交接单轮次 4）
+新增正向对照      [3+] n7_bigidx：解释轨必须报用户原值 4294967296（负控打桩后该断言消失）
+新增负判据源      examples/m189_bytes_bounds/neg/n7_bigidx.px
+815 索引原值截断  登记（**未修**，本轮不改运行时）：`int m230_raw = (int)i` —— runtime.c 8 处
+                 （bytes_get/bytes_set、str/list/dict 取值族）+ vm.c 2 处（list 索引快路径）。
+                 危害两级：① VM/C 轨报**截断值**（bytes_get(b, 2^32) ⇒「索引越界: 0」，仍响亮）
+                 ② **VM 轨 list 快路径 `int i = (int)idx.as.i` 静默错值**：
+                    `let l=[10,20,30]` 的 `l[4294967297]` ⇒ **返回 20**（rc=0，解释轨正确报 R1003）
+                 ⇒ 修它要 10 处 int→int64 + %d→PRId64 + 重烘 + 全量链，按 811-813 同例登记、下轮收口
+```
+
+### 验证（本机实测）
+
+```
+bash examples/m189_bytes_bounds/verify.sh   ⇒ PASS=24 FAIL=0（M189-VERIFY-OK）
+负控 C 双向实测：打桩后 ⇒「索引越界: 0 (len=3)」· 未打桩 ⇒「索引越界: 4294967296 (len=3)」
+未动：runtime/ · selfhost/*.px · bootstrap/（**不重烘**）· 配置 · 服务单元 · 防火墙
+```
+
+
 
 > **一句话**：解释轨的 `try/catch` 只接得住 **Err 返回值**，接不住 native 的 `px_error → longjmp`
 > —— 于是「try 里调 `regex_match("\\p", …)` / `zip_unpack(坏包)` / `list_dir(不存在)`」在 `px run`
