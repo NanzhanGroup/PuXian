@@ -1901,6 +1901,28 @@ jobs:
           M407_NC=ref bash examples/m407_rt_error_format/verify.sh > /tmp/v_m407_nc.log 2>&1 && { echo "❌ m407 负控失败：期望扰动后门仍判绿（判据无鉴别力）"; exit 1; }
           echo "✅ m407_rt_error_format（三轨逐字节 + 归因正确性 + 判据/前提自证）PASS"
 
+      - name: m408_builtin_err_trap（内置失败可捕获 · M408 · PX-002/PX-003）
+        # 判据：A 三轨逐字节（9 个内置失败用例）· B 门侧手写期望表 + 码制断言
+        #   · C 未捕获归因三轨同形且不含内部函数名
+        #   · N1 期望扰动必红 · N2 合法程序三轨一致且 stderr 空
+        #   · P 无护栏直调必死在半路 · D 同一函数经护栏活着拿回错误文本
+        if: always()
+        run: |
+          set +e
+          bash examples/m408_builtin_err_trap/verify.sh > /tmp/v_m408a.log 2>&1 || { echo "❌ m408_builtin_err_trap 门失败（内置失败可捕获）"; tail -40 /tmp/v_m408a.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m408a.log | tail -6
+          echo "✅ m408_builtin_err_trap（三轨逐字节 + 码制 + 归因 + 前提自证）PASS"
+
+      - name: m408_proxy_connect（http_request 代理 CONNECT · M408 · PX-017）
+        # 判据（全离线：门内自建代理 + 本机 origin）：X CONNECT 日志 · A 403 可读报文
+        #   · B CONNECT 目标是目标站 · C 明文经代理 200 · D 不可达可读 · N1/N2
+        if: always()
+        run: |
+          set +e
+          bash examples/m408_proxy_connect/verify.sh > /tmp/v_m408b.log 2>&1 || { echo "❌ m408_proxy_connect 门失败（代理 CONNECT）"; tail -40 /tmp/v_m408b.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^  ✅' /tmp/v_m408b.log | tail -6
+          echo "✅ m408_proxy_connect（CONNECT 隧道 + 报文可读 + 判据有牙）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

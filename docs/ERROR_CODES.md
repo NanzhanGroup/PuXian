@@ -34,6 +34,34 @@
 循环/条件创建时天然不同 ⇒ 序号不能进契约，只能取 `<closure>`。具名帧内 `def` 例外：
 三轨都用品名（解释轨本来就按名字调用）。
 
+### 0.1 M408 补：解释轨的 `try/catch` **也接 native 运行时错误**
+
+M392 引入 `try:` / `catch [e]:` 时，解释轨的实现只接住了 **Err 返回值**（.px 层语义），
+而 runtime native 的失败走 `px_error → longjmp` ⇒ 同一份源码三轨分裂，且**死的是解释轨**：
+
+```
+try: var m = regex_match("\\p", "abc") catch e: print("CAUGHT: " + e); print("alive")
+  px run   rc=1 · 无 alive · 运行时错误 [i_call_builtin 行434]: regex: …
+  VM / C   CAUGHT → alive · rc=0
+```
+
+修法（M408）：runtime 内部原语 `__guard_call(fn, args_list)` —— 装 try 帧跑 `px_call`，
+异常转成 `{"ok":false,"err":<文本>}`（`runtime.c: bi_guard_call`）；解释轨的 TryCatch
+body 逐条受保护执行（`selfhost/istmt.px: i_exec_stmt_guarded`），顶层入口再兜一道。
+
+**两条随之定稿的口径：**
+
+1. **catch 变量文本**沿用本轨道 `px_error` 的文本：语言层是 `R####: <msg>`，
+   域前缀族是 `<域>: <msg>`（**不带码**）⇒ 解释轨拼 `__err__ + ": " + msg` 时 **空码只取 msg**
+   （否则会打出前导 `": "`）。
+2. **未捕获时的归因必须是用户侧**：`运行时错误 [<用户函数> 行<N>]: …`。
+   修前是 `[i_call_builtin 行434]` —— 用户既看不到自己哪一行，也不知道那是解释器内部。
+   判据：`examples/m408_builtin_err_trap/` 的 C 层（报文**不许**出现
+   `i_call_builtin` / `i_builtin_ffi_call` / `rebake_pxi`）。
+
+**已知差异（登记缺陷 811，本门不覆盖）**：`read_file(不存在)` —— 解释轨返回
+`Err(R2001: io: … (os error N))`，编译两轨 `px_error("io: …")`：同族不同码不同文。
+
 **实现（三条轨道各自的出口，收敛到同一形态）**：
 `selfhost/i_err.px`（解释轨 `i_err_rt` + `g_i_fn_stack`）·
 `runtime/runtime.c: px_srcpos()` + `px_error` 打印 · `selfhost/cg_stmt.px`（C 轨语句级）

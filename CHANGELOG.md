@@ -1,3 +1,80 @@
+## M408：清歌余留（PX-002 / PX-003 / PX-017）—— 坏输入不再打死解释器进程，代理补齐 CONNECT
+
+> **一句话**：解释轨的 `try/catch` 只接得住 **Err 返回值**，接不住 native 的 `px_error → longjmp`
+> —— 于是「try 里调 `regex_match("\\p", …)` / `zip_unpack(坏包)` / `list_dir(不存在)`」在 `px run`
+> 下**直接打死进程**（服务端拿 `px run` 跑脚本时，用户上传一个坏 zip 就能打掉它），而 VM / C
+> 两轨有 `px_try_push` 帧、能正常捕获。M408 把这条接上，并补上 `http_request` 代理的 CONNECT。
+
+### 证据（源码 0.2.407 实测，三轨各一次）
+
+```
+a.px  try: var m = regex_match("\\p", "abc") catch e: print("CAUGHT: " + e); print("alive")
+  px run（解释轨）  rc=1 · 「alive」未打印 · [i_call_builtin 行434]: regex: 不支持的转义 \p
+  VM 轨            CAUGHT → alive · rc=0
+  C  轨            CAUGHT → alive · rc=0
+b.px  zip_unpack(坏包)  —— 同一形状（[i_builtin_ffi_call 行1303]: zip 缺少 EOCD）
+c.px  list_dir/write_file/file_size(不存在) —— 同一形状（[i_call_builtin 行413/381/422]）
+d.px  http_request("https://…", proxy) ⇒ CAUGHT: R1002: 此类型不支持索引: result（与真因无关）
+      定位 runtime.c：代理分支只「连代理 + 请求行用绝对 URL」= 明文语义，https 缺 CONNECT
+```
+
+### 修法
+
+```
+804 解释轨内置错误不可捕获     runtime 新增内部原语 __guard_call（bi_guard_call）：
+                              setjmp + px_try_push → px_call(原函数) → 正常 {ok,val} / 异常 {ok:false,err}
+                              ⚠️ 口径四条：① setjmp 必须在本函数帧内且调用期间不返回（同 px_native_call_capture）
+                              ② px_error 的捕获分支**已弹帧** ⇒ 只有成功路径 px_try_pop
+                              ③ longjmp 跳过根登记 ⇒ 进函数 px_root_iso_mark_deep / 落点 px_root_restore_iso
+                              ④ 与 M392 的 t_try_top 共用链 ⇒ 天然嵌套（错误先落最近一层）
+                              selfhost/istmt.px：TryCatch 的 body 逐条经 i_exec_stmt_guarded；
+                              捕获后回滚 g_i_fn_stack / g_loop_depth（longjmp 跳过了它们的减操作）
+                              selfhost/interp.px：顶层入口再兜一道（未捕获的 native 错误走同一报文出口）
+805 归因指向解释器内部函数     i_err.px 新增 g_i_cur_line（i_exec_stmt 每条语句更新）+ i_rt_raw（无码错误载体）；
+                              未捕获 ⇒ 运行时错误 [<用户函数> 行<N>]: <域前缀>: <msg>，不再出现 i_call_builtin
+806 https+代理缺 CONNECT      px_proxy_connect_tunnel：发 CONNECT → 读状态行 → 非 2xx 报
+                              「net: 代理 CONNECT 失败 <代理> → <目标>: <状态行原文>」（403/407/502 可分辨）
+                              https_connect_t 增 pre_fd：隧道已建则只做 TLS（SNI/校名仍是**目标**）；
+                              **所有权契约**：成功随 HttpsSession 关闭、失败仍归调用方（fail 路径先摘 net.fd，防 double close）
+807 池键未含代理              key = "<代理> > <host>:<port>"（同 host:port 经不同代理是两条链路）
+808 隧道内请求行形态          https+代理用 origin-form（修前对 https 也写 Absolute-URI）
+```
+
+### 判据（新增 2 门 · 门清单 281 → 283）
+
+```
+m408_builtin_err_trap   A 三轨逐字节（9 个内置失败：regex/zip/json/list_dir/write_file/file_size/len/sum/bytes_get）
+                        B 门侧**手写**期望表 + 码制断言（§1：域前缀族不带 R 码 / 语言层必须带码）
+                        C 未捕获归因三轨同形（[boom 行3]）且不含 i_call_builtin/i_builtin_ffi_call/rebake
+                        N1 期望扰动 ⇒ B 必红 · N2 合法程序三轨一致且 stderr 空
+                        P 无护栏直调必死在半路（修前形状）· D 同一函数经护栏活着拿回错误文本
+m408_proxy_connect      **全离线**（门内自建 Python 代理 + 本机 origin，不碰外网/不借节点 —— M405 C6）
+                        X 代理日志必须出现 CONNECT <host:port> ⇒ 证明流量真走了代理
+                        A 代理回 403 ⇒ 报文含代理地址与 403（修前是 TLS 握手失败/R1002 索引）
+                        B 200 后立刻断 ⇒ CONNECT 目标是**目标站**而非代理自己
+                        C 明文经代理打本机 origin ⇒ 200 · D 代理不可达 ⇒ 报文含代理地址
+                        N1 期望扰动（修前形态）⇒ A 必红 · N2 直连 origin ⇒ 200
+```
+
+### 验证（本机实测）
+
+```
+m408_builtin_err_trap  10/10 绿（三轨 10 行逐字节 · 码制合规 · 归因 [boom 行3]）
+m408_proxy_connect     10/10 绿（CONNECT 日志命中 · 403 报文可读 · 明文 200 · 不可达可读）
+手工三轨对拍           p002/p003/smoke3（for/while 内出错 + catch 后 break）三轨 stdout 逐字节一致
+```
+
+### 已知差异与未覆盖（诚实登记，不在本轮伪装成已修）
+
+```
+811 read_file(不存在) 三轨不同：解释轨 Err(R2001: io: … (os error N)) vs 编译两轨 px_error(io: …)
+    ⇒ 同族不同码不同文；本门**不拿它当用例**（否则等于用门掩盖差异），另立
+812 `http_get_stream` 的第二处代理分支：conn_host/req_target 算出来了却**根本没用**（仍直连目标）
+    ⇒ 代理在该函数等于无效（本轮只改了两处 req_target 的形态，未接隧道 —— 它不用连接池，改动面另算）
+813 docs/spec.md 仍写着「明确不做 try/catch/throw」（第 470 行与 §设计决策表第 7 条），
+    而 M392 起 try/catch 已实现 ⇒ 文档与实现相反；改设计表属产品决策，留给用户定
+```
+
 ## M407 r3 修：新前缀撞红 4 门 —— 三门「按旧形看世界」，一门 golden 漏重定基（缺陷 801–803）
 
 > **一句话**：M407 把三轨运行时错误前缀统一为 `运行时错误 [<fn> 行<N>]: <CODE>: <msg>`，

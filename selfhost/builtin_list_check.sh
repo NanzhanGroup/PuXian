@@ -72,8 +72,10 @@ runtime_native_names() {
     grep -h 'px_set_global("' runtime/*.c 2>/dev/null \
         | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | grep -v '^__' | sort -u
 }
-# 内部 native 名（`__` 前缀）——单独列出 + 限数（棘轮：M203 引入第 1 个 __iter_len）
-INTERNAL_NATIVE_MAX=1
+# 内部 native 名（`__` 前缀）——单独列出 + 限数（棘轮）
+#   M203 引入第 1 个 __iter_len；M408 引入第 2 个 __guard_call（解释轨 try/catch 的受保护调用桥）
+#   ⇒ 上限 1 → 2。再度增加必须同轮改这个数（这就是棘轮的意义：内部面只许有明账的增长）。
+INTERNAL_NATIVE_MAX=2
 internal_native_names() {
     grep -h 'px_set_global("__' runtime/*.c 2>/dev/null \
         | sed -n 's/.*px_set_global("\(__[A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | sort -u

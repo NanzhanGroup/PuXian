@@ -56,7 +56,37 @@ def i_collect_decl_names(stmts, out):
         elif ty == "While":
             i_collect_decl_names(st[2], out)
         i += 1
+# M408（PX-002 / PX-003）：**受保护执行一条用户语句** —— 解释轨 try/catch 的桥。
+# 病：解释轨的 try/catch 只能接住 **Err 返回值**，而 native 的 px_error 走 longjmp
+#   ⇒ 修前「try 里调 regex_match("\\p{L}+", …) / zip_unpack(坏包, …)」longjmp 一路落到
+#   进程出口：**坏输入直接打死解释器进程**（VM/C 两轨能捕获 ⇒ 三轨分裂）。
+# 修法：经 __guard_call（runtime.c 的 bi_guard_call）在 C 侧装 try 帧跑本语句，
+#   异常时拿回文本 + 位置，转成 Err 交给 .px 层的 catch。
+# ⚠️ 三处必须做（漏一处就是"看着修好了、实则状态被污染"）：
+#   ① g_i_fn_stack 回滚到进入前的深度 —— longjmp 跳过了 i_fn_pop，栈顶留着出错帧
+#      （先取 fn0 再回滚：报文要的是**出错函数**）
+#   ② g_loop_depth 回滚 —— 跳过了 i_exec_for/while 的 `-= 1`，否则 catch 之后的
+#      break/continue 判「出现在循环外」
+#   ③ 位置用 g_i_cur_line（i_exec_stmt 每条语句更新）
+def i_exec_stmt_guarded(stmt, env):
+    let depth0 = len(g_i_fn_stack)
+    let loop0 = g_loop_depth
+    let g = __guard_call(i_exec_stmt, [stmt, env])
+    if g["ok"]:
+        # ⚠️ 直接返回内层 Result（**不要**再包一层 Ok）：i_exec_stmt 的正常返回本身就是
+        #   Ok(v)，包起来会变成 Ok(Ok(v)) ⇒ ① is_err() 永远为假（Err 被吞掉，catch 不执行）
+        #   ② __flow__ 检测失效（return/break 在 try 里失灵）。M408 首测当场踩到（smoke 用例）。
+        return g["val"]
+    let msg = g["err"]
+    let fn0 = i_cur_fn()
+    let line0 = g_i_cur_line
+    while len(g_i_fn_stack) > depth0:
+        g_i_fn_stack.pop()
+    g_loop_depth = loop0
+    return Err(i_rt_raw(msg, fn0, line0))
 def i_exec_stmt(stmt, env):
+    # M408：记录当前用户语句行号（native 错误经 longjmp 逃逸时，位置只能从这里拿）
+    g_i_cur_line = i_stmt_line(stmt)
     let ty = stmt[0]
     if ty == "VarDecl":
         var v = null
@@ -106,11 +136,14 @@ def i_exec_stmt(stmt, env):
         # M392（PX-025）：["TryCatch", body, name, handler, pos]
         #   解释轨的错误形态本来就是 Err 返回值 ⇒ 天然可捕获，零运行时改动。
         #   body 的 return/break/continue（__flow__）**不**被 try 截获：原样上抛。
+        # M408（PX-002/003）：**但 Err 返回值只覆盖 .px 层构造的错误** —— native 的
+        #   px_error 走 longjmp，修前直接打死进程。故 body 每条语句改走受保护执行
+        #   （i_exec_stmt_guarded）：native 错误转成 Err 后与本层语义一致。
         var ti = 0
         var caught = false
         var errv = null
         while ti < len(stmt[1]):
-            let tr = i_exec_stmt(stmt[1][ti], env)
+            let tr = i_exec_stmt_guarded(stmt[1][ti], env)
             if tr.is_err():
                 caught = true
                 errv = tr.err()
@@ -125,11 +158,16 @@ def i_exec_stmt(stmt, env):
             # M392：catch 变量的**三轨统一口径** = "R码: 消息"（C/VM 轨的 px_try_msg 就是这个形态，
             #   见 runtime.c 的 px_error 捕获分支）。解释轨的错误值是 dict（i_err），
             #   这里拼成同一文本 —— 否则同一份源码三轨打出三种 e。
+            # M408：库·环境族**不带 R 码**（docs/ERROR_CODES.md §1，如 "regex: …" / "zip …"）
+            #   ⇒ 空码时只取消息体，否则会打出前导 ": "。
             # ⚠️ 变量名不能叫 ev：i_exec_stmt 的 Match 分支已用 `let ev`（C 轨 cg_vars 是**函数级**
             #   作用域，块不新建）⇒ 同名再 `var ev` 会被判「对不可变变量赋值」E3002（M392 重烘实测）。
             var ecap = errv
             if type(ecap) == "dict" and ecap.has("__err__"):
-                ecap = ecap["__err__"] + ": " + ecap["msg"]
+                if ecap["__err__"] == "":
+                    ecap = ecap["msg"]
+                else:
+                    ecap = ecap["__err__"] + ": " + ecap["msg"]
             env_define(env, rust_unescape(stmt[2]), ecap)
         var hi = 0
         while hi < len(stmt[3]):

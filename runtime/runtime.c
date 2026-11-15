@@ -13626,6 +13626,62 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
     return acc;
 }
 
+// ==================== M408（PX-002 / PX-003）：受保护调用的桥 ====================
+// 病（清歌 11-09 清单第 2/3 条，实测）：解释轨（pxi）的 try/catch 是 **.px 层语义**
+//   （catch 的是 `Err` 返回值），而 runtime native 出错走 `px_error → longjmp`。解释轨
+//   此前**没有装任何 try 帧** ⇒ 用户在 try 里调 `regex_match("\\p{L}+", …)` /
+//   `zip_unpack(坏包, …)` 失败时，longjmp 一路落到进程出口：**坏输入直接打死解释器进程**
+//   （服务端拿 `px run` 跑脚本时，用户上传一个坏 zip 就能打掉进程）；而 VM / C 两轨
+//   有 px_try_push 帧、能正常捕获 ⇒ 三轨分裂。
+// 修法：把「受保护调用」暴露给 .px 一层原语 —— 内部装 try 帧（px_error 的捕获分支
+//   不打印、只存消息）、跑 px_call，异常时把消息包成 {"ok":false,"err":<文本>}，
+//   正常 {"ok":true,"val":<v>}。解释轨的 TryCatch 与顶层入口各用一次。
+// ⚠️ 四条口径（每条都对着一个坑，改前先读）：
+//   ① setjmp 必须**在本函数帧内**，且本函数在 px_call 期间**未返回** —— 同
+//      px_native_call_capture 的注释：抽成「setjmp 后立刻返回帧」的 helper 是 UB
+//      （gcc -O1/-O2 下返回分支会被优化错判）。
+//   ② px_error 的捕获分支**已先弹帧再 longjmp** ⇒ 只有**成功路径**调 px_try_pop；
+//      错误路径再弹一次会把外层帧一起弹掉（handler 里的错就落到了更外面）。
+//   ③ longjmp 不展开 C 帧 ⇒ 被跳过的 px_root_push 登记成野根；与 px_native_call_capture
+//      同范式：进函数记根水位、落点归还（px_root_iso_mark_deep / px_root_restore_iso）。
+//   ④ 与 M392 的 try 帧共用 t_try_top 链 ⇒ 天然嵌套：错误先落**最近一层**。
+// 为什么用内部名（`__` 前缀）：它服务于解释器自身，不是用户面 API（同 __iter_len 口径）。
+static LXValue bi_guard_call(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[1].type != PX_LIST)
+        px_error("R1002: __guard_call 需要 (fn, args_list)");
+    LXValue fn = args[0];
+    LXObject* lo = args[1].as.obj;
+    int n = lo->as.list.len;
+    LXValue sbuf[8];
+    LXValue* av = (n <= 8) ? sbuf : (LXValue*)xmalloc(sizeof(LXValue) * (size_t)n);
+    for (int i = 0; i < n; i++) av[i] = lo->as.list.items[i];   // 栈数组 ⇒ 保守 GC 可见（根）
+    PxTryFrame tf;
+    px_root_iso_mark_deep();
+    px_try_push(&tf);
+    if (setjmp(tf.jb) == 0) {
+        LXValue r = px_call(fn, n ? av : NULL, n);
+        px_try_pop();                       // 口径②：仅成功路径弹
+        if (av != sbuf) xfree(av);
+        LXValue d = px_dict();
+        px_root_push();
+        PX_KEEP(d);
+        px_dict_set(d, "ok", px_bool(1));
+        px_dict_set(d, "val", r);
+        px_root_pop();
+        return d;
+    }
+    px_root_restore_iso();                  // 口径③：归还被 longjmp 跳过的根登记
+    if (av != sbuf) xfree(av);
+    LXValue d2 = px_dict();
+    px_root_push();
+    PX_KEEP(d2);
+    px_dict_set(d2, "ok", px_bool(0));
+    px_dict_set(d2, "err", px_str(px_try_msg()));
+    px_root_pop();
+    return d2;
+}
+
 void px_register_builtins(void) {
     // M170（缺陷 189）：建表期冻结 GC —— 逐条 `px_set_global(name, px_native(...))` 是
     //   两次分配且没有根登记，阈值低时会在注册途中回收刚建的 native 对象
@@ -13642,6 +13698,8 @@ void px_register_builtins(void) {
     px_set_global("len", px_native("len", bi_len));
     // M203（缺陷 243-b）：迭代前的统一入口（`__` 前缀 = 内部名，不进公开名册/索引）
     px_set_global("__iter_len", px_native("__iter_len", bi_iter_len));
+    // M408：解释轨 try/catch 的受保护调用桥（内部名，不进公开名册/索引）
+    px_set_global("__guard_call", px_native("__guard_call", bi_guard_call));
     px_set_global("range", px_native("range", bi_range));
     px_set_global("type", px_native("type", bi_type));
     px_set_global("object_id", px_native("object_id", bi_object_id));
@@ -17650,8 +17708,12 @@ static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms,
 #define PX_CONN_STAGE_CONNECT 3   // connect(2)（含 poll 超时 / SO_ERROR）
 #define PX_CONN_STAGE_TLS     4   // TLS 握手（https_connect_t 内部）
 
+// M408（PX-017）：`pre_fd >= 0` = **已连好的 socket**（HTTP 代理 CONNECT 隧道建立后的那条），
+//   跳过 TCP 连接只做 TLS 握手；`-1` = 本函数自己连（原行为）。为什么不另写一份 TLS 初始化：
+//   会话票据 / 校名 / 超时口径全在这一段里，复制一份必然漂移（M408 起代理与非代理共用同一段）。
 static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms,
-                                     int* out_stage, int* out_errno, char* out_addr, int addr_cap) {
+                                     int* out_stage, int* out_errno, char* out_addr, int addr_cap,
+                                     int pre_fd) {
     HttpsSession* s = (HttpsSession*)xmalloc(sizeof(HttpsSession));
     memset(s, 0, sizeof(*s));
     mbedtls_net_init(&s->net);
@@ -17668,7 +17730,11 @@ static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms,
                                      (const unsigned char*)pers, strlen(pers))) != 0) goto fail;
     // M117（qg-issue 72 F2）：HTTPS 也走带超时的连接（mbedtls_net_connect 是无超时阻塞，
     //   对黑洞地址同样挂死）。timeout_ms<=0 → 保持原 mbedtls 路径（零回归）。
-    if (timeout_ms > 0) {
+    if (pre_fd >= 0) {
+        // M408（PX-017）：代理隧道 —— socket 已建好（CONNECT 已成功），只在其上做 TLS；
+        //   SNI / 证书校名仍用**目标** host（不是代理地址）。
+        s->net.fd = pre_fd;
+    } else if (timeout_ms > 0) {
         int cfd = px_tcp_connect_timeout(host, port, timeout_ms, out_stage, out_errno, out_addr, addr_cap);
         if (cfd < 0) goto fail;
         s->net.fd = cfd;   // mbedtls_net_context 就是 fd 包装；后续 send/recv/close 均由 mbedtls 走
@@ -17725,6 +17791,10 @@ fail:
         *out_stage = PX_CONN_STAGE_TLS;
         if (out_addr && addr_cap > 0 && !out_addr[0]) snprintf(out_addr, (size_t)addr_cap, "%s", host);
     }
+    // M408（PX-017）：`pre_fd` 的**所有权契约** —— 成功时随 HttpsSession（https_close）关闭；
+    //   失败时仍归调用方。故此处先把 net.fd 摘掉，否则 mbedtls_net_free 会关一次、调用方再关一次
+    //   （double close 会把别人的 fd 关掉，是那种最难查的串错）。
+    if (pre_fd >= 0) s->net.fd = -1;
     mbedtls_net_free(&s->net);
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
@@ -17732,6 +17802,64 @@ fail:
     mbedtls_entropy_free(&s->entropy);
     xfree(s);
     return NULL;
+}
+
+// ==================== M408（PX-017）：HTTP 代理 CONNECT 隧道 ====================
+// 病（晨曦 11-09 转交，实测）：`http_request` 的代理分支只做了「连代理 + 请求行用绝对 URL」
+//   —— 那是**明文**代理的语义。https 必须**先 CONNECT host:port 建隧道**、再在隧道上做 TLS。
+//   修前 https 走代理时把 TLS 握手包直接丢给 HTTP 代理 ⇒ 代理回 4xx 或直接断 ⇒ 失败以
+//   `Err(result)` 值返回，用户拿去索引就得到 `R1002: 此类型不支持索引: result`
+//   —— 与真因（没发 CONNECT）毫无关系的报文。
+// 返回：0 = 隧道就绪；-1 = 失败（errbuf 是可读报文，含**代理地址**与**状态码原文**）。
+//   ⚠️ 只发 CONNECT，不读正文：CONNECT 的成功响应只有状态行 + 头，没有 body。
+static int px_proxy_connect_tunnel(int fd, const char* proxy, const char* host, int port,
+                                   char* errbuf, int errbuf_sz) {
+    char req[512];
+    int rl = snprintf(req, sizeof(req),
+                      "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\nProxy-Connection: keep-alive\r\n\r\n",
+                      host, port, host, port);
+    if (rl <= 0 || rl >= (int)sizeof(req)) {
+        snprintf(errbuf, (size_t)errbuf_sz, "net: 代理 CONNECT 失败 %s → %s:%d: 目标地址过长",
+                 proxy, host, port);
+        return -1;
+    }
+    if (send(fd, req, (size_t)rl, MSG_NOSIGNAL) != rl) {
+        snprintf(errbuf, (size_t)errbuf_sz, "net: 代理 CONNECT 失败 %s → %s:%d: 发送请求失败（%s）",
+                 proxy, host, port, strerror(errno));
+        return -1;
+    }
+    char buf[1024];
+    int got = 0;
+    buf[0] = 0;
+    while (got < (int)sizeof(buf) - 1) {
+        int r = (int)recv(fd, buf + got, (size_t)(sizeof(buf) - 1 - got), 0);
+        if (r <= 0) {
+            if (r < 0 && errno == EINTR) continue;   // GC 暂停信号不算失败（同 M379b 口径）
+            snprintf(errbuf, (size_t)errbuf_sz, "net: 代理 CONNECT 失败 %s → %s:%d: 读取响应失败（%s）",
+                     proxy, host, port, r == 0 ? "对端关闭连接" : strerror(errno));
+            return -1;
+        }
+        got += r;
+        buf[got] = 0;
+        if (strstr(buf, "\r\n\r\n")) break;
+    }
+    int code = 0;
+    if (sscanf(buf, "HTTP/%*d.%*d %d", &code) != 1) {
+        snprintf(errbuf, (size_t)errbuf_sz, "net: 代理 CONNECT 失败 %s → %s:%d: 响应不是 HTTP（%.40s）",
+                 proxy, host, port, buf);
+        return -1;
+    }
+    if (code / 100 != 2) {
+        // 状态行原文带给用户 —— 403（策略拒绝）/ 407（要认证）/ 502（代理连不上目标）要能一眼分辨
+        char line[128];
+        snprintf(line, sizeof(line), "%s", buf);
+        char* nl = strpbrk(line, "\r\n");
+        if (nl) *nl = 0;
+        snprintf(errbuf, (size_t)errbuf_sz, "net: 代理 CONNECT 失败 %s → %s:%d: %s",
+                 proxy, host, port, line);
+        return -1;
+    }
+    return 0;
 }
 
 static void https_close(HttpsSession* s) {
@@ -18296,7 +18424,7 @@ static LXValue bi_tls_close(LXValue* args, int nargs, void* ctx) {
 
 // https_connect：默认上限包装（无 opts 的调用点用）
 static HttpsSession* https_connect(const char* host, int port) {
-    return https_connect_t(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS, NULL, NULL, NULL, 0);
+    return https_connect_t(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS, NULL, NULL, NULL, 0, -1);
 }
 
 void* px_https_connect_ex(const char* host, int port) {
@@ -19255,7 +19383,10 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     const char* path = "/";
     if (hparse_url(url, &is_https, host, sizeof(host), &port, &path) != 0)
         return px_net_err("net: 不支持的协议: %s", url);
-    // M37：代理——连接代理地址，请求行用绝对 URL
+    // M37：代理——连接代理地址。
+    // M408（PX-017）：**只有明文**用 Absolute-URI 请求行；https 走 CONNECT 隧道
+    //   （隧道建立后请求行仍是 origin-form，由目标源站解析 —— 修前这里对 https 也写绝对
+    //    URL，且根本没发 CONNECT ⇒ 把 TLS 握手包直接丢给了 HTTP 代理）。
     char conn_host[256];
     int conn_port = is_https ? 443 : 80;
     char req_target[1024];
@@ -19270,14 +19401,18 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             snprintf(conn_host, sizeof(conn_host), "%s", proxy);
             conn_port = 8080;
         }
-        snprintf(req_target, sizeof(req_target), "%s://%s:%d%s", is_https ? "https" : "http", host, port, path);
+        if (is_https) snprintf(req_target, sizeof(req_target), "%s", path);
+        else snprintf(req_target, sizeof(req_target), "http://%s:%d%s", host, port, path);
     } else {
         snprintf(conn_host, sizeof(conn_host), "%s", host);
         conn_port = port;
         snprintf(req_target, sizeof(req_target), "%s", path);
     }
     char key[300];
-    snprintf(key, sizeof(key), "%s:%d", host, port);
+    // M408（PX-017）：池键必须含**代理** —— 同一 host:port 经不同代理是两条不同的链路
+    //   （否则复用会拿到另一条代理上的连接/隧道；https 还会因隧道目标不同而校名失败）。
+    if (proxy[0]) snprintf(key, sizeof(key), "%s>%s:%d", proxy, host, port);
+    else snprintf(key, sizeof(key), "%s:%d", host, port);
     char req[16384];
     // M316（缺陷 550）：Host / User-Agent 也按「调用方自备则不重复发」处理。
     //   修前只有 Content-Type / Content-Length 走 px_extra_hdr_has，Host 与 UA 是无条件写
@@ -19371,9 +19506,33 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             int c_stage = 0, c_errno = 0;
             char c_addr[128];
             c_addr[0] = 0;
-            if (is_https) {
+            if (is_https && proxy[0]) {
+                // M408（PX-017）：https + 代理 —— 连代理 → CONNECT 建隧道 → 在隧道上做 TLS。
+                //   修前这里直接 https_connect_t(conn_host=代理) ⇒ 对代理做 TLS 握手（必失败）。
+                int pfd = px_tcp_connect_timeout(conn_host, conn_port, timeout_ms,
+                                                 &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
+                if (pfd < 0) {
+                    if (attempt < max_attempts - 1) continue;
+                    return px_net_conn_err(conn_host, conn_port, c_stage, c_errno, c_addr);
+                }
+                struct timeval ptv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+                setsockopt(pfd, SOL_SOCKET, SO_RCVTIMEO, &ptv, sizeof(ptv));
+                setsockopt(pfd, SOL_SOCKET, SO_SNDTIMEO, &ptv, sizeof(ptv));
+                char perr[512];
+                perr[0] = 0;
+                if (px_proxy_connect_tunnel(pfd, proxy, host, port, perr, (int)sizeof(perr)) != 0) {
+                    close(pfd);
+                    if (attempt < max_attempts - 1) continue;
+                    return px_net_err("%s", perr);
+                }
+                // 所有权契约见 https_connect_t 头注：失败时 fd 仍归调用方 ⇒ 这里关掉
+                slot.tls = https_connect_t(host, port, timeout_ms, &c_stage, &c_errno,
+                                           c_addr, (int)sizeof(c_addr), pfd);
+                if (!slot.tls) { close(pfd); slot.fd = -1; }
+                else slot.fd = slot.tls->net.fd;
+            } else if (is_https) {
                 slot.tls = https_connect_t(conn_host, conn_port, timeout_ms,
-                                           &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
+                                           &c_stage, &c_errno, c_addr, (int)sizeof(c_addr), -1);
                 slot.fd = slot.tls ? slot.tls->net.fd : -1;
             } else {
                 slot.fd = hconnect_t(conn_host, conn_port, timeout_ms,
@@ -20057,7 +20216,10 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     const char* path = "/";
     if (hparse_url(url, &is_https, host, sizeof(host), &port, &path) != 0)
         return px_net_err("net: 不支持的协议: %s", url);
-    // M37：代理——连接代理地址，请求行用绝对 URL
+    // M37：代理——连接代理地址。
+    // M408（PX-017）：**只有明文**用 Absolute-URI 请求行；https 走 CONNECT 隧道
+    //   （隧道建立后请求行仍是 origin-form，由目标源站解析 —— 修前这里对 https 也写绝对
+    //    URL，且根本没发 CONNECT ⇒ 把 TLS 握手包直接丢给了 HTTP 代理）。
     char conn_host[256];
     int conn_port = is_https ? 443 : 80;
     char req_target[1024];
@@ -20072,7 +20234,8 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
             snprintf(conn_host, sizeof(conn_host), "%s", proxy);
             conn_port = 8080;
         }
-        snprintf(req_target, sizeof(req_target), "%s://%s:%d%s", is_https ? "https" : "http", host, port, path);
+        if (is_https) snprintf(req_target, sizeof(req_target), "%s", path);
+        else snprintf(req_target, sizeof(req_target), "http://%s:%d%s", host, port, path);
     } else {
         snprintf(conn_host, sizeof(conn_host), "%s", host);
         conn_port = port;

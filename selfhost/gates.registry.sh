@@ -2196,3 +2196,35 @@ run m406_struct_field_default bash examples/m406_struct_field_default/verify.sh
 #        · N1 期望扰动 ⇒ B 必红（M407_NC=ref）· N2 合法程序三轨 stderr 皆空（判据不是恒红）
 #        · P 前提自证（v0.2.406 的 bootstrap/pxi 必须给旧格式 `运行时错误: 错误 [R`）
 run m407_rt_error_format bash examples/m407_rt_error_format/verify.sh
+
+# ── m408_builtin_err_trap（M408 · 内置失败可捕获 · PX-002/PX-003 清歌余留）──────────
+#   病史（清歌 11-09 清单第 2/3 条，从未入账）：解释轨 try/catch 是 **.px 层语义**
+#     （catch 的是 Err 返回值），而 runtime native 出错走 px_error → longjmp；解释轨此前
+#     **没装任何 try 帧** ⇒ 用户在 try 里调 regex_match("\p") / zip_unpack(坏包) 时，
+#     longjmp 一路落到进程出口：**坏输入直接打死解释器进程**（服务端拿 px run 跑脚本，
+#     用户上传一个坏 zip 就能打掉它）；VM / C 两轨有 px_try_push 帧、能捕获 ⇒ 三轨分裂。
+#   修法：runtime 新增内部原语 __guard_call（bi_guard_call：装 try 帧跑 px_call，
+#     异常转 {"ok":false,"err":…}），解释轨 TryCatch 的 body 逐条受保护执行、顶层入口再兜一道。
+#   判据：A 三轨逐字节（9 个内置失败用例）· B 门侧手写期望表 + **码制断言**
+#        （docs/ERROR_CODES.md §1：域前缀族不带 R 码 / 语言层必须带码）
+#        · C 未捕获归因三轨同形且**不含内部函数名**（i_call_builtin/i_builtin_ffi_call/rebake）
+#        · N1 期望扰动 ⇒ B 必红 · N2 合法程序三轨一致且 stderr 空（判据不是恒红）
+#        · P 无护栏直调必死在半路（修前形状）· D 同一函数经护栏活着拿回错误文本
+#   不在本门覆盖（另立缺陷 811）：read_file(不存在) 的三轨码/文不同（R2001+os error vs io:）
+run m408_builtin_err_trap bash examples/m408_builtin_err_trap/verify.sh
+
+# ── m408_proxy_connect（M408 · http_request 代理 CONNECT · PX-017）────────────────
+#   病史（晨曦 11-09 转交）：代理分支只做「连代理 + 绝对 URL」= 明文代理语义；https 必须
+#     先 CONNECT 建隧道再做 TLS。修前把 TLS 握手包直接丢给 HTTP 代理 ⇒ 必失败，且失败以
+#     Err 值返回、用户拿去索引得到 `R1002: 此类型不支持索引: result`（与真因无关的报文）。
+#   修法：px_proxy_connect_tunnel（发 CONNECT、读状态行、非 2xx 报「代理 CONNECT 失败 <代理>
+#     → <目标>: <状态行原文>」）+ https_connect_t 增加 pre_fd（在隧道上做 TLS，SNI 仍是目标）；
+#     池键含代理（同 host:port 经不同代理是两条链路）。
+#   判据（**全离线**：门内自建 Python 代理 + 本机 origin，不碰外网、不借节点 —— M405 C6）：
+#     X 代理日志必须出现 `CONNECT <host>:<port>` ⇒ 证明流量真走了代理（绕过代理时该行不存在）
+#     A 代理回 403 ⇒ 报文含代理地址与 403（修前是 TLS 握手失败 / R1002 索引错误）
+#     B 200 后立刻断 ⇒ CONNECT 目标是**目标站**而非代理自己
+#     C 明文 http 经代理打本机 origin ⇒ 200（绝对 URL 路径没被改坏）
+#     D 代理不可达 ⇒ 报文含代理地址（可读）· N1 期望扰动（修前形态）⇒ A 必红
+#     N2 不经代理直连本机 origin ⇒ 200（判据不是恒红）
+run m408_proxy_connect bash examples/m408_proxy_connect/verify.sh

@@ -90,13 +90,6 @@ def i_bridge_dispatch(fnvalue, args):
         print_err(i_err_rt(r.err()))
         return null
     return r.unwrap()
-# M407（缺陷 797）：语句源位置（parser 约定：语句末位是 pos [line, col]）；未知时退回 [0,0]
-def i_stmt_pos(st):
-    if len(st) > 0:
-        let p = st[len(st) - 1]
-        if type(p) == "list" and len(p) >= 2 and type(p[0]) == "int":
-            return [p[0], p[1]]
-    return [0, 0]
 # ---------- 程序入口（对齐 run_program） ----------
 def i_run_program(prog):
     let items = prog[1]
@@ -155,7 +148,7 @@ def i_run_program(prog):
 # ---------- 入口 ----------
 # 版本：与 tools/pxc（SELFHOST_VER/SELFHOST_MILESTONE）保持一致。
 # 发布包版本号由 tools/make_release.sh 按 tag 派生（见其"版本来源"段）。
-let PXI_VER = "0.2.407"
+let PXI_VER = "0.2.408"
 let PXI_MS = "M-B9a"
 def main():
     let a = args()
@@ -198,7 +191,16 @@ def main():
     #   收到的解释轨函数值（__ufn__ / __builtin__ 包装）会自动桥成真 PX_FUNC，
     #   回调进 i_bridge_dispatch 执行。未安装时桥被调用会明确报错（不静默）。
     interp_bridge_install(i_bridge_dispatch)
-    let r = i_run_program(prog)
+    # M408（PX-002/003）：顶层也装一道受保护调用 —— 未捕获的 native 错误（例如没有 try
+    #   的 regex_match 失败）修前是 longjmp 直落到进程出口，报的是**解释器内部函数名**
+    #   （[i_call_builtin 行432]），用户既看不出自己哪一行出事、也捕不住。现在落回这里：
+    #   位置取「最后执行的用户语句」、函数名取出错帧（g_i_fn_stack 未回滚 ⇒ 栈顶就是
+    #   出错函数），报文与编译两轨同形（[<fn> 行<N>]: <msg>）。
+    let gr = __guard_call(i_run_program, [prog])
+    if not gr["ok"]:
+        print_err(i_err_rt(i_rt_raw(gr["err"], i_cur_fn(), g_i_cur_line)))
+        return 1
+    let r = gr["val"]
     if r.is_err():
         let e = r.err()
         # M172（缺陷 186）：运行期诊断统一到 **stderr**（原先 print ⇒ 走 stdout，

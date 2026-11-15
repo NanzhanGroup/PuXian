@@ -14,6 +14,11 @@
 #   exit 弹（wrapper 形式，保证 inner 的每条 return 路径都被覆盖）。i_err 在**构造时刻**
 #   取栈顶写入 e["fn"]（错误对象随栈展开传播，事后查栈会拿到已弹掉的帧）。
 var g_i_fn_stack = []
+# M408（PX-002/PX-003）：用户语句的**当前行号**（i_exec_stmt 入口更新，只存 int —— 每条语句
+#   都写一次 ⇒ 不在这里分配 list）。为什么需要：native 的 px_error 走 longjmp，跳过了所有
+#   .px 层构造 Err 的时机 ⇒ 受保护调用（__guard_call）捕到错误时，位置只能从
+#   「最后执行到的那条语句」拿。列号不进契约（编译两轨无列信息，见 M407 定稿）。
+var g_i_cur_line = 0
 def i_fn_push(name):
     g_i_fn_stack.append(name)
 def i_fn_pop():
@@ -24,13 +29,35 @@ def i_cur_fn():
     if n == 0:
         return "<top>"
     return g_i_fn_stack[n - 1]
+# M407（缺陷 797）：语句源位置（parser 约定：语句末位是 pos [line, col]）；未知时退回 [0,0]
+#   （M408 从 interp.px 移到这里：i_exec_stmt 与 i_run_program 都要用，单一真相。）
+def i_stmt_pos(st):
+    if len(st) > 0:
+        let p = st[len(st) - 1]
+        if type(p) == "list" and len(p) >= 2 and type(p[0]) == "int":
+            return [p[0], p[1]]
+    return [0, 0]
+# M408：同上，但只取行号（语句热路径用 —— 不分配 list）
+def i_stmt_line(st):
+    if len(st) > 0:
+        let p = st[len(st) - 1]
+        if type(p) == "list" and len(p) >= 2 and type(p[0]) == "int":
+            return p[0]
+    return 0
 def i_err(code, msg, pos):
     return {"__err__": code, "msg": msg, "line": pos[0], "col": pos[1], "fn": i_cur_fn()}
+# M408：**无 R 码**的错误载体（库·环境族专用 —— docs/ERROR_CODES.md §1：域前缀族不带码，
+#   如 "regex: 不支持的转义 \\p" / "zip 缺少 EOCD"）。`__err__` 置空串 = 渲染时不插码。
+#   位置与函数名由**捕获点**给出（longjmp 已跳过了出错语句的 Err 构造时机）。
+def i_rt_raw(msg, fname, line):
+    return {"__err__": "", "msg": msg, "line": line, "col": 0, "fn": fname}
 # 运行时错误前缀行（解释轨唯一出口，格式与 runtime.px_error 逐字节同形）
 def i_err_rt(e):
     var fname = "<top>"
     if e.has("fn"):
         fname = e["fn"]
+    if e["__err__"] == "":
+        return "运行时错误 [" + fname + " 行" + str(e["line"]) + "]: " + e["msg"]
     return "运行时错误 [" + fname + " 行" + str(e["line"]) + "]: " + e["__err__"] + ": " + e["msg"]
 def i_prop(v):
     return {"__prop__": v}
