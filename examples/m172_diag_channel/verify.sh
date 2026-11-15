@@ -21,9 +21,9 @@
 #       NC-A 通道：解释轨 print_err 改回 print   → [1] 的 stdout 判据变红
 #       NC-B 措辞：i_err.px 的 `未定义变量: '` 去掉引号 → [1] 的消息体判据变红
 #
-# 已知边界（如实登记，不假装已统一）：**位置前缀**保留各轨最优信息 ——
-#   解释轨 `错误 [R1001] 行:列:`（AST 行列），编译轨 `[函数 行N]:`（px_srcline 追踪，
-#   runtime 无列号）⇒ 判据只断言「同通道 + 同错误码 + 同消息体 + rc」，**不按整行对拍**。
+# 已知边界（M407 更新）：**位置前缀**已由 M407（缺陷 793-797）统一为
+#   `运行时错误 [<fn> 行N]: <CODE>: <msg>`（三轨逐字节，见 examples/m407_rt_error_format）；
+#   本门仍只断言「同通道 + 同错误码 + 同消息体 + rc」——前缀由 m407 门专管，职责不重叠。
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
 set -u
@@ -86,15 +86,18 @@ done
 
 if [ $NEG -eq 1 ]; then
 echo "=== [5] 负控（各自独立判红）"
-echo "--- NC-A 通道：解释轨 176 行 print_err 改回 print → [1] stdout 判据应变红"
+echo "--- NC-A 通道：解释轨顶层 run 的 print_err 改回 print → [1] stdout 判据应变红"
 snapshot
 python3 - "$INTERP_SRC" <<'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-old = 'print_err("运行时错误: " + i_err_display(e))'
+# M407（缺陷 802）：诊断出口改为单一渲染器 i_err_rt（旧锚点
+#   `print_err("运行时错误: " + i_err_display(e))` 已不存在 ⇒ 打桩 count=0，NC-A 静默失效）。
+#   按**内容**锚定，不依赖行号或旧前缀。
+old = 'print_err(i_err_rt(e))'
 assert s.count(old) == 1, s.count(old)
-open(p, 'w', encoding='utf-8').write(s.replace(old, 'print("运行时错误: " + i_err_display(e))'))
+open(p, 'w', encoding='utf-8').write(s.replace(old, 'print(i_err_rt(e))'))
 PYEOF
 if build_dev_pxi; then
     "$DEV_PXI" "$D/undef.px" > "$W/negA.out" 2> "$W/negA.err"; rca=$?

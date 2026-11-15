@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -12,12 +13,12 @@ static LXValue fn_try_div(LXValue* args, int nargs, void* ctx) {
     LXValue _v2 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
-    px_srcline(3);
+    px_srcpos("try_div", 3);
     if (px_is_truthy(px_eq(_v2, px_int(0LL)))) {
-        px_srcline(4);
+        px_srcpos("try_div", 4);
         return px_call(px_get_global("Err"), (LXValue[]){px_str("div0")}, 1);
     }
-    px_srcline(5);
+    px_srcpos("try_div", 5);
     return px_call(px_get_global("Ok"), (LXValue[]){px_idiv(_v1, _v2)}, 1);
 px_err_3:
     if (px_err_3_proped) return px_err_3_val;
@@ -33,9 +34,9 @@ static LXValue fn_calc(LXValue* args, int nargs, void* ctx) {
     LXValue _v5 = px_uninit();
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
-    px_srcline(8);
-    _v5 = ({ LXValue _t7 = px_call(px_get_global("try_div"), (LXValue[]){_v4, px_int(2LL)}, 2); if (px_is_result(_t7)) { if (!px_result_ok(_t7)) { px_err_6_val = _t7; px_err_6_proped = 1; goto px_err_6; } _t7 = px_result_unwrap(_t7); } else if (px_is_null(_t7)) { px_err_6_val = px_null(); px_err_6_proped = 1; goto px_err_6; } _t7; });
-    px_srcline(9);
+    px_srcpos("calc", 8);
+    _v5 = ({ LXValue _t7 = px_call(px_get_global("try_div"), (LXValue[]){_v4, px_int(2LL)}, 2); if (px_is_result(_t7)) { if (!px_result_ok(_t7)) { px_err_6_val = _t7; px_err_6_proped = 1; px_srcpos("calc", 8); goto px_err_6; } _t7 = px_result_unwrap(_t7); } else if (px_is_null(_t7)) { px_err_6_val = px_null(); px_err_6_proped = 1; px_srcpos("calc", 8); goto px_err_6; } _t7; });
+    px_srcpos("calc", 9);
     return px_call(px_get_global("Ok"), (LXValue[]){px_add(_v5, px_int(1LL))}, 1);
 px_err_6:
     if (px_err_6_proped) return px_err_6_val;
@@ -51,21 +52,21 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue _v10 = px_uninit();
     LXValue px_err_11_val = px_null();
     int px_err_11_proped = 0;
-    px_srcline(12);
+    px_srcpos("main", 12);
     _v8 = px_call(px_get_global("calc"), (LXValue[]){px_int(10LL)}, 1);
-    px_srcline(13);
+    px_srcpos("main", 13);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v8, "is_ok", (LXValue[]){}, 0)}, 1));
-    px_srcline(14);
+    px_srcpos("main", 14);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v8, "unwrap", (LXValue[]){}, 0)}, 1));
-    px_srcline(15);
+    px_srcpos("main", 15);
     _v9 = px_call(px_get_global("try_div"), (LXValue[]){px_int(1LL), px_int(0LL)}, 2);
-    px_srcline(16);
+    px_srcpos("main", 16);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v9, "is_err", (LXValue[]){}, 0)}, 1));
-    px_srcline(17);
+    px_srcpos("main", 17);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v9, "err", (LXValue[]){}, 0)}, 1));
-    px_srcline(18);
+    px_srcpos("main", 18);
     _v10 = px_call(px_get_global("Ok"), (LXValue[]){px_int(7LL)}, 1);
-    px_srcline(19);
+    px_srcpos("main", 19);
     (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _t12 = _v10; if (px_is_result(_t12)) { if (!px_result_ok(_t12)) px_error("R1004: 强制解包 !: 值为 Err(%s)", px_to_string(px_result_unwrap(_t12))); _t12 = px_result_unwrap(_t12); } if (px_is_null(_t12)) px_error("R1004: 强制解包 !: 值为 null"); _t12; })}, 1));
 px_err_11:
     if (px_err_11_proped) return px_err_11_val;

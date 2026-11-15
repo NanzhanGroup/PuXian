@@ -123,10 +123,10 @@ chk "[1] A13/A14=守卫模式仍可用（越界由调用方判）" "has ok.inter
 chk "[1] A15/A16/A17=切片 clamp 语义未变" "has ok.interp.out '^A15= 0011ff\$' && has ok.interp.out '^A16= 0011\$' && has ok.interp.out '^A17= 3\$'"
 
 echo "=== [3] 拒绝侧 6 例 × 三轨：rc≠0 + 词条逐字相同 + 三轨都带用户 行（号）"
-# 词条 = **错误消息正文**（不含 R10xx 码的包裹形态 —— 解释轨写 `错误 [R1003] 4:16: msg`、
-#   编译轨写 `运行时错误 [<top> 行4]: R1003: msg`，这是**缺陷 186**（诊断通道/措辞三轨不同，
-#   已单独登记、非本轮范围）。故此处分三条判据：① 三轨同一 R10xx 码 ② 正文逐字相同
-#   ③ 三轨都要**指到用户行**（解释轨 `错误 [Rxxx] <行>:`；编译轨 `行<行>`）。
+# 词条 = **错误消息正文**。M407（缺陷 793/801）起三轨前缀已统一为
+#   `运行时错误 [<fn> 行<N>]: <CODE>: <msg>`（docs/ERROR_CODES.md §统一前缀）⇒ 解释轨旧前缀
+#   `错误 [R1003] 4:16: msg` 不再出现，原行号断言按旧形写 ⇒ 6 例假红（M407 全量门实测）。
+#   故此处分三条判据：① 三轨同一 R10xx 码 ② 正文逐字相同 ③ 三轨都要**指到用户行**（同形 `行<N>]:`）。
 declare -A PAT=(
   [n1_get_oob]='索引越界: 3 \(len=3\)'
   [n2_set_oob]='索引越界: 3 \(len=3\)'
@@ -151,10 +151,10 @@ for c in n1_get_oob n2_set_oob n3_neg_oob n4_type n5_badidx n6_floatidx; do
         grep -qE "${PAT[$c]}" "$W/n_$c.$t.out" || ok=0
     done
     grep -qE '^before$' "$W/n_$c.interp.out" || ok=0
-    # 三轨都必须能从输出里读到**用户侧行号**
-    grep -qE "错误 \[${CODE[$c]}\] ${LNO[$c]}:" "$W/n_$c.interp.out" || ok=0
-    grep -qE "行${LNO[$c]}\]" "$W/n_$c.vm.out" || ok=0
-    grep -qE "行${LNO[$c]}\]" "$W/n_$c.c.out" || ok=0
+    # 三轨都必须能从输出里读到**用户侧行号**（M407 起三轨同形 `行<N>]: <CODE>: `）
+    grep -qE "运行时错误 \[[^]]+ 行${LNO[$c]}\]: ${CODE[$c]}: " "$W/n_$c.interp.out" || ok=0
+    grep -qE "行${LNO[$c]}\]: ${CODE[$c]}: " "$W/n_$c.vm.out" || ok=0
+    grep -qE "行${LNO[$c]}\]: ${CODE[$c]}: " "$W/n_$c.c.out" || ok=0
     e1="$(grep -oE "${PAT[$c]}" "$W/n_$c.interp.out" | head -1)"
     e2="$(grep -oE "${PAT[$c]}" "$W/n_$c.vm.out" | head -1)"
     e3="$(grep -oE "${PAT[$c]}" "$W/n_$c.c.out" | head -1)"
@@ -261,7 +261,7 @@ PY
         ( cd "$W/bn_n1_get_oob" && timeout 120 "$ROOT/selfhost/build/interp" n1_get_oob.px ) > "$W/ncc.out" 2>&1
         local rc=$?
         rm -rf "$ROOT/selfhost/build"
-        [ "$rc" != 0 ] && ! grep -qE '错误 \[R100[23]\] 4:' "$W/ncc.out"
+        [ "$rc" != 0 ] && ! grep -qE '运行时错误 \[[^]]+ 行4\]: R100[23]: ' "$W/ncc.out"
     }
     chk_D_red() {   # n5/n6：**词条分叉**（M216 起「float 静默截断」那一半已被吸收）
         run3 "$HERE/neg/n5_badidx.px" ncD

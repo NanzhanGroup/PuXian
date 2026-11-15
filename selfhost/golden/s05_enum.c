@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -12,9 +13,9 @@ static LXValue fn_desc(LXValue* args, int nargs, void* ctx) {
     LXValue _v2 = px_uninit();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
-    px_srcline(12);
+    px_srcpos("desc", 12);
     _v2 = ({ LXValue _t4 = px_field(_v1, "kind"); LXValue _t5 = px_null(); if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Int") == 0)) { _t5 = ({ LXValue _blk = px_null(); _blk = px_add(px_str("int:"), px_call(px_get_global("str"), (LXValue[]){px_field(_v1, "value")}, 1)); _blk; }); } else if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Str") == 0)) { _t5 = ({ LXValue _blk = px_null(); _blk = px_str("str"); _blk; }); } else if ((_t4.type == PX_ENUM && strcmp(_t4.as.obj->as.enum_inst.variant, "Call") == 0)) { _t5 = ({ LXValue _blk = px_null(); _blk = px_str("call"); _blk; }); } else { px_match_fail(_t4); } _t5; });
-    px_srcline(19);
+    px_srcpos("desc", 19);
     return _v2;
 px_err_3:
     if (px_err_3_proped) return px_err_3_val;
@@ -29,13 +30,13 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue _v7 = px_uninit();
     LXValue px_err_8_val = px_null();
     int px_err_8_proped = 0;
-    px_srcline(22);
+    px_srcpos("main", 22);
     _v6 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Int", 1), px_int(42LL)}, 2);
-    px_srcline(23);
+    px_srcpos("main", 23);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v6}, 1)}, 1));
-    px_srcline(24);
+    px_srcpos("main", 24);
     _v7 = px_struct("Node", (char*[]){"kind", "value"}, (LXValue[]){px_enum_checked("Kind", "Call", 1), px_int(0LL)}, 2);
-    px_srcline(25);
+    px_srcpos("main", 25);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("desc"), (LXValue[]){_v7}, 1)}, 1));
 px_err_8:
     if (px_err_8_proped) return px_err_8_val;

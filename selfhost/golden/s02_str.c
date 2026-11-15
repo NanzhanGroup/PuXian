@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -11,27 +12,27 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue _v2 = px_uninit();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
-    px_srcline(3);
+    px_srcpos("main", 3);
     _v1 = px_str("hello,world");
-    px_srcline(4);
+    px_srcpos("main", 4);
     _v2 = px_call(px_get_global("split"), (LXValue[]){_v1, px_str(",")}, 2);
-    px_srcline(5);
+    px_srcpos("main", 5);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v2}, 1)}, 1));
-    px_srcline(6);
+    px_srcpos("main", 6);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v2, px_int(0LL))}, 1));
-    px_srcline(7);
+    px_srcpos("main", 7);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v2, px_int(1LL))}, 1));
-    px_srcline(8);
+    px_srcpos("main", 8);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("join"), (LXValue[]){px_str("-"), _v2}, 2)}, 1));
-    px_srcline(9);
+    px_srcpos("main", 9);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("to_upper"), (LXValue[]){_v1}, 1)}, 1));
-    px_srcline(10);
+    px_srcpos("main", 10);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("trim"), (LXValue[]){px_str("  px  ")}, 1)}, 1));
-    px_srcline(11);
+    px_srcpos("main", 11);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("replace"), (LXValue[]){_v1, px_str("world"), px_str("px")}, 3)}, 1));
-    px_srcline(12);
+    px_srcpos("main", 12);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("contains"), (LXValue[]){_v1, px_str("wor")}, 2)}, 1));
-    px_srcline(13);
+    px_srcpos("main", 13);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1}, 1)}, 1));
 px_err_3:
     if (px_err_3_proped) return px_err_3_val;

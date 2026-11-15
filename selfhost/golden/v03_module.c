@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -15,27 +16,27 @@ static LXValue fn_module_search_paths(LXValue* args, int nargs, void* ctx) {
     LXValue _v5 = px_uninit();
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
-    px_srcline(20);
+    px_srcpos("module_search_paths", 20);
     _v2 = px_list_n((LXValue[]){_v1}, 1);
-    px_srcline(21);
+    px_srcpos("module_search_paths", 21);
     _v3 = px_add(_v1, px_str("/.px_modules"));
-    px_srcline(22);
+    px_srcpos("module_search_paths", 22);
     if (px_is_truthy(px_call(px_get_global("exists"), (LXValue[]){_v3}, 1))) {
-        px_srcline(23);
+        px_srcpos("module_search_paths", 23);
         (void)(px_method(_v2, "append", (LXValue[]){_v3}, 1));
-        px_srcline(24);
+        px_srcpos("module_search_paths", 24);
         _v4 = px_call(px_get_global("list_dir"), (LXValue[]){_v3}, 1);
-        px_srcline(25);
+        px_srcpos("module_search_paths", 25);
         LXValue _t7 = _v4;
         int _il1 = px_iter_prepare(_t7);
         for (int _t8 = 0; _t8 < _il1; _t8++) {
             px_iter_ck(_t7, _il1);
             _v5 = px_iter_at(_t7, px_int(_t8));
-            px_srcline(26);
+            px_srcpos("module_search_paths", 26);
             (void)(px_method(_v2, "append", (LXValue[]){_v5}, 1));
         }
     }
-    px_srcline(27);
+    px_srcpos("module_search_paths", 27);
     return _v2;
 px_err_6:
     if (px_err_6_proped) return px_err_6_val;
@@ -56,51 +57,51 @@ static LXValue fn_module_candidates(LXValue* args, int nargs, void* ctx) {
     LXValue _v15 = px_uninit();
     LXValue px_err_16_val = px_null();
     int px_err_16_proped = 0;
-    px_srcline(32);
+    px_srcpos("module_candidates", 32);
     _v12 = px_list_n((LXValue[]){}, 0);
-    px_srcline(33);
+    px_srcpos("module_candidates", 33);
     if (px_is_truthy(({ LXValue _t18 = px_eq(px_call(px_get_global("len"), (LXValue[]){_v9}, 1), px_int(1LL)); px_is_truthy(_t18) ? ({ LXValue _t17 = px_call(px_get_global("contains"), (LXValue[]){px_index(_v9, px_int(0LL)), px_str("/")}, 2); px_is_truthy(_t17) ? _t17 : px_call(px_get_global("contains"), (LXValue[]){px_index(_v9, px_int(0LL)), px_str(".px")}, 2); }) : _t18; }))) {
-        px_srcline(35);
+        px_srcpos("module_candidates", 35);
         (void)(px_method(_v12, "append", (LXValue[]){px_add(px_add(_v10, px_str("/")), px_index(_v9, px_int(0LL)))}, 1));
-        px_srcline(36);
+        px_srcpos("module_candidates", 36);
         return _v12;
     }
-    px_srcline(37);
+    px_srcpos("module_candidates", 37);
     if (px_is_truthy(px_eq(px_index(_v9, px_int(0LL)), px_str("std")))) {
-        px_srcline(39);
+        px_srcpos("module_candidates", 39);
         _v13 = _v11;
-        px_srcline(40);
+        px_srcpos("module_candidates", 40);
         LXValue _t19 = px_call(px_get_global("range"), (LXValue[]){px_int(1LL), px_call(px_get_global("len"), (LXValue[]){_v9}, 1)}, 2);
         int _il2 = px_iter_prepare(_t19);
         for (int _t20 = 0; _t20 < _il2; _t20++) {
             px_iter_ck(_t19, _il2);
             _v14 = px_iter_at(_t19, px_int(_t20));
-            px_srcline(41);
+            px_srcpos("module_candidates", 41);
              _v13 = px_add(px_add(_v13, px_str("/")), px_index(_v9, _v14));
         }
-        px_srcline(42);
+        px_srcpos("module_candidates", 42);
         (void)(px_method(_v12, "append", (LXValue[]){px_add(_v13, px_str(".px"))}, 1));
-        px_srcline(43);
+        px_srcpos("module_candidates", 43);
         (void)(px_method(_v12, "append", (LXValue[]){px_add(_v13, px_str("/mod.px"))}, 1));
-        px_srcline(44);
+        px_srcpos("module_candidates", 44);
         return _v12;
     }
-    px_srcline(47);
+    px_srcpos("module_candidates", 47);
     _v13 = _v10;
-    px_srcline(48);
+    px_srcpos("module_candidates", 48);
     LXValue _t21 = _v9;
     int _il3 = px_iter_prepare(_t21);
     for (int _t22 = 0; _t22 < _il3; _t22++) {
         px_iter_ck(_t21, _il3);
         _v15 = px_iter_at(_t21, px_int(_t22));
-        px_srcline(49);
+        px_srcpos("module_candidates", 49);
          _v13 = px_add(px_add(_v13, px_str("/")), _v15);
     }
-    px_srcline(50);
+    px_srcpos("module_candidates", 50);
     (void)(px_method(_v12, "append", (LXValue[]){px_add(_v13, px_str(".px"))}, 1));
-    px_srcline(51);
+    px_srcpos("module_candidates", 51);
     (void)(px_method(_v12, "append", (LXValue[]){px_add(_v13, px_str("/mod.px"))}, 1));
-    px_srcline(52);
+    px_srcpos("module_candidates", 52);
     return _v12;
 px_err_16:
     if (px_err_16_proped) return px_err_16_val;
@@ -119,21 +120,21 @@ static LXValue fn_module_find(LXValue* args, int nargs, void* ctx) {
     LXValue _v27 = px_uninit();
     LXValue px_err_28_val = px_null();
     int px_err_28_proped = 0;
-    px_srcline(55);
+    px_srcpos("module_find", 55);
     _v26 = px_call(px_get_global("module_candidates"), (LXValue[]){_v23, _v24, _v25}, 3);
-    px_srcline(56);
+    px_srcpos("module_find", 56);
     LXValue _t29 = _v26;
     int _il4 = px_iter_prepare(_t29);
     for (int _t30 = 0; _t30 < _il4; _t30++) {
         px_iter_ck(_t29, _il4);
         _v27 = px_iter_at(_t29, px_int(_t30));
-        px_srcline(57);
+        px_srcpos("module_find", 57);
         if (px_is_truthy(px_call(px_get_global("exists"), (LXValue[]){_v27}, 1))) {
-            px_srcline(58);
+            px_srcpos("module_find", 58);
             return _v27;
         }
     }
-    px_srcline(59);
+    px_srcpos("module_find", 59);
     return px_null();
 px_err_28:
     if (px_err_28_proped) return px_err_28_val;
@@ -149,7 +150,7 @@ static LXValue fn_loader_new(LXValue* args, int nargs, void* ctx) {
     LXValue _v32 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_33_val = px_null();
     int px_err_33_proped = 0;
-    px_srcline(63);
+    px_srcpos("loader_new", 63);
     return ({ LXValue _d = px_dict(); { LXValue _k = px_str("base_dir"); LXValue _v = _v31; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("stdlib"); LXValue _v = _v32; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("search_paths"); LXValue _v = px_call(px_get_global("module_search_paths"), (LXValue[]){_v31}, 1); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("loaded"); LXValue _v = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); LXValue _v = px_int(0LL); px_dict_set_checked(_d, _k, _v); } _d; }); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("stack"); LXValue _v = px_list_n((LXValue[]){}, 0); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_33:
     if (px_err_33_proped) return px_err_33_val;
@@ -167,14 +168,14 @@ static LXValue fn_loader_mark_loaded(LXValue* args, int nargs, void* ctx) {
     LXValue _v37 = px_uninit();
     LXValue px_err_38_val = px_null();
     int px_err_38_proped = 0;
-    px_srcline(72);
+    px_srcpos("loader_mark_loaded", 72);
     _v37 = px_index(_v34, px_str("loaded"));
-    px_srcline(73);
+    px_srcpos("loader_mark_loaded", 73);
     if (px_is_truthy(px_method(_v37, "has", (LXValue[]){px_str("_")}, 1))) {
-        px_srcline(74);
+        px_srcpos("loader_mark_loaded", 74);
         (void)(px_method(_v37, "remove", (LXValue[]){px_str("_")}, 1));
     }
-    px_srcline(75);
+    px_srcpos("loader_mark_loaded", 75);
     px_index_set(_v37, _v35, _v36);
 px_err_38:
     if (px_err_38_proped) return px_err_38_val;
@@ -191,14 +192,14 @@ static LXValue fn_loader_is_loaded(LXValue* args, int nargs, void* ctx) {
     LXValue _v41 = px_uninit();
     LXValue px_err_42_val = px_null();
     int px_err_42_proped = 0;
-    px_srcline(78);
+    px_srcpos("loader_is_loaded", 78);
     _v41 = px_index(_v39, px_str("loaded"));
-    px_srcline(79);
+    px_srcpos("loader_is_loaded", 79);
     if (px_is_truthy(px_method(_v41, "has", (LXValue[]){px_str("_")}, 1))) {
-        px_srcline(80);
+        px_srcpos("loader_is_loaded", 80);
         return px_bool(false);
     }
-    px_srcline(81);
+    px_srcpos("loader_is_loaded", 81);
     return px_method(_v41, "has", (LXValue[]){_v40}, 1);
 px_err_42:
     if (px_err_42_proped) return px_err_42_val;
@@ -219,61 +220,61 @@ static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
     LXValue _v49 = px_uninit();
     LXValue px_err_50_val = px_null();
     int px_err_50_proped = 0;
-    px_srcline(87);
+    px_srcpos("loader_load", 87);
     if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v44}, 1), px_int(0LL)))) {
-        px_srcline(88);
+        px_srcpos("loader_load", 88);
         return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_str("空模块"); px_dict_set_checked(_d, _k, _v); } _d; });
     }
-    px_srcline(89);
+    px_srcpos("loader_load", 89);
     _v46 = px_call(px_get_global("join"), (LXValue[]){px_str("."), _v44}, 2);
-    px_srcline(91);
+    px_srcpos("loader_load", 91);
     if (px_is_truthy(px_call(px_get_global("loader_is_loaded"), (LXValue[]){_v43, _v46}, 2))) {
-        px_srcline(92);
+        px_srcpos("loader_load", 92);
         _v47 = px_index(_v43, px_str("loaded"));
-        px_srcline(93);
+        px_srcpos("loader_load", 93);
         return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("path"); LXValue _v = px_index(_v47, _v46); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("cached"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } _d; });
     }
-    px_srcline(95);
+    px_srcpos("loader_load", 95);
     if (px_is_truthy(px_call(px_get_global("contains"), (LXValue[]){px_index(_v43, px_str("stack")), _v46}, 2))) {
-        px_srcline(96);
+        px_srcpos("loader_load", 96);
         return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_add(px_str("循环导入: "), _v46); px_dict_set_checked(_d, _k, _v); } _d; });
     }
-    px_srcline(98);
+    px_srcpos("loader_load", 98);
     _v48 = px_null();
-    px_srcline(99);
+    px_srcpos("loader_load", 99);
     if (px_is_truthy(px_eq(px_index(_v44, px_int(0LL)), px_str("std")))) {
-        px_srcline(100);
+        px_srcpos("loader_load", 100);
          _v48 = px_call(px_get_global("module_find"), (LXValue[]){_v44, _v45, px_index(_v43, px_str("stdlib"))}, 3);
     }
     else {
-        px_srcline(103);
+        px_srcpos("loader_load", 103);
         LXValue _t51 = px_index(_v43, px_str("search_paths"));
         int _il5 = px_iter_prepare(_t51);
         for (int _t52 = 0; _t52 < _il5; _t52++) {
             px_iter_ck(_t51, _il5);
             _v49 = px_iter_at(_t51, px_int(_t52));
-            px_srcline(104);
+            px_srcpos("loader_load", 104);
              _v48 = px_call(px_get_global("module_find"), (LXValue[]){_v44, _v49, px_index(_v43, px_str("stdlib"))}, 3);
-            px_srcline(105);
+            px_srcpos("loader_load", 105);
             if (px_is_truthy(px_ne(_v48, px_null()))) {
-                px_srcline(106);
+                px_srcpos("loader_load", 106);
                 break;
             }
         }
     }
-    px_srcline(107);
+    px_srcpos("loader_load", 107);
     if (px_is_truthy(px_eq(_v48, px_null()))) {
-        px_srcline(108);
+        px_srcpos("loader_load", 108);
         if (px_is_truthy(px_ne(px_index(_v44, px_int(0LL)), px_str("std")))) {
-            px_srcline(109);
+            px_srcpos("loader_load", 109);
             return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_add(px_add(px_str("[module] 警告: 找不到模块 '"), _v46), px_str("'（已跳过）")); px_dict_set_checked(_d, _k, _v); } _d; });
         }
-        px_srcline(111);
+        px_srcpos("loader_load", 111);
         return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
-    px_srcline(112);
+    px_srcpos("loader_load", 112);
     (void)(px_call(px_get_global("loader_mark_loaded"), (LXValue[]){_v43, _v46, _v48}, 3));
-    px_srcline(113);
+    px_srcpos("loader_load", 113);
     return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("path"); LXValue _v = _v48; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("cached"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_50:
     if (px_err_50_proped) return px_err_50_val;
@@ -289,17 +290,17 @@ static LXValue fn_check(LXValue* args, int nargs, void* ctx) {
     LXValue _v54 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_55_val = px_null();
     int px_err_55_proped = 0;
-    px_srcline(17);
+    px_srcpos("check", 17);
     if (px_is_truthy(_v54)) {
-        px_srcline(18);
+        px_srcpos("check", 18);
         px_set_global("g_pass", px_add(px_get_global("g_pass"), px_int(1LL)));
-        px_srcline(19);
+        px_srcpos("check", 19);
         (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("[PASS] "), _v53)}, 1));
     }
     else {
-        px_srcline(21);
+        px_srcpos("check", 21);
         px_set_global("g_fail", px_add(px_get_global("g_fail"), px_int(1LL)));
-        px_srcline(22);
+        px_srcpos("check", 22);
         (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("[FAIL] "), _v53)}, 1));
     }
 px_err_55:
@@ -318,129 +319,129 @@ int main(int argc, char** argv) {
     px_set_global("loader_is_loaded", px_func("loader_is_loaded", fn_loader_is_loaded, NULL));
     px_set_global("loader_load", px_func("loader_load", fn_loader_load, NULL));
     px_set_global("check", px_func("check", fn_check, NULL));
-    px_srcline(13);
+    px_srcpos("<top>", 13);
     px_set_global("g_pass", px_int(0LL));
-    px_srcline(14);
+    px_srcpos("<top>", 14);
     px_set_global("g_fail", px_int(0LL));
-    px_srcline(24);
+    px_srcpos("<top>", 24);
     px_set_global("BASE", px_str("/tmp/px_m5_modtest"));
-    px_srcline(25);
+    px_srcpos("<top>", 25);
     px_set_global("STDLIB", px_add(px_get_global("BASE"), px_str("/stdlib")));
-    px_srcline(28);
+    px_srcpos("<top>", 28);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("== module_candidates 候选路径 ==")}, 1));
-    px_srcline(30);
+    px_srcpos("<top>", 30);
     px_set_global("c1", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("sub/file.px")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(31);
+    px_srcpos("<top>", 31);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("相对路径候选"), px_eq(px_get_global("c1"), px_list_n((LXValue[]){px_add(px_get_global("BASE"), px_str("/sub/file.px"))}, 1))}, 2));
-    px_srcline(33);
+    px_srcpos("<top>", 33);
     px_set_global("c1b", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("dir/x.px")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(34);
+    px_srcpos("<top>", 34);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("相对路径含.px"), px_eq(px_get_global("c1b"), px_list_n((LXValue[]){px_add(px_get_global("BASE"), px_str("/dir/x.px"))}, 1))}, 2));
-    px_srcline(36);
+    px_srcpos("<top>", 36);
     px_set_global("c2", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("std"), px_str("a"), px_str("b")}, 3), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(37);
+    px_srcpos("<top>", 37);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("std 候选"), px_eq(px_get_global("c2"), px_list_n((LXValue[]){px_add(px_get_global("STDLIB"), px_str("/a/b.px")), px_add(px_get_global("STDLIB"), px_str("/a/b/mod.px"))}, 2))}, 2));
-    px_srcline(39);
+    px_srcpos("<top>", 39);
     px_set_global("c2b", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("std"), px_str("collections")}, 2), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(40);
+    px_srcpos("<top>", 40);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("std 单层候选"), px_eq(px_get_global("c2b"), px_list_n((LXValue[]){px_add(px_get_global("STDLIB"), px_str("/collections.px")), px_add(px_get_global("STDLIB"), px_str("/collections/mod.px"))}, 2))}, 2));
-    px_srcline(42);
+    px_srcpos("<top>", 42);
     px_set_global("c3", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("pkg"), px_str("tools")}, 2), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(43);
+    px_srcpos("<top>", 43);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("用户点分候选"), px_eq(px_get_global("c3"), px_list_n((LXValue[]){px_add(px_get_global("BASE"), px_str("/pkg/tools.px")), px_add(px_get_global("BASE"), px_str("/pkg/tools/mod.px"))}, 2))}, 2));
-    px_srcline(45);
+    px_srcpos("<top>", 45);
     px_set_global("c4", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("mylib")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(46);
+    px_srcpos("<top>", 46);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("用户单段候选"), px_eq(px_get_global("c4"), px_list_n((LXValue[]){px_add(px_get_global("BASE"), px_str("/mylib.px")), px_add(px_get_global("BASE"), px_str("/mylib/mod.px"))}, 2))}, 2));
-    px_srcline(48);
+    px_srcpos("<top>", 48);
     px_set_global("c5", px_call(px_get_global("module_candidates"), (LXValue[]){px_list_n((LXValue[]){px_str("lib")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(49);
+    px_srcpos("<top>", 49);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("用户 mod.px 候选"), px_eq(px_get_global("c5"), px_list_n((LXValue[]){px_add(px_get_global("BASE"), px_str("/lib.px")), px_add(px_get_global("BASE"), px_str("/lib/mod.px"))}, 2))}, 2));
-    px_srcline(52);
+    px_srcpos("<top>", 52);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("== module_find 存在性查找 ==")}, 1));
-    px_srcline(53);
+    px_srcpos("<top>", 53);
     px_set_global("f1", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("mylib")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(54);
+    px_srcpos("<top>", 54);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find 单段文件"), px_eq(px_get_global("f1"), px_add(px_get_global("BASE"), px_str("/mylib.px")))}, 2));
-    px_srcline(55);
+    px_srcpos("<top>", 55);
     px_set_global("f2", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("pkg"), px_str("tools")}, 2), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(56);
+    px_srcpos("<top>", 56);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find 点分文件"), px_eq(px_get_global("f2"), px_add(px_get_global("BASE"), px_str("/pkg/tools.px")))}, 2));
-    px_srcline(57);
+    px_srcpos("<top>", 57);
     px_set_global("f3", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("lib")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(58);
+    px_srcpos("<top>", 58);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find mod.px 目录"), px_eq(px_get_global("f3"), px_add(px_get_global("BASE"), px_str("/lib/mod.px")))}, 2));
-    px_srcline(59);
+    px_srcpos("<top>", 59);
     px_set_global("f4", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("std"), px_str("collections")}, 2), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(60);
+    px_srcpos("<top>", 60);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find std 模块"), px_eq(px_get_global("f4"), px_add(px_get_global("STDLIB"), px_str("/collections.px")))}, 2));
-    px_srcline(61);
+    px_srcpos("<top>", 61);
     px_set_global("f5", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("nope")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(62);
+    px_srcpos("<top>", 62);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find 不存在 null"), px_eq(px_get_global("f5"), px_null())}, 2));
-    px_srcline(63);
+    px_srcpos("<top>", 63);
     px_set_global("f6", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("missing/file.px")}, 1), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(64);
+    px_srcpos("<top>", 64);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find 相对路径不存在"), px_eq(px_get_global("f6"), px_null())}, 2));
-    px_srcline(65);
+    px_srcpos("<top>", 65);
     px_set_global("f7", px_call(px_get_global("module_find"), (LXValue[]){px_list_n((LXValue[]){px_str("std"), px_str("nope")}, 2), px_get_global("BASE"), px_get_global("STDLIB")}, 3));
-    px_srcline(66);
+    px_srcpos("<top>", 66);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("find std 不存在"), px_eq(px_get_global("f7"), px_null())}, 2));
-    px_srcline(69);
+    px_srcpos("<top>", 69);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("== loader 缓存与循环检测 ==")}, 1));
-    px_srcline(70);
+    px_srcpos("<top>", 70);
     px_set_global("ld", px_call(px_get_global("loader_new"), (LXValue[]){px_get_global("BASE"), px_get_global("STDLIB")}, 2));
-    px_srcline(71);
+    px_srcpos("<top>", 71);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("loader loaded 初始未加载"), px_not(px_call(px_get_global("loader_is_loaded"), (LXValue[]){px_get_global("ld"), px_str("mylib")}, 2))}, 2));
-    px_srcline(72);
+    px_srcpos("<top>", 72);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("loader search_paths 含 base"), px_eq(px_index(px_index(px_get_global("ld"), px_str("search_paths")), px_int(0LL)), px_get_global("BASE"))}, 2));
-    px_srcline(75);
+    px_srcpos("<top>", 75);
     px_set_global("r1", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld"), px_list_n((LXValue[]){px_str("mylib")}, 1), px_get_global("BASE")}, 3));
-    px_srcline(76);
+    px_srcpos("<top>", 76);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("首次加载 ok"), px_index(px_get_global("r1"), px_str("ok"))}, 2));
-    px_srcline(77);
+    px_srcpos("<top>", 77);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("首次加载非缓存"), px_not(px_index(px_get_global("r1"), px_str("cached")))}, 2));
-    px_srcline(78);
+    px_srcpos("<top>", 78);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("首次加载路径"), px_eq(px_index(px_get_global("r1"), px_str("path")), px_add(px_get_global("BASE"), px_str("/mylib.px")))}, 2));
-    px_srcline(81);
+    px_srcpos("<top>", 81);
     px_set_global("r2", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld"), px_list_n((LXValue[]){px_str("mylib")}, 1), px_get_global("BASE")}, 3));
-    px_srcline(82);
+    px_srcpos("<top>", 82);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("二次加载 cached"), ({ LXValue _t77 = px_index(px_get_global("r2"), px_str("ok")); px_is_truthy(_t77) ? px_index(px_get_global("r2"), px_str("cached")) : _t77; })}, 2));
-    px_srcline(85);
+    px_srcpos("<top>", 85);
     px_set_global("r3", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld"), px_list_n((LXValue[]){px_str("ghost")}, 1), px_get_global("BASE")}, 3));
-    px_srcline(86);
+    px_srcpos("<top>", 86);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("缺失用户模块 err"), px_not(px_index(px_get_global("r3"), px_str("ok")))}, 2));
-    px_srcline(87);
+    px_srcpos("<top>", 87);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("缺失警告消息"), px_call(px_get_global("contains"), (LXValue[]){px_index(px_get_global("r3"), px_str("err")), px_str("找不到模块 'ghost'")}, 2)}, 2));
-    px_srcline(90);
+    px_srcpos("<top>", 90);
     px_set_global("r4", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld"), px_list_n((LXValue[]){px_str("std"), px_str("nope")}, 2), px_get_global("BASE")}, 3));
-    px_srcline(91);
+    px_srcpos("<top>", 91);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("std 缺失静默"), ({ LXValue _t80 = px_not(px_index(px_get_global("r4"), px_str("ok"))); px_is_truthy(_t80) ? px_eq(px_index(px_get_global("r4"), px_str("err")), px_str("")) : _t80; })}, 2));
-    px_srcline(94);
+    px_srcpos("<top>", 94);
     px_set_global("ld2", px_call(px_get_global("loader_new"), (LXValue[]){px_get_global("BASE"), px_get_global("STDLIB")}, 2));
-    px_srcline(95);
+    px_srcpos("<top>", 95);
     (void)(px_method(px_index(px_get_global("ld2"), px_str("stack")), "append", (LXValue[]){px_str("a.b")}, 1));
-    px_srcline(96);
+    px_srcpos("<top>", 96);
     px_set_global("r5", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld2"), px_list_n((LXValue[]){px_str("a"), px_str("b")}, 2), px_get_global("BASE")}, 3));
-    px_srcline(97);
+    px_srcpos("<top>", 97);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("循环导入检测"), ({ LXValue _t83 = px_not(px_index(px_get_global("r5"), px_str("ok"))); px_is_truthy(_t83) ? px_call(px_get_global("contains"), (LXValue[]){px_index(px_get_global("r5"), px_str("err")), px_str("循环导入: a.b")}, 2) : _t83; })}, 2));
-    px_srcline(99);
+    px_srcpos("<top>", 99);
     px_index_set(px_get_global("ld2"), px_str("stack"), px_list_n((LXValue[]){}, 0));
-    px_srcline(100);
+    px_srcpos("<top>", 100);
     px_set_global("r6", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld2"), px_list_n((LXValue[]){px_str("mylib")}, 1), px_get_global("BASE")}, 3));
-    px_srcline(101);
+    px_srcpos("<top>", 101);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("弹栈后可加载"), px_index(px_get_global("r6"), px_str("ok"))}, 2));
-    px_srcline(104);
+    px_srcpos("<top>", 104);
     px_set_global("r7", px_call(px_get_global("loader_load"), (LXValue[]){px_get_global("ld2"), px_list_n((LXValue[]){}, 0), px_get_global("BASE")}, 3));
-    px_srcline(105);
+    px_srcpos("<top>", 105);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("空模块 err"), px_not(px_index(px_get_global("r7"), px_str("ok")))}, 2));
-    px_srcline(108);
+    px_srcpos("<top>", 108);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("")}, 1));
-    px_srcline(109);
+    px_srcpos("<top>", 109);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s1 = px_add(px_add(px_str("结果: "), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_pass")}, 1)), px_str(" PASS / ")); LXValue _s2 = px_call(px_get_global("str"), (LXValue[]){px_get_global("g_fail")}, 1); px_add(_s1, _s2); }), px_str(" FAIL"))}, 1));
-    px_srcline(110);
+    px_srcpos("<top>", 110);
     if (px_is_truthy(px_gt(px_get_global("g_fail"), px_int(0LL)))) {
-        px_srcline(111);
+        px_srcpos("<top>", 111);
         (void)(px_call(px_get_global("exit"), (LXValue[]){px_int(1LL)}, 1));
     }
     return px_exit_code_final(0);   // M120（qg-issue 76 E1）

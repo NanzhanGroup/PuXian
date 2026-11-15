@@ -1,3 +1,45 @@
+## M407 r3 修：新前缀撞红 4 门 —— 三门「按旧形看世界」，一门 golden 漏重定基（缺陷 801–803）
+
+> **一句话**：M407 把三轨运行时错误前缀统一为 `运行时错误 [<fn> 行<N>]: <CODE>: <msg>`，
+> r3 全量门 281 门里红 4 门，**产品实现零缺陷**：三门是判据/负控按旧前缀写（假红 + 负控没牙），
+> 一门是 codegen golden 19 件漏了重定基（M407 只重定基了 `emitc_freeze` / `golden/compiler.c`）。
+
+### 证据（head=27d5efc · /data/gatevm/m407-chain-20261115-082318.log · green=277 red=4）
+
+```
+m189_bytes_bounds  FAIL [3] 6/6   解释轨断言 `错误 [R1003] 4:`（旧形，M407 后不存在）
+m190_arity         FAIL [2] 25/25 li 从旧形取行号 ⇒ 取值为空 ⇒ 三轨「不同行」
+m172_diag_channel  FAIL NC-A      锚点 print_err("运行时错误: " + i_err_display(e)) 已不存在 ⇒ AssertionError: 0
+diff_codegen       FAIL 19/19     golden/*.c 仍 px_srcline(3)，实现已发 px_srcpos("<fn>", 3)
+```
+
+### 修法（判据口径不放松，只把「怎么读输出」改成新前缀）
+
+```
+801 examples/m189_bytes_bounds/verify.sh  [3] 三轨行号断言 + chk_C_red（负控 C 的判红条件）改 `行<N>]: <CODE>: `
+    examples/m190_arity/verify.sh         [2] li/lv/lc 行号提取改新前缀（CODE 限定，防消息体里的「行N」串入）
+802 examples/m172_diag_channel/verify.sh  NC-A 锚点改 `print_err(i_err_rt(e))`（按内容锚定，不依赖行号/旧前缀）
+803 selfhost/golden/*.c 19 件重定基（bootstrap/pxc 现生成）：差异 2458 行全部是
+    px_srcline(N) → px_srcpos("<fn>", N)，其中 s06 多 1 处 `?` 传播重发位置 px_srcpos("calc", 8) —— 缺陷 797 的产物
+```
+
+### 验证（各门自跑，负控全部有牙）
+
+```
+diff_codegen       19 例全一致 ✅
+m189_bytes_bounds  23/0（负控 A–D 各自判红）✅
+m190_arity         48/0（负控 A–E 各自判红）✅
+m172_diag_channel  41/0（NC-A 打桩后 stdout 判据变红；NC-B 仍有牙）✅
+```
+
+### 边界（如实登记）
+
+- 全量门**本轮未重跑**：改动面只有门脚本 + golden，`runtime/` 与 `selfhost/*.px` **零改动**
+  ⇒ 由链 r3 复验 281 门（机械段交 systemd，不在此处硬跑）。
+- `golden/compiler.c` 与 `golden/compiler.bc.dump`（自举基准）**未动**：M407 已重定基且不含 `px_srcline`。
+- 回滚：`git revert` 本提交即可（无数据迁移、无服务重启）。
+
+
 ## M407：运行时错误报文三轨统一 —— 缺陷 186 族「不判」的账开始还（缺陷 793–799）
 
 > **一句话**：缺陷 186「诊断三轨不同」登记了十几轮，21 扇门里写着「属 186 族 ⇒ **不判**」。

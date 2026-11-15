@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -11,7 +12,7 @@ static LXValue fn_lookup(LXValue* args, int nargs, void* ctx) {
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue px_err_2_val = px_null();
     int px_err_2_proped = 0;
-    px_srcline(8);
+    px_srcpos("lookup", 8);
     return px_index(_v1, px_str("k"));
 px_err_2:
     if (px_err_2_proped) return px_err_2_val;
@@ -28,7 +29,7 @@ static LXValue fn_add3(LXValue* args, int nargs, void* ctx) {
     LXValue _v5 = (nargs > 2) ? args[2] : px_null();
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
-    px_srcline(11);
+    px_srcpos("add3", 11);
     return px_add(px_add(_v3, _v4), _v5);
 px_err_6:
     if (px_err_6_proped) return px_err_6_val;
@@ -47,37 +48,37 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue _v12 = px_uninit();
     LXValue px_err_13_val = px_null();
     int px_err_13_proped = 0;
-    px_srcline(15);
+    px_srcpos("main", 15);
     _v7 = px_list_n((LXValue[]){px_int(1LL), px_int(2LL), px_int(3LL)}, 3);
-    px_srcline(20);
+    px_srcpos("main", 20);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v7}, 1)}, 1));
-    px_srcline(22);
+    px_srcpos("main", 22);
     _v8 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("x"); LXValue _v = px_int(10LL); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("y"); LXValue _v = px_int(20LL); px_dict_set_checked(_d, _k, _v); } _d; });
-    px_srcline(26);
+    px_srcpos("main", 26);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_index(_v8, px_str("x")), px_index(_v8, px_str("y")))}, 1));
-    px_srcline(28);
+    px_srcpos("main", 28);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("add3"), (LXValue[]){px_int(1LL), px_int(2LL), px_int(3LL)}, 3)}, 1));
-    px_srcline(33);
+    px_srcpos("main", 33);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("max"), (LXValue[]){px_int(8LL), px_int(2LL)}, 2)}, 1));
-    px_srcline(38);
+    px_srcpos("main", 38);
     _v9 = px_tuple((LXValue[]){px_int(1LL), px_int(2LL)}, 2);
-    px_srcline(42);
+    px_srcpos("main", 42);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_index(_v9, px_int(0LL)), px_index(_v9, px_int(1LL)))}, 1));
-    px_srcline(44);
+    px_srcpos("main", 44);
     _v10 = px_list_n((LXValue[]){px_int(10LL), px_int(20LL), px_int(30LL), px_int(40LL)}, 4);
-    px_srcline(45);
+    px_srcpos("main", 45);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v10, px_int(2LL))}, 1));
-    px_srcline(48);
+    px_srcpos("main", 48);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_slice(_v10, px_int(1LL), px_int(3LL), px_null())}, 1)}, 1));
-    px_srcline(52);
+    px_srcpos("main", 52);
     _v11 = ({ LXValue _t14 = px_list(0); LXValue _t15 = px_list_n((LXValue[]){px_int(1LL), px_int(2LL), px_int(3LL), px_int(4LL), px_int(5LL), px_int(6LL)}, 6); for (int _il1 = px_iter_prepare(_t15), _t17=0; _t17<_il1; _t17++) { px_iter_ck(_t15, _il1); LXValue _t16 = px_iter_at(_t15, px_int(_t17)); LXValue _cv18 = _t16; if (px_is_truthy(px_eq(px_mod(px_chk_uninit(_cv18, "x"), px_int(2LL)), px_int(0LL)))) { px_list_push(_t14, px_chk_uninit(_cv18, "x")); }  }  _t14; });
-    px_srcline(56);
+    px_srcpos("main", 56);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v11}, 1));
-    px_srcline(58);
+    px_srcpos("main", 58);
     _v12 = px_call(px_get_global("lookup"), (LXValue[]){({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); LXValue _v = px_list_n((LXValue[]){px_int(5LL), px_int(6LL)}, 2); px_dict_set_checked(_d, _k, _v); } _d; })}, 1);
-    px_srcline(64);
+    px_srcpos("main", 64);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v12}, 1));
-    px_srcline(66);
+    px_srcpos("main", 66);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_call(px_get_global("lookup"), (LXValue[]){({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); LXValue _v = px_list_n((LXValue[]){px_int(7LL), px_int(8LL), px_int(9LL)}, 3); px_dict_set_checked(_d, _k, _v); } _d; })}, 1)}, 1)}, 1));
 px_err_13:
     if (px_err_13_proped) return px_err_13_val;

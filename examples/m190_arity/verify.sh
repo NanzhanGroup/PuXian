@@ -169,9 +169,12 @@ for c in "${!PAT[@]}"; do
         grep -qE "${PAT[$c]}" "$W/n_$c.$t.out" || ok=0
     done
     grep -qE '^before$' "$W/n_$c.interp.out" || ok=0          # 证明是运行期（编译期就不会打印）
-    li="$(grep -oE "错误 \[${CODE[$c]}\] [0-9]+:" "$W/n_$c.interp.out" | head -1 | sed -E 's/.*\] ([0-9]+):/\1/')"
-    lv="$(grep -oE "行[0-9]+\]" "$W/n_$c.vm.out" | head -1 | sed -E 's/行([0-9]+)\]/\1/')"
-    lc="$(grep -oE "行[0-9]+\]" "$W/n_$c.c.out" | head -1 | sed -E 's/行([0-9]+)\]/\1/')"
+    # M407（缺陷 793/801）：三轨前缀统一为「运行时错误 [<fn> 行N]: <CODE>: <msg>」⇒
+    #   解释轨旧形 `错误 [R1005] 4:` 已不存在（原取值为空 ⇒ 25 例假红）。三轨同一口径取行号，
+    #   并用 CODE 限定，避免消息体里的「行N」串进来。
+    li="$(grep -oE "运行时错误 \[[^]]+ 行[0-9]+\]: ${CODE[$c]}: " "$W/n_$c.interp.out" | head -1 | sed -E 's/.*行([0-9]+)\]:.*/\1/')"
+    lv="$(grep -oE "行[0-9]+\]: ${CODE[$c]}: " "$W/n_$c.vm.out" | head -1 | sed -E 's/行([0-9]+)\]:.*/\1/')"
+    lc="$(grep -oE "行[0-9]+\]: ${CODE[$c]}: " "$W/n_$c.c.out" | head -1 | sed -E 's/行([0-9]+)\]:.*/\1/')"
     [ -n "$li" ] && [ "$li" = "$lv" ] && [ "$li" = "$lc" ] || ok=0
     e1="$(grep -oE "${PAT[$c]}" "$W/n_$c.interp.out" | head -1)"
     e2="$(grep -oE "${PAT[$c]}" "$W/n_$c.vm.out" | head -1)"
