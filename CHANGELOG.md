@@ -75,6 +75,51 @@ m408_proxy_connect     10/10 绿（CONNECT 日志命中 · 403 报文可读 · �
     而 M392 起 try/catch 已实现 ⇒ 文档与实现相反；改设计表属产品决策，留给用户定
 ```
 
+## M408 r2 修：`__guard_call` 在 VM 轨吞错 —— 补帧栈回收与根登记（缺陷 809–810）
+
+> **一句话**：M408 的受保护调用桥用**C 侧 setjmp** 捕获 `px_error`，但 longjmp **跳过 `vm_run_loop`**
+> —— 被中断的调用在帧栈里留下的帧不会弹；VM 轨（`px build` 默认轨）外层循环拿着错乱的 `nframes`
+> 继续跑。全量门 9 门红里**只有 1 门是产品行为**（m178），其余 8 门是同一根因的静态面。
+
+### 证据（head=c5a5cb7 · /data/gatevm/m408-chain-20261115-153638.log · green=274 red=9）
+
+```
+m178_iterable_args   FAIL C/err_contains_nonstr/interp stdout 恰为 before（实测多打出「null」）
+  复现（VM 轨的 interp）   print("A") / let r = contains("abc",1) / print("B", r) / print("C")
+                          ⇒ A · B null · C · rc=1（末尾才补一条错），错误**被吞、语句继续**
+  对照（C 轨 bootstrap/pxi 同一源码）⇒ A · 立即中止 · 运行时错误 [<top> 行2]（M408 目标行为）
+  机理（gdb）              px_error 落点上方只有 bi_guard_call 的 try 帧 ⇒ longjmp 跨过 vm_run_loop
+                          ⇒ frames[] 未弹；bi_guard_call 返回后外层循环从错位帧继续执行
+m206/m209/m212/m213/m214 静态新候选 ('runtime/runtime.c','bi_guard_call','px_dict(','r')
+m208_vm_c_local_roots    S13 两段式 px_root_push(); PX_KEEP(d); ×2
+m259_root_trunc          [5] 桥级调用点 3（期望 2）—— 新增 bi_guard_call
+gate_inputs              examples/m408_proxy_connect/verify.sh:94 未声明输入 www.example.com
+```
+
+### 修法
+
+```
+809 VM 轨吞错      vm.c/vm.h 新增 px_vm_frame_depth / px_vm_unwind_to（只回收被 longjmp 跳过的帧；
+                  ntry 防御性回退到该帧 try_base —— 能落到 C 帧 ⇒ 上方不可能还有未弹的 .px try 帧）
+                  bi_guard_call：进函数记帧水位，错误路径「先抄 px_try_msg（弹帧会清它）→ 回收帧
+                  → 归还根水位」；runtime.c 以**弱符号**引用（C 轨产物不链 vm.o ⇒ 空指针跳过）
+810 根登记        结果 dict 的两处两段式改原子 px_root_push_keep（S13）；px_call 的返回值 r 在
+                  px_dict() 分配点前先挂根（修前是「未登记活值撞分配点」的新候选）
+判据侧扩面        m259 [5] 桥级调用点 2 → 3（bi_guard_call 前提同 px_native_call_capture：
+                  native 内建 yield_ok=0、错误路径也归还根水位）⇒ 数量仍钉死
+                  gate_inputs 登记 www.example.com（门内自备 deny 代理 403，不出网/不解析）
+```
+
+### 验证（本机实测）
+
+```
+四组合（pxi / px build 的 interp / vm 产物 / c 产物）：未捕获失败 ⇒ 立即中止 + 行号归因；
+  try/catch 捕获 ⇒ caught: R1002: … / ret= 7 / after（四组合逐字节一致）
+重烘 14/14 与源码一致（PXSRC-61db0940b2e03058）
+靶向门 13 门全绿：gate_inputs · m178 · m206 · m208 · m209 · m212 · m213 · m214 · m259
+  · m392_try_catch · m407_rt_error_format · m408_builtin_err_trap · m408_proxy_connect
+```
+
 ## M407 r3 修：新前缀撞红 4 门 —— 三门「按旧形看世界」，一门 golden 漏重定基（缺陷 801–803）
 
 > **一句话**：M407 把三轨运行时错误前缀统一为 `运行时错误 [<fn> 行<N>]: <CODE>: <msg>`，
