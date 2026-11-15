@@ -1,3 +1,56 @@
+## M408 r4：quiet 名单加门却没同步归档 ⇒ quiet_archive 门判红（缺陷 816–817）
+
+> **一句话**：全量链按 head=14ffd46 重跑 **282/283 绿**，唯一红门 `quiet_archive` 报
+> 「归档漂移：档位变化 1 门 ['m256_eintr']」—— 不是产品回归，是**我 r3 把 m256 加进宿主
+> quiet 名单后没重算归档**（`quiet_lanes.txt` / `quiet_exclusive.txt`），被测门当场抓住了。
+
+### 证据（head=14ffd46 · `/data/gatevm/m408-chain-20261115-232329.log` · green=282 red=1）
+
+```
+quiet_archive  FAIL  QUIET-ARCHIVE-FAIL（1 项）
+  A1 归档器自证   7/7 ✅（含 2 条负控）
+  A2 现场一致性   ❌ 归档漂移：档位变化 1 门 ['m256_eintr']
+  A3 选源自证     7/7 ✅（含 4 条负控）
+  其余 282 门全绿：m408_builtin_err_trap ✅337s · m189_bytes_bounds ✅ · m256_eintr ✅116s（quiet 独占档）
+```
+
+### 根因
+
+```
+M408 r4 前（22:5x）把 m256_eintr 追加进宿主 /data/gatevm/quiet_needed.txt（16 → 17 门），
+理由与证据都写了；但**没跑 packaging/chain/quiet_archive.py --write** ⇒
+  · quiet_lanes.txt 仍是 16 门口径（m256 无车道归属 ⇒ chain 保守留独占，行为正确）
+  · quiet_exclusive.txt 无 m256 条目 ⇒ 归档器按「116s < 180s」把它算进并行档
+  ⇒ 声明(17) 与 重算(16+m256 par) 不一致 ⇒ A2 判红。
+  与 M402 漏重定基、M406 漏 AST golden、M408 r1 漏 golden/*.c 同族：**改了输入没算全下游产物**。
+```
+
+### 修法（数据侧，产品代码与判据一字未改）
+
+```
+817 m256 进独占白名单  quiet_exclusive.txt 增行，理由是「判据前提」不是「慢」：
+                      信号注入窗口稳定 + 两档 stdout 逐字节一致（r3 满载 2 项红：[5] 缺陷 267 家族
+                      告警行污染比对、[6B] 结构性注入可判 12 次命中 0；空闲 6/6 绿 23/0；
+                      r4 quiet 独占 116s 绿）；「2 核 JOBS=2 车道」适配性**未实测** ⇒ 保守留独占。
+                      注明：本条不声称 267 家族已修。
+    重新归档          quiet_archive.py --times /data/gatevm/shard-20261115-232332/quiet.times.tsv --write
+                      ⇒ 并行 6 门 / 独占 11 门 · 独占合计 1858s · quiet 尾 ≈ 35.8min
+816 通知去重降级     登记（**未修**，属运维件不在本仓）：dy-notify 对已 ESCALATED 的同一 key 再判红
+                      只写日志、不重挂不叫醒（r3 21:41 判红，22:48 由用户问出）⇒「修完重跑又红」
+                      在通知面等于没发生。与缺陷 800（少给参数被吞）同族。修法候选：key 带轮次 或
+                      按退避重叫。证据 /var/log/dy-ops/ + data/handoff/dy-ops-m408-impl.md 轮次 5。
+```
+
+### 验证（本机实测，全部现跑）
+
+```
+python3 packaging/chain/quiet_archive.py --check          ⇒ QUIET-ARCHIVE-OK（rc=0）
+bash selfhost/check_quiet_archive.sh                      ⇒ QUIET-ARCHIVE-OK（A1 7/7 · A2 一致 · A3 7/7）
+宿主 quiet_lanes.txt                                      ⇒ 并行 6 / 独占 11（m256_eintr solo）
+仓库工作树                                                ⇒ 干净（本修只动宿主数据 + 本段 CHANGELOG）
+```
+
+
 ## M408 r3 修：m189 负控 C 的靶心被 M408 自己的内置错误桥吸收（缺陷 814–815）
 
 > **一句话**：全量链按 head=774e607 重跑 **282/283 绿**，唯一红门 `m189_bytes_bounds` 报的是
