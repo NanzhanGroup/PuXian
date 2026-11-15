@@ -1723,7 +1723,8 @@ static long long g_a_by_type[PX_TYPE_MAX];
 static long long g_a_bytes;
 static long long g_a_total;
 static void px_alloc_stats_dump(void);
-// M170（缺陷 187）：根登记栈峰值打印（PX_GC_DEBUG=1 退出时；实现见 px_root_keep 之后）
+// M409（缺陷 267）：退出时汇报「提前挣脱暂停」计数（有异常才响；PX_GC_M409STAT=1 强制）
+static void px_gc_m409_stat_dump(void);// M170（缺陷 187）：根登记栈峰值打印（PX_GC_DEBUG=1 退出时；实现见 px_root_keep 之后）
 static void px_root_peak_dump(void);
 // M170（缺陷 187/188）：根登记栈深度记录/还原 + 峰值查询
 int px_root_depth(int* marks_out);
@@ -1776,6 +1777,20 @@ static int g_gc_runs = 0;
 static int g_gc_freed = 0;
 static int g_gc_skips = 0;
 static long long g_gc_marked = 0;   // 调试：最近一轮 GC 标记数
+// ==================== M409（缺陷 267）：提前挣脱暂停 ⇒ 本轮根面不完整 ====================
+// 判据：**一轮 GC 的根面快照，只在这一轮内「所有被暂停线程都真停到最后」时才完整**。
+//   实测病灶（/data/gatevm/m409-repro2-20261116-060556 · round6.16）：
+//   handler 的自旋上限到点（300 × 20ms ≈ 6s）就 break 恢复用户态 —— 此刻若 executor 仍在
+//   mark/sweep，该线程此后新分配 / 新入根的对象**必然漏标**，而 sweep 的
+//   `for (i=0; i<g_obj_count; i++)` 会看到这些新条目并回收 ⇒ 观测形态正是
+//   「对象仍在执行者 TLS 登记根栈 idx=0，却已被 sweep 回收」（[M257-CTR] + PX_GC_DIAG）。
+// 处置（宁可漏回收、绝不漏根）：本轮有任何线程挣脱过 ⇒ executor **放弃本轮 sweep**
+//   （只清 gc_mark，一个对象都不 free）；sweep 期间新出现的条目也一律保留。
+static volatile int g_gc_early_resume_epoch = 0;  // 挣脱发生时的轮次号（= 该轮不得 sweep）
+static volatile int g_gc_early_resumes = 0;       // 累计挣脱次数（诊断）
+static int g_gc_early_resume_skips = 0;           // 因挣脱而放弃 sweep 的轮数
+static int g_gc_force_early_resume = 0;           // PX_GC_FORCE_EARLY_RESUME=1（门/负控专用）
+static int g_gc_early_abort = 1;                  // PX_GC_EARLY_ABORT=0 ⇒ 关掉放弃逻辑（A/B 对拍）
 static __thread LXObject* g_tmp_root = NULL;  // 暂存根：保护刚创建对象（构造函数内触发 GC）
 
 // ---------- M124（qg-issue 80）：STW 屏障「阻塞等待」原语 ----------
@@ -1986,6 +2001,17 @@ static void gc_init_env(void) {
     //   （硬不变量：登记了就必被标记 ⇒ 若仍被回收，说明该根面未被 GC 看见）。
     const char* gt = getenv("PX_GC_TRACE");
     if (gt && gt[0] == '1') g_gc_trace = 1;
+    // M409（缺陷 267）：挣脱暂停的**故障注入**与**逃逸阀**
+    //   PX_GC_FORCE_EARLY_RESUME=1 ⇒ 被暂停线程立刻挣脱（门用：把「偶发窗口」变成必现）
+    //   PX_GC_EARLY_ABORT=0        ⇒ 关掉「挣脱 ⇒ 放弃 sweep」的安全处置（负控用）
+    const char* fe = getenv("PX_GC_FORCE_EARLY_RESUME");
+    if (fe && fe[0] == '1') g_gc_force_early_resume = 1;
+    const char* ea = getenv("PX_GC_EARLY_ABORT");
+    if (ea && ea[0] == '0') g_gc_early_abort = 0;
+    {   // M409：退出时汇报挣脱/skip 计数（有异常才响；PX_GC_M409STAT=1 强制打印）
+        static int m409stat_reg = 0;
+        if (!m409stat_reg) { m409stat_reg = 1; atexit(px_gc_m409_stat_dump); }
+    }
     if (g_gc_debug) atexit(px_root_peak_dump);   // M170：退出打印根登记栈峰值
     // M312：GC 可观测性（见顶部 g_gc_stats_on 注释）
     {
@@ -2661,7 +2687,15 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
         int cur = g_gc_epoch;
         if (!g_gc_stop_in_progress || g_gc_epoch != my_epoch) break;
         px_futex_wait(&g_gc_epoch, cur, 20000);
-        if (++hspins > 300) break;
+        if (++hspins > 300 || g_gc_force_early_resume) {
+            // M409（缺陷 267）：**提前挣脱** —— 本轮 GC 尚未结束就恢复用户态。
+            //   一旦放手，本线程此后新分配 / 新入根的对象都赶不上本轮 mark ⇒ 必须让
+            //   executor 知道「本轮根面不完整」并放弃 sweep（见 px_gc_collect）。
+            //   handler 内只用原子写（async-signal-safe）。
+            __atomic_store_n(&g_gc_early_resume_epoch, my_epoch, __ATOMIC_SEQ_CST);
+            __sync_fetch_and_add(&g_gc_early_resumes, 1);
+            break;
+        }
     }
     __sync_synchronize();
     ti->paused = 0;
@@ -3144,6 +3178,17 @@ static LXValue px_str_int_pool(int64_t v) {
     }
 }
 // 分配统计：导出（声明见文件前部 g_alloc_stats 处）
+static void px_gc_m409_stat_dump(void) {
+    const char* force = getenv("PX_GC_M409STAT");
+    int forced = (force && force[0] == '1');
+    if (!forced && g_gc_early_resumes == 0 && g_gc_early_resume_skips == 0) return;
+    char b[256];
+    int n = snprintf(b, sizeof(b),
+        "[M409-STAT] 提前挣脱暂停=%d 次 · 因挣脱放弃 sweep=%d 轮 · gc_skips=%d · gc_runs=%d\n",
+        (int)g_gc_early_resumes, g_gc_early_resume_skips, g_gc_skips, g_gc_runs);
+    if (n > 0) (void)write(2, b, (size_t)n);
+}
+
 static void px_alloc_stats_dump(void) {
     if (!g_alloc_stats) return;
     char b[256];
@@ -3163,6 +3208,41 @@ static void gc_mark_pinned(GCHash* set) {
     for (int i = 0; i < g_pinned_n; i++) gc_mark_obj(set, g_pinned[i]);
     pthread_mutex_unlock(&g_pinned_mu);
 }
+
+// ==================== M409（缺陷 267 · 根面收缩的宽限期） ====================
+// 病灶类别：`px_root_restore_iso` 是**隔离点（longjmp）落点**，它把 `g_px_roots_n` 直接
+//   收缩回记录深度。根栈是**线程级 TLS**，而执行流是**协程级**（M:N，同一 worker 上多协程
+//   交替）⇒ 若某协程在隔离作用域内让出、别的协程在此期间 push 了根，落点这一收缩会把
+//   **仍活跃的他者根**一并摘掉 ⇒ 该对象失去根面 ⇒ 被后续 GC 回收（本缺陷的形态）。
+// 处置（over-approximate = 安全）：被摘掉的条目进一张**环形宽限表**，GC 标记时一并标记
+//   （最多多保活 PX_DROPPED_RING 个「最近的」被摘条目；表满即淘汰最旧 ⇒ 内存有界）。
+//   这不是根因修复，而是「摘根动作不再可能立刻造成 UAF」的兜底（与 M409 放弃 sweep 同源）。
+#define PX_DROPPED_RING 256
+static LXValue g_dropped_roots[PX_DROPPED_RING];
+static volatile int g_dropped_idx = 0;   // 单调递增写游标
+static volatile int g_dropped_n = 0;     // 有效条目数（≤ RING）
+static volatile int g_dropped_hits = 0;  // 累计被摘条目数（诊断）
+
+static void px_root_note_dropped(const LXValue* base, int from, int to) {
+    if (!base) return;
+    for (int i = from; i < to; i++) {
+        if (!px_value_is_obj(base[i]) || !base[i].as.obj) continue;
+        int k = __sync_fetch_and_add(&g_dropped_idx, 1);
+        g_dropped_roots[k & (PX_DROPPED_RING - 1)] = base[i];
+        if (g_dropped_n < PX_DROPPED_RING) g_dropped_n = g_dropped_n + 1;
+        __sync_fetch_and_add(&g_dropped_hits, 1);
+    }
+}
+
+static void gc_mark_dropped(GCHash* set) {
+    int n = __atomic_load_n(&g_dropped_n, __ATOMIC_RELAXED);
+    if (n > PX_DROPPED_RING) n = PX_DROPPED_RING;
+    for (int i = 0; i < n; i++) {
+        LXValue v = g_dropped_roots[i];   // 无锁读：最坏读到半态 → gc_hash_has 过滤掉
+        if (px_value_is_obj(v) && v.as.obj) gc_mark_obj(set, v.as.obj);
+    }
+}
+
 
 static int g_gc_trace_hits = 0;
 static void gc_trace_check_freed(LXObject* o) {
@@ -3237,10 +3317,16 @@ static void px_dbg_obj_refs(const void* obj) {
     }
     if (px_coro_dbg_refs) px_coro_dbg_refs(obj);
     {
+        char eb[160];
+        int en = snprintf(eb, sizeof(eb),
+            "[PX_GC_DBG] M409 提前挣脱：累计 %d 次，最近轮次 epoch=%d（本轮=%d），因此放弃 sweep 的轮数 %d\n",
+            (int)g_gc_early_resumes, (int)g_gc_early_resume_epoch, (int)g_gc_epoch, g_gc_early_resume_skips);
+        if (en > 0) (void)write(2, eb, (size_t)en);
+    }
+    {
         pthread_t me = pthread_self();
         int found = -1;
-        n = snprintf(b, sizeof(b), "[PX_GC_DBG] active_threads=%d epoch=%d 本线程槽=", g_active_threads, g_gc_epoch);
-        if (n > 0) (void)write(2, b, (size_t)n);
+        n = snprintf(b, sizeof(b), "[PX_GC_DBG] active_threads=%d epoch=%d 本线程槽=", g_active_threads, g_gc_epoch);        if (n > 0) (void)write(2, b, (size_t)n);
         for (int t = 0; t < g_thread_cap; t++)
             if (g_threads[t].in_use && pthread_equal(g_threads[t].tid, me)) { found = t; break; }
         n = snprintf(b, sizeof(b), "%d\n", found);
@@ -3375,6 +3461,7 @@ void px_gc_collect(void) {
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
         if (g_gc_stats_on) g_gcs_mksub[1] = gc_mono_us() - _gcs_mk0 - g_gcs_mksub[0];
         gc_mark_pinned(&set);   // M153：常量池/短串池化对象（永久根）
+        gc_mark_dropped(&set);  // M409：被隔离点收缩摘掉的根（宽限期，防跨协程摘根 UAF）
         // 根2：本线程（GC 执行者）暂存根
         if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
         // S3-D-1：VM 帧槽精确根 —— executor 自身 VM 状态 + 各暂停线程 VM 状态。
@@ -3442,10 +3529,35 @@ void px_gc_collect(void) {
         g_in_gc_sweep = 1;   // ISSUE28-B1：sweep 单线程（executor 已屏蔽信号）→ xfree 免逐趟 sigprocmask
         int freed = 0, w = 0;
         long long live_b = 0;   // M318：本轮存活集字节（逐对象累加，O(1)/对象）
-        for (int i = 0; i < g_obj_count; i++) {
+        // ===== M409（缺陷 267）：本轮是否有线程「提前挣脱暂停」=====
+        //   有 ⇒ 本轮 mark 之后它又分配/登记过对象 ⇒ 根面快照不完整 ⇒ **放弃 sweep**。
+        //   （判据与实测见 g_gc_early_resume_epoch 处注释；宁可漏回收、绝不漏根）
+        int sweep_n = g_obj_count;      // sweep 期间新追加的条目一律保留（不得被本轮回收）
+        int do_sweep = 1;
+        {
+            int early_ep = __atomic_load_n(&g_gc_early_resume_epoch, __ATOMIC_SEQ_CST);
+            if (early_ep == g_gc_epoch) {
+                if (!g_gc_early_abort) {
+                    // 负控（PX_GC_EARLY_ABORT=0）：保留旧行为（照常 sweep）—— 只做对拍
+                    if (g_gc_early_resume_skips < 0) {}
+                } else {
+                    do_sweep = 0;
+                    g_gc_early_resume_skips++;
+                    g_gc_skips++;
+                    if (g_gc_early_resume_skips <= 20 || g_gc_debug) {
+                        char dbg[192];
+                        int dn = snprintf(dbg, sizeof(dbg),
+                            "[M409-EARLY] 本轮(epoch=%d)有线程提前挣脱暂停 ⇒ 放弃 sweep（存活 %d 全保留，累计 %d 次）\n",
+                            g_gc_epoch, g_obj_count, g_gc_early_resume_skips);
+                        if (dn > 0) (void)write(2, dbg, (size_t)dn);
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < sweep_n; i++) {
             LXObject* o = g_objs[i];
             if (!gc_hash_has(&set, (uintptr_t)o)) continue;   // 防御：损坏条目，丢弃
-            if (o->gc_mark) {
+            if (o->gc_mark || !do_sweep) {
                 o->gc_mark = 0;
                 g_objs[w++] = o;
                 live_b += gc_obj_size(o);
@@ -3454,6 +3566,15 @@ void px_gc_collect(void) {
                 px_obj_free(o);
                 freed++;
             }
+        }
+        if (g_obj_count > sweep_n) {
+            // M409：sweep 期间有线程恢复了用户态并新分配 ⇒ 尾部条目未参与本轮 mark，
+            //   原样保留（下一轮再判）——绝不在此回收。
+            int extra = g_obj_count - sweep_n;
+            memmove(&g_objs[w], &g_objs[sweep_n], sizeof(LXObject*) * (size_t)extra);
+            for (int k = 0; k < extra; k++) live_b += gc_obj_size(g_objs[w + k]);
+            w += extra;
+            g_gc_skips++;
         }
         g_in_gc_sweep = 0;
         g_obj_count = w;
@@ -3520,6 +3641,7 @@ void px_gc_collect(void) {
     }
     pthread_rwlock_unlock(&g_globals_mu);
     gc_mark_pinned(&set);   // M153：常量池/短串池化对象（永久根）
+    gc_mark_dropped(&set);  // M409：被隔离点收缩摘掉的根（宽限期，单线程路径同款）
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
     // M92 precise：退役整栈保守扫描 → 跳过本线程栈/寄存器扫描（conservative 保持旧行为）
     if (!g_gc_precise) {
@@ -3885,6 +4007,10 @@ void px_root_iso_mark_deep(void) { t_iso_roots = g_px_roots_n; t_iso_marks = g_p
 //   只收缩、不扩张；同线程才动作；打印格式与 px_root_restore 一致（门据此断言）。
 void px_root_restore_iso(void) {
     int r0 = g_px_roots_n, m0 = g_px_root_marks_n;
+    // M409（缺陷 267）：收缩前把**将被摘掉**的条目记入宽限表 —— 根栈是线程级 TLS、
+    //   执行流是协程级 ⇒ 被摘的条目可能仍是**别的协程**的活跃根（详见 gc_mark_dropped）。
+    if (t_iso_roots >= 0 && g_px_roots_n > t_iso_roots)
+        px_root_note_dropped(g_px_roots, t_iso_roots, g_px_roots_n);
     if (t_iso_roots >= 0 && g_px_roots_n > t_iso_roots) g_px_roots_n = t_iso_roots;
     // M259（决策项 · 缺陷 463）：**桥级**隔离点一并归还 marks。
     //   哨兵 -1 = 本线程无桥级记录（协程/信号级、或跨线程）⇒ 不动手（宁可不修，也不误伤）。
@@ -16920,6 +17046,11 @@ void px_gc_thread_enter(void) {
         g_threads[slot].is_main = 0;
         g_threads[slot].epoch = 0;
         g_threads[slot].tmp_root = NULL;
+        // M409：槽位复用必须清根面快照 —— 否则新线程在本轮暂停上报之前，
+        //   executor 可能读到上一个线程遗留的 roots/root_n/vm_state（旧数组早已释放）。
+        g_threads[slot].roots = NULL;
+        g_threads[slot].root_n = 0;
+        g_threads[slot].vm_state = NULL;
     }
     pthread_mutex_unlock(&g_gc_mu);
 }
@@ -30198,6 +30329,11 @@ static void* px_pool_worker(void* argp) {
         g_threads[slot].is_main = 0;
         g_threads[slot].epoch = 0;
         g_threads[slot].tmp_root = NULL;
+        // M409：槽位复用必须清根面快照 —— 否则新线程在本轮暂停上报之前，
+        //   executor 可能读到上一个线程遗留的 roots/root_n/vm_state（旧数组早已释放）。
+        g_threads[slot].roots = NULL;
+        g_threads[slot].root_n = 0;
+        g_threads[slot].vm_state = NULL;
     }
     pthread_mutex_unlock(&g_gc_mu);
     long long served = 0;   // M108-S1d：本 worker 已处理 job 数（滚动重建判定）
