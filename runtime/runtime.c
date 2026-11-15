@@ -6494,6 +6494,18 @@ static void px_dict_idx_publish(LXObject* o, PXDictIdxSnap* s) {
 }
 
 // 查一个键：返回 keys 下标或 -1。**不加锁**（与既有 px_dict_get 同口径）
+// M409-S3（缺陷 267 · 守卫盲区）：键槽为 NULL ⇒ 该 dict 的存储已被回收/复用。
+//   实测（/data/gatevm/m409-repro2-20261116-050643 · core 472149）：bi_tcp_connect_ex 里
+//   **刚建且已 px_root_push_keep** 的 dict，在写第 3 个键 "addr" 时 keys[0]==NULL ⇒
+//   strcmp 读地址 0 ⇒ SIGSEGV。那一刻对象头 type 已被释放链覆盖，而 M257 的类型守卫是在
+//   **临界区外**读的（读到 PX_DICT 后才被别的线程回收）⇒ 守卫整个失效（现场**无** [M257-CTR]）。
+//   本函数只负责「空键不 strcmp」：把硬崩溃降级为「不命中」，真正的响亮报告由
+//   px_dict_set 的存储完整性检查（锁内）负责 —— 那里既能报，又能拒绝触碰失效存储。
+static int px_key_eq(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    return strcmp(a, b) == 0;
+}
+
 static int px_dict_find(const LXObject* o, const char* key) {
     int len = o->as.dict.len;                    // 无锁快照（陈旧只会漏掉更新的键，同既有语义）
     PXDictIdxSnap* s = __atomic_load_n(&o->as.dict.idx, __ATOMIC_ACQUIRE);
@@ -6508,12 +6520,12 @@ static int px_dict_find(const LXObject* o, const char* key) {
         }
         // 尾部补扫 [s->n, len)：建表之后追加的键。几何重建（1.25×）⇒ 尾部平均 ≤ 12.5% n
         for (int i = s->n; i < len; i++) {
-            if (strcmp(o->as.dict.keys[i], key) == 0) return i;
+            if (px_key_eq(o->as.dict.keys[i], key)) return i;
         }
         return -1;
     }
     for (int i = 0; i < len; i++) {
-        if (strcmp(o->as.dict.keys[i], key) == 0) return i;
+        if (px_key_eq(o->as.dict.keys[i], key)) return i;
     }
     return -1;
 }
@@ -6593,6 +6605,26 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
     //   正确性：只把既有的一遍锁内扫描提前，判定仍全在锁内；未命中时对象状态零改动。
     pthread_mutex_lock(&g_gc_mu);
     gc_block_stop(&old);
+    // ── M409-S3（缺陷 267）：容器存储完整性检查 —— 补 M257 类型守卫的盲区 ──
+    //   实测（core 472149）：锁外读到 type==PX_DICT，等锁期间被别的线程 GC 回收（对象头被
+    //   释放链覆盖、keys 数组整片清零）⇒ 守卫放行、进来后 strcmp(keys[0]==NULL) 直接 SIGSEGV。
+    //   判据（自洽性，不依赖 type）：keys 非空 + 0<=len<=cap + 在用键槽非 NULL
+    //   （常规档只验首槽 = 零成本；PX_GC_DIAG=1 全扫）。命中 ⇒ 拒绝本次操作 + 响亮报告
+    //   （同 M257 语义：不读、不写、不释放失效存储），并把 DIAG 的「谁还指着它」打出来。
+    {
+        int bad = (!o->as.dict.keys || o->as.dict.cap <= 0 ||
+                   o->as.dict.len < 0 || o->as.dict.len > o->as.dict.cap);
+        if (!bad && o->as.dict.len > 0 && !o->as.dict.keys[0]) bad = 1;
+        if (!bad && px_ctr_diag_on()) {
+            for (int i = 0; i < o->as.dict.len; i++) if (!o->as.dict.keys[i]) { bad = 1; break; }
+        }
+        if (bad) {
+            pthread_mutex_unlock(&g_gc_mu);
+            gc_unblock_stop(&old);
+            px_ctr_guard_fail(o, PX_DICT, "px_dict_set(dict 存储已回收：keys/vals 不自洽或键槽为 NULL)");
+            return;
+        }
+    }
     {
         int len_f = o->as.dict.len;
         int idx_f = px_dict_find(o, key);      // M396：走桶索引（无索引/失效时自动回落线性扫）
@@ -6635,7 +6667,7 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
             idx = len;   // 免重扫：无删除 ⇒ i<len 的键集未变；len 未变 ⇒ 期间没有插入发生
         } else {
             for (int i = 0; i < len; i++) {
-                if (strcmp(o->as.dict.keys[i], key) == 0) { idx = i; break; }
+                if (px_key_eq(o->as.dict.keys[i], key)) { idx = i; break; }
             }
             if (idx < 0) { absent = 1; absent_len = len; } else { absent = 0; }
         }
