@@ -96,8 +96,10 @@ def main():
             if "错误" in line or "error" in line.lower():
                 got = line.strip()
                 break
+        # M407 缺陷 793：前缀统一为「运行时错误 [<fn> 行<N>]: <CODE>: <msg>」⇒ `]` 后直接是 `:`
+        #   故第二条正则吃 `]:`；第一条只吃旧形态 [R1002]（兼容旧日志），判据本身未放宽
         m2 = re.search(r'\[(R\d{4})\]\s*(?:[0-9]+:[0-9]+:\s*)?(.*)$', got) or \
-             re.search(r'\]\s*(R\d{4}):\s*(.*)$', got)
+             re.search(r'\]:?\s*(R\d{4}):\s*(.*)$', got)
         code, text = (m2.group(1), m2.group(2)) if m2 else ("", got)
         nchk += 1
         if code != "R1002":
