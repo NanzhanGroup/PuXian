@@ -2241,3 +2241,16 @@ step "M409 · 容器生命周期（缺陷 267：提前挣脱暂停 ⇒ 必须放
 #   ⚠️ 驱动器必须是**真注册 OS 线程**（信号处理器线程）。协程版证不了：根 4b 无条件标全部存活
 #      协程帧槽 ⇒ 未暂停也被标 ⇒ 负控恒绿（假绿）。实测记录见 probe_lifetime.px 文件头。
 run m409_gc_container_lifetime bash examples/m409_gc_container_lifetime/verify.sh
+
+step "M410 · 判据自欺扫描（判绿必须能证明自己测过东西）"
+#   病灶（M409 三例 + 新发现）：
+#     a) M408 r4 quiet 归档漂移 —— 改输入没算下游派生件
+#     b) M409 closeout2 假 FAIL —— grep 扫到脚本自己上一轮的汇总行
+#     c) m409_m256_loadcheck `nscan=0` 判绿 —— **扫描面为 0 也算通过**
+#     d) `run_gates.sh --only` 只跑 1 门会打印「跳过 283 门」，旧判据只看 rc=0
+#   共同形状：结论说「通过」，却没人证明被测面真被扫到了。
+#   齿（规则）：R1 有判据+绿输出但从不打印扫描面 ⇒ 红；R2 打了扫描面变量却无零值守卫 ⇒ 红；
+#     扫描面为 0 ⇒ 红（「没东西可扫」不等于「没问题」）；例外表登记了却已不违规 ⇒ 红（STALE）。
+#   --selftest：坏两件必红 / 好一件必绿 / 空面必红。扫描范围：packaging/chain/*.sh 全量
+#     + 宿主 /data/autodrive/*.sh 中 mtime ≥ 2026-11-16（策略生效日）的新脚本（不追溯历史噪声）。
+run m410_criteria_scan bash examples/m410_criteria_scan/verify.sh

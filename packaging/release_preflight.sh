@@ -79,6 +79,7 @@ PRECHECK_GATES=(
     m282_registry_020 m187_registry_import           # 登记表 ⇄ 磁盘（m187 约 700s，本档最慢的一门）
     version_drift version_golden                     # 版本字面量 9 处 + 自举基准（M392 首跑 3 红里的 2 红，几秒一门）
     fmt_check                                        # pxfmt 规范（M391 首跑红之一，20s）
+    m410_criteria_scan                               # M410：判据自欺扫描（判绿必须证扫描面，秒级）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

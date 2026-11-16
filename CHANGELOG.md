@@ -1,3 +1,70 @@
+## M410：静默失效收口 —— 通知缺失 + 判据自欺（缺陷 816 / 819）
+
+> **一句话**：M409 暴露的两类毛病是同一个形状 —— **事情发生了，但没人（或没有判据）知道**。
+> 本里程碑只加「宿主侧机械闸 + 一个门」，**不改产品语义**：
+> ① 已升级的告警再红会**按退避+内容变化重叫**（缺陷 816）；
+> ② 发版通知有**兜底探针**（缺陷 819，M410 前已完成）；
+> ③ 新门 `m410_criteria_scan` 抓「判绿却没证明自己测过东西」（判据自欺族）。
+
+### 证据
+
+```
+缺陷 816  已 ESCALATED 的 key 再判红不叫醒
+          · M408 r1 17:22 挂 m408-chain-red → ESCALATED
+          · r2 19:41 / r3 21:41 / r4 01:03 三次再红，只写 P1-REPEAT，未重叫
+          · 后果：三次都是用户开口问，我才知道
+缺陷 819  M409 tag v0.2.409 发布后**零用户通知**（inbox 15:30 后只有 RESOLVE）
+判据自欺  a) M408 r4 quiet 归档漂移 —— 改输入没算下游派生件
+          b) M409 closeout2 假 FAIL —— grep 扫到脚本自己上一轮的汇总行
+          c) m409_m256_loadcheck `nscan=0` 判绿 —— 扫描面为 0 也算通过
+          d) `run_gates.sh --only` 只跑 1 门会打印「跳过 283 门」，旧判据只看 rc=0
+```
+
+### 已做
+
+```
+① 缺陷 816 修复（/usr/local/sbin/dy-notify.sh v2.10）
+   · p1 见台账末行 ESCALATED：距上次升级 ≥ DY_NOTIFY_REACT_MIN（默认 30min）
+     且标题/正文有变 ⇒ 追加 RE-ESCALATE 行 + 末行写回 PENDING（历史行不覆盖）+ 立刻重 park
+   · 升级行改为 ESCALATED\t<epoch>\t<bodyhash>（旧格式裸 ESCALATED 兼容：hash 空 ⇒ 按 mtime 计退避）
+   · esc 的正文提取改走 pend_body()：标记行不进正文（否则下一轮会把标记当正文推给用户）
+   · 门禁自证：/data/autodrive/m410_notify_reactivate_selftest.sh
+     P1 正控（P1-REACTIVATED + 末行 PENDING + 重 park 1 次）· P1b 正控闭环（下一轮 esc 真再叫：ESCALATE ≥2）
+     N1 负控（正文逐字相同 ⇒ P1-KNOWN，不打扰）· N2 负控（未到 30min ⇒ P1-KNOWN）
+     N3 前提自证（RE-ESCALATE 历史行仍在）      实测：nscan=4 fails=0 ⇒ OK
+② 缺陷 819 兜底（M410 本轮之前完成，本轮补记为验收对象）
+   · /data/autodrive/tag_notify.sh（幂等台账）· check_tag_notify.sh（策略生效日 2026-11-16，正控 rc=0 / 负控 A、B rc=1）
+   · tag-notify-watch.timer 30min：红 ⇒ dy-notify p1(key=m410-tag-notify)；绿 ⇒ resolve 双清
+③ 新门 m410_criteria_scan（examples/m410_criteria_scan/）
+   · R1 有判据 + 绿输出却从不打印扫描面 ⇒ 红
+   · R2 打了扫描面变量却无零值守卫 ⇒ 红（含 -eq 1 单例口径）
+   · 扫描面为 0 ⇒ **红**（「没东西可扫」不等于「没问题」）
+   · 例外表 allow.tsv：未登记违规 ⇒ 红；登记了却已不违规 ⇒ 红（STALE，防白名单烂账）
+   · --selftest：坏两件必红 / 好一件必绿 / 空面必红
+   · 扫描范围：packaging/chain/*.sh 全量 + 宿主 /data/autodrive/*.sh 中 mtime ≥ 2026-11-16 的新脚本
+     （**不追溯**历史脚本：106 条历史噪声会让门变成「反正永远红」的假装置）
+④ 收编进 release_preflight.sh --gates：11 → **12** 门（新增 m410_criteria_scan）
+```
+
+### 口径与已知偏差（诚实记账）
+
+```
+· 缺陷 816 的牙**不进 repo 门**：dy-notify.sh 是宿主脚本、不在仓库里，CI 跑不到；
+  把它拷一份进门里测 = 又一种「测的是副本」，M410 正是要收口自欺。
+  故 816 的判据 = 宿主 selftest（fails=0）+ esc 重入闭环（P1b），证据落在 /data/autodrive/。
+· m410_criteria_scan 是**静态规则**：能抓「没打印扫描面 / 没有零值守卫」，抓不到「扫描面造假」。
+  口径只说「装置上有没有牙」，不说「以后绝不会静默」。
+```
+
+### 验收
+
+```
+A 通知：tag 后 tag_notify.sh 必须 OK；不跑它 ⇒ check_tag_notify 红（负控已验）
+B 816：同 key 连红两次（>30min 且正文有变）⇒ 第二次产生 RE-ESCALATE + 重新 park（selftest P1/P1b 实测）
+C 判据闸：m410_criteria_scan 自检坏两件必红 / 好一件必绿 / 空面必红；全量扫描 nscan>0 判绿
+D 全量门绿 + preflight 12 门绿
+```
+
 ## M409：缺陷 267 收口 —— 提前挣脱 GC 暂停导致的根面快照失效（S3a–S3e）
 
 > **一句话**：campaign3 两次真命中拿到完整形态 —— **对象仍在执行者 TLS 登记根栈 idx=0（root_n=1），

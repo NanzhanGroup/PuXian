@@ -1932,6 +1932,16 @@ jobs:
           grep -E '^(── |  PASS)' /tmp/v_m409.log | tail -8
           echo "✅ m409_gc_container_lifetime（前提自证 + 负控必红 + 修后连跑 2 次绿）PASS"
 
+      - name: m410_criteria_scan（判据自欺扫描 · M410 · 判绿必须证扫描面）
+        # 齿：R1 有判据+绿输出但从不打印扫描面 ⇒ 红 · R2 打了扫描面却无零值守卫 ⇒ 红
+        #   · 扫描面 0 ⇒ 红 · 例外表登记了却已不违规 ⇒ 红（STALE）· --selftest 坏两件必红/好一件必绿
+        if: always()
+        run: |
+          bash examples/m410_criteria_scan/verify.sh --selftest > /tmp/v_m410s.log 2>&1 || { echo "❌ m410_criteria_scan 自检失败（装置自己没牙）"; tail -20 /tmp/v_m410s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m410_criteria_scan/verify.sh > /tmp/v_m410.log 2>&1 || { echo "❌ m410_criteria_scan 门失败（有脚本判绿未证扫描面）"; tail -40 /tmp/v_m410.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'nscan=' /tmp/v_m410.log | tail -1
+          echo "✅ m410_criteria_scan（自检正负控 + 全量扫描面 > 0）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

@@ -1,0 +1,13 @@
+# M410 判据扫描例外表 —— <标识 或 basename>\t<理由>
+# 规则：表里没有的违规 ⇒ 门红；表里登记了但已不违规 ⇒ 门红（STALE，防白名单烂账）
+# 只登记「规则不适用」的，不登记「懒得改」的。新增条目必须写清为什么这条规则不该管它。
+repo:packaging/chain/launch_release_chain.sh	编排脚本：绿判定是「伴生单元逐个 is-active」不是 grep 扫描面，规则不适用（M410 复核）
+repo:packaging/chain/run_release_chain.sh	主链编排：绿判定是门返回码汇总，扫描面由各门自己打印（M410 复核）
+repo:packaging/chain/release_watch.sh	看护脚本：绿判定是链进程/标记文件状态，不做内容扫描（M410 复核）
+repo:packaging/chain/start_release_watcher.sh	启动器：无判据无扫描，exit 0 只是启动成功（M410 复核）
+repo:packaging/chain/release_postupgrade.sh	升级后状态核验：判据是镜像 version.json / 标记件 / 报告件的存在与取值，不是内容扫描 ⇒ 无扫描面概念（M410 复核）
+repo:packaging/chain/release_red_guard.sh	红守卫：判据方向相反（发现 FAIL 即红），有命中就是结论；不存「判绿却漏测」的面（M410 复核）
+host:tag_notify.sh	发版通知：绿判定是投递回执 USER-NOTIFY-OK，不是扫描；覆盖由探针 check_tag_notify.sh（ntags=）承担
+host:tag_notify_watch.sh	探针外壳：判据委托给 check_tag_notify.sh（那里有 ntags= 与明文缺失清单）
+host:m409_closeout2.sh	M409 收口归档脚本（11-16 15:30 定稿），已过时不再运行；追溯改写无收益
+host:m409_m256_loadcheck_r23.sh	M409 r23 失败复现脚本，一次性已归档；同一形状的现行判据在 m409_verify_m256_shard.sh（有扫描面 + 零值守卫）
