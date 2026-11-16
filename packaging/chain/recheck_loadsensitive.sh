@@ -157,11 +157,12 @@ say() { echo "$*" | tee -a "$LOG/recheck.log"; }
   done
 } | sort -u > "$CAND" 2>/dev/null || true
 
-NCAND=$(grep -c . "$CAND" 2>/dev/null) || NCAND=0
-case "$NCAND" in ''|*[!0-9]*) NCAND=0 ;; esac
+# 扫描面（M410 R1/R2 口径：判绿必须打印扫描面，且扫描面要带零值守卫）
+nscan=$(grep -c . "$CAND" 2>/dev/null) || nscan=0
+case "$nscan" in ''|*[!0-9]*) nscan=0 ;; esac
 
-say "═══ M411 复跑分类：候选 $NCAND 门（来源 $LOG）═══"
-if [ "$NCAND" -eq 0 ]; then
+say "═══ M411 复跑分类：nscan=$nscan（候选失败门，来源 $LOG）═══"
+if [ "$nscan" -eq 0 ]; then
   say "RECHECK: 无失败门 ⇒ 不进入复跑（候选数 0 已打印，判据在跑）"
   {
     echo "candidates=0"; echo "loadsensitive=0"; echo "exempt=0"; echo "still_red=0"
@@ -261,10 +262,10 @@ say "LOAD-SENSITIVE n=$NLS 门=$(tr '\n' ',' < "$LSALL" | sed 's/,$//')"
 say "RECHECK-EXEMPT n=$NEX 门=$(tr '\n' ',' < "$EXEMPT" | sed 's/,$//')"
 say "RECHECK-RED n=$NRED 门=$(tr '\n' ',' < "$RCRED" | sed 's/,$//')"
 say "RECHECK-ESCALATED n=$NESC（连续两轮 LOAD-SENSITIVE ⇒ 不豁免）"
-say "RECHECK-SUMMARY 候选=$NCAND 复跑绿=$NLS 豁免=$NEX 仍红=$NRED 超预算或超上限=$NSKIP 用时=$((SECONDS-T0))s"
+say "RECHECK-SUMMARY nscan=$nscan 复跑绿=$NLS 豁免=$NEX 仍红=$NRED 超预算或超上限=$NSKIP 用时=$((SECONDS-T0))s"
 
 {
-  echo "candidates=$NCAND"; echo "loadsensitive=$NLS"; echo "exempt=$NEX"
+  echo "nscan=$nscan"; echo "candidates=$nscan"; echo "loadsensitive=$NLS"; echo "exempt=$NEX"
   echo "still_red=$NRED"; echo "skipped_budget=$NSKIP"; echo "escalated=$NESC"
   echo "head=$HEAD7"; echo "wt_selfproof=$WT_OK"
 } > "$SUMF"
