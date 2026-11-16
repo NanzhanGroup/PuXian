@@ -2254,3 +2254,12 @@ step "M410 · 判据自欺扫描（判绿必须能证明自己测过东西）"
 #   --selftest：坏两件必红 / 好一件必绿 / 空面必红。扫描范围：packaging/chain/*.sh 全量
 #     + 宿主 /data/autodrive/*.sh 中 mtime ≥ 2026-11-16（策略生效日）的新脚本（不追溯历史噪声）。
 run m410_criteria_scan bash examples/m410_criteria_scan/verify.sh
+# ══ M411 · LOAD-SENSITIVE 豁免机制自身的守卫（M411 S2 的配套门）══
+#   背景：M411 给 shard_run 加了「失败门同轮低负载复跑 ⇒ 复跑绿则豁免不计产品红」。
+#   这个机制天生是「可以把红洗成绿」的口子 ⇒ 必须有判据守着，理由与 M410 同族。
+#   齿（规则）：P1 分类器 --selftest 全绿且断言 ≥11、负控 ≥3（仍红/换代码/连续两轮）；
+#     P2 shard_run 真接线且打印豁免名单；P3 豁免后 TOT_FAIL 扣减 ∧ TOT_OK 增加（计数守恒）；
+#     P4 chain_verdict 仍以「红 != 0 ⇒ RED」判红（豁免只作用于 shard 汇总，不许改判据）。
+#   扫描面：packaging/chain/recheck_loadsensitive.sh · shard_run.sh · 宿主 chain_verdict.sh
+#   实测耗时：见 gate_time_baseline.tsv（秒级：一次分类器自测 + 4 处 grep）
+run m411_loadsensitive bash examples/m411_loadsensitive/verify.sh

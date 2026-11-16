@@ -734,6 +734,51 @@ if [ -n "$QUIET_LIST" ]; then
   echo "  quiet : 绿 $qok · 红 $qbad（低负载档 · 独占 ${QSOLO:-无} · 车道 ${QLANE_USED:-无}）"
   TOT_OK=$((TOT_OK+qok)); TOT_FAIL=$((TOT_FAIL+qbad))
 fi
+# ── 6.9) M411 S2：失败门同轮低负载复跑（LOAD-SENSITIVE 分类）─────────────────
+#   旧口径的代价（实测）：M410 r1 一轮 9 红，其中 2 门是负载敏感
+#     （m128_unlock_grow 分片 pass=90 fail=4，quiet 车道复跑 94/0；
+#       m324_tls_failclosed 负控 build 期链接失败）⇒ 100min 的链白跑 + 人工逐门定性。
+#   新口径：失败门在**同一 HEAD、同一 worktree** 上串行复跑一次。
+#     复跑绿   ⇒ LOAD-SENSITIVE：不计产品红，但**计数 + 门名单必须打印**；
+#                同一门连续两轮 LOAD-SENSITIVE ⇒ 升级为红（不许长期靠复跑掩盖）
+#     复跑仍红 ⇒ 产品红（照旧判整轮 RED）
+#   判据唯一实现在 packaging/chain/recheck_loadsensitive.sh；本段只读它的产物并调计数。
+#   ⚠️ 失败时必须**保持红**：脚本 rc≠0 / 产物缺失 ⇒ 不豁免（宁红不假绿）。
+RECHECK_NOTE="disabled"
+if [ "${TOT_FAIL:-0}" -gt 0 ]; then
+  _rcs="$SRC/packaging/chain/recheck_loadsensitive.sh"
+  if [ -f "$_rcs" ]; then
+    _rlog="$LOG/recheck.log"
+    bash "$_rcs" --log "$LOG" --repo "$SRC" --wt "$BASE/wt1" > "$_rlog" 2>&1
+    _rrc=$?
+    cat "$_rlog" 2>/dev/null || true
+    if [ "$_rrc" != 0 ]; then
+      echo "  ⚠️ 复跑分类自身故障 rc=$_rrc ⇒ 不豁免任何红门（保持 RED，看 $_rlog）"
+      RECHECK_NOTE="self-error-rc$_rrc"
+    else
+      EXF="$LOG/loadsens-exempt.txt"
+      if [ -s "$EXF" ]; then
+        NEX=$(grep -c . "$EXF" 2>/dev/null) || NEX=0
+        case "$NEX" in ''|*[!0-9]*) NEX=0 ;; esac
+        if [ "$NEX" -gt 0 ]; then
+          # 台账口径：豁免门算绿（门真跑过），红门数扣减；计数守恒：green+red == listed
+          TOT_FAIL=$((TOT_FAIL-NEX)); TOT_OK=$((TOT_OK+NEX))
+          echo "  ⚠️ LOAD-SENSITIVE 豁免 $NEX 门：$(tr '\n' ',' < "$EXF" | sed 's/,$//')（明细 $_rlog）"
+          RECHECK_NOTE="exempt-$NEX"
+        else
+          RECHECK_NOTE="no-exempt"
+        fi
+      else
+        RECHECK_NOTE="no-exempt"
+      fi
+    fi
+  else
+    echo "  ⚠️ 缺复跑分类脚本 $_rcs ⇒ 不豁免红门（保持 RED）"
+    RECHECK_NOTE="missing-script"
+  fi
+else
+  RECHECK_NOTE="no-fail"
+fi
 echo "  合计：绿 $TOT_OK · 红 $TOT_FAIL（门清单 $NG）"
 # ── M383 · 2/3（缺陷 678）：**链完成戳** —— 让校验器区分「全量链」与「限范围探针」──
 #   现场（2026-11-09 14:1x）：我为「车道能不能并行」跑了一次 4 门探针，shard_run 照常

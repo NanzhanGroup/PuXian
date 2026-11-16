@@ -80,6 +80,16 @@ PRECHECK_GATES=(
     version_drift version_golden                     # 版本字面量 9 处 + 自举基准（M392 首跑 3 红里的 2 红，几秒一门）
     fmt_check                                        # pxfmt 规范（M391 首跑红之一，20s）
     m410_criteria_scan                               # M410：判据自欺扫描（判绿必须证扫描面，秒级）
+    # ── M411 S1：入册六账本前置（12 → 20 门，实测代价 +~7min，换掉「100min 分片才发现」）──
+    #   病史：M408 r4 / M409 r1 / M410 r1 三次的红门都是「新增一门，六处账本没同步」，
+    #   而这几门本身只要 1~247s（本机实测：gate_inputs 3 · m264 6 · m283 110 ·
+    #   m276 6 · gate_lock_guard 1 · gate_timeouts 34 · m400 247 · quiet_archive 0）。用 100min 的反馈周期发现 30s 能发现的问题，必须前置。
+    #   覆盖：M410 r1 的 9 红里 5 类（gate_inputs / 共用 /tmp / 门级锁 / 超时 / 耗时基线）、
+    #         M409 r1 的 13 红里 9 门。
+    gate_inputs m264_gate_shared_tmp m283_gate_premise   # 新门读了什么（宿主档 · 共用 /tmp · 外部前提）
+    m276_gate_lock gate_lock_guard                       # 新门进分片但没挂门锁 ⇒ 并发假红
+    gate_timeouts m400_baseline_feedback                 # 超时声明 + 耗时基线回灌（本档最慢 247s）
+    quiet_archive                                        # quiet 归档不漂移（读宿主 /data/gatevm 档，秒级）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错
@@ -214,7 +224,10 @@ STUB
                                         || bad "G-P1 前提缺失：stub 没被调用（判据不成立）"
 
     # M400：计时表必须**落盘**（过去跑完就 rm，最高占用只存在于被删的临时表里）
-    local pf_t; pf_t="$(ls "$PX_PREFLIGHT_TSVDIR"/preflight-*.times.tsv 2>/dev/null | awk 'END{print}')"
+    # M411 顺手修：这行原来写 `local pf_t`，而自测块不在函数里 ⇒ bash 报
+    #   "local: can only be used in a function"（不影响结果，但把 stderr 弄脏，
+    #   而自测本身要判「输出干净」时会误伤）。改成普通变量赋值。
+    pf_t=""; pf_t="$(ls "$PX_PREFLIGHT_TSVDIR"/preflight-*.times.tsv 2>/dev/null | awk 'END{print}')"
     if [ -n "$pf_t" ] && [ "$(grep -c . "$pf_t")" = "$NG" ]; then
         ok "G-P2 计时表落盘：$(basename "$pf_t") 有 $NG 行"
     else

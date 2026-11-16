@@ -1,3 +1,72 @@
+## M411：入册账本前置 + 失败门同轮复跑（LOAD-SENSITIVE 分类）
+
+> **一句话**：上一轮 9 门红里 0 处产品回退，全部是「新增一门、六处账本没同步」与「负载敏感」
+> 两类流程病。本里程碑**不改产品语义**，只把这两类病的反馈周期从「100 分钟一轮」压到
+> 「起链前 20 分钟」和「同轮 1 次复跑」，并给「豁免」这个新口子配上自己的门。
+>
+> ⚠️ 口径：本里程碑不声称任何产品缺陷已修；它修的是**发布流程的判据反馈速度**。
+
+### 证据（都是实测，不是推断）
+
+```
+M410 r1（head=d354b8e）一轮 9 红 / 0 产品回退 —— 逐门定性见 /data/autodrive/m410-red-classify.md
+  ① 入册漏同步 5 门：gate_inputs · m264_gate_shared_tmp · m283_gate_premise（同一处 /tmp/x）
+                     m276_gate_lock + gate_lock_guard · gate_timeouts + m400_baseline_feedback
+  ② 负载敏感 2 门：  m128_unlock_grow   分片 pass=90 fail=4 → 同轮 quiet 车道复跑 94/0（此前 11 轮全绿）
+                     m324_tls_failclosed 负控 build 期链接失败（资源耗尽）→ 已移入低负载车道
+同族病史：M408 r4（quiet 归档漂移）· M409 r1（8 门重烘指纹未提交 + 4 门门侧账本）· M410 r1 = 三次
+成本对照：这 7 本账门宿主实测 3+6+110+6+1+34+304+0 = 464s（≈7.7min），
+          而发现它们的代价是 100min 一轮的链 —— 用 100min 换 8min，方向反了。
+```
+
+### 已做
+
+```
+① S1 · 入册账本前置（packaging/release_preflight.sh：PRECHECK_GATES 12 → 20）
+   追加 gate_inputs · m264_gate_shared_tmp · m283_gate_premise · m276_gate_lock ·
+        gate_lock_guard · gate_timeouts · m400_baseline_feedback · quiet_archive
+   代价实测 +464s（宿主单跑逐门：3 / 6 / 110 / 6 / 1 / 34 / 304 / 0 秒）
+   覆盖 M410 r1 的 5 类红、M409 r1 的 9 门
+   自测：--self-test 18/18（正控 + 5 负控 + 3 前提自证，全部离线 stub，不跑真门）
+   顺手修：自测块里 `local pf_t` 在函数外 ⇒ bash 报 "can only be used in a function"，
+           把 stderr 弄脏（M411 之前就在，不影响结论）⇒ 改普通变量赋值
+
+② S2 · 失败门同轮低负载复跑（packaging/chain/recheck_loadsensitive.sh 新建 + shard_run.sh 接线）
+   分片/车道里失败的门 ⇒ 同一 HEAD、同一 worktree 串行复跑一次：
+     复跑绿   ⇒ LOAD-SENSITIVE：不算产品红，但**计数 + 门名单必须打印**
+     复跑仍红 ⇒ 产品红（照旧判整轮 RED）
+     被测物自证失败（WT HEAD ≠ 本轮 HEAD / worktree 脏）⇒ 一律按红，不许换代码豁免
+     连续两轮 LOAD-SENSITIVE ⇒ 升级为红（不许长期靠复跑掩盖「门没声明负载前提」）
+   硬上限：--max 8 门 · --budget 1500s（超出的门保持红，打印未复跑）
+   自测：--selftest 11/11（S1 正控 + S2 仍红/S3 换代码/S4 连续两轮三条负控 + S5 无候选）
+
+③ 新门 m411_loadsensitive（examples/m411_loadsensitive/verify.sh · 注册 285 → 286 · ci.yml 同步）
+   P1 分类器自测全绿且断言 ≥11、负控 ≥3（负控被删 ⇒ 豁免恒真，这是最危险的退化）
+   P2 shard_run 真接线 + 豁免时打印名单 + 故障路径写「不豁免」
+   P3 豁免后 TOT_FAIL 扣减 ∧ TOT_OK 增加（计数守恒，否则会被归因成「有门被跳过」）
+   P4 chain_verdict 仍以「红 != 0 ⇒ RED」判红（豁免只作用于 shard 汇总，不许顺手放宽唯一判据）
+   扫描面 nscan 显式打印 + 零值守卫（遵循 M410 R1/R2）
+```
+
+### 本轮就是自己的负控（真实新门入册，不是造夹具）
+
+```
+未补账本时实测（负控一，必须红）：
+  gate_inputs    ❌ examples/m411_loadsensitive/verify.sh:45 P1 未声明输入 /data/autodrive/chain_verdict.sh
+  gate_timeouts  ❌ 基线缺 1 / 286 门的实测行 ⇒ 该门 P2 判不到：· m411_loadsensitive
+逐项补齐后（负控二，必须绿）：gate_inputs → GATE-INPUTS-OK（373 文件 · 32 处已声明 · 违例 0）
+```
+
+### 未做 / 边界
+
+```
+· 不碰 runtime/ 语义，不声称任何产品缺陷已修
+· 不动既有判据的宽严；只增加「入册一致性前置」与「复跑分类」两步
+· LOAD-SENSITIVE 不是「门的问题被解决」：只是把它从「整轮作废」降级为「记录在案」，
+  连续两轮就会变红，逼着把负载前提写进门本身
+· 复跑只在同一 worktree 串行跑一次；并发条件下才复现的缺陷（缺陷 598 族）仍要靠分片本身发现
+```
+
 ## M410：静默失效收口 —— 通知缺失 + 判据自欺（缺陷 816 / 819 / 820）
 
 > **一句话**：M409 暴露的两类毛病是同一个形状 —— **事情发生了，但没人（或没有判据）知道**。

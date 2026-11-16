@@ -1942,6 +1942,17 @@ jobs:
           grep -E 'nscan=' /tmp/v_m410.log | tail -1
           echo "✅ m410_criteria_scan（自检正负控 + 全量扫描面 > 0）PASS"
 
+      - name: m411_loadsensitive（LOAD-SENSITIVE 豁免机制守卫 · M411）
+        # 齿：P1 分类器自测全绿且断言 ≥11 / 负控 ≥3（仍红不豁免 · 换代码不豁免 · 连续两轮升级）
+        #   · P2 shard_run 真接线并打印豁免名单 · P3 豁免后计数守恒 · P4 chain_verdict 判红条件未被放宽
+        #   · 扫描面 0 ⇒ 红（被测面为空时不许当绿）
+        if: always()
+        run: |
+          bash examples/m411_loadsensitive/verify.sh --selftest > /tmp/v_m411s.log 2>&1 || { echo "❌ m411_loadsensitive 自检失败（装置自己没牙）"; tail -20 /tmp/v_m411s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m411_loadsensitive/verify.sh > /tmp/v_m411.log 2>&1 || { echo "❌ m411_loadsensitive 门失败（豁免机制缺牙/未接线）"; tail -40 /tmp/v_m411.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'nscan=' /tmp/v_m411.log | tail -1
+          echo "✅ m411_loadsensitive（分类器自测 + 接线 + 计数守恒 + 判据未放宽）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交
