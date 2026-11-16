@@ -81,7 +81,10 @@ list_scan_face(){
         printf 'repo:%s\t%s\n' "${f#"$ROOT"/}" "$f"
     done
     local AD="${M410_AUTODRIVE_DIR:-/data/autodrive}"
-    if [ -d "$AD" ]; then
+    if [ ! -d "$AD" ]; then
+        # host 档输入（登记见 selfhost/gate_inputs_allow.tsv）：仅本机存在 ⇒ 响亮跳过，repo 面照扫
+        say "宿主面：$AD 不存在 ⇒ 跳过宿主脚本面（host 档，CI 必跳）"
+    else
         cutoff=$(date -d "$POLICY_DATE" +%s 2>/dev/null || echo 0)
         for f in "$AD"/*.sh; do
             [ -f "$f" ] || continue
