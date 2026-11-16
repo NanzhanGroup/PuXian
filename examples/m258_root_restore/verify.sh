@@ -16,9 +16,11 @@
 #   [1] 守卫自证（check_root_contract.py --self-test · 5 判据各自判红）
 #   [2] 守卫实检（本仓 runtime/ ⇒ 0 违例 + 规模锚点）
 #   [3] **窗口正判据**：等价形态的「立即收缩」探针（probe_m258_iso.c，用
-#       px_root_iso_mark/restore_iso —— 语义就是立即收缩）在 VM 轨默认档下
-#       ⇒ **必须**丢掉容器（失效报告 / 值不对 / 信号致死）⇒ 证明窗口真实存在
-#       ⚠️ 这一层不需要改任何产品代码 ⇒ **负控免费**
+#       px_root_iso_mark/restore_iso —— 语义就是立即收缩）在 **`PX_ROOT_GRACE=0`**（关掉 M409
+#       宽限表）下 ⇒ **必须**丢掉容器（失效报告 / 值不对 / 信号致死）⇒ 证明窗口真实存在
+#   [3b] **宽限档判据**（M409 · 缺陷 267）：同一探针在**默认档**下 ⇒ 必须不再丢容器 ⇒
+#       证明「被摘条目进宽限表」这层兜底真的生效（[3] 的红因此只能靠关阀拿到）
+#       ⚠️ [3]/[3b] 都不需要改产品代码 ⇒ **负控免费**
 #   [4] **修复判据**：probe_m258.c（走 px_root_restore）在同档下 ⇒ 值必须正确、
 #       无任何检测器报告、rc=0
 #   [5] 负控 3 道：A 注 J1 违例 ⇒ [2] 必红 · B 用 iso 探针替身跑 [4] ⇒ 必红 ·
@@ -95,27 +97,42 @@ $RT/third_party/zlib/lib/libz.a -lm -ldl -lpthread"
 
     # 共同的判据：把「输出」与「检测器标记」分开看
     MARK='\[M257-CTR\]|\[M257-ROOT\]|\[M258-|已回收|LIVECHK|UAFDET|Segmentation|core dumped'
-    runprobe() {   # $1=探针名  $2=tag
-        env PX_GC_STRESS=1 PX_GC_LIVECHK=1 PX_GC_UAFDET=1 \
+    runprobe() {   # $1=探针名  $2=tag  [$3=额外 env「K=V」]
+        env PX_GC_STRESS=1 PX_GC_LIVECHK=1 PX_GC_UAFDET=1 ${3:-} \
             timeout -k 5 180 "$W/$1" >"$W/$2.out" 2>"$W/$2.err"
         echo $? > "$W/$2.rc"
     }
 
     if [ "$bp_ok" = 1 ]; then
-        echo "══ [3] 窗口正判据（立即收缩形态 ⇒ 容器必丢）════"
-        runprobe probe_m258_iso iso
+        echo "══ [3] 窗口正判据（立即收缩形态 ⇒ 容器必丢 · 宽限档关闭）════"
+        #    M409（缺陷 267）起 `px_root_restore_iso` 多了一层「被摘条目进宽限表」的兜底 ⇒
+        #    默认档下这个窗口**已被兜住**（这正是 M409 要的效果）⇒ 必须用 `PX_ROOT_GRACE=0`
+        #    把兜底摘掉再证窗口存在，否则 [3] 会被自己的修复弄成假红。
+        runprobe probe_m258_iso iso "PX_ROOT_GRACE=0"
         irc=$(cat "$W/iso.rc")
         ilen=$(grep -oP '(?<=^LEN=)\S+' "$W/iso.out" || true)
         imark=$(grep -cE "$MARK" "$W/iso.out" "$W/iso.err" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
-        echo "     iso: rc=$irc LEN=${ilen:-无} 检测器标记=$imark"
+        echo "     iso(PX_ROOT_GRACE=0): rc=$irc LEN=${ilen:-无} 检测器标记=$imark"
         if [ "$irc" -ge 128 ] || [ "$imark" -gt 0 ] || [ "${ilen:-x}" != "4" ]; then
             ok "[3] 立即收缩形态**确实**丢掉容器（窗口真实存在）"
         else
             bad2 "[3] 立即收缩形态竟未丢容器 ⇒ 探针不敏感（判据无牙）"
         fi
 
-        echo "══ [4] 修复判据（px_root_restore ⇒ 延迟收缩）════"
-        runprobe probe_m258 fix
+        echo "══ [3b] 宽限档判据（默认档 ⇒ 同一形态不再丢容器 · 缺陷 267 兜底生效）════"
+        runprobe probe_m258_iso iso_grace ""
+        g_rc=$(cat "$W/iso_grace.rc")
+        g_len=$(grep -oP '(?<=^LEN=)\S+' "$W/iso_grace.out" || true)
+        g_mark=$(grep -cE "$MARK" "$W/iso_grace.out" "$W/iso_grace.err" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+        echo "     iso(默认档): rc=$g_rc LEN=${g_len:-无} 检测器标记=$g_mark"
+        if [ "$g_rc" = 0 ] && [ "${g_len:-x}" = 4 ] && [ "$g_mark" = 0 ]; then
+            ok "[3b] 宽限档生效（同一窗口下容器存活 ⇒ 摘根不再立刻 UAF）"
+        else
+            bad2 "[3b] 宽限档未生效（rc=$g_rc LEN=${g_len:-无} 标记=$g_mark）"
+        fi
+
+        echo "══ [4] 修复判据（px_root_restore ⇒ 延迟收缩 · 宽限档关闭）════"
+        runprobe probe_m258 fix "PX_ROOT_GRACE=0"
         frc=$(cat "$W/fix.rc")
         flen=$(grep -oP '(?<=^LEN=)\S+' "$W/fix.out" || true)
         fsum=$(grep -oP '(?<=^SUM=)\S+' "$W/fix.out" || true)

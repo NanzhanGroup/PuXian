@@ -1170,7 +1170,7 @@ step "M190 · 上游 registry-px 真实用例回归（238 用例 × 双轨 · EX
 #     （M310 D2 段2 rc=124）。此前只有宿主侧 `/data/gatevm/shard_run.sh` 硬写 1800 兜着
 #     ⇒ 同一件事实有两份真相，且**仓里那份缺失**。现在：1800 = 1.87× 实测（≥1.5× 裕度），
 #     守卫 `selfhost/check_gate_timeouts.sh` 用基线逐门盯裕度。
-gate_timeout upstream_tests 1800
+gate_timeout upstream_tests 2400   # M409：实测 1213s（chain-20261115-195907）⇒ 1800 仅 1.4× < 1.5× ⇒ 2400（1.98×）
 run upstream_tests bash selfhost/run_upstream_tests.sh
 # ── M287s2：上游回归的「失败确认步 / FLAKE」自证 ─────────────────────────
 #   动机（实测）：上游 `mock_test` 的桩服务器 `mk_start_server` = `spawn mk_server_loop(...)`
@@ -2164,6 +2164,9 @@ run m401_default_args bash examples/m401_default_args/verify.sh
 #        · N1 必败夹具 ⇒ 判红并指名 · N2 必过夹具 ⇒ 判绿（证明 N1 的红来自失败本身）
 #   ⚠️ 本门是「孤儿门算不算已收录」的唯一消费者：check_orphan_gates 只在**本门已注册且脚本在盘**时
 #     才把清单里的门算作已收录（否则清单一律不算数）—— 清单不能成为洗白孤儿的新后门。
+#   ⚠️ 上限声明（M409 收口轮 · 2026-11-16）：实测 798s（chain-20261115-195907）走默认 900s ⇒
+#      P2 判 88%（贴上限）且 m400 的 N1b/N2d 正控连带假红。798×1.5=1197 ⇒ 1200（裕度 66%）。
+gate_timeout m403_orphan_batch 1200
 run m403_orphan_batch bash examples/m403_orphan_batch/verify.sh
 
 # ── m406_struct_field_default（M406 · spec §3.7 字段默认值）──────────────────

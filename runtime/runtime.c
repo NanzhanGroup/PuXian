@@ -3245,8 +3245,23 @@ static volatile int g_dropped_idx = 0;   // 单调递增写游标
 static volatile int g_dropped_n = 0;     // 有效条目数（≤ RING）
 static volatile int g_dropped_hits = 0;  // 累计被摘条目数（诊断）
 
+// 逃逸阀（M409 门用 · 判据可分辨）：`PX_ROOT_GRACE=0` ⇒ 关掉宽限表（= 回到 S3b 前语义）。
+//   用途：m258 门的「窗口正判据」必须证明「立即收缩确实会丢容器」——默认档已被宽限表兜住，
+//   拿不到那个红 ⇒ 用本阀把宽限档摘掉再证窗口存在（红线只来自被测差异，不来自判据噪声）。
+static int px_root_grace_on(void) {
+    static volatile int v = -1;
+    int x = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (x < 0) {
+        const char* e = getenv("PX_ROOT_GRACE");
+        x = (e && e[0] == '0' && e[1] == '\0') ? 0 : 1;
+        __atomic_store_n(&v, x, __ATOMIC_RELAXED);
+    }
+    return x;
+}
+
 static void px_root_note_dropped(const LXValue* base, int from, int to) {
     if (!base) return;
+    if (!px_root_grace_on()) return;
     for (int i = from; i < to; i++) {
         if (!px_value_is_obj(base[i]) || !base[i].as.obj) continue;
         int k = __sync_fetch_and_add(&g_dropped_idx, 1);
@@ -3257,6 +3272,7 @@ static void px_root_note_dropped(const LXValue* base, int from, int to) {
 }
 
 static void gc_mark_dropped(GCHash* set) {
+    if (!px_root_grace_on()) return;
     int n = __atomic_load_n(&g_dropped_n, __ATOMIC_RELAXED);
     if (n > PX_DROPPED_RING) n = PX_DROPPED_RING;
     for (int i = 0; i < n; i++) {
