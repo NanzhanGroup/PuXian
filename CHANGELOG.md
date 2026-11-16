@@ -1,4 +1,4 @@
-## M410：静默失效收口 —— 通知缺失 + 判据自欺（缺陷 816 / 819）
+## M410：静默失效收口 —— 通知缺失 + 判据自欺（缺陷 816 / 819 / 820）
 
 > **一句话**：M409 暴露的两类毛病是同一个形状 —— **事情发生了，但没人（或没有判据）知道**。
 > 本里程碑只加「宿主侧机械闸 + 一个门」，**不改产品语义**：
@@ -44,6 +44,11 @@
    · 扫描范围：packaging/chain/*.sh 全量 + 宿主 /data/autodrive/*.sh 中 mtime ≥ 2026-11-16 的新脚本
      （**不追溯**历史脚本：106 条历史噪声会让门变成「反正永远红」的假装置）
 ④ 收编进 release_preflight.sh --gates：11 → **12** 门（新增 m410_criteria_scan）
+⑤ 缺陷 820（本轮 r3 全量门实测抓到的门假红）：m324_tls_failclosed 的 pick_cache 契约清单
+   只列了 10 个扩展内建，漏 QUIC/H3 四件 ⇒ 并行档按 mtime 选中不含 runtime_quic.c 的缓存，
+   负控链接报 undefined reference to px_register_quic/h3/h3_qpack_dyn ⇒ N1/N2 假红（产品 A1–A5 全绿）。
+   修法：契约清单提到文件顶层作唯一源 M324_CACHE_NEED（14 项）+ 打印「need=/miss=」自证，
+   缺对象即 CACHE-CONTRACT-FAIL rc=2（不静默降级）。这是缺陷 583 的同一形状（判据贴表象）再犯。
 ```
 
 ### 口径与已知偏差（诚实记账）

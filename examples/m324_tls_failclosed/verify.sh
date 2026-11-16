@@ -73,6 +73,14 @@ for _k in stop_mocks restore_rt px_gate_lock_release gate_tmp_clean; do
 done
 ck "EXIT 陷阱在位（stop_mocks / restore_rt / 锁释放 / 目录清理 四项俱全）" "$([ "$_tp_ok" = 1 ] && echo 0 || echo 1)"
 
+# ── 本门负控链接契约（唯一源；M410 缺陷 820：改 runtime 引入新模块必须同步这里）──
+#   为什么是硬清单而不是「挑最新缓存」：缓存的 key 由构建配置决定，同一棵树上
+#   既有含 QUIC/H3 的 full 档、也有不含的档，按 mtime 挑 = 贴表象（缺陷 583 的形状）。
+M324_CACHE_NEED="runtime_aes.o runtime_rsa.o runtime_sqlite.o runtime_route.o \
+                  runtime_xml.o runtime_zip.o runtime_zlib.o runtime_image.o \
+                  runtime_ed25519.o tweetnacl.o \
+                  runtime_quic.o runtime_h3.o runtime_h3_qpack.o runtime_h3_qpack_dyn.o"
+
 # ── 找「full」rtcache（必须是含 runtime_ws.o 的那一类；缺 runtime.o 的空目录跳过）──
 pick_cache() {
     local best="" m best_m=0
@@ -87,10 +95,17 @@ pick_cache() {
         #   而产品一行未动（A1–A5 与还原自证全绿）。偶发的原因：哪个 key 目录最新，取决于
         #   并发档下上一个门用了哪种构建配置 ⇒ 判据贴表象而非契约。
         #   修法：按**负控链接真正需要的对象**逐个查（下面这串就是链接的契约）。
+        # ⚠️ M410（缺陷 820）：清单必须覆盖 **runtime.c 里 px_register_* 引用的全部模块对象**。
+        #   上一版只列了 10 个扩展内建，漏了 QUIC/H3 四件 ⇒ M410 r3 并行档实测：
+        #   pick_cache 按 mtime 选中 .rtcache/53fda6a25cd78951（有 aes/sqlite/route… 十项全有、
+        #   看着像 --full，但**不含 runtime_quic.c**），负控链接报
+        #   undefined reference to px_register_quic / px_register_h3 / px_register_h3_qpack_dyn /
+        #   px_h3_server_listen_pipe / px_quic_raw_close_listener ⇒ N1/N2 两条负控判红，
+        #   而产品一行未动（A1–A5 与还原自证全绿）= **门假红**（判据贴表象，缺陷 583 的同一形状再犯）。
+        #   判据：契约清单项 = 本门负控链接的真实需要（改 runtime 引入新模块时必须同步这里，
+        #   漏了的表现是负控链接失败 ⇒ 门红，不会假绿）。
         ok=1
-        for need in runtime_aes.o runtime_rsa.o runtime_sqlite.o runtime_route.o \
-                    runtime_xml.o runtime_zip.o runtime_zlib.o runtime_image.o \
-                    runtime_ed25519.o tweetnacl.o; do
+        for need in $M324_CACHE_NEED; do
             [ -f "$d/$need" ] || { ok=0; break; }
         done
         [ "$ok" = 1 ] || continue                     # 精简档缓存 ⇒ 不是本门要的
@@ -100,8 +115,15 @@ pick_cache() {
     [ -n "$best" ] && echo "${best%/}"
 }
 CACHE=$(pick_cache)
-[ -n "$CACHE" ] || { echo "❌ 找不到 --full 的 rtcache（先 ./tools/px build --full examples/hello.px）"; exit 2; }
-echo "── rtcache：$CACHE"
+[ -n "$CACHE" ] || { echo "❌ 找不到满足链接契约的 rtcache（14 项对象齐备；先 ./tools/px build --full examples/hello.px）"; exit 2; }
+# 契约自证（M410 缺陷 820）：打印「要几个 / 缺几个」，缺即响亮退出（不静默降级）
+_NEED_N=0; _NEED_MISS=0
+for _n in $M324_CACHE_NEED; do
+    _NEED_N=$((_NEED_N+1))
+    [ -f "$CACHE/$_n" ] || { _NEED_MISS=$((_NEED_MISS+1)); echo "  ❌ 缓存缺契约对象：$_n"; }
+done
+[ "$_NEED_MISS" = 0 ] || { echo "CACHE-CONTRACT-FAIL need=$_NEED_N miss=$_NEED_MISS cache=$(basename "$CACHE")"; exit 2; }
+echo "── rtcache：$CACHE（链接契约自证 need=$_NEED_N miss=0）"
 
 # ── ① 证书 ──
 echo "── ① 造证书"
