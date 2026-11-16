@@ -234,7 +234,7 @@ for g in $(cat "$CAND"); do
     NLS=$((NLS+1))
     echo "$g" >> "$LSALL"
     # 连续两轮 ⇒ 升级（不许长期靠复跑掩盖）
-    if printf '%s\n' "$PREV_LS" | grep -qxF "$g"; then
+    if grep -qxF "$g" <<< "$PREV_LS"; then
       NESC=$((NESC+1))
       echo "$g" >> "$RCRED"
       say "  ⚠️ $g：低负载复跑绿（${_sec}s）但**上一轮也是 LOAD-SENSITIVE** ⇒ ESCALATED（仍判红）"

@@ -59,6 +59,19 @@ recheck_loadsensitive.sh 初版打印的是「候选 N 门」，不含 M410 R1 �
 口径：这就是 M410 那扇门存在的意义 —— 它先抓了我，不是先抓产品。
 ```
 
+### 自食其果第二次（M411 r1 链，pkg_pipe_grep 抓的）
+
+```
+链判红：green=285 red=1（286 门 · head=3336a70 · /data/gatevm/m411-chain-20261117-041829.log）
+红门：pkg_pipe_grep —— PIPE-GREP-VERDICT=REGRESS files_over_baseline=1
+根因：recheck_loadsensitive.sh:237 `printf '%s\n' "$PREV_LS" | grep -qxF "$g"`
+      ⇒ pipefail 下 grep 命中即退 ⇒ 生产者 EPIPE ⇒ 命中被读成「不含」（缺陷 621/622/624 同族）
+修法：改 here-string `grep -qxF "$g" <<< "$PREV_LS"`（该门自证夹具 B 的正确形态）
+复验：check_pipe_grep.sh --gate ⇒ PIPE-GREP-VERDICT=OK remaining=8 files=5；自证 9/9
+      recheck_loadsensitive.sh --selftest ⇒ 11/11（含 S4 连续两轮升级，正好走这条语句）
+口径：新写的判据脚本自己踩了判据要防的坑 ⇒ 门先抓我，不是先抓产品。零产品代码改动。
+```
+
 ### 本轮就是自己的负控（真实新门入册，不是造夹具）
 
 ```
