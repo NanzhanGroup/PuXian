@@ -30,6 +30,8 @@
 # 用法：verify.sh [--selftest] [--root <仓库根>]
 # ============================================================
 set -uo pipefail
+# M276 门级互斥锁（gate_lock_guard J1：每个 examples/*/verify.sh 必须 source）
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败" >&2; exit 2; }
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SELF_DIR/../.." && pwd)
 SELFTEST=0
@@ -101,7 +103,7 @@ if [ "$SELFTEST" = 1 ]; then
     # 坏 1：有 grep 判据 + OK 输出，从不打印扫描面
     cat > "$T/fx/bad_no_surface.sh" <<'EOS'
 #!/usr/bin/env bash
-if grep -q ROOT /tmp/x; then echo "OK"; else echo "FAIL"; fi
+if grep -q ROOT "$FX"; then echo "OK"; else echo "FAIL"; fi
 EOS
     # 坏 2：打了 nscan=、直接 OK，没有零值守卫
     cat > "$T/fx/bad_no_guard.sh" <<'EOS'
