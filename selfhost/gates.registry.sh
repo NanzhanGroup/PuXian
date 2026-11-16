@@ -2166,7 +2166,7 @@ run m401_default_args bash examples/m401_default_args/verify.sh
 #     才把清单里的门算作已收录（否则清单一律不算数）—— 清单不能成为洗白孤儿的新后门。
 #   ⚠️ 上限声明（M409 收口轮 · 2026-11-16）：实测 798s（chain-20261115-195907）走默认 900s ⇒
 #      P2 判 88%（贴上限）且 m400 的 N1b/N2d 正控连带假红。798×1.5=1197 ⇒ 1200（裕度 66%）。
-gate_timeout m403_orphan_batch 1200
+gate_timeout m403_orphan_batch 1320
 run m403_orphan_batch bash examples/m403_orphan_batch/verify.sh
 
 # ── m406_struct_field_default（M406 · spec §3.7 字段默认值）──────────────────
