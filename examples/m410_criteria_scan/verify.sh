@@ -14,7 +14,9 @@
 #      绿输出 = echo/printf 出 OK/PASS/DONE 或显式 exit 0
 #      扫描面 = nscan|ntags|nfiles|n_files|nrows|nhits|matched=|scanned=|扫描面|命中
 #   R2 「打了扫描面变量、却没有零值守卫」⇒ 红
-#      守卫 = 对同名变量做 -eq 0 / -le 0 / -lt 1 / == 0 / < 1 比较（0 必须判红）
+#      守卫 = 该变量被拿来跟**一个数**比较（-eq/-ne/-lt/-le/-gt/-ge n · ==/!= n · </> n）
+#      口径说明：只看「有没有把扫描面拿来比数」，不猜比较方向 —— 这是启发式，
+#      真正的牙由 --selftest（坏两件必红 / 好一件必绿）与「扫描面 0 必红」承担。
 #
 # 扫描面（打印后由调用方核对，**扫描面为空 ⇒ 本门自己判红**）：
 #   ① $ROOT/packaging/chain/*.sh                 发布链与看护脚本（全量）
@@ -48,9 +50,9 @@ ok(){ echo "  PASS  $*"; }
 bad(){ echo "  FAIL  $*"; fails=$((fails+1)); }
 
 # ── 规则实现（自检与正式跑共用同一份）─────────────────────────
-SURFACE_RE='nscan|ntags|nfiles|n_files|nrows|nhits|matched=|scanned=|扫描面|命中'
+SURFACE_RE='nscan|ntags|nfiles|n_files|nrows|nhits|nverify|matched=|scanned=|扫描面|命中'
 GREEN_RE='(echo|printf)[^#]*(OK|PASS|DONE|-DONE)|^[[:space:]]*exit 0'
-SURFVAR_RE='(^|[^A-Za-z0-9_])(nscan|ntags|nfiles|n_files|nrows|nhits)='
+SURFVAR_RE='(^|[^A-Za-z0-9_])(nscan|ntags|nfiles|n_files|nrows|nhits|nverify)='
 
 # r1_hit <file> → 0 命中 R1
 r1_hit(){
@@ -65,7 +67,7 @@ r2_hit(){
     local v hit=1
     for v in $(grep -oE "$SURFVAR_RE" "$1" 2>/dev/null | sed 's/[^A-Za-z0-9_]//g' | sort -u); do
         # 该变量必须出现在零值比较里（$v 或 ${v}）
-        grep -qE "\\\$\{?$v\}?\"?[[:space:]]*(-eq[[:space:]]+0|-le[[:space:]]+0|-lt[[:space:]]+1|==[[:space:]]*0|<[[:space:]]*1|-eq[[:space:]]+1|-ge[[:space:]]+1|-gt[[:space:]]+0|!=[[:space:]]*0|-ne[[:space:]]+0)" "$1" 2>/dev/null || { hit=0; }
+        grep -qE "\\\$\{?$v\}?\"?[[:space:]]*(-(eq|ne|lt|le|gt|ge)[[:space:]]+[0-9]+|[=!]=[[:space:]]*[0-9]+|[<>][[:space:]]*[0-9]+)" "$1" 2>/dev/null || { hit=0; }
     done
     [ "$hit" = 0 ] && return 0
     return 1
