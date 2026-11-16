@@ -1789,8 +1789,25 @@ static long long g_gc_marked = 0;   // 调试：最近一轮 GC 标记数
 static volatile int g_gc_early_resume_epoch = 0;  // 挣脱发生时的轮次号（= 该轮不得 sweep）
 static volatile int g_gc_early_resumes = 0;       // 累计挣脱次数（诊断）
 static int g_gc_early_resume_skips = 0;           // 因挣脱而放弃 sweep 的轮数
+static int g_gc_last_sweep_resumes = 0;           // 上一次 sweep 结束时的挣脱计数（S3d 判据基准）
 static int g_gc_force_early_resume = 0;           // PX_GC_FORCE_EARLY_RESUME=1（门/负控专用）
 static int g_gc_early_abort = 1;                  // PX_GC_EARLY_ABORT=0 ⇒ 关掉放弃逻辑（A/B 对拍）
+// M409-S3c（缺陷 267 · **门装置**）：mark 之前的**可控窗口**（PX_GC_M409_HOLD_US，默认 0 = 关闭）。
+//   为什么需要它：真实病灶的窗口 = 「某线程提前挣脱暂停」→「本轮根面快照（hash 建表）」之间，
+//   实测宽度只有微秒级 ⇒ 野外 ~1/60 命中。判据若等这个窗口自己撞上来，就只能写成
+//   「跑 N 次不崩」（假绿温床，M257 §「加探测器后 60~240 次均未复现」同款教训）。
+//   ⇒ 把窗口**拉宽**成可观测量：hold 期间已挣脱的线程在用户态自由分配/入根，随后才建快照。
+//   **只影响开了该环境变量的进程**；生产/常态档 0 ⇒ 一行都不会执行。
+static int g_gc_m409_hold_us = 0;
+//   PX_GC_M409_HOLD_N=<轮数> ⇒ 只对**前 N 轮** GC 施加 hold（默认 -1 = 不限）。
+//   为什么需要限量：配合 PX_GC_STRESS（每次分配即 GC）时，无限 hold 会把进程拖成
+//   「N 轮 × hold」的定长慢放（实测 1 万轮 × 20ms = 200s）；限量后装置只在开局
+//   几轮里造窗口，之后恢复常态速度。判据见 verify.sh 的 N1（必须真的造出挣脱）。
+static int g_gc_m409_hold_left = -1;
+//   **触发口径**：hold 只加在「上一次统计到挣脱之后的那一轮」——因为**危险窗口就在挣脱之后**
+//   （挣脱线程此后新分配的对象会进紧接着那一轮的 hash，而它的根面不会被扫）。
+//   无条件 hold 会把整段跑成慢放，且在「挣脱尚未发生」的轮次上白等（实测红率仅 ~50%）。
+static int g_gc_m409_hold_seen = 0;
 static __thread LXObject* g_tmp_root = NULL;  // 暂存根：保护刚创建对象（构造函数内触发 GC）
 
 // ---------- M124（qg-issue 80）：STW 屏障「阻塞等待」原语 ----------
@@ -2008,6 +2025,11 @@ static void gc_init_env(void) {
     if (fe && fe[0] == '1') g_gc_force_early_resume = 1;
     const char* ea = getenv("PX_GC_EARLY_ABORT");
     if (ea && ea[0] == '0') g_gc_early_abort = 0;
+    //   PX_GC_M409_HOLD_US=<微秒> ⇒ mark 前窗口拉宽（门装置；默认 0 关闭，见 g_gc_m409_hold_us 注释）
+    const char* hd = getenv("PX_GC_M409_HOLD_US");
+    if (hd && hd[0]) { int _v = atoi(hd); if (_v > 0) g_gc_m409_hold_us = _v; }
+    const char* hn = getenv("PX_GC_M409_HOLD_N");
+    if (hn && hn[0]) { int _v = atoi(hn); if (_v >= 0) g_gc_m409_hold_left = _v; }
     {   // M409：退出时汇报挣脱/skip 计数（有异常才响；PX_GC_M409STAT=1 强制打印）
         static int m409stat_reg = 0;
         if (!m409stat_reg) { m409stat_reg = 1; atexit(px_gc_m409_stat_dump); }
@@ -3388,6 +3410,13 @@ void px_gc_collect(void) {
         g_gc_epoch++;
         g_gc_stop_in_progress = 1;   // 标记进行中（handler 据此区分过期堆积信号）
         __sync_synchronize();
+        // M409-S3d（缺陷 267 · 第二根面）：挣脱判据**不得**用「本轮开始时快照」。
+        //   为什么要一直退到「上一轮 sweep 之后」：装置实测（2026-11-16，PX_GC_DEBUG）
+        //   `[M409-CHK] epoch=5 early_ep=3 er=3 snap=3 round=0` —— 挣脱计数总是在
+        //   **两轮之间**涨（handler 的堆积信号在上一轮结束后才 break，写的是旧 epoch），
+        //   到下一轮建快照时早已被吸收 ⇒ 无论 epoch 比较还是轮初快照都漏掉它。
+        //   ⇒ 判据 = 「自上一次 sweep 以来发生过任何挣脱」就放弃本轮（保守一轮，代价只是漏回收）。
+        //   基准 g_gc_last_sweep_resumes 在每轮 sweep 结束后更新（见本轮尾部）。
         // 1) 向所有已注册、非自身、已创建完成的线程发送暂停信号（只发一次）
         for (int i = 0; i < g_thread_cap; i++) {
             GCThreadInfo* ti = &g_threads[i];
@@ -3446,6 +3475,23 @@ void px_gc_collect(void) {
         long long _gcs_mk0 = g_gc_stats_on ? gc_mono_us() : 0;                // M312-B：mark 细分基准
         if (g_gc_stats_on) _gcs_thr = g_paused_count;   // M312-C：暂停线程数（此处才代表 STW 规模）
         // 3) 标记
+        // M409-S3c（门装置）：把「挣脱 → 根面快照」的微秒级窗口拉宽成可观测量。
+        //   位置刻意选在**快照之前**：hold 期间挣脱线程新分配的对象会进本轮 hash，
+        //   而它已 paused=0 ⇒ 根面不被扫描 ⇒ 未标记（正是缺陷 267 的真实形态）。
+        //   默认 0（生产档不执行）；判据与负控见 examples/m409_gc_container_lifetime/。
+        if (g_gc_m409_hold_us > 0 && g_gc_m409_hold_left != 0) {
+            int _er = __atomic_load_n(&g_gc_early_resumes, __ATOMIC_SEQ_CST);
+            if (_er <= g_gc_m409_hold_seen) goto _m409_no_hold;
+            g_gc_m409_hold_seen = _er;
+            if (g_gc_m409_hold_left > 0) g_gc_m409_hold_left--;
+            int _n0 = g_obj_count;
+            struct timespec _hs;
+            _hs.tv_sec = g_gc_m409_hold_us / 1000000;
+            _hs.tv_nsec = (long)(g_gc_m409_hold_us % 1000000) * 1000L;
+            nanosleep(&_hs, NULL);   // PX_IO_EINTR_OK: 门装置定长等待，被打断也只是提前结束（不重试）
+            if (g_gc_debug) { char _dbg[160]; int _dn = snprintf(_dbg, sizeof(_dbg), "[M409-HOLD] us=%d objs %d->%d paused=%d\n", g_gc_m409_hold_us, _n0, g_obj_count, g_paused_count); if (_dn > 0) (void)write(2, _dbg, (size_t)_dn); }
+        }
+_m409_no_hold:;
         GCHash set;
         gc_hash_init(&set, (size_t)g_obj_count * 2);
         for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
@@ -3536,7 +3582,11 @@ void px_gc_collect(void) {
         int do_sweep = 1;
         {
             int early_ep = __atomic_load_n(&g_gc_early_resume_epoch, __ATOMIC_SEQ_CST);
-            if (early_ep == g_gc_epoch) {
+            int early_now = __atomic_load_n(&g_gc_early_resumes, __ATOMIC_SEQ_CST);
+            // M409-S3d：**计数差**才是真判据（epoch 相等会漏「陈旧 epoch 的挣脱」——见本轮快照处注释）
+            int early_round = (early_now != g_gc_last_sweep_resumes) || (early_ep == g_gc_epoch);
+            if (g_gc_debug) { char _dbg[160]; int _dn = snprintf(_dbg, sizeof(_dbg), "[M409-CHK] epoch=%d early_ep=%d er=%d last=%d round=%d\n", g_gc_epoch, early_ep, early_now, g_gc_last_sweep_resumes, early_round); if (_dn > 0) (void)write(2, _dbg, (size_t)_dn); }
+            if (early_round) {
                 if (!g_gc_early_abort) {
                     // 负控（PX_GC_EARLY_ABORT=0）：保留旧行为（照常 sweep）—— 只做对拍
                     if (g_gc_early_resume_skips < 0) {}
@@ -3583,6 +3633,7 @@ void px_gc_collect(void) {
         g_gc_last_ms = gc_now_ms();      // M317（缺陷 551）：时间判据基准
         g_gc_time_check_at = 0;
         g_gc_freed += freed;
+        g_gc_last_sweep_resumes = __atomic_load_n(&g_gc_early_resumes, __ATOMIC_SEQ_CST);   // M409-S3d：本轮判据基准
         g_gc_runs++;
         // M208（缺陷 269）：**不得清 g_tmp_root** —— 见 px_gc_collect 出口注释。
         if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;

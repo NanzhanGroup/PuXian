@@ -336,6 +336,8 @@ examples/m396_dict_index/shape.px src=14c3e37f2572ac86 dep=54325cfb921a7ed4 rc=0
 examples/m397_bytes_ops/main.px src=0b1bc629bfa64b28 dep=d05b5ec21242e90c rc=0 out=6c182028f84b2597b1bf97cf1b3aa1a8 err=e3b0c44298fc1c14
 examples/m397_bytes_ops/neg_add.px src=0ebbe1ad6a62d644 dep=962536a6e011689a rc=0 out=3f81270404813149bfafeff491ea8ba4 err=e3b0c44298fc1c14
 examples/m397_bytes_ops/neg_in.px src=6fb5ddec0f96363f dep=06079aa7ab0fdaa8 rc=0 out=49061896287e02af3f05fb32ed516d78 err=e3b0c44298fc1c14
+examples/m409_gc_container_lifetime/probe_lifetime.px src=9bdc212879f9353d dep=c33b677ce8ebd947 rc=0 out=81b4761858c178beea27f174cf99d371 err=e3b0c44298fc1c14
+examples/m409_gc_container_lifetime/probe_sig.px src=6b44540f81275de8 dep=f30a59b9fb3c25da rc=0 out=873d73a2b3c9815b78950d98c054ec3f err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 dep=0fff66d42e9eb5ed rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 dep=4feb3f45634763df rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 dep=30f57d4669464f56 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

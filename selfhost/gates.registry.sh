@@ -2228,3 +2228,13 @@ run m408_builtin_err_trap bash examples/m408_builtin_err_trap/verify.sh
 #     D 代理不可达 ⇒ 报文含代理地址（可读）· N1 期望扰动（修前形态）⇒ A 必红
 #     N2 不经代理直连本机 origin ⇒ 200（判据不是恒红）
 run m408_proxy_connect bash examples/m408_proxy_connect/verify.sh
+
+step "M409 · 容器生命周期（缺陷 267：提前挣脱暂停 ⇒ 必须放弃本轮 sweep）"
+#   病灶：某线程 handler 自旋上限到点「提前挣脱暂停」后恢复用户态、继续改写自己的容器，
+#     而本轮 mark 的根面快照里没有它（根4 只扫 `paused` 的线程）⇒ sweep 把仍存活的容器回收复用。
+#   处置（S3b/S3d）：判据 =「自上一次 sweep 以来发生过挣脱」⇒ 放弃本轮 sweep（只清 mark 位）。
+#   门三层牙：N1 前提自证（挣脱>0 且 放弃 sweep>0，否则 PREMISE-FAIL）· N2 负控
+#     （PX_GC_EARLY_ABORT=0 ⇒ 必红，若也绿则判红=装置没牙）· N3 反假绿（DONE + BAD=0 + 无 CTR，连跑 2 次）。
+#   ⚠️ 驱动器必须是**真注册 OS 线程**（信号处理器线程）。协程版证不了：根 4b 无条件标全部存活
+#      协程帧槽 ⇒ 未暂停也被标 ⇒ 负控恒绿（假绿）。实测记录见 probe_lifetime.px 文件头。
+run m409_gc_container_lifetime bash examples/m409_gc_container_lifetime/verify.sh

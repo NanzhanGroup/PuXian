@@ -1,0 +1,67 @@
+# ============================================================
+# M409 门探针 · **容器生命周期（信号处理器线程版）**（缺陷 267）
+# ------------------------------------------------------------
+# 为什么要这一版（v3 协程版失败，见 probe_lifetime.px 文件头）：
+#   `spawn` 出来的 victim 是**协程**，`px_coro_gc_mark_roots`（GC 根 4b）会无条件标
+#   全部存活协程的帧槽 ⇒ 即使该线程未暂停，它的作用域局部照样被标 ⇒ 制造不出漏标。
+#   真病灶要的是「**只在某个执行流的根面里、且该执行流未被扫**」的对象。
+#
+# 本版执行流 = **信号处理器线程**（`sig_dispatch_thread`，M126 起 px_gc_thread_enter 注册）：
+#   · 它跑 .px 处理器 ⇒ 处理器内的 dict/list 只挂在 **ti->vm_state / TLS 登记根栈** 上；
+#   · 这些根**只在「该线程本轮 paused」时**才被扫（runtime.c 根4：`if (!ti->paused ...) continue`）；
+#   · 处理器里**只改写已有槽、不分配** ⇒ 不会因为拿 g_gc_mu 而阻塞在锁上（v2 教训）。
+#   ⇒ 注入「提前挣脱暂停」（`PX_GC_FORCE_EARLY_RESUME=1`）+ 把窗口拉宽（`PX_GC_M409_HOLD_US`）：
+#      hold 期间已挣脱的处理器线程在用户态改写自己的容器 ⇒ 本轮 mark 看不到它
+#      ⇒ 负控（`PX_GC_EARLY_ABORT=0`）下被 sweep 回收 ⇒ 后续改写落在复用存储上
+#      ⇒ `[M257-CTR]` / LIVECHK / SIGSEGV / `BAD>0`。
+#   修后期望：`M409-PROBE-DONE` + `BAD=0` + `[M409-STAT] 因挣脱放弃 sweep>0`（前提自证）。
+#
+# ⚠️ 本探针不发网络包、不碰端口、不写数据目录（M264 门间隔离），只吃内存 + stdout。
+# ============================================================
+var ROUNDS = 16
+var HN = 400000       # 处理器内改写次数（要活过 hold 窗口）
+var stop = 0
+var bad = 0
+var hdone = 0
+
+def h(sig):
+    # 容器只建一次（不分配）；此后整段处理器执行期都挂在本线程根面上
+    let d = {"a": 0, "b": sig}
+    let l = [0, 0, 0]
+    var i = 1
+    var n = 0
+    while n < HN:
+        d["a"] = i
+        l[0] = i
+        if d["a"] != i:
+            bad += 1
+        if d["b"] != sig:
+            bad += 1
+        if l[0] != i:
+            bad += 1
+        i += 1
+        n += 1
+    hdone += 1
+    return 0
+
+let _r = env("M409_PROBE_ROUNDS")
+if _r != null:
+    if _r != "":
+        ROUNDS = int(_r)
+let _hn = env("M409_PROBE_HN")
+if _hn != null:
+    if _hn != "":
+        HN = int(_hn)
+
+signal(10, h)
+print("M409-PROBE-READY")
+var r = 0
+while r < ROUNDS:
+    os_kill(os_pid(), 10)   # 唤醒处理器线程，让它活过接下来这轮 GC
+    sleep(3)                # 等它真的进到处理器（注册窗口只覆盖执行期）
+    gc()
+    r += 1
+sleep(300)
+print("M409-PROBE-HDONE=" + str(hdone))
+print("M409-PROBE-BAD=" + str(bad))
+print("M409-PROBE-DONE")

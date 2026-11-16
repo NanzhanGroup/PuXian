@@ -1923,6 +1923,15 @@ jobs:
           grep -E '^  ✅' /tmp/v_m408b.log | tail -6
           echo "✅ m408_proxy_connect（CONNECT 隧道 + 报文可读 + 判据有牙）PASS"
 
+      - name: m409_gc_container_lifetime（容器生命周期 · 缺陷 267 · 挣脱暂停 ⇒ 放弃 sweep）
+        # 判据：N1 前提自证（提前挣脱>0 且 因挣脱放弃 sweep>0，否则 PREMISE-FAIL）
+        #   N2 负控 PX_GC_EARLY_ABORT=0 ⇒ 必红（也绿 = 装置没牙 ⇒ 判红）· N3 反假绿（连跑 2 次）
+        if: always()
+        run: |
+          bash examples/m409_gc_container_lifetime/verify.sh > /tmp/v_m409.log 2>&1 || { echo "❌ m409_gc_container_lifetime 门失败（容器生命周期）"; tail -40 /tmp/v_m409.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(── |  PASS)' /tmp/v_m409.log | tail -8
+          echo "✅ m409_gc_container_lifetime（前提自证 + 负控必红 + 修后连跑 2 次绿）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交
