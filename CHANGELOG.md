@@ -1,3 +1,55 @@
+## M409：缺陷 267 收口 —— 提前挣脱 GC 暂停导致的根面快照失效（S3a–S3e）
+
+> **一句话**：campaign3 两次真命中拿到完整形态 —— **对象仍在执行者 TLS 登记根栈 idx=0（root_n=1），
+> 却已被 sweep 回收**；线程槽 epoch 证明该线程在本轮**暂停后又提前恢复**（handler 自旋上限到点 break）。
+> 修法：挣脱即让 executor **放弃本轮 sweep**（只清标记、不 free）+ 摘根宽限期 + 槽位复用清根面；
+> 并以**确定性门** `m409_gc_container_lifetime`（N1 前提自证 / N2 负控 / N3 反假绿）钉住。
+
+### 证据
+
+```
+campaign3（旧行为）  45min 内 2 次 CAMPAIGN-HIT；第 2 次原件 /data/gatevm/m409-repro2-20261116-060556/
+  [M257-CTR] 容器存储已失效 … 359604496(unknown) 期望 7(dict)
+  [PX_GC_DIAG] idx=-1 不在 g_objs（已被 sweep 回收） ← 仍在执行者 TLS 登记根栈 idx=0
+  线程槽：槽0 epoch=4719（本轮暂停过）/ paused=0 / root_n=1 · g_gc_epoch=4720 ⇒ 提前恢复
+  尾部 SLAB BUG: bad-alloc off=136235312（存储已复用，堆已脏）
+campaign4（S3b 修后）125 batch ×10 round ≈ 20000 探针 · 90min · 0 命中
+单进程实证 PX_GC_STRESS=1 PX_GC_INLINE=1：gc_runs=5467 · 提前挣脱=4 · 因挣脱放弃 sweep=1
+（旧行为下这 1 轮就会回收未标记对象）
+```
+
+### 修法（runtime 语义）
+
+```
+S3a 25cfbeb  px_key_eq 空键不 strcmp · px_dict_set 锁内存储自洽性检查（补 M257 类型守卫盲区）
+S3b d85d9b4  g_gc_early_resume_epoch：handler 挣脱即打标 ⇒ executor 放弃本轮 sweep（sweep_n 快照，
+             期间新追加条目一律保留）；px_root_restore_iso 摘根改入 256 环形宽限表；
+             线程槽复用清 roots/root_n/vm_state
+S3c/S3d 38fb7e1  确定性门 examples/m409_gc_container_lifetime（信号处理器线程版驱动器）
+S3e 54309b3  宽限表逃逸阀（16 行）· m258_root_restore 替身可分辨 · m409 门挂门锁 + 声明超时
+```
+
+### 观测与逃生阀
+
+```
+[M409-EARLY]  放弃 sweep（前 20 次或 PX_GC_DEBUG）·  退出时 [M409-STAT] 提前挣脱 / 因挣脱放弃 sweep
+PX_GC_FORCE_EARLY_RESUME=1 注入 · PX_GC_EARLY_ABORT=0 关处置（A/B 负控）· PX_GC_M409_HOLD_US 窗口
+```
+
+### 门
+
+```
+m409_gc_container_lifetime（284 门）：N1 前提自证（提前挣脱>0 且放弃 sweep>0，否则 PREMISE-FAIL）
+  N2 负控（EARLY_ABORT=0 必红：实测 [M257-CTR] 复现）· N3 反假绿（DONE + BAD=0 + 无 CTR，连跑 2 次）
+  verify.sh 连跑 5/5 M409-VERIFY-OK，每轮 ~3.6s；耗时基线回灌 3s（P6 覆盖 284/284）
+反例留档：协程版 probe_lifetime.px 证不了（px_coro_gc_mark_roots 无条件标存活协程帧槽 ⇒ 负控恒绿）
+```
+
+### 口径
+
+只说「装置上红了/绿了」。定位到的是**机制级解释 + 处置**（根面快照与被回收时刻不一致），
+不声称「267 彻底消灭」；campaign5（25min 负载验证）+ 分片全量门 ×2 无 `[M257-CTR]`/`[M257-ROOT]`
+作为收口外部证据。
 ## M408 r4：quiet 名单加门却没同步归档 ⇒ quiet_archive 门判红（缺陷 816–817）
 
 > **一句话**：全量链按 head=14ffd46 重跑 **282/283 绿**，唯一红门 `quiet_archive` 报
