@@ -45,6 +45,14 @@ while [ $# -gt 0 ]; do
 done
 ALLOW="$SELF_DIR/allow.tsv"
 POLICY_DATE="${M410_POLICY_DATE:-2026-11-16 00:00:00}"
+# HOSTFACE-ABSENT（M415 · 缺陷 826）：宿主面缺席的判定口径
+#   CI/干净环境没有 /data/autodrive ⇒ host: 例外表条目一条都不会命中。
+#   旧版把这种「面本来就不存在」算成 STALE-ALLOW ⇒ **门在 CI 上必红**（2026-11-17 实测连续 15 轮）。
+#   口径：面缺席 ⇒ host: 条目 SKIP（打印扣减）；面存在而文件消失 ⇒ 仍判 STALE（豁免不能吃掉真烂账）。
+HOSTFACE_ABSENT=0
+is_host_key(){ case "$1" in host:*) return 0;; *) return 1;; esac; }
+# judge_stale <key> <absent 0|1> → 0 = 判 STALE（红） · 1 = 跳过（面缺席）
+judge_stale(){ is_host_key "$1" && [ "$2" = 1 ] && return 1; return 0; }
 
 fails=0
 say(){ echo "── $*"; }
@@ -125,6 +133,11 @@ EOS
     r2_hit "$T/fx/bad_no_guard.sh"   && ok "正控 R2：无零值守卫必被抓" || bad "正控 R2 漏抓"
     r2_hit "$T/fx/good.sh" && bad "负控 R2 误报好样例" || ok "负控 R2：有守卫不误报"
     r1_hit "$T/fx/good.sh" && bad "负控 R1 误报好样例" || ok "负控 R1：打印了扫描面不误报（本案按 R1 也不该红）"
+    # ── 宿主面缺席的口径（M415 · 缺陷 826：CI 无 /data/autodrive ⇒ 旧版 4 条 STALE 必红）──
+    say "[自检] 宿主面缺席 ≠ 白名单烂账"
+    judge_stale "host:tag_notify.sh" 1 && bad "正控：面缺席时 host 条目仍判 STALE（CI 必红）" || ok "正控：面缺席 ⇒ host 条目跳过"
+    judge_stale "host:tag_notify.sh" 0 && ok "负控：面在场 ⇒ 未命中仍判 STALE（豁免不是无条件）" || bad "负控：面在场也跳过 ⇒ 豁免吃掉了真烂账"
+    judge_stale "repo:packaging/chain/x.sh" 1 && ok "负控：面缺席不豁免 repo 条目" || bad "面缺席把 repo 条目也放过了"
     # 扫描面 0 必须判红（本门不允许「没东西可扫 ⇒ 绿」）
     say "[自检] 扫描面为 0"
     n=0
@@ -136,6 +149,9 @@ EOS
 fi
 
 # ── 正式扫描 ─────────────────────────────────────────────────
+# 宿主面在场性（必须在主 shell 求值：list_scan_face 跑在子 shell 里，变量传不回来）
+AD_DIR="${M410_AUTODRIVE_DIR:-/data/autodrive}"
+[ -d "$AD_DIR" ] || HOSTFACE_ABSENT=1
 mapfile -t FACE < <(list_scan_face)
 nscan=${#FACE[@]}
 say "[1] 扫描面：nscan=$nscan（repo packaging/chain + 宿主 mtime ≥ $POLICY_DATE）"
@@ -181,11 +197,18 @@ for row in "${FACE[@]}"; do
 done
 
 say "[3] 例外表对账"
-stale=0
+stale=0; hostskip=0
 for k in "${!ALLOW_REASON[@]}"; do
-    [ -n "${SEEN[$k]+x}" ] || { bad "STALE-ALLOW $k（未命中任何扫描文件）"; stale=$((stale+1)); }
+    [ -n "${SEEN[$k]+x}" ] && continue
+    if ! judge_stale "$k" "$HOSTFACE_ABSENT"; then
+        hostskip=$((hostskip+1))
+        printf '  SKIP  %s（宿主面缺席 ⇒ 本条不判 STALE；宿主面在场时仍须命中）\n' "$k"
+        continue
+    fi
+    bad "STALE-ALLOW $k（未命中任何扫描文件）"; stale=$((stale+1))
 done
-[ "$stale" = 0 ] && ok "例外表无烂账（allow=$allow_n）"
+echo "  宿主面：absent=$HOSTFACE_ABSENT（$AD_DIR）· host 条目 SKIP=$hostskip"
+[ "$stale" = 0 ] && ok "例外表无烂账（allow=$allow_n · 面内命中 $((allow_n-hostskip)) · 面缺席跳过 $hostskip）"
 
 echo
 echo "nscan=$nscan R1=$r1 R2=$r2 allow=$allow_n"

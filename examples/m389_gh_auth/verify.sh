@@ -164,12 +164,56 @@ if ! diff -q "$GHGET" "$TMP/gh_bad1.sh" >/dev/null; then ok "P3a 负控副本确
 if grep -q 'state=token-ok' "$TMP/n1.out"; then ok "N1 负控 A 成立：失效令牌被标成 token-ok（C2 会红）"; else ng "N1 负控 A 打不出来（判据无牙）"; fi
 
 printf '\n【N2】负控 B：取不到数时返回 rc=0 + 空文件 ⇒ C4 必须红\n'
-sed 's/GH_AUTH_STATE="fail-\$code" ; return 4 ;;/GH_AUTH_STATE="fail-$code"; : > "$out"; return 0 ;;/' \
+# M415 · 缺陷 829：本负控必须**两条分支都打**。
+#   旧版只 patch 了「带令牌」那条（`fail-$code ; return 4`），匿名那条
+#   （`fail-$anon_code ; return 4`）没打 ⇒ 在**没有 /data/pat.md 的干净环境**（CI）里
+#   请求走匿名分支、坏实现根本没生效 ⇒ latest_guard 仍 exit 2 ⇒ **负控假红**（2026-11-17 CI 实测）。
+#   这是「负控的前提没自证」：它测的不是坏实现，而是「这台机器有没有令牌文件」。
+sed -e 's/GH_AUTH_STATE="fail-\$code" ; return 4 ;;/GH_AUTH_STATE="fail-$code"; : > "$out"; return 0 ;;/' \
+    -e 's/GH_AUTH_STATE="fail-\$anon_code"; return 4 ;;/GH_AUTH_STATE="fail-$anon_code"; : > "$out"; return 0 ;;/' \
     "$GHGET" > "$TMP/gh_bad2.sh"
 if ! diff -q "$GHGET" "$TMP/gh_bad2.sh" >/dev/null; then ok "P3b 负控副本确实被改过"; else ng "P3b 负控没改到（sed 锚点失效）"; fi
+# 前提自证（两条分支都被打掉才算前提成立）
+n_patched=$(grep -cE 'fail-\$(code|anon_code)"; : > "\$out"; return 0' "$TMP/gh_bad2.sh" 2>/dev/null || true)
+n_still=$(grep -cE 'fail-\$(code|anon_code)" ; return 4' "$TMP/gh_bad2.sh" 2>/dev/null || true)
+n_patched=${n_patched:-0}; n_still=${n_still:-0}
+if [ "$n_patched" = 2 ] && [ "$n_still" = 0 ]; then
+    ok "P3c 前提自证：有令牌 / 匿名两条失败分支都已改成 rc=0（patched=$n_patched still=$n_still）"
+else
+    ng "P3c 前提不成立：分支没打全（patched=$n_patched 期望 2 · still=$n_still 期望 0）⇒ 本轮 N2 结论不可信"
+fi
 mkdir -p "$TMP/neg2"; cp "$GUARD" "$TMP/neg2/latest_guard.sh"; cp "$TMP/gh_bad2.sh" "$TMP/neg2/gh_get.sh"
 out=$( env -u GH_TOKEN GH_ALLOW_ANON=1 GH_API="$BASE/down" bash "$TMP/neg2/latest_guard.sh" --repo X/Y 2>&1 ); rc=$?
 chkn "N2 负控 B 成立：坏实现下 latest_guard 不再 exit 2（实得 rc=$rc）" "rc=$rc" "rc=2"
+
+printf '\n【C8】令牌不进 argv（ps / systemd journal 里不得出现 Bearer 令牌）\n'
+# M415 · 缺陷 831：2026-11-18 实测 systemd 的 cgroup 树把
+#   `curl ... -H "Authorization: Bearer github_pat_..."` 整条打进 journal ⇒ 本机任何能读日志的
+#   进程都能拿到有效期 30 天的令牌。修法：`curl -K -`（配置从 stdin 读），argv 只剩 `-K -`。
+if grep -nE '\-H[[:space:]]+"Authorization' "$ROOT/packaging/gh_get.sh" 2>/dev/null | grep -qvE '^[0-9]+:[[:space:]]*#'; then
+    ng "C8 gh_get.sh 仍把 Authorization 放进 argv（ps/journal 可见）"
+else
+    ok "C8 gh_get.sh 的 Authorization 不走 argv"
+fi
+if grep -q 'K[[:space:]]*-' "$ROOT/packaging/gh_get.sh"; then ok "C8b 确有 -K - 通道（配置走 stdin）"; else ng "C8b 没找到 -K - 通道"; fi
+# C8c 前提自证：用「会记下自己 argv 的假 curl」实抓一次，证明令牌真的没进参数表
+mkdir -p "$TMP/curlspy"
+cat > "$TMP/curlspy/curl" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CURLSPY_OUT"
+exit 0
+EOS
+chmod +x "$TMP/curlspy/curl"
+( export PATH="$TMP/curlspy:$PATH" CURLSPY_OUT="$TMP/argv.txt"
+  # shellcheck disable=SC1090
+  . "$GHGET"; _gh_call "/x" "$TMP/o.json" "github_pat_C8SECRET_abcdef" >/dev/null 2>&1 || true )
+if [ -s "$TMP/argv.txt" ] && ! grep -q 'C8SECRET' "$TMP/argv.txt"; then
+    ok "C8c 实抓 argv：令牌不在参数里（$(tr '\n' ' ' < "$TMP/argv.txt" | cut -c1-60)…）"
+elif [ ! -s "$TMP/argv.txt" ]; then
+    ng "C8c 前提不成立：假 curl 没被调到（本轮 C8 结论不可信）"
+else
+    ng "C8c 实抓 argv：令牌仍在参数里（argv 里出现 C8SECRET）"
+fi
 
 printf '\n'
 if [ "$F" = 0 ]; then echo "M389 门结果：$P 通过 / 0 失败"; echo "M389-VERIFY-OK"; exit 0

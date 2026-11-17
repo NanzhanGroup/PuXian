@@ -65,6 +65,11 @@ run_manifest() {
             #   真因（go 的真实报错 / 断言原文）无从查证。红必须自带证据 ⇒ 留尾部 6 行。
             echo "     ── 子门日志尾部（$name · 共 $(grep -c . "$TMP/$name.log" 2>/dev/null || echo 0) 行）──"
             tail -6 "$TMP/$name.log" 2>/dev/null | sed 's/^/       /'
+            # M415 · 缺陷 830：尾部 6 行对「子门自己的汇总行」不够 —— CI 那次只看到
+            #   「M126 verify 有失败 pass=40 fail=2」，失败的是哪 2 条断言一个字都没留下。
+            #   红必须自带证据 ⇒ 额外点名失败行（带缩进，CI 注解才留得住）。
+            echo "     ── 子门失败行（$name · 最多 8 条）──"
+            grep -nE 'FAIL|❌|错误|panic|error:' "$TMP/$name.log" 2>/dev/null | head -8 | sed 's/^/       失败行 /' || true
             RM_BAD=$((RM_BAD + 1))
             continue
         fi

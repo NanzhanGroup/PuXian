@@ -2294,3 +2294,14 @@ run m413_notify_ack bash examples/m413_notify_ack/verify.sh
 #   扫描面：notify_ack.sh · 本注册源 · m413 前置门 · 宿主 dy-ops-watch-lib-ack.sh
 gate_timeout m414_notify_waiting 180
 run m414_notify_waiting bash examples/m414_notify_waiting/verify.sh
+
+# ── m415_cleanenv：干净环境自证（缺陷 826）───────────────────────────────
+#   病史：GitHub 上 PuXian CI **连续 15 轮红**（最早可查 11-14），本地 289 门全绿，
+#   发布链照常判 GREEN 并打 tag —— 两条判据相反，没人知道。逐门定性后四条同形：
+#   判据在「东月这台机器」上成立、在干净环境里不成立（无 /data/autodrive · 无 /data/pat.md）。
+#   本门守：① CI 门里的宿主面运行时依赖必须可缺失/可注入，例外登记带到期（STALE/过期即红）
+#     · ② 动态正控：m410 在宿主面缺席下必绿、m389 在无令牌下必绿
+#     · ③ 动态负控：把 m410 的豁免改回原样 ⇒ 同样环境必须红（防「环境本来就不红」的假绿）
+#   扫描面：ci.yml 里会跑的 225 门（nscan 显式打印，为 0 自身判红）
+gate_timeout m415_cleanenv 420
+run m415_cleanenv bash examples/m415_cleanenv/verify.sh

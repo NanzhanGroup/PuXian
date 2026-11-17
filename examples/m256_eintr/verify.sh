@@ -318,7 +318,14 @@ if [ -x "$BIN" ]; then
     if cmp -s "$W/out_norm.txt" "$W/out_stress.txt"; then
         ok "[5] 两档一致"
     else
-        bad "[5] 两档不一致"; diff "$W/out_norm.txt" "$W/out_stress.txt" | head -8
+        bad "[5] 两档不一致"
+        # M415 · 缺陷 828：**门红了要能读出真因**。
+        #   CI 的注解只保留带缩进/标记的行（grep -E '^(   |── |❌|  PASS|  FAIL)'），
+        #   裸 diff 输出（以 < > 数字开头）会被整段筛掉 ⇒ 2026-11-17 那次 CI 红只剩
+        #   「[5] 两档不一致」一句话，读不出差在哪。这里把现场打进带标记的行。
+        echo "        现场 norm: $(wc -c < "$W/out_norm.txt") 字节 · stress: $(wc -c < "$W/out_stress.txt") 字节"
+        echo "        现场 md5  norm=$(md5sum < "$W/out_norm.txt" | cut -c1-12) stress=$(md5sum < "$W/out_stress.txt" | cut -c1-12)"
+        diff "$W/out_norm.txt" "$W/out_stress.txt" | head -8 | sed 's/^/        差异 /' || true
     fi
 fi
 

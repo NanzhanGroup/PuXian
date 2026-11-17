@@ -1,3 +1,84 @@
+## M415：本地绿 ≠ 远端绿（判据的环境前提 · 缺陷 826–831）
+
+> **一句话**：GitHub 上 PuXian CI **连续 15 轮红**（最早可查 11-14），本地全量门 289/289 全绿、
+> 发布链照常判 GREEN 并连打 6 个 tag —— **两条判据给出相反结论，而没有任何东西在看着远端**。
+> 逐门定性后四条同形：判据在「东月这台机器」上成立、在干净环境里不成立。
+> 这不是产品坏了，是**判据没把「环境前提」当第 0 维**（同 m283 的 P4 精神）。
+
+### 证据（先量后改，全部可复核 · 2026-11-18 04:2x 实测）
+
+```
+CI 结论（api.github.com，token-ok）
+  b2ac180 main  PuXian CI  failure    ← HEAD
+  e4a4af0 main  PuXian CI  failure    11-17 14:56
+  5be66ab main  PuXian CI  failure    11-17 13:50
+  639636a main  PuXian CI  failure    11-17 11:47
+  … 连续 15 轮 failure（Release 工作流全是 success ⇒ 发版链从不看 CI）
+失败 step（都在同一个 job「工具链自举质量门」里）
+  m256_eintr    FAIL [5] 两档不一致        （T1/U2 全 PASS，只有逐字节比对红；diff 行被 CI 注解的 grep 筛掉 ⇒ 读不出差在哪）
+  m389_gh_auth  ❌ N2 负控 B 成立（实得 rc=2）（负控只 patch 了「带令牌」分支，CI 无 /data/pat.md ⇒ 走匿名分支，坏实现没生效）
+  m410_criteria_scan  STALE-ALLOW host:tag_notify.sh ×4（CI 无 /data/autodrive ⇒ host 例外表一条都不命中 ⇒ 被判烂账）
+  m403_orphan_batch   子门 M126 verify 有失败 pass=40 fail=2（尾部 6 行只剩汇总 ⇒ 失败的是哪 2 条没留下）
+本地        289 门全绿（11-17 23:23 链）· 同一 HEAD
+```
+
+### 修法（四条真修 + 一条新发现）
+
+```
+缺陷 826  m410_criteria_scan：宿主面缺席时 host: 例外表转 SKIP（打印扣减），不判 STALE
+          面缺席 ≠ 白名单烂账；面在场而文件消失 ⇒ 仍判 STALE（豁免不能吃掉真烂账）
+缺陷 829  m389_gh_auth：负控 B 两条失败分支都打（带令牌 / 匿名），并加 P3c 前提自证
+          （patched=2 · still=0）—— 否则这负数测的是「这台机器有没有令牌文件」，不是坏实现
+缺陷 828  m256_eintr：[5] 失败时把字节数 / md5 / diff 打进**带缩进的行**（CI 注解才留得住）
+缺陷 830  m403_orphan_batch：子门红时额外的「失败行」清单（最多 8 条，带缩进）
+缺陷 831  gh_get.sh：Authorization 改走 `curl -K -`（配置从 stdin 读）
+          实测：systemd 的 cgroup 树把整条 `curl -H "Authorization: Bearer github_pat_…"` 打进 journal
+          ⇒ 本机任何能读日志的进程都能拿到有效期 30 天的 PAT（ps 同理）。这是 SECURITY/P0 级暴露。
+```
+
+### 新门 m415_cleanenv（289 → 290 门 · preflight 22 → 23 门）
+
+```
+[1] 静态：ci.yml 里会跑的 226 门逐个看「有没有运行时宿主依赖且无缺失检测」
+     → RISK 必须逐条登记在 examples/m415_cleanenv/known_risks.tsv（带定性 + 到期）
+     → 未登记 / 登记已不违规(STALE) / 到期过了 ⇒ 各自判红
+     （注释、echo 文案、`[ -f ]` 探测、`${VAR:-路径}` 可注入、`for cand in …` 候选枚举都不算 RISK）
+[2] 动态正控：m410 在宿主面缺席下必绿 · m389 在无令牌文件下必绿
+[3] 动态负控：把 m410 的豁免 sed 改回「永远判 STALE」⇒ 同样环境必须红（防「环境本来就不红」的假绿）
+扫描面 226 显式打印，为 0 自身判红
+自测 8/8：缺失检测识别 2 · 运行时依赖识别 2 · 端到端 4（未登记/转绿/STALE/过期 各自要有牙）
+```
+
+### 远端对账器（这才是「不再无声」的那一半）
+
+```
+packaging/chain/ci_parity_check.sh    拉最近 main 的 PuXian CI + 失败 step，与 ci_known_red.tsv 对账
+    0 OK/SYNC（红都在账上且未过期）· 1 GAP（未登记 / 过期）· 2 ENV-FAIL（取不到数，不许当空结果）
+    粒度：step（不是 job）—— 只用 job 名会把十几门红压成一行「XX 质量门」，等于把信息扔掉
+    自测 6/6：未登记 / 只登记一半 / 全登记 / 过期 / CI 绿 / 无 fixture 各自要命
+packaging/ci_known_red.tsv            4 条在账：m256(11-20) · m389(11-19) · m410(11-19) · m403(11-20)
+宿主 /usr/local/sbin/dy-ops-ci-parity.sh + dy-ops-ci-parity.timer（30min）
+    GAP / ENV-FAIL ⇒ dy-notify p1（叫醒东月，不推用户）；SYNC ⇒ resolve 双清
+```
+
+### 口径（不夸大）
+
+```
+能说    远端 CI 从「没人看」变成「每 30 分钟有人对账，红必须落在账上且带到期」
+        四条 CI 红逐门定性完毕，其中两条（m389/m410）已真修并在干净环境复验
+        令牌不再进 argv（C8c 用「会记 argv 的假 curl」实抓取证）
+不能说  「CI 已全绿」—— m256/m403 是 CI-only 红，本轮只把诊断做实（diff / 失败行能读出来了），
+        真因要等下一轮 CI 跑完才拿得到
+不能说  「本地绿就等于产品好了」—— 本轮恰恰证明它不等于：本地绿只证明这台机器
+不做    不把 known_risks 当免检牌：每条带到期日，过期即红
+```
+
+### 一处自我更正
+
+M414 的收口通知曾写「投递后台账自动回写 OK」，实际 `notify-ledger.tsv` 里 v0.2.414 仍是 `FAIL`
+（探针 `miss=0` 是因为它按「已入重投队列 = QUEUED」放行）。两处口径不一致 ⇒ 已列为候选（缺陷 832），
+下一轮修：`tag_state` 返回 DELIVERED 时回写台账，并让探针把「长期 QUEUED 未投递」算 miss。
+
 ## M414：BLIND 判据的 WAITING 口径（缺陷 824）
 
 > **一句话**：上一轮（M413）我装上「已通知 ≠ 已被读到」的可观测性，**它第一天就用最高级别叫错了人**。

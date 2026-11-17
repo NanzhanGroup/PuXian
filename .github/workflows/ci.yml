@@ -1987,6 +1987,18 @@ jobs:
           grep -E 'nscan=' /tmp/v_m414.log | tail -1
           echo "✅ m414_notify_waiting（事故复现 + 豁免有界 + p0 防抖）PASS"
 
+      - name: m415_cleanenv（干净环境自证 · M415 · 缺陷 826）
+        # 病史：CI 连续 15 轮红、本地全绿 —— 判据靠「这台机器恰好有什么」（/data/autodrive · /data/pat.md）。
+        # 齿：① 宿主面运行时依赖必须可缺失/可注入，例外登记带到期（未登记/STALE/过期 各自必红）
+        #   · ② 动态正控 m410（宿主面缺席）+ m389（无令牌）必绿
+        #   · ③ 动态负控：m410 豁免改回原样 ⇒ 同样环境必红 · 扫描面 0 ⇒ 红
+        if: always()
+        run: |
+          bash examples/m415_cleanenv/verify.sh --selftest > /tmp/v_m415s.log 2>&1 || { echo "❌ m415_cleanenv 自检失败（装置自己没牙）"; tail -20 /tmp/v_m415s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m415_cleanenv/verify.sh > /tmp/v_m415.log 2>&1 || { echo "❌ m415_cleanenv 门失败（本地绿≠远端绿）"; tail -40 /tmp/v_m415.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'nscan=' /tmp/v_m415.log | tail -1
+          echo "✅ m415_cleanenv（宿主依赖可缺失 + 两处真修钉住 + 负控有牙）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

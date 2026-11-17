@@ -48,12 +48,22 @@ _gh_token() {
 }
 
 # ── 单次请求：$1=path $2=outfile $3=token(可空) ⇒ 吐 http code（curl 失败吐 000）──
+# ⚠️ M415 · 缺陷 831：**令牌不许进 argv**（2026-11-18 实测：systemd 的 cgroup 树把
+#   `curl ... -H "Authorization: Bearer github_pat_..."` 整条打进 journal ⇒ 任何能
+#   读日志/ps 的本机进程都能拿到有效期 30 天的 PAT）。改用 `curl -K -`（配置从 stdin 读），
+#   argv 里只剩 `-K -`。gh_auth_state 本来就只报长度/前缀，这条把「本体不落地」补齐。
+_gh_authhdr_cfg() {  # $1=token ⇒ 一行 curl 配置文件（不进 argv）
+    printf 'header = "Authorization: Bearer %s"\n' "$1"
+}
 _gh_call() {
-    local path="$1" out="$2" tok="${3:-}" code hdr=()
-    hdr=(-H "Accept: application/vnd.github+json")
-    [ -n "$tok" ] && hdr+=(-H "Authorization: Bearer $tok")
-    code="$(curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" \
-                 "${hdr[@]}" "$GH_API$path" 2>/dev/null)" || code="000"
+    local path="$1" out="$2" tok="${3:-}" code
+    if [ -n "$tok" ]; then
+        code="$( _gh_authhdr_cfg "$tok" | curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" \
+                     -K - -H "Accept: application/vnd.github+json" "$GH_API$path" 2>/dev/null )" || code="000"
+    else
+        code="$( curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" \
+                     -H "Accept: application/vnd.github+json" "$GH_API$path" 2>/dev/null )" || code="000"
+    fi
     printf '%s' "${code:-000}"
 }
 
@@ -111,9 +121,9 @@ gh_write() {  # gh_write <method> <path> <body> <outfile>
     local method="$1" path="$2" body="$3" out="$4" tok code
     tok="$(_gh_token || true)"
     [ -n "$tok" ] || { GH_AUTH_STATE="token-missing"; return 4; }
-    code="$(curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" -X "$method" \
-                 -H "Authorization: Bearer $tok" -H "Accept: application/vnd.github+json" \
-                 -d "$body" "$GH_API$path" 2>/dev/null)" || code="000"
+    code="$( _gh_authhdr_cfg "$tok" | curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" -X "$method" \
+                 -K - -H "Accept: application/vnd.github+json" \
+                 -d "$body" "$GH_API$path" 2>/dev/null )" || code="000"
     GH_LAST_CODE="$code"
     case "$code" in
         200|201|202|204) GH_AUTH_STATE="write-ok"; return 0 ;;
