@@ -190,7 +190,11 @@ printf '\n【C8】令牌不进 argv（ps / systemd journal 里不得出现 Beare
 # M415 · 缺陷 831：2026-11-18 实测 systemd 的 cgroup 树把
 #   `curl ... -H "Authorization: Bearer github_pat_..."` 整条打进 journal ⇒ 本机任何能读日志的
 #   进程都能拿到有效期 30 天的令牌。修法：`curl -K -`（配置从 stdin 读），argv 只剩 `-K -`。
-if grep -nE '\-H[[:space:]]+"Authorization' "$ROOT/packaging/gh_get.sh" 2>/dev/null | grep -qvE '^[0-9]+:[[:space:]]*#'; then
+# M415 修正（pkg_pipe_grep 门 · 口径 19）：原写法 `grep -nE … | grep -qvE …` 属缺陷 621/622/624 同族 ——
+#   `grep -q` 一命中即退出 ⇒ 生产者拿 EPIPE ⇒ rc=141 ⇒ pipefail 把「有违规」读成「合格」（实测 PIPESTATUS[0]=141）。
+#   改为先落变量再 here-string 判（无写端，不撞 SIGPIPE）；保留非空守卫，否则空输出会被当成「有一行非注释」而误报。
+auth_argv_hits=$(grep -nE '\-H[[:space:]]+"Authorization' "$ROOT/packaging/gh_get.sh" 2>/dev/null || true)
+if [ -n "$auth_argv_hits" ] && grep -qvE '^[0-9]+:[[:space:]]*#' <<< "$auth_argv_hits"; then
     ng "C8 gh_get.sh 仍把 Authorization 放进 argv（ps/journal 可见）"
 else
     ok "C8 gh_get.sh 的 Authorization 不走 argv"
