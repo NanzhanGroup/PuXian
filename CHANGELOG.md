@@ -1,3 +1,86 @@
+## M414：BLIND 判据的 WAITING 口径（缺陷 824）
+
+> **一句话**：上一轮（M413）我装上「已通知 ≠ 已被读到」的可观测性，**它第一天就用最高级别叫错了人**。
+> 2026-11-17 21:37 推给用户的 p0「⚠ 自驱唤醒可能失效」是假警报：台账 `M413-release` 末行 `ESCALATED`、
+> age=110min，但它的 park 探测条件（`test -f M413-RELEASE.done`）**为假** —— 发布链还在跑，
+> **根本不到该醒的时候**。BLIND 的语义是「**该醒**而没醒」，判据跳过了「该醒」这一步。
+>
+> ⚠️ 口径：本轮不碰产品运行时，也不声称修好了 buswake 空闲门禁本身（那是 ws-core 的行为）。
+> 它修的是**判据口径**：把「等工序」从「叫不醒」里摘出来，并且不再让判据自己说「证据不够」时按 p0 打扰用户。
+
+### 证据（先量后改，全部可复核）
+
+```
+21:37:15  dy-ops-watch  [notify-blind] FAIL  blind=1 M413-release(age=110min) user_present=no
+21:37:15  同一秒        [stuck-unit]   OK    m413-chain 已运行 1h27m（正常推进，未到 2h30m 阈值）
+          ⇒ 两条判据互相不看对方：一边说「单元在正常干活」，一边说「人叫不醒」
+台账      首行 epoch 1794916001（19:46:41 r1 判红）· 末行 ESCALATED 1794919198（20:39:58）
+park      .parkwhen.json[dy-ops-M413-release] = test -f /data/autodrive/M413-RELEASE.done（21:37 时为假）
+结构性    发布链典型墙钟 ≈110min > blind_min 90min ⇒ **每次发版都必然误报一次 p0**（不是偶发）
+防抖矛盾  同一秒日志写「连续 1/2 次命中，未达阈值（暂不报）」，下一行「→ 已推用户 p0」
+          —— p0 是直推分支，绕过了 apply 的防抖；判据自己说证据不够却按最响的级别打扰
+```
+
+### 修法（三件，缺一不算修好）
+
+```
+A. 分类新增 WAITING（既不算 ok，也不算 blind，单列计数）：
+     先求 park probe（权威定义「该醒」）
+       probe=false              ⇒ WAITING-PROBE（该醒前提不成立）
+       probe=true + 用户在场      ⇒ wait-present
+       probe=true + 在场未知      ⇒ wait-unknown（不猜）
+       probe=true + 用户不在场    ⇒ BLIND
+     无 park 记录：有在途发布单元 ⇒ WAITING-UNIT（等工序 ≠ 叫不醒）
+                   无在途单元     ⇒ wait-unknown（宁可不判，不猜）
+B. blind_min 动态下界 = max(90, 30 + 最长在途发布单元时长)
+     理由：等工序的时间不该算进「叫不醒」的账龄；同时要有界（130min 下 age=140 仍判 BLIND）
+C. p0 直推必须过与 p1 同一道防抖（读同一个计数文件）：未达 CONFIRM 只挂台账，不推用户
+```
+
+### 交付件
+
+```
+packaging/chain/notify_ack.sh            判据唯一实现 v2（探针求值 + 在途单元 + 动态下界，nscan/零值守卫照旧）
+examples/m414_notify_waiting/verify.sh   门：自测 12 断言（事故复现正控 A1 + 5 负控 + 3 前提自证）
+                                         + P4/P5/P6 宿主 p0 防抖功能测试（连续 1/2 不推 · 达阈 p1+p0 都到 · 绿判据不升级）
+examples/m413_notify_ack/verify.sh       正控夹具补 park probe=true（口径更正后，「该醒」是 BLIND 的必要前提）
+                                         + S3c 前提自证：park 记录存在且 probe 实测为真
+/usr/local/sbin/dy-ops-watch-lib-ack.sh  p0 分支加防抖闸（读 cnt_file，未达 CONFIRM 不推）+ p0 正文口径更正
+/usr/local/sbin/dy-ops-watch-selftest.sh 不变（宿主 p0 功能测试在门里做，见 P4/P5/P6）
+/data/autodrive/tag_notify.sh            台账时间戳 UTC → 本地（v0.2.409~412 那几行早 8 小时）
+selfhost/gates.registry.sh               289 门（+1：m414_notify_waiting）
+.github/workflows/ci.yml                 +1 步（m414_notify_waiting）
+selfhost/gate_inputs_allow.tsv           +1 条 host 登记（/var/log/dy-ops/pending）
+packaging/release_preflight.sh           --gates 档 21 → 22 门（判据口径本身也前置）
+```
+
+### 负控（没有牙不算修好）
+
+```
+A1  事故复现：probe=false + ESCALATED + age=110 + 用户静默180 ⇒ wait_probe=1 blind=0 rc=0（不推 p0）
+A2  前提自证：那条 probe 命令实测返回 1（证明 A1 测的真是「等工序」）
+B1  豁免不许吃掉真盲区：probe=true + 无在途单元 + 同账龄 ⇒ 仍判 BLIND rc=1
+B1a 前提自证：probe 命令实测为真
+C   无 park 记录 ⇒ wait-unknown（不猜、不报 p0）
+D   在途单元兜底：打印单元名与运行分钟（m999-chain run=100min）
+E1  动态下界生效：unit=100 ⇒ blind_min=130，age=110 判 WAITING
+E2  下界有界：age=140 > 130 ⇒ 仍判 BLIND（豁免不是无限）
+F   台账目录不存在 ⇒ rc=3（不假绿）· G 空台账 ⇒ SCAN-GUARD + nscan=0 rc=0
+H   计数不串：nscan=3 / blind=1 / wait_unknown=1 / ok=1（四类单列）
+I   用户在场 ⇒ wait_present=1 blind=0（设计如此，不打扰）
+P4  连续 1/2 次命中 ⇒ 不推 p0（判据桩实测被调用 1 次，前提自证）
+P5  达阈值 ⇒ p1 与 p0 都到位（防「顺手把 p0 通道永久闩死」）
+P6  判据绿 ⇒ 两次巡视都不升级（不假红，桩实测跑 2 次）
+```
+
+### 诚实边界
+
+```
+未做   不改 buswake 空闲门禁本身（ws-core 行为），本轮只把「该醒」的定义接进判据
+未做   在场判据仍用 token_cache.updated_at 代理，不精确（NEXT-QUEUE 候选 E 保留）
+未验证 宿主 p0 防抖只在沙箱桩上验过；真实触发一次 p0 才算端到端，但那要求真出现盲区 ⇒ 不制造
+```
+
 ## M413：已通知 ≠ 已被读到（缺陷 823）
 
 > **一句话**：本轮不改产品语义。它修的是**「告警系统说『我叫过你了』，但从来没人被叫醒」**——

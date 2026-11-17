@@ -95,6 +95,10 @@ PRECHECK_GATES=(
     #   我新写的 recheck_loadsensitive.sh 用了 `… | grep -q`（SIGPIPE）。这门全仓扫描只要 5s。
     #   用 100 分钟的反馈周期发现 5s 能发现的问题，与 M411 S1 是同一个错误。
     pkg_pipe_grep                                        # 管道形态棘轮（`| grep -q` 等 SIGPIPE 形态，实测 5s）
+    # ── M414 S1：把「判据口径」本身也前置（21 → 22 门，实测 ~2s）──
+    #   病史：M413 的 BLIND 判据把「发布链还在跑」当成「叫不醒」⇒ 每次发版必误报一次 p0
+    #   （2026-11-17 21:37 用户被假警报叫醒）。这门守 WAITING 口径 + p0 防抖。
+    m414_notify_waiting                                  # probe 权威 + 在途单元兜底 + p0 防抖（秒级）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

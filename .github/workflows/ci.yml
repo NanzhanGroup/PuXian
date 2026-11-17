@@ -1976,6 +1976,17 @@ jobs:
           grep -E 'nscan=' /tmp/v_m413.log | tail -1
           echo "✅ m413_notify_ack（判据自测正负控 + 宿主接线有牙）PASS"
 
+      - name: m414_notify_waiting（BLIND 口径 WAITING · M414 · 缺陷 824）
+        # 齿：A1 事故复现（probe=false ⇒ WAITING，不许 BLIND）· B1 豁免不吃真盲区（probe=true ⇒ BLIND）
+        #   · C 无 park 记录 ⇒ wait-unknown · D 在途单元兜底 · E 动态下界有界（130min）
+        #   · P4 p0 防抖（连续 1/2 不推）· P5 达阀 p1+p0 都到 · P6 绿判据不升级 · 扫描面 0 ⇒ 红
+        if: always()
+        run: |
+          bash examples/m414_notify_waiting/verify.sh --selftest > /tmp/v_m414s.log 2>&1 || { echo "❌ m414_notify_waiting 自检失败（装置自己没牙）"; tail -20 /tmp/v_m414s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m414_notify_waiting/verify.sh > /tmp/v_m414.log 2>&1 || { echo "❌ m414_notify_waiting 门失败（WAITING 口径或 p0 防抖未闭合）"; tail -40 /tmp/v_m414.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'nscan=' /tmp/v_m414.log | tail -1
+          echo "✅ m414_notify_waiting（事故复现 + 豁免有界 + p0 防抖）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

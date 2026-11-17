@@ -62,8 +62,15 @@ selftest() {
     local NOW=1800000000
     mkdir -p "$pen" || { echo "❌ fixture 建不出来" >&2; return 2; }
 
+    # M414 口径更正后，「BLIND」必须先满足「该醒」= park probe 为真。
+    #   ⇒ 正控夹具必须显式提供 probe=true 的 park 记录 + 空在途单元清单，否则测的是
+    #     「无 park 记录」那类 wait-unknown，正控不再是正控（M414 门 N2 守这条）。
+    local park="$T/park.json" units="$T/units.empty"
+    printf '{"dy-ops-fixture-red":{"cmds":["test -d %s"]}}\n' "$pen" > "$park"
+    : > "$units"
+    echo "  · 夹具 park=$park（probe=true 指向 fixture 目录）· units=$units（空）"
     # S1 前提自证：空台账目录 ⇒ nscan=0 且 rc=0（不是「假绿」，是真空）
-    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 0 ] && grep -q 'nscan=0' <<<"$out" && ok "S1 空台账 ⇒ nscan=0 rc=0（扫描面自证）" || bad "S1 rc=$rc out=$out"
 
@@ -75,7 +82,7 @@ selftest() {
     # S3 正控：已升级 + 120min + 用户 180min 未活动 ⇒ BLIND=1 rc=1
     mk_pend "$pen/dy-ops-fixture-red" "$((NOW-7200))" ESCALATED
     mk_db "$db" "$((NOW-10800))" || bad "S3 夹具 db 建失败（后续结论不可信）"
-    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_BLIND_MIN=90 NA_IDLE_MIN=30 bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" NA_BLIND_MIN=90 NA_IDLE_MIN=30 bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 1 ] && grep -q 'blind=1' <<<"$out" && grep -q 'BLIND-KEYS' <<<"$out" \
         && ok "S3 正控：已叫未读（120min/用户离线180min）⇒ BLIND rc=1" || bad "S3 rc=$rc out=$out"
@@ -90,9 +97,17 @@ selftest() {
         && ok "S3b 前提自证：末行=ESCALATED · age=$((age_s/60))min · 用户静默$(( (NOW-dbts)/60 ))min（不是脚本自说自话）" \
         || bad "S3b 夹具前提不成立 lm=$lm age=${age_s}s db_gap=$(( NOW - dbts ))s"
 
+    # S3c 前提自证（M414 新增）：probe 必须真为 true —— 否则「该醒」不成立，正控退化
+    nscan=$((nscan+1))
+    if grep -q 'dy-ops-fixture-red' "$park" && bash -c "test -d $pen"; then
+        ok "S3c 前提自证：park 记录存在且 probe=true（该醒的前提成立）"
+    else
+        bad "S3c park 夹具不成立 ⇒ S3 结论不可信"
+    fi
+
     # S4 负控：用户在场（5min 前有 token 写入）⇒ 不许判 BLIND（这是设计如此，不打扰）
     mk_db "$db" "$((NOW-300))" || bad "S4 db 建失败"
-    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 0 ] && grep -q 'blind=0' <<<"$out" && grep -q 'wait_present=1' <<<"$out" \
         && ok "S4 负控：用户在场 ⇒ blind=0 / wait_present=1 rc=0" || bad "S4 rc=$rc out=$out"
@@ -100,21 +115,21 @@ selftest() {
     # S5 负控：末行是 PENDING（没升级过）⇒ 不算「已通知」⇒ blind=0
     mk_db "$db" "$((NOW-10800))"
     mk_pend "$pen/dy-ops-fixture-red" "$((NOW-7200))" PENDING
-    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 0 ] && grep -q 'blind=0' <<<"$out" \
         && ok "S5 负控：未升级（PENDING）⇒ 不算 BLIND（判据不越界）" || bad "S5 rc=$rc out=$out"
 
     # S6 负控：已升级但只挂了 30min（< BLIND_MIN 90）⇒ 不许提前报
     mk_pend "$pen/dy-ops-fixture-red" "$((NOW-1800))" ESCALATED
-    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 0 ] && grep -q 'blind=0' <<<"$out" \
         && ok "S6 负控：30min < 90min 阈值 ⇒ 不提前报" || bad "S6 rc=$rc out=$out"
 
     # S7 负控：拿不到在场判据（无 db）⇒ 单列 wait-unknown，既不假红也不假绿
     mk_pend "$pen/dy-ops-fixture-red" "$((NOW-7200))" ESCALATED
-    out="$(NA_PEND_DIR="$pen" NA_DB="$T/no-such.db" NA_NOW="$NOW" bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$T/no-such.db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 0 ] && grep -q 'user_present=unknown' <<<"$out" && grep -q 'wait_unknown=1' <<<"$out" \
         && ok "S7 负控：无在场判据 ⇒ wait_unknown=1 rc=0（不猜）" || bad "S7 rc=$rc out=$out"
@@ -123,13 +138,13 @@ selftest() {
     mk_db "$db" "$((NOW-10800))"
     mk_pend "$pen/dy-ops-fixture-ok1" "$((NOW-1800))" ESCALATED       # 未到点
     mk_pend "$pen/dy-ops-fixture-ok2" "$((NOW-7200))" PENDING         # 未升级
-    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" bash "$NA" 2>&1)"; rc=$?
+    out="$(NA_PEND_DIR="$pen" NA_DB="$db" NA_NOW="$NOW" NA_PARKWHEN="$park" NA_UNITS_FILE="$units" bash "$NA" 2>&1)"; rc=$?
     nscan=$((nscan+1))
     [ "$rc" = 1 ] && grep -q 'nscan=3' <<<"$out" && grep -q 'blind=1' <<<"$out" \
         && ok "S8 负控：3 条里只有 1 条成立（nscan=3 blind=1，计数不串）" || bad "S8 rc=$rc out=$out"
 
-    echo "── 自测：$((n-FAIL))/$n 通过 · 断言 $n（要求 ≥9）· 负控 5（S4/S5/S6/S7/S8）+ 前提 2（S1/S2）──"
-    [ "$n" -ge 9 ] || { echo "❌ 断言数 $n < 9（自测被削弱）" >&2; return 2; }
+    echo "── 自测：$((n-FAIL))/$n 通过 · 断言 $n（要求 ≥10）· 负控 5（S4/S5/S6/S7/S8）+ 前提 3（S1/S2/S3c）──"
+    [ "$n" -ge 10 ] || { echo "❌ 断言数 $n < 10（自测被削弱）" >&2; return 2; }
     [ "$FAIL" = 0 ] || return 1
     return 0
 }
@@ -151,7 +166,7 @@ echo "扫描面 nscan=$nscan（判据实现 · 注册源 · 宿主看门狗）"
 
 # P1 装置自测
 if selftest; then
-    ok "P1 装置自测全绿（正控会红 · 5 条负控 · 2 条前提）"
+    ok "P1 装置自测全绿（正控会红 · 5 条负控 · 3 条前提）"
 else
     bad "P1 装置自测失败（判据不可信）"
 fi

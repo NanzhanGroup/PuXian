@@ -45,3 +45,4 @@ examples/m411_loadsensitive/verify.sh	P1	/data/autodrive/chain_verdict.sh	host	�
 examples/m412_chain_tail/verify.sh	P1	/data/autodrive	host	链尾判据读宿主发布标记与队列（M412 缺陷 821）；CI 无宿主档时 P2 响亮跳过并扣扫描面，P1/P3 照判
 examples/m412_chain_tail/verify.sh	P1	/var/log/dy-ops/pending	host	链尾判据要读告警台账（除自身 key 外有台账即算有人接力）；CI 无此目录时 pending=0 照判
 examples/m413_notify_ack/verify.sh	P1	/var/log/dy-ops/pending	host	「已通知≠已读」判据要读宿主台账（M413 缺陷 823）；CI 无此目录时 P2 段响亮跳过，P1 自测照判
+examples/m414_notify_waiting/verify.sh	P1	/var/log/dy-ops/pending	host	WAITING 口径门按新版判据复判宿主真台账（M414 缺陷 824）；CI 无此目录时 P7 段整段跳过并扣扫描面，P1 自测照判

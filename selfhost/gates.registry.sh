@@ -2282,3 +2282,15 @@ run m412_chain_tail bash examples/m412_chain_tail/verify.sh
 #   扫描面：notify_ack.sh · 本注册源 · 宿主 dy-ops-watch.sh（nscan 显式打印，为 0 自身判红）
 gate_timeout m413_notify_ack 180
 run m413_notify_ack bash examples/m413_notify_ack/verify.sh
+
+# ── m414_notify_waiting：BLIND 判据的 WAITING 口径（缺陷 824）─────────────
+#   病史：2026-11-17 21:37 推给用户的 p0「自驱唤醒可能失效」是假警报：台账 M413-release
+#   末行 ESCALATED、age=110min，但它的 park 探测条件（test -f M413-RELEASE.done）为假
+#   ⇒ 根本不到该醒的时候。发布链典型墙钟 ≈110min > 90min 阀值 ⇒ **每次发版必误报一次**。
+#   本门守：A1 事故复现（probe=false ⇒ WAITING）· B1 豁免不吃真盲区（probe=true ⇒ BLIND）
+#     · C 无 park 记录 ⇒ wait-unknown（不猜）· D 在途单元兜底 · E 动态下界有界（130 ⇒ age140 仍红）
+#     · F/G 前提与扫描面 · H 四类计数不串 · I 用户在场不打扰
+#     · P4/P5/P6 p0 防抖（连续 1/2 不推；达阀 p1+p0 都到；绿判据不升级）
+#   扫描面：notify_ack.sh · 本注册源 · m413 前置门 · 宿主 dy-ops-watch-lib-ack.sh
+gate_timeout m414_notify_waiting 180
+run m414_notify_waiting bash examples/m414_notify_waiting/verify.sh
