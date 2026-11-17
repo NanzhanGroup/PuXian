@@ -44,8 +44,9 @@
 #   - chain-20261117-063056 = /data/gatevm/shard-20261117-063056/shard8.times.tsv（286 行）
 #   - preflight-20261117-035437 = /data/gatevm/preflight-20261117-035437.times.tsv（286 行）
 #   - preflight-20261117-060738 = /data/gatevm/preflight-20261117-060738.times.tsv（286 行）
+#   - preflight-20261117-134539 = /data/gatevm/preflight-20261117-134539.times.tsv（287 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-17 08:12:55 +0800
+# 生成时间：2026-11-17 13:45:52 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261117-003600
@@ -289,6 +290,7 @@ m408_proxy_connect	2	OK	chain-20261117-003600
 m409_gc_container_lifetime	4	OK	chain-20261117-041832
 m410_criteria_scan	2	OK	chain-20261117-003600
 m411_loadsensitive	1	OK	chain-20261117-041832
+m412_chain_tail	0	OK	preflight-20261117-134539
 m63_langfix	5	OK	chain-20261117-041832
 m64_fmt	1	OK	chain-20261117-003600
 m64_lint	1	OK	chain-20261117-003600
