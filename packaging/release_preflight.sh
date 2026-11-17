@@ -90,6 +90,11 @@ PRECHECK_GATES=(
     m276_gate_lock gate_lock_guard                       # 新门进分片但没挂门锁 ⇒ 并发假红
     gate_timeouts m400_baseline_feedback                 # 超时声明 + 耗时基线回灌（本档最慢 247s）
     quiet_archive                                        # quiet 归档不漂移（读宿主 /data/gatevm 档，秒级）
+    # ── M412 S1：把「新脚本不守仓库既有纪律」也前置（20 → 21 门，实测 +5s）──
+    #   病史：M411 r1（head=3336a70）整轮 100 分钟只红了 1 门 pkg_pipe_grep ——
+    #   我新写的 recheck_loadsensitive.sh 用了 `… | grep -q`（SIGPIPE）。这门全仓扫描只要 5s。
+    #   用 100 分钟的反馈周期发现 5s 能发现的问题，与 M411 S1 是同一个错误。
+    pkg_pipe_grep                                        # 管道形态棘轮（`| grep -q` 等 SIGPIPE 形态，实测 5s）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

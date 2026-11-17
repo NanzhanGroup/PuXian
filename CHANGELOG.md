@@ -1,3 +1,88 @@
+## M412：链尾接力（缺陷 821）+ 新脚本管道形态前置（缺陷 822）
+
+> **一句话**：本轮不改产品语义。它修的是**「一轮干完了、下一轮没人立项」在所有既有判据里都是正常态**
+> 这件事 —— M411 发布完成后空转 5h19m，且当时监控**主动判绿**（打印「没活可接」）。
+> 另外把 M411 r1 那类「新脚本不守仓库既有纪律」（100 分钟才红 1 门）前置到 5 秒。
+>
+> ⚠️ 口径：本里程碑不声称任何产品缺陷已修；它修的是**发布链的接力与反馈速度**。
+
+### 证据（都是实测，不是推断）
+
+```
+缺陷 821 · 空转 5h19m（真事，2026-11-17）
+  08:11  M411-RELEASE.done（285/285 绿 · tag v0.2.411 · notify=OK · probe=OK）
+  08:32  release_postupgrade 收尾「===DONE 本机已升到 0.2.411==="
+  … 之后 4h58m 无立项、无交接单、无 park、无告警 …
+  13:30  用户来问「报告一下 M412 的进度」——**M412 当时不存在**（无计划/无交接/无提交）
+  13:34  本里程碑的看门狗第一次真跑，当场判 STALE 并写台账 dy-ops-chain-tail
+         （这是「判据对当天真实状态的一次命中」，不是造出来的演示）
+
+旧判据为什么放行：dy-ops-watch-lib-idle.sh 的 idle_unpushed_verdict
+  active = (HEAD 领先 origin/main) ∪ (NEXT-QUEUE 有未开工项)
+  两者都是 0 ⇒ 打印「OK 没活可接」
+  ⇒ 「链跑完了，接力棒没人接」在既有监控里是**正常态**。这是判据的口径漏洞，不是 watcher 写错。
+
+缺陷 822 · M411 r1（head=3336a70）整轮 100min 只红 1 门 pkg_pipe_grep
+  红因：我新写的 recheck_loadsensitive.sh 用 `… | grep -q`（SIGPIPE 形态）
+  代价：100 分钟一轮；而 pkg_pipe_grep 全仓扫描实测 **5s**
+```
+
+### 已做
+
+```
+① S1 · 链尾判据唯一实现 packaging/chain/chain_tail.sh（132 行）
+   判定：最后一轮 M*-RELEASE.done 距今 > --max-age（默认 3600s）
+         且下列接力载体**一个都没有** ⇒ STALE（rc=1）
+           ① NEXT-QUEUE.md 的 `- [ ]`（未开工项）  ② /var/log/dy-ops/pending 台账
+           ③ 正在跑的 m<数字>* 单元                  ④ CAMPAIGN-IDLE（必须 UNTIL= + REASON= 两段齐全）
+   ⚠️ 两处防自欺：
+     · 台账排除自身 key（*chain-tail*）—— 否则报警把自己判成「有人接力」⇒ 报警/了结 30min 振荡
+     · 豁免必须两段齐全 —— M385 的 idle-unpushed-OFF 曾因没人写 UNTIL/REASON 静默 4h46m
+
+② S2 · 新门 m412_chain_tail（examples/m412_chain_tail/verify.sh · 注册 286 → 287）
+   P1 装置自测 11 断言 / 4 负控，**正控（5h 无载体）必须红**；断言 <10 直接判装置不合格
+   P2 宿主真判据跑一次，STALE ⇒ 红（照实报，不按「本机噪音」放过）
+   P3 release_postupgrade.sh 真接线（只写脚本不接线 = 没人执行）
+   扫描面 nscan 显式打印；为 0 自身判红（M410 R1/R2 口径）
+   自测踩到的坑（已留成固定断言）：B 用例最初被宿主真台账带出一次 resolve 调用 ⇒ 假红；
+     根因是 PEND_D 在脚本顶部求值、自测里只改了另一个变量名 ⇒ 测试与宿主没隔离。
+
+③ S3 · 发布链收尾接线（packaging/chain/release_postupgrade.sh 第 ⑤ 步）
+   判绿收尾处打印 CHAIN-TAIL=… ；STALE ⇒ dy-notify p1（DY_NOTIFY_MUTATE=publish 由 alert 已声明）
+   ⚠️ 这里**注入 --busy 0**：本进程自己正在跑，去扫 systemctl 会把自己算成接力载体 ⇒ 永远绿
+
+④ S4 · 宿主 30 分钟看门狗 /usr/local/sbin/dy-ops-chain-tail.sh + dy-ops-chain-tail.{service,timer}
+   为什么门之外还要它：门只在**跑链**时被评估，而 08:32→13:30 恰恰是「链早跑完」的空档 ——
+     门永远不会被跑到的时间段，只能靠周期件。唯一出口仍是 dy-notify.sh（NO_SELFCHANNEL）
+   --selftest 7/7（A 正控报警 · A2 前提自证 · B 有接力不报警 · C 判据自身炸了不许当绿 · D 防自喂）
+
+⑤ S5 · 前置档 20 → 21 门（packaging/release_preflight.sh 加 pkg_pipe_grep，实测 +5s）
+   覆盖缺陷 822：用 100min 的周期发现 5s 能发现的问题，与 M411 S1 是同一个错误
+
+⑥ 接力棒落地 /data/autodrive/NEXT-QUEUE.md：4 条候选（每条形如「现象 + 为什么它值得下一轮」），
+   含 267 第三轮外部旁证、el7 rpm 未真装过、缺陷 645 长期 OFF、通知「已发≠已读」口径
+```
+
+### 判据
+
+```
+chain_tail.sh 自测（由 verify.sh --selftest 驱动）：11/11
+  S1 无 done ⇒ N/A · S2 30min ⇒ YOUNG · S3 正控 5h 无载体 ⇒ STALE
+  S3b 前提自证（时间戳真被改成 5h 前）· S4 有未开工项 ⇒ OK · S5 只有 - [x] ⇒ STALE
+  S6 有台账 ⇒ OK · S7 有单元在跑 ⇒ OK · S8 合规 CAMPAIGN-IDLE ⇒ EXEMPT
+  S9 负控 豁免缺 REASON ⇒ 仍 STALE
+宿主看门狗 selftest：7/7（含 3 条负控 + 1 条前提自证）
+宿主真跑：13:34:24 STALE ⇒ NOTIFIED p1；写入 NEXT-QUEUE 后 ⇒ OK open=4
+```
+
+### 不做 / 不知道
+
+```
+不做  不声称「以后不会再空转」——本轮只是让「空转」变成可判、会叫；叫了之后是否被读到，
+      属于「已通知 ≠ 已处理」的口径（缺陷 816 修了重叫，未修「空闲门禁长期不满足」），已列 M413 候选 A
+不知道 campaign 期间 12.5min 的「无单元但忙」窗口是否会误报 STALE —— busy 载体只认 systemd 单元，
+      手工跑的探针/编译不在其中。等实测 3 天再决定要不要加「CPU/进程形态」载体（不预设）
+```
 ## M411：入册账本前置 + 失败门同轮复跑（LOAD-SENSITIVE 分类）
 
 > **一句话**：上一轮 9 门红里 0 处产品回退，全部是「新增一门、六处账本没同步」与「负载敏感」

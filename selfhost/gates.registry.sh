@@ -2263,3 +2263,12 @@ run m410_criteria_scan bash examples/m410_criteria_scan/verify.sh
 #   扫描面：packaging/chain/recheck_loadsensitive.sh · shard_run.sh · 宿主 chain_verdict.sh
 #   实测耗时：见 gate_time_baseline.tsv（秒级：一次分类器自测 + 4 处 grep）
 run m411_loadsensitive bash examples/m411_loadsensitive/verify.sh
+# ══ M412 · 链尾接力（缺陷 821：发布完成后无人立项 ⇒ 全系统判绿空转 5h19m）══
+#   病史：M411 08:11 发布 / 08:32 升级完毕，之后 5h19m 无立项，而 idle-unpushed
+#     的判据是「HEAD 领先 origin」+「NEXT-QUEUE 有未开工项」，两者 0 ⇒ 打印「没活可接」。
+#   齿：P1 装置自测 ≥10 断言含 4 负控（正控必须红）；P2 宿主真判据 STALE ⇒ 红；
+#     P3 release_postupgrade.sh 真接线（只写脚本不接线 = 没人执行）。
+#   实现：packaging/chain/chain_tail.sh（唯一实现，发布链收尾也调它）
+#   扫描面：chain_tail.sh · release_postupgrade.sh · 本注册源（nscan 显式打印，为 0 自身判红）
+gate_timeout m412_chain_tail 180
+run m412_chain_tail bash examples/m412_chain_tail/verify.sh

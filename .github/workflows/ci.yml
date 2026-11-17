@@ -1953,6 +1953,18 @@ jobs:
           grep -E 'nscan=' /tmp/v_m411.log | tail -1
           echo "✅ m411_loadsensitive（分类器自测 + 接线 + 计数守恒 + 判据未放宽）PASS"
 
+      - name: m412_chain_tail（链尾接力 · M412 · 缺陷 821）
+        # 齿：P1 装置自测 ≥10 断言含 4 负控，且正控（5h 无载体）必须判红
+        #   · P2 宿主真判据 STALE ⇒ 红（CI 无宿主档时响亮跳过并扣扫描面）
+        #   · P3 release_postupgrade.sh 真接线（只写脚本不接线 = 没人执行）
+        #   · 扫描面 0 ⇒ 红
+        if: always()
+        run: |
+          bash examples/m412_chain_tail/verify.sh --selftest > /tmp/v_m412s.log 2>&1 || { echo "❌ m412_chain_tail 自检失败（装置自己没牙）"; tail -20 /tmp/v_m412s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m412_chain_tail/verify.sh > /tmp/v_m412.log 2>&1 || { echo "❌ m412_chain_tail 门失败（链尾判据缺牙或未接线）"; tail -40 /tmp/v_m412.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E 'nscan=' /tmp/v_m412.log | tail -1
+          echo "✅ m412_chain_tail（自测正负控 + 宿主真判据 + 接线）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

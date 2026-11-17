@@ -42,3 +42,4 @@ examples/m71_mcp_build/mcp_client.py	P5	examples/m71_mcp_build/hello_build.px	se
 examples/m71_mcp_build/verify.sh	P5	examples/m71_mcp_build/tools/pxmcp.px	self	同上：门内生成后即用
 examples/m410_criteria_scan/verify.sh	P1	/data/autodrive	host	宿主运维脚本扫描面：M409/M410 两次事故都是宿主脚本「判绿不证扫描面」；仅本机存在，目录缺时打「宿主面跳过」，repo 面照扫
 examples/m411_loadsensitive/verify.sh	P1	/data/autodrive/chain_verdict.sh	host	判红唯一实现 chain_verdict.sh 住在宿主（与 m410 同因）；宿主件缺时 P4 响亮 SKIP，其余三条照判
+examples/m412_chain_tail/verify.sh	P1	/data/autodrive	host	链尾判据读宿主发布标记与队列（M412 缺陷 821）；CI 无宿主档时 P2 响亮跳过并扣扫描面，P1/P3 照判

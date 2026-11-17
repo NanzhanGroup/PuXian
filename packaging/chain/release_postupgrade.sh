@@ -157,6 +157,23 @@ run_pu() {
             "rpm=${nowv:-无} px=${binv:-无} want=$TARGET（dnf 说成功不等于升上了）"
         return 1
     fi
+    # ⑤ M412 · 缺陷 821：链尾接力状态必须打出来。
+    #   病史：M411 08:11 发布完成 / 08:32 本机升级完毕，之后 5h19m 无人立项，
+    #   而当时所有既有判据（idle-unpushed 等）都判绿 —— 「干完了没人接棒」是盲区。
+    #   判据唯一实现 = packaging/chain/chain_tail.sh（门 m412_chain_tail 守它）。
+    #   ⚠️ 这里**注入 busy=0**：本进程自己正在跑，若让它去扫 systemctl 会把「自己还在跑」
+    #      当成接力载体 ⇒ 永远绿。要判的是「除我之外还有没有人在干活」。
+    local ct_repo ct_out ct_rc
+    ct_repo="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)/packaging/chain/chain_tail.sh"
+    if [ -f "$ct_repo" ]; then
+        ct_out="$(bash "$ct_repo" --busy 0 2>&1)"; ct_rc=$?
+        say "⑤ 链尾接力：$(grep 'CHAIN-TAIL=' <<<"$ct_out" | tail -1)"
+        if [ "$ct_rc" != 0 ]; then
+            alert "m${MS}-chain-tail" "M${MS} 发布完成但没有接力载体" "$ct_out"
+        fi
+    else
+        say "⑤ 链尾接力：判据实现缺失（$ct_repo）—— 响亮跳过，绝不静默当绿"
+    fi
     say "===DONE 本机已升到 $TARGET==="
     return 0
 }
