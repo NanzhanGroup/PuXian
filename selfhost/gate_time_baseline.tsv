@@ -44,8 +44,9 @@
 #   - chain-20261117-200959 = /data/gatevm/shard-20261117-200959/shard8.times.tsv（288 行）
 #   - preflight-20261117-173826 = /data/gatevm/preflight-20261117-173826.times.tsv（288 行）
 #   - preflight-20261117-194803 = /data/gatevm/preflight-20261117-194803.times.tsv（288 行）
+#   - preflight-20261117-223152 = /data/gatevm/preflight-20261117-223152.times.tsv（289 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-17 21:49:58 +0800
+# 生成时间：2026-11-17 22:54:15 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261117-144105
@@ -148,7 +149,7 @@ m189_bytes_bounds	121	OK	chain-20261117-200959
 m190_arity	149	OK	chain-20261117-144105
 m191_error_codes	40	OK	preflight-20261117-194803
 m192_encfamily	31	OK	preflight-20261117-194803
-m193_errcodes2	42	OK	preflight-20261117-173826
+m193_errcodes2	44	OK	preflight-20261117-223152
 m194_arg_guards	109	OK	chain-20261117-200959
 m195_arg_guards2	99	OK	chain-20261117-200959
 m196_msg_parity	49	OK	preflight-20261117-173826
@@ -219,7 +220,7 @@ m278_release_reconcile	2	OK	chain-20261117-144105
 m279_std_surface	13	OK	chain-20261117-144105
 m280_resource_baseline	61	OK	chain-20261117-144105
 m282_registry_020	63	OK	preflight-20261117-173826
-m283_gate_premise	98	OK	preflight-20261117-194803
+m283_gate_premise	100	OK	preflight-20261117-223152
 m284_orchestrator	36	OK	chain-20261117-144105
 m285_gate_assertions	84	OK	chain-20261117-144105
 m286_anchor_multi	45	OK	chain-20261117-144105
@@ -291,6 +292,7 @@ m410_criteria_scan	2	OK	chain-20261117-144105
 m411_loadsensitive	1	OK	chain-20261117-144105
 m412_chain_tail	1	OK	chain-20261117-180037
 m413_notify_ack	1	OK	chain-20261117-180037
+m414_notify_waiting	2	OK	preflight-20261117-223152
 m63_langfix	5	OK	chain-20261117-144105
 m64_fmt	1	OK	chain-20261117-200959
 m64_lint	0	OK	chain-20261117-144105
@@ -333,6 +335,6 @@ shell_contract	6	OK	chain-20261117-144105
 spec_consistency	1	OK	chain-20261117-180037
 upstream_confirm_selftest	4	OK	chain-20261117-144105
 upstream_tests	1118	OK	chain-20261117-200959
-version_drift	0	OK	chain-20261117-144105
+version_drift	1	OK	preflight-20261117-223152
 version_golden	1	OK	chain-20261117-180037
 zombie_reap	25	OK	chain-20261117-144105
