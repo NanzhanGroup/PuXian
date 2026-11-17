@@ -1,3 +1,65 @@
+## M413：已通知 ≠ 已被读到（缺陷 823）
+
+> **一句话**：本轮不改产品语义。它修的是**「告警系统说『我叫过你了』，但从来没人被叫醒」**——
+> `dy-notify.sh` 写完台账就 `ws-core -task-park`，可 buswake 有 30 分钟空闲门禁；
+> 台账末行 `ESCALATED` 只证明「park 调用成功过」，不证明有人被唤醒。本轮把这个盲区变成可判的判据。
+>
+> ⚠️ 口径：本里程碑不声称修好了 buswake 门禁本身（那是 ws-core 的行为）；它做的是
+> **可观测 + 明确的升级出口**，并把「叫了没读到」从「正常态」变成「会响的状态」。
+
+### 证据（先量后改）
+
+```
+inbox.log 15 天：ESCALATE 82 次 · P1 138 次 · RESOLVE 110 次
+  能与后续了结配对的 12 条 —— 11 条是 EXPIRE（12h TTL 到期自清），不是被处理掉的
+  最长样本：M319 SHARD_SEM 693min · M324 675min · M323 673min · M307 672min · M294 668min
+M408 三次判红全靠用户来问（缺陷 816 只修了「重叫」，没修「叫了但门禁永不满足」）
+M411→M412 空转 5h19m（缺陷 821 同源：链路无声）
+```
+
+### 判据（三条同时成立 = BLIND）
+
+```
+① 台账 age ≥ 90min（DY_BLIND_MIN 可调）
+② 末行 marker = ESCALATED（= 已通知，park 成功过）
+③ 用户不在场：token_cache 最近写入距今 ≥ 30min（与 buswake 门禁同口径）
+分类全打印：blind / wait-present（在场，设计如此不打扰）/ wait-unknown（拿不到证据就不猜）/ ok
+```
+
+### 交付件
+
+```
+packaging/chain/notify_ack.sh            判据唯一实现（rc 0/1/3 + nscan + 零值守卫）
+examples/m413_notify_ack/verify.sh       门：自测 9 断言（5 负控 + 2 前提）· 接线验收 14/14
+/usr/local/sbin/dy-ops-watch-lib-ack.sh  宿主检查项（接既有 30min 巡检）
+/usr/local/sbin/dy-ops-watch.sh          4 处小改（source 清单 / dispatch / --status / done 行）
+selfhost/gates.registry.sh               288 门（+1）
+selfhost/gate_inputs_allow.tsv           +1 条 host 登记（/var/log/dy-ops/pending）
+selfhost/gate_time_baseline.tsv          +1 行（实测 1s）
+```
+
+### 处置口径（为什么不是「再挂一次 p1」）
+
+BLIND 的定义就是「p1 自驱没生效」，再 p1 是同一循环（自我指涉）。所以：p1 仍挂（保留了结路径），
+额外 **p0 推用户**，仅此一种情形，**24h 最多一条**（`DYOPS_ACK_P0_MIN=1440`）。
+不新建任何通道（NO_SELFCHANNEL）：出口仍是 `dy-notify.sh`。
+
+### 自食其果一次（记在账上）
+
+`notify_ack.sh` 初版打印 `nscan=` 但没有零值守卫 ⇒ 被 M410 的 `m410_criteria_scan` R2 当场判红。
+修法：加「nscan=0 时复验目录可读，否则 PREMISE-FAIL」的守卫 —— 零值合法但必须是**证明过的真空**，
+不是盲区。这是 M411/M413 两次同族（新脚本不守仓库既有纪律），已进 CHANGELOG 留痕。
+
+### 已知边界
+
+```
+能说：判据能区分「已通知」与「已被读到」；用户不在场的失效窗口可判、会响、有上限
+不能说：修好了 buswake 门禁本身；也不能说「用户在场判据」精确
+        （token_cache.updated_at 只是代理，已立 NEXT-QUEUE 候选 E）
+```
+
+---
+
 ## M412：链尾接力（缺陷 821）+ 新脚本管道形态前置（缺陷 822）
 
 > **一句话**：本轮不改产品语义。它修的是**「一轮干完了、下一轮没人立项」在所有既有判据里都是正常态**

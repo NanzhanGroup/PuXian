@@ -2272,3 +2272,13 @@ run m411_loadsensitive bash examples/m411_loadsensitive/verify.sh
 #   扫描面：chain_tail.sh · release_postupgrade.sh · 本注册源（nscan 显式打印，为 0 自身判红）
 gate_timeout m412_chain_tail 180
 run m412_chain_tail bash examples/m412_chain_tail/verify.sh
+# ══ M413 · 已通知 ≠ 已被读到（缺陷 823：自驱唤醒在空闲门禁窗口里失效且无声）══
+#   病史：dy-notify 的 p1/esc 写完台账就 ws-core -task-park「叫醒东月」，但 buswake 有
+#     30 分钟空闲门禁。台账末行 ESCALATED（= park 调用成功过）≠ 真有人被叫醒。
+#     inbox.log 15 天 82 次 ESCALATE，能配对了结的 12 条里 11 条走到 EXPIRE（TTL 自清）。
+#   齿：P1 判据自测 ≥9 断言含 5 负控（正控必须红）；P2 前提失守 rc=3 不许假绿；
+#     P3 宿主看门狗真接线；P4 接线有牙（桩判据连 2 次巡检真发 p1）；P5 判据绿不假红。
+#   实现：packaging/chain/notify_ack.sh（唯一实现）· 宿主库 dy-ops-watch-lib-ack.sh
+#   扫描面：notify_ack.sh · 本注册源 · 宿主 dy-ops-watch.sh（nscan 显式打印，为 0 自身判红）
+gate_timeout m413_notify_ack 180
+run m413_notify_ack bash examples/m413_notify_ack/verify.sh
