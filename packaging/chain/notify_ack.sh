@@ -22,6 +22,8 @@
 #
 # 输出固定含 nscan=<台账条数>，且把四类等待单独计数（不许并进 ok，也不许并进 blind）。
 # rc：0=无 BLIND · 1=有 BLIND · 3=前提不成立（台账目录不可用 / 参数非法，不许假绿）
+#     ⚠ 在途单元查询抖动（systemctl/dbus 忙）**不再**算前提不成立（M415 缺陷 833）：
+#       重试 3 次仍失败 ⇒ 退档为 units_state=unavailable，相关条目归 wait-unknown（不猜）。
 #
 # 环境变量（自测注入用）：
 #   NA_PEND_DIR    台账目录（默认 /var/log/dy-ops/pending）
@@ -97,7 +99,18 @@ list_units() {
     done
 }
 
-units_out=$(list_units 2>/dev/null) || { echo "PREMISE-FAIL 在途单元清单不可用"; exit 3; }
+# ── 在途单元清单：单次查询抖动不许把整条判据打成 PREMISE-FAIL ──
+#   M415 轮次实测（缺陷 833）：8 分片满载时 m413_notify_ack / m414_notify_waiting 两门
+#   连红两轮（20261117-232307、20261118-052141），失败点都是宿主 P2/P7 的
+#   「判据自身前提失守 rc=3」，低负载复跑 1s 全绿 ⇒ 触发面是**查询抖动**（fork/dbus 忙），
+#   不是台账前提。原实现把抖动当「前提失守」⇒ 发布链被无辜判红。
+#   现口径：重试 3 次；仍不可用 ⇒ units=unavailable **退档**（宁可不判，不猜），不 exit 3。
+units_state=ok; units_out=""
+for attempt in 1 2 3; do
+    if units_out=$(list_units 2>/dev/null); then units_state=ok; break; fi
+    units_state=unavailable; units_out=""
+    [ "$attempt" -lt 3 ] && sleep "0.$((attempt*3))"
+done
 unit_max=0; unit_max_name=""; unit_n=0
 while IFS=$'\t' read -r un um; do
     [ -n "${un:-}" ] || continue
@@ -199,7 +212,12 @@ for f in "$PEND_DIR"/*; do
                         "$key" "$age" "$DB" "$tok_src" "$title"
                     ;;
                 *)
-                    if [ "$age" -lt "$eff_min" ]; then
+                    if [ "$units_state" != "ok" ]; then
+                        # 查不到在途单元 ⇒ 动态下界失效 ⇒ 宁可归入「不猜」，也不假报 BLIND/p0
+                        nunknown=$((nunknown+1))
+                        printf 'wait-unknown  %-40s age=%smin（在途单元查询不可用 units=unavailable，不判 BLIND）title=%s\n' \
+                            "$key" "$age" "$title"
+                    elif [ "$age" -lt "$eff_min" ]; then
                         nunitexc=$((nunitexc+1))
                         waiting_list="$waiting_list $key(unit=$unit_max_name)"
                         printf 'WAITING-UNIT  %-40s age=%smin unit=%s run=%smin threshold=%smin\n' \
@@ -237,9 +255,9 @@ if [ "$nscan" -eq 0 ]; then
     echo "SCAN-GUARD nscan=0 且台账目录存在可读 ⇒ 真空（不是扫描盲区）"
 fi
 
-printf 'NOTIFY-ACK nscan=%s blind=%s wait_present=%s wait_unknown=%s wait_probe=%s wait_unit=%s ok=%s blind_min=%s base_min=%s unit_n=%s unit_max=%s unit=%s idle_min=%s user_present=%s tok_age_min=%s\n' \
+printf 'NOTIFY-ACK nscan=%s blind=%s wait_present=%s wait_unknown=%s wait_probe=%s wait_unit=%s ok=%s blind_min=%s base_min=%s unit_n=%s unit_max=%s unit=%s idle_min=%s user_present=%s tok_age_min=%s units_state=%s\n' \
     "$nscan" "$nblind" "$npresent" "$nunknown" "$nprobe" "$nunitexc" "$nok" \
-    "$eff_min" "$BLIND_MIN" "$unit_n" "$unit_max" "${unit_max_name:-none}" "$IDLE_MIN" "$present" "$tok_age_min"
+    "$eff_min" "$BLIND_MIN" "$unit_n" "$unit_max" "${unit_max_name:-none}" "$IDLE_MIN" "$present" "$tok_age_min" "$units_state"
 
 if [ "$nblind" -gt 0 ]; then
     echo "BLIND-KEYS$blind_list"

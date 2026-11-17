@@ -73,7 +73,28 @@ packaging/ci_known_red.tsv            4 条在账：m256(11-20) · m389(11-19) �
 不做    不把 known_risks 当免检牌：每条带到期日，过期即红
 ```
 
-### 一处自我更正
+### 追加修复（缺陷 833）：查询抖动不许冒充「前提失守」
+
+```
+病史  M415 链首次跑（11-18 06:12/06:24）两门连红：m413_notify_ack / m414_notify_waiting，
+      失败点都是宿主断言「判据自身前提失守 rc=3」，而**低负载复跑 1s 全绿**；
+      上一轮 20261117-232307 也是这两门同点连红（loadsens.txt 同名单）⇒ 不是产品红。
+真因  notify_ack.sh 的「在途单元清单」查询是 systemctl 管道（set -o pipefail），
+      满载时任何一环起进程失败（dbus/fork 忙）⇒ 整条判据 exit 3 = PREMISE-FAIL。
+      口径错在：**查询抖动 ≠ 台账前提不成立**。实测（负控）：
+        PATH 里放假 systemctl(exit 1) ⇒ 旧实现 rc=3「PREMISE-FAIL 在途单元清单不可用」
+修法  ① 重试 3 次（0.3s/0.6s 退避）；② 仍不可用 ⇒ units_state=unavailable **退档**：
+        相关条目归 wait-unknown（宁可不判，不猜），不 exit 3、也不假报 BLIND/p0；
+        判定行新增 units_state= 字段，退档可见。
+      ③ 两门的宿主断言在 rc>=2 时**把判据首行打进日志**（原先只印一句 rc=3，真因被吞）
+      ④ 新增负控：m413 P6 / m414 P8 —— 假 systemctl(exit 1) + probe=true + 用户离线120min
+        ⇒ 必须 units_state=unavailable ∧ wait-unknown，且**不许** rc=3 / 不许 BLIND
+证据  run_gates --only m413,m414 ⇒ 双绿（3s/3s）；把 notify_ack.sh 回退后同两门必红
+        （P6/P8 打印「查询抖动仍被判前提失守（rc=3）out=PREMISE-FAIL 在途单元清单不可用」）
+      pkg_pipe_grep / shell_contract / m410_criteria_scan 同轮复跑全绿
+```
+
+
 
 M414 的收口通知曾写「投递后台账自动回写 OK」，实际 `notify-ledger.tsv` 里 v0.2.414 仍是 `FAIL`
 （探针 `miss=0` 是因为它按「已入重投队列 = QUEUED」放行）。两处口径不一致 ⇒ 已列为候选（缺陷 832），

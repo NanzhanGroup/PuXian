@@ -250,9 +250,29 @@ if [ -d /var/log/dy-ops/pending ]; then
         bad "P2 宿主存在 BLIND（已通知但没人读到）—— 自驱唤醒在失效窗口内"
         grep 'BLIND ' <<<"$out" | sed 's/^/     /' | head -5
     else
-        bad "P2 判据自身前提失守（rc=$rc）"
+        bad "P2 判据自身前提失守（rc=$rc）：$(printf '%s' "$out" | head -1)"
     fi
 fi
+
+# P6 · 在途单元查询抖动（缺陷 833）：不许把单次 systemctl 失败打成 PREMISE-FAIL rc=3
+T4="$(mktemp -d)"
+mkdir -p "$T4/bin" "$T4/pend"
+printf '#!/bin/sh\nexit 1\n' > "$T4/bin/systemctl"; chmod +x "$T4/bin/systemctl"
+# 前提：probe=true（该醒）+ 用户离线 120min + 账龄 120min ⇒ 正常路径会走 units 动态下界判 BLIND
+printf '%s\t夹具\nESCALATED\t%s\n' "$(( $(date +%s) - 7200 ))" "$(( $(date +%s) - 7200 ))" > "$T4/pend/jitter-case"
+printf '{"jitter-case":{"cmds":["true"]}}' > "$T4/park.json"
+sqlite3 "$T4/tok.db" "create table token_cache(updated_at integer); insert into token_cache values ($(( $(date +%s) - 7200 )));" 2>/dev/null
+out="$(PATH="$T4/bin:$PATH" NA_PEND_DIR="$T4/pend" NA_DB="$T4/tok.db" NA_PARKWHEN="$T4/park.json" bash "$NA" 2>&1)"; rc=$?
+if [ "$rc" = 3 ]; then
+    bad "P6 负控失败：查询抖动仍被判前提失守（rc=3）out=$(printf '%s' "$out" | head -1)"
+elif [ "$rc" = 1 ] || grep -qE '^BLIND ' <<<"$out"; then
+    bad "P6 负控失败：查询抖动下假报 BLIND（rc=$rc）—— 这正是 M414 的假 p0 回归"
+elif grep -q 'units_state=unavailable' <<<"$out" && grep -q 'wait-unknown' <<<"$out"; then
+    ok "P6 负控：systemctl 抖动 ⇒ units_state=unavailable · 归 wait-unknown（不 exit 3、不假报 BLIND）"
+else
+    bad "P6 查询抖动退档不自证：rc=$rc out=$(printf '%s' "$out" | head -1)"
+fi
+rm -rf "$T4"
 
 echo "── 断言：$((n-FAIL))/$n 通过 ──"
 [ "$FAIL" = 0 ] && { echo "M413-NOTIFY-ACK-OK"; exit 0; } || { echo "M413-NOTIFY-ACK-FAIL"; exit 1; }
