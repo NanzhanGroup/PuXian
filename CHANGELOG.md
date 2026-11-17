@@ -36,6 +36,21 @@ examples/m413_notify_ack/verify.sh       门：自测 9 断言（5 负控 + 2 �
 selfhost/gates.registry.sh               288 门（+1）
 selfhost/gate_inputs_allow.tsv           +1 条 host 登记（/var/log/dy-ops/pending）
 selfhost/gate_time_baseline.tsv          +1 行（实测 1s）
+.github/workflows/ci.yml                  +1 步（m413_notify_ack 门 · 补登记，见下「修复」）
+```
+
+### 修复（2026-11-17 19:5x · 门注册漏登记）
+
+```
+现象：M413 发布主链判红 —— gate_registry（12 通过 / 1 失败）
+根因：本里程碑新增 examples/m413_notify_ack/verify.sh 并进了 gates.registry.sh（2283-2284 行），
+      但 .github/workflows/ci.yml 未加对应 step ⇒ 清单有 / CI 没有（M235 缺陷 355 同形）。
+证据：bash selfhost/check_gate_registry.sh
+        ❌ 以下门在本地清单里、ci.yml 里没有：examples/m413_notify_ack/verify.sh
+        （已知历史：本地清单 222 · ci.yml 223）
+修：ci.yml 在 m412_chain_tail 之后补 m413_notify_ack step（--selftest 正控 + 正式门 + nscan）
+副作用：只动 CI 编排与本文档；不改产品语义、不改判据
+回滚：git revert 该提交（ci.yml step 与门注册同进同退）
 ```
 
 ### 处置口径（为什么不是「再挂一次 p1」）
