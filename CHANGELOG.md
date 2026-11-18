@@ -1,4 +1,50 @@
-## M415：本地绿 ≠ 远端绿（判据的环境前提 · 缺陷 826–831）
+## M416：CI-only 红的真因定性（M415 诊断增强的第一次真跑 · 缺陷 835）
+
+> **一句话**：M415 装的「门红了要能读出真因」第一次真跑就兼现了 —— 两条 CI-only 红不再是一句话，
+> 而是带字节数/md5/逐行 diff 的现场。m256 的真因是**判据自己在比错的流**（stderr 诊断混进 stdout 比对），
+> 不是产品；m403→m126 D 档的真因仍需更多证据，本轮先把失败行拉到可定性。
+
+### 证据（CI run 44214647924 @ 5d0aa8d · 2026-11-18 09:17 · 已含 M415 诊断增强）
+
+```
+m256_eintr（job 134501320261 step 45）
+  FAIL [5] 两档不一致
+       现场 norm: 26 字节 · stress: 244 字节
+       现场 md5  norm=cb1f3bbc170c stress=4d03cf6fd92d
+       差异 1a2 > [M409-EARLY] 本轮(epoch=18995)有线程提前挣脱暂停 ⇒ 放弃 sweep（存活 2382 全保留）
+       差异 3a5 > [M409-STAT] 提前挣脱暂停=5 次 · 因挣脱放弃 sweep=1 轮 · gc_skips=1 · gc_runs=12025
+  ⇒ 真因：run_once 旧版 >out.txt 2>&1（合并流）⇒ 判据声称比 stdout、实际比的是 stdout+stderr；
+     M409 诊断写 fd 2（错在 run_once 合并，不在诊断本身）· stress 档才会触发 ⇒ 两档必然不一致
+
+m403_orphan_batch（job 134501320261 step 143）→ 子门 m126_signal_isolate
+  ❌ M126 verify 有失败（pass=40 fail=2）
+  失败行 30:  --- D FX=inject PX_ALLOC_FAIL_MIN=8388610 ---
+  失败行 35:  ❌ D 主循环未存活
+  失败行 36:  ❌ D HUNG=0 rc=1
+  ⇒ 已能从 CI 注解读出失败行（M415 缺陷 830 生效）；但 D 档 LOG 的 px-signal / 注入标定 / 退出原因
+     尚未打印 ⇒ 本轮不足以定性（不猜、不拿「诊断已增强」冒充「已修」）
+```
+
+### 修法（缺陷 835 · m256 判据）
+
+```
+run_once        stdout / stderr 分离写入（out_<tag>.txt / err_<tag>.txt）
+listen_fail()   新辅助：监听失败两路都查（px_error 走 stderr ⇒ 分离后单查 stdout 会漏）
+env_foreign/env_why/judge_track 的监听失败检查改走 listen_fail()
+探针未跑完       现场打印分两段（stdout 行数 + stderr 行数 + stderr 前 30 行）
+[5]             现在真是「两档 stdout 逐字节一致」；仍红则额外打印两档 stderr 的 M409 诊断行数作证据
+                 （诊断行数差异 ≠ 判据红，只解释「差异在 stderr、不在被测行为」）
+```
+
+### 未做完（诚实栏）
+
+```
+m403 → m126 D 档 CI-only 红：本轮只把失败行拉到可读，真因待下一轮（需打印 D 档 LOG 的
+  [px-signal] / PX_ALLOC_FAIL_MIN 注入行 / 退出路径）· 本地 289 门全绿 ⇒ 环境相关，不排除
+  CI runner（2 核/内存少）下 8MB 注入阈值标定漂移
+```
+
+
 
 > **一句话**：GitHub 上 PuXian CI **连续 15 轮红**（最早可查 11-14），本地全量门 289/289 全绿、
 > 发布链照常判 GREEN 并连打 6 个 tag —— **两条判据给出相反结论，而没有任何东西在看着远端**。

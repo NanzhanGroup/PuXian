@@ -19,7 +19,7 @@
 #   [3] 正常档：T1=5 · U2=4（两档都必须如此 —— 修**不能**破坏正常语义）
 #   [4] 压力档 `PX_GC_STRESS=1 PX_GC_INLINE=1`：同上（**修前 T1=-1 · U2=-1**）
 #   [4b] 压力档**复跑**（判据不能是 flake）
-#   [5] 两档 stdout **逐字节一致**
+#   [5] 两档 **stdout** 逐字节一致（M416：run_once 分离 stderr —— 诊断行不再混进比对）
 #   [6] 负控 3 道（`--neg-skip` 可跳；各自独立判红，各自干净起点）：
 #       A 撤回 `bi_read` 的包装（退回裸 read）⇒ 压力档 T1 必红（U2 仍绿 ⇒ 独立性）
 #       B 撤回 `bi_udp_recv` 的包装     ⇒ 压力档 U2 必红（T1 仍绿 ⇒ 独立性）
@@ -145,7 +145,7 @@ run_once() {
     #   M288b：上界改为 PORT_SPAN（宿主 ephemeral 下限以内 —— 见文件头 ③）。
     local _base=$(( 20000 + RANDOM % PORT_SPAN ))
     ( cd "$ROOT" && env "$@" M256_PROBE_PORT="$_base" M256_PROBE_UPORT="$(( _base + 1 ))" \
-        timeout -k 5 180 "$BIN" ) >"$W/out_$tag.txt" 2>&1
+        timeout -k 5 180 "$BIN" ) >"$W/out_$tag.txt" 2>"$W/err_$tag.txt"
     echo "$?"
 }
 
@@ -202,16 +202,24 @@ get_val() { grep -oE "^$2=[-0-9A-Za-z:]+" "$W/out_$1.txt" | head -1 | cut -d= -f
 #      当成干扰、白耗 3 次重试**，且因为判据层随后照样读到正确输出，**结果仍是绿** ⇒
 #      这类「重试用尽但结论仍对」的 bug 不会被 PASS/FAIL 计数发现。⇒ 两处加固：
 #      ① 语义对齐 grep（下面）；② run_track 用尽重试时**响亮打一行**（见该函数尾部）。
+# M416（缺陷 835）：run_once 现在**分离 stdout / stderr**（见该函数）。
+#   「监听端口失败」是 runtime 的 px_error ⇒ 走 stderr ⇒ 必须两路都查，否则环境干扰识别失效。
+listen_fail() {   # $1=档名 → 0=有监听失败
+    grep -q '监听端口 .* 失败' "$W/out_$1.txt" 2>/dev/null && return 0
+    grep -q '监听端口 .* 失败' "$W/err_$1.txt" 2>/dev/null && return 0
+    return 1
+}
+
 env_foreign() {   # $1=档名 → 0=**有**环境干扰 · 1=干净
     grep -qE '^(T1|U2)=FOREIGN:' "$W/out_$1.txt" && return 0
-    grep -q '监听端口 .* 失败' "$W/out_$1.txt" && return 0
+    listen_fail "$1" && return 0
     return 1
 }
 env_why() {   # $1=档名 → 人类可读的干扰原因（多条用 ` · ` 连接）
     local tag="$1" r=""
     grep -qE '^T1=FOREIGN:' "$W/out_$1.txt" && r="$rTCP 端口上读到陌生字节（$(get_val "$tag" T1 | cut -c1-40)）"
     grep -qE '^U2=FOREIGN:' "$W/out_$1.txt" && r="$r${r:+ · }UDP 端口上收到陌生数据报（$(get_val "$tag" U2 | cut -c1-40)）"
-    grep -q '监听端口 .* 失败' "$W/out_$1.txt" && r="$r${r:+ · }探针服务端 tcp_listen 失败（端口被占）"
+    listen_fail "$1" && r="$r${r:+ · }探针服务端 tcp_listen 失败（端口被占）"
     echo "${r:-未知}"
 }
 
@@ -235,7 +243,7 @@ judge_track() {
             echo "       ⇒ 产品回归（EINTR 未重试）的指纹是 T1=-1，**不是**这一条。"
             n=$((n + 1)) ;;
         CONNFAIL)
-            if grep -q '监听端口 .* 失败' "$W/out_$tag.txt"; then
+            if listen_fail "$tag"; then
                 bad "[$tag] T1=**环境干扰·非产品回归**：探针服务端 tcp_listen 失败（端口被占）"
             else
                 bad "[$tag] T1=CONNFAIL（连不上本探针的服务端 —— 期望 $e_t1）"
@@ -263,8 +271,10 @@ judge_track() {
         bad "[$tag] 探针未跑完（异常/挂死）"; n=$((n + 1))
         # ⚠️ M284s1（缺陷 497）：**把现场打进 stdout** —— CI 的 job 日志非管理员 403，
         #    注解是唯一通道，而只有 stdout 会被注解带走（「门红了要能读出真因」）。
-        echo "       ── [$tag] 探针 stdout 全文（含 stderr）──"
+        echo "       ── [$tag] 探针 stdout（$(wc -l < "$W/out_$tag.txt" 2>/dev/null || echo 0) 行）──"
         sed 's/^/       | /' "$W/out_$tag.txt" 2>/dev/null
+        echo "       ── [$tag] 探针 stderr（$(wc -l < "$W/err_$tag.txt" 2>/dev/null || echo 0) 行）──"
+        sed 's/^/       | /' "$W/err_$tag.txt" 2>/dev/null | head -30
         echo "       ── 结束（rc 见上方 [第 N 次 rc=…] 行）──"
     fi
     return $((n > 0 ? 1 : 0))
@@ -314,7 +324,7 @@ if [ -x "$BIN" ]; then
     echo "── [4b] 压力档**复跑**（稳定性：判据不能是 flake）"
     run_track stress2 PX_GC_STRESS=1 PX_GC_INLINE=1 || true; judge_track stress2 || true
 
-    echo "── [5] 两档 stdout 逐字节一致"
+    echo "── [5] 两档 stdout 逐字节一致（stderr 已分离）"
     if cmp -s "$W/out_norm.txt" "$W/out_stress.txt"; then
         ok "[5] 两档一致"
     else
@@ -326,6 +336,33 @@ if [ -x "$BIN" ]; then
         echo "        现场 norm: $(wc -c < "$W/out_norm.txt") 字节 · stress: $(wc -c < "$W/out_stress.txt") 字节"
         echo "        现场 md5  norm=$(md5sum < "$W/out_norm.txt" | cut -c1-12) stress=$(md5sum < "$W/out_stress.txt" | cut -c1-12)"
         diff "$W/out_norm.txt" "$W/out_stress.txt" | head -8 | sed 's/^/        差异 /' || true
+        # M416（缺陷 835）：2026-11-18 CI 真因 —— 旧版 run_once 用 2>&1，把 stderr 诊断
+        #   （[M409-EARLY] / [M409-STAT]，GC 压力档才会触发）混进了「stdout」比对
+        #   ⇒ 两档必然不一致，而产品行为其实一致。现在分离后两档 stderr 差异只作证据打印。
+        echo "        证据 stderr 行数  norm=$(wc -l < "$W/err_norm.txt" 2>/dev/null || echo 0) · stress=$(wc -l < "$W/err_stress.txt" 2>/dev/null || echo 0)"
+        echo "        证据 stderr M409 诊断行  norm=$(grep -c '^\[M409-' "$W/err_norm.txt" 2>/dev/null || echo 0) · stress=$(grep -c '^\[M409-' "$W/err_stress.txt" 2>/dev/null || echo 0)"
+    fi
+
+    # ── [5b] 判据自证（M416 · 缺陷 835）：stderr 诊断不得影响 stdout 判定 ──
+    #   CI 现场（2026-11-18 run 44214647924）= 「产品行为一致、stderr 多出 [M409-*] 诊断」。
+    #   夹具构造该形态，两向都验（CRITERIA：改判据必须带牙）：
+    #     ① 正控：stdout 相同 + stderr 不同 ⇒ cmp 必绿（诊断不进判据）
+    #     ② 负控：把诊断混进 **stdout** ⇒ cmp 必红（判据没被削钝）
+    _sc5b="$W/selfcheck5b"; rm -rf "$_sc5b"; mkdir -p "$_sc5b"
+    printf 'T1=5\nU2=4\nM256-PROBE-DONE\n' > "$_sc5b/out_norm.txt"
+    cp "$_sc5b/out_norm.txt" "$_sc5b/out_stress.txt"
+    printf '[M409-EARLY] 模拟诊断\n[M409-STAT] 模拟\n' > "$_sc5b/err_stress.txt"
+    : > "$_sc5b/err_norm.txt"
+    if cmp -s "$_sc5b/out_norm.txt" "$_sc5b/out_stress.txt"; then
+        ok "[5b] 判据自证：stderr 有诊断、stdout 相同 ⇒ 判绿（诊断不污染比对）"
+    else
+        bad "[5b] 自证失败：stderr 差异竟影响 stdout 判定"
+    fi
+    printf 'T1=5\nU2=4\n[M409-EARLY] 混进 stdout\nM256-PROBE-DONE\n' > "$_sc5b/out_stress_bad.txt"
+    if cmp -s "$_sc5b/out_norm.txt" "$_sc5b/out_stress_bad.txt"; then
+        bad "[5b-N] 负控失效：诊断混进 stdout 却不判红（判据被削钝）"
+    else
+        ok "[5b-N] 负控：诊断混进 stdout ⇒ 判红（判据仍有牙）"
     fi
 fi
 
