@@ -45,7 +45,7 @@
 #   - preflight-20261118-071504 = /data/gatevm/preflight-20261118-071504.times.tsv（290 行）
 #   - preflight-20261118-122311 = /data/gatevm/preflight-20261118-122311.times.tsv（290 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-18 14:30:47 +0800
+# 生成时间：2026-11-18 14:32:37 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261118-073719
