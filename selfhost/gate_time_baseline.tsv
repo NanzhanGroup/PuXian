@@ -6,44 +6,9 @@
 # 刷新：不用手跑 —— packaging/chain/release_postupgrade.sh 判绿后自动调 selfhost/refresh_gate_baseline.sh。
 #
 # 本次输入：
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/quiet-lane1.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/quiet-lane2.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/quiet-lane3.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/quiet.times.tsv（16 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard1.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard2.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard3.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard4.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard5.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard6.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard7.times.tsv（290 行）
-#   - chain-20261118-172934 = /data/gatevm/shard-20261118-172934/shard8.times.tsv（290 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet-lane1.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet-lane2.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet-lane3.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet.times.tsv（16 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard1.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard2.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard3.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard4.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard5.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard6.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard7.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard8.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet-lane1.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet-lane2.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet-lane3.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet.times.tsv（16 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard1.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard2.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard3.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard4.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard5.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard6.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard7.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard8.times.tsv（291 行）
-#   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-19 03:01:59 +0800
+#   - m419-only = /tmp/m419_only.tsv（292 行）
+#   - retain（只补缺）= selfhost/gate_time_baseline.tsv
+# 生成时间：2026-11-19 03:11:54 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261118-172934
@@ -292,6 +257,7 @@ m413_notify_ack	4	OK	chain-20261119-011400
 m414_notify_waiting	4	OK	chain-20261118-172934
 m415_cleanenv	35	OK	chain-20261118-231930
 m418_alloc_fail_budget	8	OK	chain-20261119-011400
+m419_keyword_sync	2	OK	m419-only
 m63_langfix	5	OK	chain-20261118-172934
 m64_fmt	1	OK	chain-20261119-011400
 m64_lint	0	OK	chain-20261118-172934
