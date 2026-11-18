@@ -130,6 +130,24 @@ selftest() {
     nscan=$((nscan + 1))
     [ "$rc" = 1 ] && grep -q 'taken=0' <<<"$out" && grep -q 'CHAIN-TAIL=STALE-OPEN ' <<<"$out" \
         && ok "S4f 负控：仓库存在但无新提交 ⇒ taken=0 ⇒ STALE-OPEN" || bad "S4f rc=$rc out=$out"
+
+    # S4g 正控（缺陷 838 · M417 复核实测）：**worktree** 里 .git 是普通文件不是目录。
+    #   旧判据 `[ -d "$REPO/.git" ]` 恒假 ⇒ taken 恒 -1 ⇒ 只要 taking 超 grace 就必然
+    #   STALE-OPEN 误红（M417 链 15:14→17:00 跑 106min，shard8 里 taking 过期 5149s 判红，
+    #   与代码无关）。本用例把「长链 + worktree」原样复现：宽限期已过、只有 '- [~]'。
+    local R4W="$T/repo4-wt"
+    git -C "$R4" commit -qm next2 --allow-empty >/dev/null 2>&1
+    git -C "$R4" worktree add -q "$R4W" HEAD >/dev/null 2>&1
+    printf '# 队列\n- [~] M417 进行中\n' > "$ad/NEXT-QUEUE.md"
+    touch -d "@$((ECHO_NOW-3600))" "$ad/NEXT-QUEUE.md"
+    printf 'M900-RELEASE-DONE commit=%s\n' "$BASE4" > "$ad/M900-RELEASE.done"
+    touch -d "@$((ECHO_NOW-18000))" "$ad/M900-RELEASE.done"
+    nscan=$((nscan + 2))
+    [ -f "$R4W/.git" ] && [ ! -d "$R4W/.git" ] && ok "S4g 前提自证：worktree 的 .git 是文件（旧判据 [ -d ] 必假）" || bad "S4g 前提：$R4W/.git 不是普通文件"
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$R4W" --busy 0 2>&1)"; rc=$?
+    [ "$rc" = 0 ] && grep -q 'taken=1' <<<"$out" \
+        && ok "S4g 正控：worktree 里 taken 仍可判定（=1）⇒ OK（缺陷 838 修复在此守）" || bad "S4g rc=$rc out=$out"
+
     printf 'M900-RELEASE-DONE tag=v0.2.900\n' > "$ad/M900-RELEASE.done"
     touch -d "@$((ECHO_NOW-18000))" "$ad/M900-RELEASE.done"
     rm -f "$ad/NEXT-QUEUE.md"

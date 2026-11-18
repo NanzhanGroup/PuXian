@@ -147,7 +147,12 @@ taken=0
 taking=0
 why=none
 done_commit="$(sed -n 's/.*[Cc]ommit=\([0-9a-f]\{7,40\}\).*/\1/p' "$done_file" 2>/dev/null | head -1)"
-if [ -n "$done_commit" ] && command -v git >/dev/null 2>&1 && [ -d "$REPO/.git" ]; then
+# 缺陷 838（M417 复核实测）：旧判据用 `[ -d "$REPO/.git" ]` 认仓库 ——
+#   分片/worktree 里 .git 是**普通文件**（gitdir: ...），该判据恒假 ⇒ taken 恒 -1
+#   ⇒ 只要 NEXT-QUEUE 有 `- [ ]`／`- [~]` 且宽限期已过，本判据必然 STALE-OPEN 误红，
+#   与代码无关（2026-11-18 M417 链 15:14→17:00 跑 106min，shard8 里 taking 过期 5149s 判红）。
+#   改用 git 自身判仓库（worktree 同样返回成功），只在 git 真不可用时才 taken=-1。
+if [ -n "$done_commit" ] && command -v git >/dev/null 2>&1 && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
     n_after="$(git -C "$REPO" rev-list --count "$done_commit..HEAD" 2>/dev/null || echo "")"
     case "$n_after" in
         ''|*[!0-9]*) taken=-1; why=unknown-commit ;;

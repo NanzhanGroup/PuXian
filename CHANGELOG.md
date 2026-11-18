@@ -1,3 +1,54 @@
+## M417 补2：链尾判据在 worktree 里恒 taken=-1（缺陷 838 · 分片误红）
+
+> **一句话**：`chain_tail.sh` 用 `[ -d "$REPO/.git" ]` 认 git 仓库，而**分片/worktree 里 `.git` 是普通文件**
+> ⇒ `taken` 恒 -1 ⇒ 只要 NEXT-QUEUE 有未开工项、且 `- [~]` 的宽限期（1800s）已过，门在任何分片里必然
+> STALE-OPEN 判红。跟代码无关，是**门的环境前提缺陷**（缺陷 300 同族：门必须在自己被跑的地方成立）。
+
+### 证据（2026-11-18 16:07 · shard8 · /data/gatevm/m417-chain-20261118-151408.log）
+
+```
+CHAIN-TAIL=STALE-OPEN done=M416-RELEASE.done age=6537 open=12 open_do=2 pending=0 busy=0 exempt=0 \
+  taken=-1 taking=0 why=unknown-commit,taking-expired-5149s
+❌ P2 宿主链尾断了（rc=1）——发布完成太久且无任何接力载体
+```
+
+- 链 15:14→17:00 跑 **106 min**；M416 done（14:30:49）之后其实**有 2 个提交**（cc11e31、bfdc229），
+  但 taken 被 `.git` 是文件这一条挡死 ⇒ 拿不到证据 ⇒ 一律按红。
+- 同时解释「为什么 M416 那轮绿、M417 这轮红」：M416 链短，`- [~]` 还在 30min 宽限期内（taking=1）；
+  M417 链长，宽限期必然过期 ⇒ taking=0 且 taken=-1 ⇒ 必红。**链越长越必红**，与改动无关。
+
+### 修法
+
+```
+A. packaging/chain/chain_tail.sh：
+   [ -d "$REPO/.git" ]  →  git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1
+   （worktree 同样返回成功；只有 git 真不可用时才落到 taken=-1）
+B. examples/m412_chain_tail/verify.sh：新增 S4g（前提自证：worktree 的 .git 是文件 + worktree 正控 taken=1）
+```
+
+负控已实测（禁「应该好了」）：把 A 那一行**临时回退**后跑 `verify.sh --selftest` ⇒
+
+```
+✅ S4g 前提自证：worktree 的 .git 是文件（旧判据 [ -d ] 必假）
+❌ S4g rc=1 out=CHAIN-TAIL=STALE-OPEN ... taken=-1 taking=0 why=unknown-commit,taking-expired-3600s
+── 自测：20/21 通过 ──
+```
+
+输出与 M417 现场同形 ⇒ 判据有牙。修回后 21/21，`m412_chain_tail` 门绿（1s）。
+
+副作用面：只改判据与门自测两个文件；不改 runtime / 不改基线数值 / 不动 CI 配置。
+回滚：`git revert` 本提交（链尾门在「长链 + worktree」场景重新误红）。
+
+### 同轮另一定性（未改代码）
+
+- `m128_unlock_grow` 分片红 = **LOAD-SENSITIVE**：门内 C10 自己写明「1 次答非所问（串味）⇒ 缺陷 440」。
+  机器空闲下串行复跑 **3 次全绿**（33s/33s/34s，`/data/autodrive/m417b-m128-rerun*.log`）。
+- 本轮 RECHECK 拒绝复跑的根因是另一个时序事实：链 14:52 起跑时 HEAD=cc11e31，15:43 又提交了 bfdc229
+  ⇒ `WT(cc11e31) ≠ HEAD(bfdc229)` ⇒ 判据按规定「不许换代码豁免红」按红处理。**不是代码回归**。
+  纪律推论：**发布链起跑后不许再往被测分支提交**；要修就修完再起链（本轮即按此重起）。
+
+---
+
 ## M417 补1：性能门下限判据的分母（缺陷 837 · 远端 CI 红的真因）
 
 > **一句话**：下限判据（「比基线快 10 倍 ⇒ 负载没真跑」）拿**最慢**参考机当尺子，
