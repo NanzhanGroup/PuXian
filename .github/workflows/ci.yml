@@ -2009,6 +2009,18 @@ jobs:
           bash examples/m418_alloc_fail_budget/verify.sh > /tmp/v_m418.log 2>&1 || { echo "❌ m418_alloc_fail_budget 门失败（注入预算缺牙）"; tail -40 /tmp/v_m418.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m418_alloc_fail_budget（注入预算显式契约 + 旧行为负控）PASS"
 
+      - name: m419_keyword_sync（保留字表单一事实源 · M419 · 缺陷 841/842）
+        # 病史：spec §2.4 列 35 键而实现 41 键（多列假的 type、漏列 7 个真的），
+        #   §5.8 / 设计表第 7 条仍写「不做 try/catch」而 M392 已实现 ⇒ 照文档写 px 直接 E2001；
+        #   12 份 KEYWORDS 副本零判据看管，加一个关键字要改 12 处。
+        # 齿：[1] 判据自测 9 条 · [2] 真仓三方对账（12 份 ⇄ spec ⇄ 名单）
+        #   · [3] 真仓镜像三扰动各必红 + 前提自证 · [4] 环境问题 rc=3 不判绿
+        if: always()
+        run: |
+          bash selfhost/check_keyword_sync.sh --selftest > /tmp/v_m419s.log 2>&1 || { echo "❌ m419_keyword_sync 自检失败（装置自己没牙）"; tail -20 /tmp/v_m419s.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          bash examples/m419_keyword_sync/verify.sh > /tmp/v_m419.log 2>&1 || { echo "❌ m419_keyword_sync 门失败（保留字表已漂移）"; tail -40 /tmp/v_m419.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m419_keyword_sync（三方对账 + 三扰动负控 + 环境问题不判绿）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

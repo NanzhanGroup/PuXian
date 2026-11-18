@@ -69,10 +69,16 @@
 ### 2.4 关键字（保留字）
 ```
 let  var  const  def  fn  struct  enum  trait  impl
-match  case  if  elif  else  for  while  in  return  break  continue
-import  from  pub  as  spawn  chan  send  recv  select
-true  false  null  self  type  capture
+match  case  if  elif  else  for  while  in
+and  or  not  return  break  continue
+import  from  pub  as  spawn  chan  send  recv  select  extern
+true  false  null  None  self  capture  try  catch
 ```
+- 本表与实现**逐字一致（41 键）**，由 `selfhost/check_keyword_sync.sh` 守着：
+  实现（12 份 KEYWORDS 副本）⇄ 本文档 ⇄ `selfhost/keywords_owners.txt` 三方对账，偏差即判红。
+- `None` 与 `null` 等价（同一保留值的别名），推荐写 `null`。
+- `type` **不是**保留字（0.2.391 及更早的本文档把它列进来是错的，M419 更正）。
+- `try` / `catch` 见 §5.8。
 
 ### 2.5 字面量
 | 类别 | 示例 |
@@ -467,7 +473,12 @@ def name(params) -> RetType:
 见 §3.5。`?` 只能用于返回 Result/Option/可空类型的函数内。
 
 ### 5.8 异常
-**明确不做** try/catch/throw（v0.1+）。错误处理唯一通道：Result + `?`。
+**try / catch 已实现**（M392 · 2026-11-11 · edition 2026），`throw` 仍不做。
+错误处理两条通道：Result + `?`（主推），try/catch（用于跨层错误收敛与非 Result 场景）。
+
+> ⚠️ **相对 v0.2.391 及更早版本这是 breaking change**：`try` / `catch` 此前是普通标识符，
+> 形如 `var try = 1` 的代码自本版起报 `E2001`（保留字不可作变量名），升级须改名。
+> 语法演进按 §14 应带 edition 标注 —— 本次变更当时未留痕（M419 缺陷 841 已补记于此）。
 
 ---
 
@@ -1666,7 +1677,7 @@ bench / lsp / mcp`）；`ast` 已有 `astdump.px`（JSON/Debug AST），`pkg` �
 | 4 | 手动线程 / 锁原语 | channel 优先，线程抽象对 AI 负担重 |
 | 5 | 交互式断点调试器（gdb 式） | AI 需要结构化错误 + trace + 修复建议，不需要单步 |
 | 6 | 类继承体系 | 继承层次是 AI 难推理的 spaghetti，trait + 组合替代 |
-| 7 | 异常 try/catch/throw | 与 Result 双轨制让 AI 困惑，只留 Result + ? |
+| 7 | 异常 try/catch/throw | ~~与 Result 双轨制让 AI 困惑，只留 Result + ?~~ → **M392 推翻**：try/catch 已实现（edition 2026），throw 仍不做；理由：跨层错误收敛缺少非 Result 表达，AI 写 px 时反复绕路。Result + `?` 仍是主推通道 |
 | 8 | 三元表达式 a if b else c | 二义性，用 if 表达式 / match |
 | 9 | 隐式类型转换 | AI 易写错，显式转换 |
 | 10 | 运算符重载 | 魔法行为不可预测，v0.1 不做（后续 trait 化可选） |

@@ -1,0 +1,17 @@
+# selfhost/keywords_owners.txt —— 持有 KEYWORDS 表的 .px 源文件名单（M419 · 缺陷 842）
+# 判据：selfhost/check_keyword_sync.sh（--selftest 7 组正负控）
+# 口径：名单 ⇄ 实际持有者 **双向对账** —— 未登记持有者判红；名单项已无定义判红。
+#       加一个持有 KEYWORDS 的新文件，必须同时在此登记（否则全量门红）。
+# 说明：键集合语义一致即可；行尾 "# noqa" 造成的行指纹差异**不算**差异（T6 负控守着）。
+selfhost/bc_cli.px
+selfhost/codegen.px
+selfhost/compiler.px
+selfhost/interp.px
+selfhost/lexer.px
+selfhost/parser.px
+selfhost/pxlexer.px
+tools/fmtlexer.px
+tools/pxcheck.px
+tools/pxdoc.px
+tools/pxfmt.px
+tools/pxlint.px

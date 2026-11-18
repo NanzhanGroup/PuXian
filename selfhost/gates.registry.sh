@@ -2317,3 +2317,17 @@ run m415_cleanenv bash examples/m415_cleanenv/verify.sh
 #     · T3 注入计数 1 vs 2 前提自证 · T4 未触发场景不受影响 · T5 阈值边界（踩请求尺寸）
 gate_timeout m418_alloc_fail_budget 300
 run m418_alloc_fail_budget bash examples/m418_alloc_fail_budget/verify.sh
+
+# ── m419_keyword_sync：保留字表的单一事实源（缺陷 841 / 842）───────────────────
+#   病史（2026-11-18 实测 HEAD b38da5e）：
+#     ① docs/spec.md §2.4 列 35 键，实现 41 键 —— 多列 1 个假的（type），漏列 7 个真的
+#        （and/or/not/None/extern/try/catch）；§5.8 与设计表第 7 条仍写「明确不做 try/catch/throw」
+#        而 M392 已三轨实现 ⇒ 照文档写 px 直接 E2001（文档与实现相反）
+#     ② 12 份 .px 各自手抄 KEYWORDS（selfhost 7 + tools 5），零判据看管
+#        ⇒ 加一个关键字要改 12 处，漏一处就是「编译轨认、解释轨不认」的裂脑
+#     ③ M392 的保留字化是静默 breaking change（无 edition 标注）
+#   本门判据：[1] 判据自测 9 条（6 负控 + 2 前提自证 + 行指纹陷阱）
+#     · [2] 真仓三方对账（实现 12 份 ⇄ spec ⇄ 名单）· [3] 真仓镜像三扰动各必红（带前提自证）
+#     · [4] 环境问题 rc=3 不判绿
+gate_timeout m419_keyword_sync 120
+run m419_keyword_sync bash examples/m419_keyword_sync/verify.sh
