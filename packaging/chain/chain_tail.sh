@@ -1,38 +1,47 @@
 #!/usr/bin/env bash
 # ============================================================================
-# chain_tail.sh —— 链尾接力判据【唯一实现】（M412 · 缺陷 821）
+# chain_tail.sh —— 链尾接力判据【唯一实现】（M412 · 缺陷 821 / M417 · 缺陷 836）
 # ----------------------------------------------------------------------------
-# 病史（真事，2026-11-17）：
+# 病史一（M412 实测 · 2026-11-17）：
 #   M411 于 08:11 发布完成、08:32 本机 rpm 升级完毕，然后**什么都没发生**。
 #   我（东月）没有立项、没有交接单、没有 park；用户 13:30 来问「M412 进度」
 #   —— 那一刻 M412 压根不存在。空转 5h19m。
+#   当时的监控口径主动判绿：idle-unpushed 只看「HEAD 领先 origin/main」+
+#   「NEXT-QUEUE 有未开工项」，两者都 0 ⇒ 打印 "OK 没活可接"。
 #
-#   更糟的是当时的监控口径**主动判了绿灯**：
-#   dy-ops-watch-lib-idle.sh 的 idle_unpushed_verdict 只看
-#     「HEAD 是否领先 origin/main」+「NEXT-QUEUE 是否有未开工项」，
-#   两者都是 0 ⇒ 打印 "OK 没活可接"。也就是说：
-#     「一轮干完了、下一轮没人立项」这件事，在所有既有判据里都是**正常态**。
+# 病史二（M417 复核 · 2026-11-18）：
+#   M415 09:19 完成 → 12:05 用户来问，2h46m 零提交；而本脚本判 OK（open=10）。
+#   病因：只看「棒在不在文件里」，不看「有没有人在接」。
+#   ⇒ 一个把 10 条候选写进文件就再也不动的系统，在旧判据里是「有接力」。
 #
-# 本脚本把这件事变成可判的：
-#   最后一轮 RELEASE.done 距今 > --max-age（默认 3600s），且
-#   以下接力载体**一个都没有** ⇒ STALE（rc=1）
-#     ① NEXT-QUEUE.md 里还有 `- [ ]`（未开工项）
-#     ② /var/log/dy-ops/pending/ 有台账（有告警/任务在等人处置）
-#     ③ 有正在跑的 m<数字>* systemd 单元（链/发布/升级 —— 有人真在干活）
-#     ④ /data/autodrive/CAMPAIGN-IDLE 显式收工（必须同时带 UNTIL= 与 REASON=）
+# 本脚本把这件事变成可判的（两条独立的病）：
+#   ① 棒丢了：最后一轮 RELEASE.done 距今 > --max-age（默认 3600s），且
+#      以下接力载体**一个都没有** ⇒ STALE（rc=1）
+#         · 告警/任务台账（有人在等处置，排除本 key 自身）
+#         · 正在跑的 m<数字>-{chain,release,gate,postupgrade,red-guard} 单元
+#         · 合规 CAMPAIGN-IDLE（必须同时带 UNTIL= 与 REASON=）
+#   ② 棒在但没人接（M417 新增）：有 `- [ ]` 未开工项，却
+#         · RELEASE.done 之后没有任何新 commit（taken=0）
+#         · 且 NEXT-QUEUE 文件没有在宽限期内被改成 `- [~]`（taking=0）
+#      ⇒ STALE-OPEN（rc=1）
+#      为什么 `- [ ]` 本身不算接棒：写候选是「排队的动作」，不是「开干的动作」。
+#      为什么「改标签」有宽限：改 `- [~]` 是接棒的第一秒，但必须随后产出 commit；
+#        超过 --grace（默认 1800s）还没有 commit ⇒ 仍判 STALE-OPEN。
+#        （这就是「只改标签不算接棒」的负控口径，门里 S4c/S4d 守着。）
 #
-# 为什么 ④ 要这么严：一个光秃秃的「别报我」开关，最后一定会变成永久静音
+# 为什么 CAMPAIGN-IDLE 要这么严：一个光秃秃的「别报我」开关，最后一定会变成永久静音
 #   —— M385 的 idle-unpushed-OFF 就因为没人写 UNTIL/REASON 静默了 4h46m。
-#   缺任一段 ⇒ 豁免不生效，照判 STALE（这条有负控守着）。
 #
 # 用法：
 #   chain_tail.sh [--ad DIR] [--pending DIR] [--max-age SEC] [--now TS]
-#                 [--busy N | --busy-scan] [--quiet]
+#                 [--repo DIR] [--grace SEC] [--busy N | --busy-scan] [--quiet]
 #   退出码：0 = N-A / YOUNG / OK / EXEMPT（有接力或还没到点）
-#           1 = STALE（发布完成太久且无人接力）
+#           1 = STALE（棒丢了） / STALE-OPEN（棒在没人接）
 #           2 = 参数/环境错
 # 输出（单行，供门与发布链 grep）：
-#   CHAIN-TAIL=<V> done=<basename|none> age=<秒|none> open=<n> pending=<n> busy=<n> exempt=<0|1>
+#   CHAIN-TAIL=<V> done=<basename|none> age=<秒|none> open=<n> open_do=<n> pending=<n> busy=<n> exempt=<0|1> taken=<0|1|-1> taking=<0|1> why=<字>
+#   taken: 1=done 之后有新 commit · 0=没有 · -1=无法判定（无 done commit / 非 git 仓库）
+#   ⚠️ taken=-1 时**不**据此判绿（不猜）；此时只靠 taking 与实际载体。
 # ============================================================================
 set -uo pipefail
 
@@ -43,6 +52,10 @@ NOW=""
 BUSY=""
 SCAN_BUSY=1
 QUIET=0
+# 仓库根按**脚本位置**推导（缺陷 300：门里出现开发机绝对路径 ⇒ 本机绿 / CI 红 / 分片污染被测树）
+CT_HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REPO="$(cd "$CT_HERE/../.." 2>/dev/null && pwd || echo "")"
+GRACE=1800
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,15 +63,18 @@ while [ $# -gt 0 ]; do
         --pending)    PEND="${2:-}"; shift 2 ;;
         --max-age)    MAXAGE="${2:-}"; shift 2 ;;
         --now)        NOW="${2:-}"; shift 2 ;;
+        --repo)       REPO="${2:-}"; shift 2 ;;
+        --grace)      GRACE="${2:-}"; shift 2 ;;
         --busy)       BUSY="${2:-}"; SCAN_BUSY=0; shift 2 ;;
         --busy-scan)  SCAN_BUSY=1; shift ;;
         --quiet)      QUIET=1; shift ;;
-        -h|--help)    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)    sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "未知参数：$1" >&2; exit 2 ;;
     esac
 done
 
 case "$MAXAGE" in ''|*[!0-9]*) echo "❌ --max-age 必须是整数：$MAXAGE" >&2; exit 2 ;; esac
+case "$GRACE"  in ''|*[!0-9]*) echo "❌ --grace 必须是整数：$GRACE" >&2; exit 2 ;; esac
 [ -d "$AD" ] || { echo "❌ 目录不存在：$AD" >&2; exit 2; }
 
 # 取「现在」：只从时钟取，不猜；测试时可用 --now 注入（自测需要确定性）
@@ -81,23 +97,28 @@ for f in "$AD"/M*-RELEASE.done; do
 done
 
 if [ -z "$done_file" ]; then
-    [ "$QUIET" = 1 ] || echo "CHAIN-TAIL=N-A done=none age=none open=0 pending=0 busy=0 exempt=0"
+    [ "$QUIET" = 1 ] || echo "CHAIN-TAIL=N-A done=none age=none open=0 open_do=0 pending=0 busy=0 exempt=0 taken=0 taking=0 why=none"
     exit 0
 fi
 age=$(( NOW - done_mtime ))
 [ "$age" -ge 0 ] || age=0
 
-# ② 接力载体一：NEXT-QUEUE 未开工项
+# ② 接力载体一：NEXT-QUEUE 未开工项 / 进行中项 / 文件动过的时刻
 open_n=0
+open_do=0
+qfile_mtime=0
 if [ -f "$AD/NEXT-QUEUE.md" ]; then
     open_n="$(grep -c '^[[:space:]]*- \[ \]' "$AD/NEXT-QUEUE.md" 2>/dev/null || true)"
     case "$open_n" in ''|*[!0-9]*) open_n=0 ;; esac
+    open_do="$(grep -c '^[[:space:]]*- \[~\]' "$AD/NEXT-QUEUE.md" 2>/dev/null || true)"
+    case "$open_do" in ''|*[!0-9]*) open_do=0 ;; esac
+    qfile_mtime="$(stat -c %Y "$AD/NEXT-QUEUE.md" 2>/dev/null || echo 0)"
+    case "$qfile_mtime" in ''|*[!0-9]*) qfile_mtime=0 ;; esac
 fi
 
 # ③ 接力载体二：告警/任务台账（有人在等处置）
 #    ⚠️ 必须排除「链尾自己拉响的那条」：否则本判据的报警会把自己判成「有接力」，
 #       下一次运行立刻变绿并把台账了结 ⇒ 报警/了结 30 分钟振荡一次，而人还是没立项。
-#       这是「判据被自己的产物喂饱」的典型形态，故用白名单式排除（默认 *chain-tail*）。
 pend_n=0
 if [ -d "$PEND" ]; then
     pend_n="$(find "$PEND" -maxdepth 1 -type f ! -name "*chain-tail*" 2>/dev/null | wc -l)"
@@ -119,7 +140,42 @@ else
     busy_n=0
 fi
 
-# ⑤ 接力载体四：显式收工（必须 UNTIL= + REASON= 两段齐全）
+# ⑤ 接棒迹象（M417 新增，与载体分开算：载体是「有棒」，这里才是「有人接」）
+#    taken：RELEASE.done 里的 commit 之后是否有新提交
+#    taking：NEXT-QUEUE 里已有 `- [~]` 且文件在宽限期内被改过（接棒的第一秒）
+taken=0
+taking=0
+why=none
+done_commit="$(sed -n 's/.*[Cc]ommit=\([0-9a-f]\{7,40\}\).*/\1/p' "$done_file" 2>/dev/null | head -1)"
+if [ -n "$done_commit" ] && command -v git >/dev/null 2>&1 && [ -d "$REPO/.git" ]; then
+    n_after="$(git -C "$REPO" rev-list --count "$done_commit..HEAD" 2>/dev/null || echo "")"
+    case "$n_after" in
+        ''|*[!0-9]*) taken=-1; why=unknown-commit ;;
+        0)           taken=0;  why=no-new-commit ;;
+        *)           taken=1;  why="commit+$n_after" ;;
+    esac
+else
+    taken=-1; why=unknown-commit
+fi
+qstate=none
+if [ "$open_do" -gt 0 ] && [ "$qfile_mtime" -gt "$done_mtime" ]; then
+    q_age=$(( NOW - qfile_mtime ))
+    [ "$q_age" -ge 0 ] || q_age=0
+    if [ "$q_age" -le "$GRACE" ]; then
+        taking=1
+        qstate="taking-${q_age}s"
+    else
+        qstate="taking-expired-${q_age}s"
+    fi
+fi
+# why 同时承载两条线索（commit 判定 + NEXT-QUEUE 动过的时刻），用逗号分隔
+#   —— 只留一条会把另一条吞掉（S4d 首跑就红在这：why 已被 unknown-commit 占用，
+#      taking-expired 写不进去，门读不到「标签过期」这个事实）。
+if [ "$qstate" != none ]; then
+    if [ "$why" = none ]; then why="$qstate"; else why="$why,$qstate"; fi
+fi
+
+# ⑥ 接力载体四：显式收工（必须 UNTIL= + REASON= 两段齐全）
 exempt=0
 idle_file="$AD/CAMPAIGN-IDLE"
 if [ -f "$idle_file" ]; then
@@ -133,21 +189,36 @@ verdict=OK
 if [ "$verdict" = OK ]; then
     if [ "$exempt" = 1 ]; then
         verdict=EXEMPT
-    elif [ "$open_n" -gt 0 ] || [ "$pend_n" -gt 0 ] || [ "$busy_n" -gt 0 ]; then
+    elif [ "$busy_n" -gt 0 ] || [ "$pend_n" -gt 0 ]; then
         verdict=OK
+    elif [ "$open_n" -gt 0 ] || [ "$open_do" -gt 0 ]; then
+        # 有棒：区分「有人接」与「没人接」
+        if [ "$taken" = 1 ] || [ "$taking" = 1 ]; then
+            verdict=OK
+        else
+            verdict=STALE-OPEN
+        fi
     else
         verdict=STALE
     fi
 fi
 
-[ "$QUIET" = 1 ] || printf 'CHAIN-TAIL=%s done=%s age=%s open=%s pending=%s busy=%s exempt=%s\n' \
-    "$verdict" "$(basename "$done_file")" "$age" "$open_n" "$pend_n" "$busy_n" "$exempt"
+[ "$QUIET" = 1 ] || printf 'CHAIN-TAIL=%s done=%s age=%s open=%s open_do=%s pending=%s busy=%s exempt=%s taken=%s taking=%s why=%s\n' \
+    "$verdict" "$(basename "$done_file")" "$age" "$open_n" "$open_do" "$pend_n" "$busy_n" "$exempt" "$taken" "$taking" "$why"
 
 if [ "$verdict" = STALE ]; then
     echo "   ❌ 链尾断了：$(basename "$done_file") 已 $((age/60)) 分钟，且没有任何接力载体" >&2
     echo "      （NEXT-QUEUE 未开工项 0 · pending 台账 0 · 里程碑单元 0 · 无合规 CAMPAIGN-IDLE）" >&2
     echo "      修法：① 立项下一轮并写 $AD/NEXT-QUEUE.md（至少一条 '- [ ]'）" >&2
     echo "            ② 或写 $AD/CAMPAIGN-IDLE，必须含 UNTIL=… 与 REASON=… 两行" >&2
+    exit 1
+fi
+
+if [ "$verdict" = STALE-OPEN ]; then
+    echo "   ❌ 有棒没人接：$(basename "$done_file") 已 $((age/60)) 分钟，NEXT-QUEUE 有 $open_n 条未开工项，但" >&2
+    echo "      既无 $((GRACE/60)) 分钟内标过的 '- [~]'（taking=0），也无可判定的新提交（taken=$taken，why=$why）" >&2
+    echo "      修法：把那一条改成 '- [~]' **并立刻产出提交**（只改标签超过 $((GRACE/60)) 分钟不产出提交，仍判红）" >&2
+    [ "$taken" = -1 ] && echo "      注意：taken=-1 表示拿不到 done 的 commit 或 $REPO 不是 git 仓库 ⇒ 本判据不据此判绿" >&2
     exit 1
 fi
 exit 0

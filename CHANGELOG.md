@@ -1,3 +1,77 @@
+## M417：有棒没人接（缺陷 836 · 判据只看棒、不看人）
+
+> **一句话**：M412 修了「干完了没立下一轮」，M417 修它漏掉的那一半 —— 「候选写进文件就再也不动」
+> 在旧判据里等于「有接力」。同轮还修了基线回灌的 push：一次 40 秒网络抖动被记成「回灌失败」
+> （看上去像数据不全），且要人肉续推。
+
+### 证据一：2 小时 46 分的绿色空转（2026-11-18）
+
+```
+M415 09:18 发布完成 · 09:19 RELEASE.done
+      → 12:05 用户来问「报告自动推进的进度」  期间零提交、零立项
+chain_tail 判定：CHAIN-TAIL=OK open=10
+  因为旧判据把「NEXT-QUEUE 里有 - [ ]」直接当成「有人在接」
+```
+
+### 证据二：push 抖动被写成「回灌失败」（2026-11-18 14:30–14:31）
+
+```
+14:30:49  REFRESH-COMMIT=OK f584668
+14:31:29  REFRESH-PUSH=FAIL(见 /tmp/gtb_push.log；main 会领先 origin，看门狗会报)
+14:31:29  ALERT m416-baseline-refresh「M416 基线回灌失败」
+          ⇒ 台账分不清「覆盖不全」与「网络抖一下」
+14:32:40  手工重跑 ⇒ REFRESH-PUSH=OK，同时多产生 d9cca0b（同内容基线，窗口数据已变）
+```
+
+### 修法
+
+```
+A. chain_tail.sh 增加第二维（taken / taking），与「载体」分开算
+   taken  = RELEASE.done 里的 commit 之后是否有新提交（git rev-list --count）
+   taking = NEXT-QUEUE 有 '- [~]' 且文件在 --grace（默认 1800s）内被改过
+   有棒（open>0）而 taken=0 且 taking=0 ⇒ CHAIN-TAIL=STALE-OPEN（rc=1）
+   拿不到证据（无 commit= / 非 git 仓库）⇒ taken=-1，**不据此判绿**（不猜）
+   输出行新增 open_do= taken= taking= why=
+B. refresh_gate_baseline.sh：push 重试 3 次（退避 1s/3s）
+   失败文案必须带 attempts + 已提交 sha + 错误摘要 + 日志路径
+   非快进（rejected / non-fast-forward）不空转重试，立即标注「需人工 rebase」
+C. release_postupgrade.sh：告警正文透传 REFRESH-* 结论行（不再只说「失败」）
+D. 宿主 dy-ops-chain-tail.sh：报警按 STALE / STALE-OPEN 分文案
+   （一份告警说两件事，人就只能猜）
+```
+
+### 门与自测（都要有牙）
+
+```
+examples/m412_chain_tail/verify.sh
+  自测 19 断言（旧 13）：S4 从「open>0 就 OK」改成负控 STALE-OPEN；
+    S4b 正控 60s 内标 '- [~]' ⇒ taking=1；S4c 负控 只动文件不标 '- [~]' ⇒ 仍 STALE-OPEN；
+    S4d 负控 '- [~]' 超 1800s 无提交 ⇒ 仍 STALE-OPEN；S4e 正控 真 git 仓库有 done 后提交 ⇒ taken=1；
+    S4f 负控 同仓库 reset 回 done ⇒ taken=0（证明不是「有 .git 就判绿」）
+  完整门 22/22 · nscan=3
+selfhost/refresh_gate_baseline.sh --self-test
+  9 → 17 断言：T7 正控「前 2 次失败、第 3 次成功 attempts=3」· T7b 前提自证（桩调用计数=3）
+  T8 负控「三次全败 ⇒ rc=1 且文案含『未推送』」· T9 负控「非快进 ⇒ attempts=1 不重试」
+/usr/local/sbin/dy-ops-chain-tail.sh --selftest
+  9/9（B 改为 pending 台账接力；新增 B2 正控：仅 '- [ ]' ⇒ 报警且文案为「有棒没人接」）
+```
+
+### 一处自我更正
+
+```
+S4d 首跑红：why 字段已被 unknown-commit 占用，taking-expired 写不进去 ⇒ 门读不到「标签过期」。
+改成 why 用逗号承载两条线索（unknown-commit,taking-expired-3600s）。判据绿了，但这一红说明
+「单字段塞两个事实」本身就是判据设计缺陷 —— 记在此处，后续再出现同类必须拆字段而不是拼字符串。
+```
+
+### 未做（已列 NEXT-QUEUE 候选 H）
+
+```
+缺陷 825：发布机械段脚本仍是逐里程碑手抄（本轮又抄了一份 m417_release.sh）。
+模板入仓的事本轮不动，理由：同轮已改 4 个文件 + 2 个门，再动发布脚手架风险不可控。
+```
+
+
 ## M416：CI-only 红的真因定性（M415 诊断增强的第一次真跑 · 缺陷 835）
 
 > **一句话**：M415 装的「门红了要能读出真因」第一次真跑就兼现了 —— 两条 CI-only 红不再是一句话，

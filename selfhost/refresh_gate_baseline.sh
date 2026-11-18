@@ -200,10 +200,29 @@ refresh() {   # $1=repo ; 结果写全局 RESULT_TXT
             || { say "REFRESH-COMMIT=FAIL(commit，见 /tmp/gtb_commit.log)"; return 1; }
         say "REFRESH-COMMIT=OK $(git -C "$repo" rev-parse --short HEAD)"
         if [ "$DO_PUSH" = 1 ]; then
-            if git -C "$repo" push origin HEAD:main >/tmp/gtb_push.log 2>&1; then
-                say "REFRESH-PUSH=OK"
+            # M417（缺陷 836 实测）：M416 那轮 14:30:49 commit OK、14:31:29 push FAIL（40s 超时），
+            #   台账只写「基线回灌失败」⇒ 看上去像「覆盖不全」，实际只是推不动。
+            #   而失败后留下的 pending 台账，又和「真失败」混在一起，无法分辨。
+            #   改为：3 次退避重试（1s/3s），失败文案必须带 attempts + 已提交 sha + 错误摘要。
+            local attempt=0 max=3 rc_push=1 pmsg="" sha
+            sha="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+            while [ "$attempt" -lt "$max" ]; do
+                attempt=$((attempt + 1))
+                if git -C "$repo" push origin HEAD:main >/tmp/gtb_push.log 2>&1; then
+                    rc_push=0; break
+                fi
+                pmsg="$(tail -3 /tmp/gtb_push.log 2>/dev/null | tr '\n' ' ' | cut -c1-160)"
+                # 非快进/被拒 = 推不上去（远端有新提交），退避重试不会有帮助 ⇒ 立刻停，交人裁决
+                if grep -qiE 'rejected|non-fast-forward|fetch first' /tmp/gtb_push.log 2>/dev/null; then
+                    pmsg="非快进（远端有新提交，需人工 rebase）：$pmsg"
+                    break
+                fi
+                case "$attempt" in 1) sleep 1 ;; 2) sleep 3 ;; esac
+            done
+            if [ "$rc_push" = 0 ]; then
+                say "REFRESH-PUSH=OK attempts=$attempt"
             else
-                say "REFRESH-PUSH=FAIL(见 /tmp/gtb_push.log；main 会领先 origin，看门狗会报)"
+                say "REFRESH-PUSH=FAIL(attempts=$attempt · 已提交 $sha 未推送 · main 领先 origin；err=$pmsg；log=/tmp/gtb_push.log)"
                 return 1
             fi
         fi
@@ -217,7 +236,7 @@ refresh() {   # $1=repo ; 结果写全局 RESULT_TXT
 selftest() {
     ST_T="$(mktemp -d /tmp/m400rf.XXXXXX)" || exit 3
     local T="$ST_T"
-    trap 'rm -rf "$ST_T"' EXIT
+    [ -z "${SELFTEST_KEEP:-}" ] && trap 'rm -rf "$ST_T"' EXIT
     local n=0 FAIL=0
     ok()  { n=$((n+1)); echo "  ✅ $*"; }
     bad() { n=$((n+1)); FAIL=$((FAIL+1)); echo "  ❌ $*"; }
@@ -339,6 +358,100 @@ EOS
     MDIR="$T/md3" bash "$0" --repo "$R2" --measured-dir "$T/md3" \
         --baseline selfhost/gate_time_baseline.tsv >"$T/t6.log" 2>&1
     [ "$?" = 3 ] && ok "T6 未完成的链不算数据 ⇒ rc=3" || bad "T6 未完成链没报 rc=3"
+
+    # ── T7/T8：push 重试（M417 · 缺陷 836）────────────────────────────────
+    #   病史：M416 那轮 commit OK、push 40s 超时 ⇒ 台账只写「基线回灌失败」，
+    #         看着像覆盖不全；而且一次网络抖动就留下人肉待办。
+    #   这里用 git 包装器注入「前两次失败」，验证重试真的存在（不是写在注释里）。
+    local GITREAL; GITREAL="$(command -v git)"
+    if [ -z "$GITREAL" ]; then
+        bad "T7/T8 跳过前提不成立：找不到真 git"
+    else
+        local BARE="$T/origin.git" CNTF="$T/pushcnt" GB="$T/bin_git"
+        # fixture repo 原本只是「目录 + 文件」，从未 git init（旧用例不测 --commit）。
+        #   测 push 就必须先让它成为真仓库，并把现状提交掉（否则「树脏不代提交」的守卫
+        #   会把整条路径 SKIP 掉，T7 将变成「什么都没测」而假绿）。
+        git -C "$R" init -q >/dev/null 2>&1
+        git -C "$R" config user.email t@example.invalid >/dev/null 2>&1
+        git -C "$R" config user.name t >/dev/null 2>&1
+        git -C "$R" add -A >/dev/null 2>&1
+        git -C "$R" commit -qm "fixture init（m417 selftest）" >/dev/null 2>&1
+        git init -q --bare "$BARE" >/dev/null 2>&1
+        git -C "$R" remote remove origin >/dev/null 2>&1 || true
+        git -C "$R" remote add origin "$BARE" >/dev/null 2>&1
+        git -C "$R" push -q origin HEAD:main >/dev/null 2>&1 || true
+        mkdir -p "$GB"
+        cat > "$GB/git" <<STUBG
+#!/usr/bin/env bash
+args=("\$@")
+is_push=0
+for a in "\$@"; do [ "\$a" = "push" ] && is_push=1; done
+if [ "\$is_push" = 1 ]; then
+    c=\$(cat "$CNTF" 2>/dev/null || echo 0); c=\$((c+1)); echo "\$c" > "$CNTF"
+    if [ "\$c" -le "\${STUB_FAIL_N:-2}" ]; then
+        echo "fatal: unable to access 'https://example.invalid/': Operation timed out" >&2
+        exit 128
+    fi
+fi
+exec "$GITREAL" "\${args[@]}"
+STUBG
+        chmod +x "$GB/git"
+        # T7 正控：前 2 次失败、第 3 次成功 ⇒ rc=0 且 attempts=3
+        : > "$CNTF"; mkstamp 20260107-000000 120 30
+        PATH="$GB:$PATH" STUB_FAIL_N=2 MDIR="$T/md" bash "$0" --repo "$R" \
+            --measured-dir "$T/md" --baseline selfhost/gate_time_baseline.tsv --stamps 3 --push \
+            >"$T/t7.log" 2>&1
+        local rc7=$?
+        n=$((n+1))
+        if [ "$rc7" = 0 ] && grep -q 'REFRESH-PUSH=OK attempts=3' "$T/t7.log"; then
+            ok "T7 正控：push 前两次失败 ⇒ 重试第 3 次成功（attempts=3）"
+        else
+            bad "T7 rc=$rc7（应 0）；$(grep 'REFRESH-PUSH=' "$T/t7.log" | tail -1)"
+        fi
+        # T7b 前提自证：桩真被调了 3 次（证明上面那条走的不是「一次就成功」）
+        local cnt7; cnt7="$(cat "$CNTF" 2>/dev/null || echo 0)"
+        n=$((n+1))
+        [ "$cnt7" = 3 ] && ok "T7b 前提自证：桩 git 的 push 调用计数 = 3" \
+                        || bad "T7b 桩只被调 $cnt7 次（应 3 ⇒ 重试逻辑没跑）"
+        # T8 负控：三次全败 ⇒ rc=1，且文案必须点名「已提交 sha 未推送」（不许再说「覆盖不全」）
+        : > "$CNTF"; mkstamp 20260108-000000 130 30
+        PATH="$GB:$PATH" STUB_FAIL_N=9 MDIR="$T/md" bash "$0" --repo "$R" \
+            --measured-dir "$T/md" --baseline selfhost/gate_time_baseline.tsv --stamps 3 --push \
+            >"$T/t8.log" 2>&1
+        local rc8=$?
+        n=$((n+1))
+        if [ "$rc8" = 1 ] && grep -q 'REFRESH-PUSH=FAIL(attempts=3' "$T/t8.log" \
+           && grep -q '未推送' "$T/t8.log"; then
+            ok "T8 负控：三次全败 ⇒ rc=1，文案点名「已提交未推送」"
+        else
+            bad "T8 rc=$rc8（应 1）；$(grep 'REFRESH-PUSH=' "$T/t8.log" | tail -1)"
+        fi
+        # T9 负控：非快进（rejected）⇒ 不空转重试，attempts=1 立刻交人
+        : > "$CNTF"; mkstamp 20260109-000000 140 30
+        cat > "$GB/git" <<STUBG2
+#!/usr/bin/env bash
+args=("\$@")
+is_push=0
+for a in "\$@"; do [ "\$a" = "push" ] && is_push=1; done
+if [ "\$is_push" = 1 ]; then
+    c=\$(cat "$CNTF" 2>/dev/null || echo 0); c=\$((c+1)); echo "\$c" > "$CNTF"
+    echo "! [rejected]        main -> main (non-fast-forward)" >&2
+    exit 1
+fi
+exec "$GITREAL" "\${args[@]}"
+STUBG2
+        chmod +x "$GB/git"
+        PATH="$GB:$PATH" MDIR="$T/md" bash "$0" --repo "$R" \
+            --measured-dir "$T/md" --baseline selfhost/gate_time_baseline.tsv --stamps 3 --push \
+            >"$T/t9.log" 2>&1
+        local rc9=$? cnt9; cnt9="$(cat "$CNTF" 2>/dev/null || echo 0)"
+        n=$((n+1))
+        if [ "$rc9" = 1 ] && [ "$cnt9" = 1 ] && grep -q '非快进' "$T/t9.log"; then
+            ok "T9 负控：非快进 ⇒ 不重试（attempts=1）并标注需人工 rebase"
+        else
+            bad "T9 rc=$rc9 cnt=$cnt9（应 1/1）；$(grep 'REFRESH-PUSH=' "$T/t9.log" | tail -1)"
+        fi
+    fi
 
     echo "── refresh 自测：$((n-FAIL))/$n 通过 ──"
     [ "$FAIL" = 0 ] || return 1

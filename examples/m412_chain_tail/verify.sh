@@ -47,65 +47,123 @@ selftest() {
     local ad="$T/ad" pen="$T/pending"
     mkdir -p "$ad" "$pen" || { echo "❌ fixture 建不出来" >&2; return 2; }
     nscan=$((nscan + 2)); ECHO_NOW=1800000000
+    # M417：接棒判据要看 git。selftest 必须显式给它一个**不存在的仓库**，
+    #   否则会去读宿主真仓库（那上面永远有 M41x 的提交）⇒ 所有用例假绿。
+    #   这是「测试没隔离」的同族病（M413 selftest 踩过一次），故在源头钉死。
+    local NGR="$T/nogit"
 
     # S1 没有任何 RELEASE.done ⇒ N-A（前提自证：目录里确实没有）
     ls "$ad"/M*-RELEASE.done >/dev/null 2>&1 && bad "S1 前提：空目录里居然有 done 文件" || ok "S1 前提自证：fixture 里确实没有 M*-RELEASE.done"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 0 ] && grep -q 'CHAIN-TAIL=N-A' <<<"$out" && ok "S1 无发布记录 ⇒ N-A（不是 STALE）" || bad "S1 rc=$rc out=$out"
 
     # S2 30min 前发布 + 无载体 ⇒ YOUNG（还没到点）
     touch -d "@$((ECHO_NOW-1800))" "$ad/M900-RELEASE.done"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 0 ] && grep -q 'CHAIN-TAIL=YOUNG' <<<"$out" && ok "S2 发布 30min ⇒ YOUNG" || bad "S2 rc=$rc out=$out"
 
     # S3 正控：5h 前发布 + 没有任何载体 ⇒ STALE（必须是红）
     touch -d "@$((ECHO_NOW-18000))" "$ad/M900-RELEASE.done"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
-    [ "$rc" = 1 ] && grep -q 'CHAIN-TAIL=STALE' <<<"$out" && ok "S3 正控：5h 无接力 ⇒ STALE rc=1" || bad "S3 rc=$rc（应 1）out=$out"
+    [ "$rc" = 1 ] && grep -q 'CHAIN-TAIL=STALE '<<<"$out" && ok "S3 正控：5h 无接力 ⇒ STALE rc=1" || bad "S3 rc=$rc（应 1）out=$out"
     # S3b 前提自证：fixture 的 done 时间真的被改成 5h 前（不是脚本自说自话）
     d=$(( ECHO_NOW - $(stat -c %Y "$ad/M900-RELEASE.done") ))
     nscan=$((nscan + 1))
     [ "$d" -ge 17990 ] && [ "$d" -le 18010 ] && ok "S3b 前提自证：done 时间戳确实是 5h 前（差 ${d}s）" || bad "S3b 时间戳差 ${d}s（应 ≈18000）"
 
-    # S4 负控：NEXT-QUEUE 有未开工项 ⇒ OK
+    # S4（M417 变严 · 缺陷 836）：只有 `- [ ]` 未开工项、无人接 ⇒ STALE-OPEN
+    #   旧版这里判 OK —— 那正是 M415 之后 2h46m 空转的判据口径。
     printf '# 队列\n- [ ] M413 候选\n' > "$ad/NEXT-QUEUE.md"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    touch -d "@$((ECHO_NOW-18000))" "$ad/NEXT-QUEUE.md"   # 未在宽限期内动过
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
-    [ "$rc" = 0 ] && grep -q 'open=1' <<<"$out" && ok "S4 负控：有未开工项 ⇒ OK（open=1）" || bad "S4 rc=$rc out=$out"
+    [ "$rc" = 1 ] && grep -q 'CHAIN-TAIL=STALE-OPEN ' <<<"$out" && grep -q 'open=1 open_do=0' <<<"$out" \
+        && ok "S4 负控：有未开工项但无人接 ⇒ STALE-OPEN rc=1" || bad "S4 rc=$rc（应 1）out=$out"
+
+    # S4b 正控：已标 '- [~]' 且文件在宽限期内动过 ⇒ taking=1 ⇒ OK
+    printf '# 队列\n- [~] M417 进行中\n' > "$ad/NEXT-QUEUE.md"
+    touch -d "@$((ECHO_NOW-60))" "$ad/NEXT-QUEUE.md"
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
+    nscan=$((nscan + 1))
+    [ "$rc" = 0 ] && grep -q 'taking=1' <<<"$out" && ok "S4b 正控：60s 内标过 '- [~]' ⇒ taking=1 ⇒ OK" || bad "S4b rc=$rc out=$out"
+
+    # S4c 负控：文件刚动过，但全是 '- [ ]'（连标签都没改）⇒ 不算接棒 ⇒ STALE-OPEN
+    printf '# 队列\n- [ ] M417 没标进行中\n' > "$ad/NEXT-QUEUE.md"
+    touch -d "@$((ECHO_NOW-60))" "$ad/NEXT-QUEUE.md"
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
+    nscan=$((nscan + 1))
+    [ "$rc" = 1 ] && grep -q 'taking=0' <<<"$out" && grep -q 'CHAIN-TAIL=STALE-OPEN ' <<<"$out" \
+        && ok "S4c 负控：只动文件不标 '- [~]' ⇒ 不算接棒（taking=0 · 仍 STALE-OPEN）" || bad "S4c rc=$rc out=$out"
+
+    # S4d 负控：标了 '- [~]' 但宽限期（1800s）已过、仍无提交 ⇒ 仍 STALE-OPEN
+    printf '# 队列\n- [~] M417 标了但没干\n' > "$ad/NEXT-QUEUE.md"
+    touch -d "@$((ECHO_NOW-3600))" "$ad/NEXT-QUEUE.md"
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
+    nscan=$((nscan + 1))
+    [ "$rc" = 1 ] && grep -q 'taking=0' <<<"$out" && grep -q 'taking-expired' <<<"$out" \
+        && ok "S4d 负控：'- [~]' 超 1800s 无提交 ⇒ 仍 STALE-OPEN（改标签不算接棒）" || bad "S4d rc=$rc out=$out"
+
+    # S4e 正控：真 git 仓库里有「done 之后的新提交」⇒ taken=1 ⇒ OK
+    local R4="$T/repo4"; mkdir -p "$R4"
+    git -C "$R4" init -q 2>/dev/null && git -C "$R4" config user.email t@example.invalid \
+        && git -C "$R4" config user.name t
+    echo a > "$R4/f"; git -C "$R4" add f >/dev/null 2>&1; git -C "$R4" commit -qm base >/dev/null 2>&1
+    local BASE4; BASE4="$(git -C "$R4" rev-parse HEAD 2>/dev/null)"
+    echo b >> "$R4/f"; git -C "$R4" commit -qam next >/dev/null 2>&1
+    local NAFTER; NAFTER="$(git -C "$R4" rev-list --count "$BASE4..HEAD" 2>/dev/null)"
+    printf '# 队列\n- [ ] M417 已开干\n' > "$ad/NEXT-QUEUE.md"
+    touch -d "@$((ECHO_NOW-18000))" "$ad/NEXT-QUEUE.md"
+    printf 'M900-RELEASE-DONE commit=%s\n' "$BASE4" > "$ad/M900-RELEASE.done"
+    touch -d "@$((ECHO_NOW-18000))" "$ad/M900-RELEASE.done"
+    nscan=$((nscan + 2))
+    [ "$NAFTER" = 1 ] && ok "S4e 前提自证：fixture 仓库确实有 1 个 done 之后的提交" || bad "S4e 前提：rev-list=$NAFTER（应 1）"
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$R4" --busy 0 2>&1)"; rc=$?
+    [ "$rc" = 0 ] && grep -q 'taken=1' <<<"$out" && ok "S4e 正控：done 之后有新提交 ⇒ taken=1 ⇒ OK" || bad "S4e rc=$rc out=$out"
+
+    # S4f 负控：同一仓库把 HEAD 退回 done 那个提交 ⇒ taken=0 ⇒ STALE-OPEN
+    #   （证明 taken 真在比 commit，不是「有 .git 就判绿」）
+    git -C "$R4" reset -q --hard "$BASE4" >/dev/null 2>&1
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$R4" --busy 0 2>&1)"; rc=$?
+    nscan=$((nscan + 1))
+    [ "$rc" = 1 ] && grep -q 'taken=0' <<<"$out" && grep -q 'CHAIN-TAIL=STALE-OPEN ' <<<"$out" \
+        && ok "S4f 负控：仓库存在但无新提交 ⇒ taken=0 ⇒ STALE-OPEN" || bad "S4f rc=$rc out=$out"
+    printf 'M900-RELEASE-DONE tag=v0.2.900\n' > "$ad/M900-RELEASE.done"
+    touch -d "@$((ECHO_NOW-18000))" "$ad/M900-RELEASE.done"
+    rm -f "$ad/NEXT-QUEUE.md"
 
     # S5 负控：只有已完成项（- [x]）⇒ 不算接力 ⇒ STALE
     printf '# 队列\n- [x] M411 已办\n' > "$ad/NEXT-QUEUE.md"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 1 ] && grep -q 'open=0' <<<"$out" && ok "S5 负控：已完成项不算接力 ⇒ STALE" || bad "S5 rc=$rc（应 1）out=$out"
     rm -f "$ad/NEXT-QUEUE.md"
 
     # S6 负控：pending 台账有 1 条 ⇒ OK
     : > "$pen/chaintail-fixture"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 0 ] && grep -q 'pending=1' <<<"$out" && ok "S6 负控：有告警台账 ⇒ OK（pending=1）" || bad "S6 rc=$rc out=$out"
     rm -f "$pen/chaintail-fixture"
 
     # S7 有里程碑单元在跑 ⇒ OK
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 2 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 2 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 0 ] && grep -q 'busy=2' <<<"$out" && ok "S7 有单元在跑 ⇒ OK（busy=2）" || bad "S7 rc=$rc out=$out"
 
     # S8 负控：CAMPAIGN-IDLE 合规（UNTIL+REASON）⇒ EXEMPT，但**不算**「没断」而是显式收工
     printf 'UNTIL=2026-11-18 09:00\nREASON=用户令暂停\n' > "$ad/CAMPAIGN-IDLE"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 0 ] && grep -q 'CHAIN-TAIL=EXEMPT' <<<"$out" && ok "S8 合规 CAMPAIGN-IDLE ⇒ EXEMPT" || bad "S8 rc=$rc out=$out"
 
     # S9 负控：CAMPAIGN-IDLE 缺 REASON ⇒ 不生效 ⇒ 仍 STALE
     printf 'UNTIL=2026-11-18 09:00\n' > "$ad/CAMPAIGN-IDLE"
-    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --busy 0 2>&1)"; rc=$?
+    out="$(bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" --busy 0 2>&1)"; rc=$?
     nscan=$((nscan + 1))
-    [ "$rc" = 1 ] && grep -q 'CHAIN-TAIL=STALE' <<<"$out" && ok "S9 负控：豁免缺 REASON ⇒ 不生效（仍 STALE）" || bad "S9 rc=$rc（应 1）out=$out"
+    [ "$rc" = 1 ] && grep -q 'CHAIN-TAIL=STALE '<<<"$out" && ok "S9 负控：豁免缺 REASON ⇒ 不生效（仍 STALE）" || bad "S9 rc=$rc（应 1）out=$out"
     rm -f "$ad/CAMPAIGN-IDLE"
 
     # S10/S11：busy 载体的**扫描口径**（不是注入值）——用 PATH 里的 systemctl 桩，
@@ -118,11 +176,11 @@ cat "$STUB_UNITS" 2>/dev/null
 SCTL
     chmod +x "$T/bin/systemctl"
     printf 'm412-rebake.service loaded active running 重烘\n' > "$T/units"
-    out="$(STUB_UNITS="$T/units" PATH="$T/bin:$PATH" bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" 2>&1)"; rc=$?
+    out="$(STUB_UNITS="$T/units" PATH="$T/bin:$PATH" bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 1 ] && grep -q 'busy=0' <<<"$out" && ok "S10 负控：非链单元（m412-rebake）不算接力 ⇒ 仍 STALE（busy=0）" || bad "S10 rc=$rc out=$out"
     printf 'm412-chain.service loaded active running 主链\nm412-rebake.service loaded active running 重烘\n' > "$T/units"
-    out="$(STUB_UNITS="$T/units" PATH="$T/bin:$PATH" bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" 2>&1)"; rc=$?
+    out="$(STUB_UNITS="$T/units" PATH="$T/bin:$PATH" bash "$CT" --ad "$ad" --pending "$pen" --now "$ECHO_NOW" --repo "$NGR" 2>&1)"; rc=$?
     nscan=$((nscan + 1))
     [ "$rc" = 0 ] && grep -q 'busy=1' <<<"$out" && ok "S11 正控：链单元在跑 ⇒ OK（busy=1，重烘那条不计）" || bad "S11 rc=$rc out=$out"
 

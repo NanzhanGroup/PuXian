@@ -98,9 +98,14 @@ run_pu() {
         if "$rf" --repo "$repo" --commit --push >> "$LOG" 2>&1; then
             say "①' 基线回灌 OK"
         else
-            say "①' 基线回灌 FAIL（下一轮 gate_timeouts 的 P7 会当场拦下）"
+            # M417（缺陷 836）：失败原因必须透传。旧文案只写「基线回灌失败」，
+            #   而 M416 那轮的真实原因只是 push 超时（commit 已成功、本地领先 origin）——
+            #   台账把它写成「失败」，人就分不清是「数据不全」还是「网络抖一下」。
+            local rline
+            rline="$(grep -E 'REFRESH-(PUSH|COMMIT|COVERAGE)=' "$LOG" 2>/dev/null | tail -3 | tr '\n' ' ' | cut -c1-300)"
+            say "①' 基线回灌 FAIL ⇒ ${rline:-（日志里没留下 REFRESH-* 结论行）}"
             alert "m${MS}-baseline-refresh" "M${MS} 基线回灌失败" \
-                "下一轮 gate_timeouts 的 P7 会判红；手工：$rf --commit --push"
+                "原因：${rline:-无结论行}；手工：$rf --commit --push（幂等：已提交则只续推）；日志 $LOG"
         fi
         return 0
     }
