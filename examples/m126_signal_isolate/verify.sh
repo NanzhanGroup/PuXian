@@ -102,7 +102,7 @@ grep -q "M126 HANDLER-EXIT-OK"    "$LOG" && ok "A 处理器跑到结尾（正常
 
 echo
 echo "[3/4] B/C/D/E 处理器内失败：进程必须存活且可服务"
-for case_spec in "B abort 4000 1" "C huge 4000 1" "D inject 4000 1 PX_ALLOC_FAIL_MIN=$THRESH" "E storm 4500 1 PX_GC_THRESHOLD=100"; do
+for case_spec in "B abort 4000 1" "C huge 4000 1" "D inject 4000 1 PX_ALLOC_FAIL_MIN=$THRESH PX_ALLOC_FAIL_MAX=1" "E storm 4500 1 PX_GC_THRESHOLD=100"; do
   set -- $case_spec
   tag=$1; fx=$2; hold=$3; nsig=$4; shift 4
   echo "  --- $tag FX=$fx $* ---"
@@ -123,6 +123,11 @@ for case_spec in "B abort 4000 1" "C huge 4000 1" "D inject 4000 1 PX_ALLOC_FAIL
       grep -q "\[px-signal\]" "$LOG" && ok "D [px-signal] 隔离行" || bad "D 无 [px-signal] 行"
       grep -q "PX_ALLOC_FAIL_MIN 注入" "$LOG" && ok "D 真因标注为注入（可区分于真 OOM）" || bad "D 未标注注入"
       grep -qE "px-coro" "$LOG" && bad "D 连带打掉了运行时内部协程（阈值标定失效）" || ok "D 只打中处理器，未波及运行时内部"
+      # M418（缺陷 840）：注入必须**恰 1 次**。旧行为是「每次 ≥ 阈值都注入」⇒ 隔离点外的
+      #   后续大分配（GC 扩容）被连坐 ⇒ CI 上 _exit(1)（run 44292432507 §D 现场）。
+      n_inj=$(grep -c "PX_ALLOC_FAIL_MIN 注入" "$LOG")
+      [ "$n_inj" = 1 ] && ok "D 注入恰 1 次（PX_ALLOC_FAIL_MAX=1 契约生效）" \
+                       || bad "D 注入 $n_inj 次（>1 ⇒ 后续大分配被钩子连坐，CI 真因）"
       ;;
     E)
       grep -q "M126 HANDLER-ALLOC-DONE len=20000" "$LOG" && ok "E 处理器内 20000 字节存活对象构造完成" || bad "E 处理器分配阶段未完成"

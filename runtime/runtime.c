@@ -866,6 +866,7 @@ static size_t g_slab_range_cap = 0;
 #define PX_ALLOC_ABSURD ((size_t)1 << 62)
 static void px_alloc_fail(size_t n, size_t total, const char* what);  // 定义见 px_error 之后
 static size_t px_alloc_fail_min(void);                                // 测试钩子（PX_ALLOC_FAIL_MIN）
+static int    px_alloc_fail_take(size_t n);                           // 测试钩子（M418 注入预算 · 缺陷 840）
 static int px_alloc_fail_in_lock_hit(size_t n);                       // M127 测试钩子（PX_ALLOC_FAIL_IN_LOCK）
 static __thread const char* t_alt_match;                              // M127：注入命中的锁名（诊断用）
 static _Atomic int g_sig_err_count;   // M126：信号处理器隔离计数（定义在 sig 段；此处前置声明）
@@ -1174,8 +1175,9 @@ void* xmalloc(size_t n) {
         px_alloc_fail(n, o ? 0 : t, t_alt_match ? "xmalloc（PX_ALLOC_FAIL_IN_LOCK 注入：临界区内）"
                                                 : "xmalloc（注入）");
     }
-    if (n >= px_alloc_fail_min()) {
+    if (px_alloc_fail_take(n)) {
         // M125 测试钩子：按"映射失败"语义注入（total 传真实值，避免被分类成尺寸非法）
+        // M418：注入次数受 PX_ALLOC_FAIL_MAX 约束（默认不限 = 旧行为）
         int o = 0;
         size_t t = px_map_bytes(n, &o);
         px_alloc_fail(n, o ? 0 : t, "xmalloc（PX_ALLOC_FAIL_MIN 注入）");
@@ -5016,6 +5018,37 @@ static size_t px_alloc_fail_min(void) {
         if (cached == 0) cached = SIZE_MAX;   // 0 / 未设 → 阈值拉到 u64 上限（含比较恒假）
     }
     return cached;
+}
+
+// ==================== M418（缺陷 840）：注入**预算** ====================
+// 病灶（2026-11-18 CI 实证 · run 44292432507 · m403 → m126 D 档）：
+//   上面注释写「xmalloc 请求 ≥ 该值即注入**一次**失败」，实现却是「每次 ≥ 阈值都注入」。
+//   ⇒ 隔离点内第一次失败被 longjmp 吃掉之后钩子仍在生效；进程后续任何 ≥ 阈值的分配
+//     （GC 扩容 / 大对象）只要落在隔离点外，就走 px_alloc_fail 的
+//     「无隔离点 → 保留致命语义」分支 `_exit(1)`。
+//   CI 现场：4 核 runner 上 D 档「主循环未存活 rc=1 / HUNG=0」，本地 16 核 42/0 全绿
+//     （本地那 4 秒里恰好没有第二笔 ≥8MB 分配 ⇒ 判据依赖环境事实，与 M415 同族）。
+//   本地最小夹具 5/5 复现：处理器内失败→隔离→AFTER-SLEEP→第二次 8MB 分配 ⇒ rc=1。
+// 修法：把「注入几次」变成**显式契约**（默认 0 = 不限次数 = 保持旧行为，m127 E 档依赖它）；
+//   需要确定性的门用 PX_ALLOC_FAIL_MAX=N 钉住，不再依赖「此后恰好没有大分配」。
+static size_t px_alloc_fail_max(void) {
+    static size_t cached = 0;
+    if (cached == 0) {
+        const char* e = getenv("PX_ALLOC_FAIL_MAX");
+        size_t v = (e && *e) ? (size_t)strtoull(e, NULL, 10) : 0;
+        cached = (v == 0) ? SIZE_MAX : v;   // 0 / 未设 ⇒ 不限
+    }
+    return cached;
+}
+
+// 返回 1 = 本次应注入失败（并已占掉一次预算）。线程安全：budget 用原子自增。
+static int px_alloc_fail_take(size_t n) {
+    if (n < px_alloc_fail_min()) return 0;
+    size_t max = px_alloc_fail_max();
+    if (max == SIZE_MAX) return 1;                       // 不限次数（旧行为）
+    static unsigned long long used = 0;
+    unsigned long long prev = __atomic_fetch_add(&used, 1ULL, __ATOMIC_SEQ_CST);
+    return (prev < (unsigned long long)max) ? 1 : 0;
 }
 
 // 分配失败统一出口（三处 mmap 失败 + xcalloc 溢出）。语义见文件头部 M125 段：

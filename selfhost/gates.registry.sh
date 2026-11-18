@@ -2305,3 +2305,15 @@ run m414_notify_waiting bash examples/m414_notify_waiting/verify.sh
 #   扫描面：ci.yml 里会跑的 225 门（nscan 显式打印，为 0 自身判红）
 gate_timeout m415_cleanenv 420
 run m415_cleanenv bash examples/m415_cleanenv/verify.sh
+
+# ── m418_alloc_fail_budget：PX_ALLOC_FAIL_MIN 的注入预算（缺陷 840）─────────
+#   病史（2026-11-18 CI run 44292432507）：钩子注释写「注入一次失败」，实现是「每次 ≥ 阈值都注入」
+#   ⇒ 隔离点内第一次失败被 longjmp 吃掉后钩子仍在生效；进程后续任何 ≥ 阈值的分配
+#     （GC 扩容 / 大对象）落在隔离点外 ⇒「无隔离点 → 保留致命语义」_exit(1)
+#   ⇒ m403 → m126 D 档在 4 核 runner 上「主循环未存活 rc=1」，本地 16 核 42/0 全绿
+#     = 判据依赖「这台机器这 4 秒里恰好没有第二笔大分配」这一环境事实（M415 · 缺陷 826 同族）
+#   修：PX_ALLOC_FAIL_MAX=N（默认 0/未设 = 不限 = 旧行为，m127 E 档依赖它）；m126 D 档钉 MAX=1
+#   本门判据：T1 MAX=1 三笔分配全成功且自然退出 · T2 不设 MAX 必复现 rc≠0 与死因行（负控）
+#     · T3 注入计数 1 vs 2 前提自证 · T4 未触发场景不受影响 · T5 阈值边界（踩请求尺寸）
+gate_timeout m418_alloc_fail_budget 300
+run m418_alloc_fail_budget bash examples/m418_alloc_fail_budget/verify.sh

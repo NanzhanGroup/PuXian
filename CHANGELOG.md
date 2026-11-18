@@ -1,4 +1,68 @@
-## M417 补3：传输层抖包被当成「取不到数」（缺陷 839 · CI 对账误报 ENV-FAIL）
+## M418：注入钩子的「一次」是契约，不是环境巧合（缺陷 840 · CI 唯一红的真因）
+
+> **一句话**：`PX_ALLOC_FAIL_MIN` 的注释写着「xmalloc 请求 ≥ 该值即注入**一次**失败」，
+> 实现却是「**每次** ≥ 阈值都注入」⇒ 信号处理器隔离点内第一次失败被 longjmp 吃掉之后，
+> 钩子仍在生效；进程后续任何 ≥ 阈值的分配（GC 扩容 / 大对象）只要落在隔离点外，
+> 就走 `px_alloc_fail` 的「无隔离点 → 保留致命语义」分支 `_exit(1)`。
+> 结果：CI（4 核）上 m403 → m126 D 档判「主循环未存活 rc=1」，本地（16 核）42/0 全绿 ——
+> **判据依赖「这台机器这 4 秒里恰好没有第二笔 ≥8MB 分配」这一环境事实**（M415 缺陷 826 同族）。
+
+### 证据（2026-11-18 22:4x–23:0x 实测）
+
+```
+CI run 44292432507 @858c81d（19:11 CST）· job「工具链自举质量门」· step 143 m403_orphan_batch failure
+  失败行 30  --- D FX=inject PX_ALLOC_FAIL_MIN=8388610 ---
+  失败行 35  ❌ D 主循环未存活
+  失败行 36  ❌ D HUNG=0 rc=1
+  同 run 内 m256 / m389 / m410 / m415 全 success（M415 那批修复确认在 CI 生效，唯一红只剩这一个）
+
+本地同 HEAD：m126 verify pass=42 fail=0
+本地复现尝试（不是没试）：D 档 60 次分组 —— 不限核 20/20 · taskset 2 核 20/20 · taskset 1 核 20/20 全存活
+  ⇒ 「核数」假设否证，改换假设（见下）
+```
+
+最小夹具（`examples/m418_alloc_fail_budget/alloc_budget.px`）5/5 稳定复现真因：
+
+```
+READY → SIGUSR1 → 处理器内 8MB 分配被注入失败 → [px-signal] 已隔离
+AFTER-SLEEP
+运行时错误: 内存不足【xmalloc（PX_ALLOC_FAIL_MIN 注入）】申请 8388610 字节 errno=4
+          处理：无隔离点 → 保留致命语义退出（启动期 / GC 上下文）      ⇒ rc=1
+```
+
+定性：**不是产品行为缺陷**（`px_alloc_fail` 在无隔离点时的致命语义是设计如此），
+是①测试钩子「实现与文档不符」+②判据把「此后无大分配」当成前提。
+
+### 修法
+
+```
+A. runtime/runtime.c：新增 px_alloc_fail_max() / px_alloc_fail_take(n)
+   PX_ALLOC_FAIL_MAX=N —— 注入预算（默认 0/未设 = 不限次数 = **旧行为**，m127 E 档等依赖它）
+   budget 用 __atomic_fetch_add 计数（信号线程与主线程并发安全）
+   xmalloc 注入点由 `n >= px_alloc_fail_min()` 改为 `px_alloc_fail_take(n)`
+B. examples/m126_signal_isolate/verify.sh：D 档显式钉 PX_ALLOC_FAIL_MAX=1
+   新增断言「D 注入恰 1 次」（旧行为在 CI 上 ≥2 次正是缺陷形态，此断言能当场抓住）
+C. 新门 m418_alloc_fail_budget（290 → 291 门 · preflight 23 门不变）：
+   T1 MAX=1：处理器内失败被隔离 → 第二、三笔 8MB 分配成功 → EXIT-NORMAL rc=0
+   T2 负控（不设 MAX）：同夹具必 rc≠0 且死因行 = 「无隔离点 → 保留致命语义」
+                        + 前提自证（第二笔确实失败）—— 这是 CI 真因的**可判复现**
+   T3 前提自证：T1 注入计数 = 1 · T2 = 2 · T1 隔离行 = 1
+   T4 MIN 未触发 ⇒ 三笔全成功且无隔离痕迹（防判据恒真）
+   T5 阈值边界：MIN = 载荷字节（8388609）仍注入 ⇒ 判据踩的是请求尺寸 8388610，不是别的
+   自测实测：pass=16 fail=0
+```
+
+### 口径
+
+```
+能说    「注入几次」从环境巧合变成显式契约；CI 那门红的死因可判、可复现、有负控
+不能说  「CI 已经全绿」—— 本轮只改了判据装置，要等下一轮 CI 跑完才算验过
+不能说  「修好了产品」—— 这是钩子/判据缺陷（缺陷 840），不是运行时行为缺陷
+配合同轮产品面取证：缺陷 267 家族三条 FAIL_SIG 台账项在最新 HEAD 上重跑 ——
+  m93_s3/coro_gc_block 已 PASS（台账陈旧，M409 修复顺带治好了）· m88_s3/m96_s3 压力档 STIMEOUT（待定性）
+```
+
+
 
 > **一句话**：`gh_get.sh` 对传输失败（code=000）**一次就返回 4**，没有重试 ⇒ 到 api.github.com
 > 路径本来就慢（connect 0.3s / TLS 0.6s），偶发一次 20s 卡顿就让 `ci_parity_check.sh` 判 ENV-FAIL、

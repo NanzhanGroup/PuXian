@@ -1,0 +1,20 @@
+# M418 门夹具：PX_ALLOC_FAIL_MIN 的**注入预算**（缺陷 840）
+# 用途：证明「注入 N 次」是可显式契约，而不是「此后恰好没有大分配」这一环境事实。
+#   T1（MAX=1）处理器内失败被隔离 → 主循环第二、三笔 8MB 分配必须成功 → 自然退出 rc=0
+#   T2（不设 MAX · 旧行为）同上夹具 ⇒ 第二笔分配落在隔离点外 ⇒ _exit(1)（CI 真因复现）
+# 载荷：/tmp/m418_payload.bin = 8388609 字节（+1 = 阈值 8388610，与 m126 D 档同口径）
+PORT = 18099
+
+def h(sig):
+    let d = read_file("/tmp/m418_payload.bin")
+    print("HANDLER-EXIT-OK len=" + str(len(d)))
+
+signal(10, h)
+print("READY pid=" + str(os_pid()))
+sleep(1200)
+print("AFTER-SLEEP")
+let e = read_file("/tmp/m418_payload.bin")
+print("SECOND-ALLOC-OK len=" + str(len(e)))
+let f = read_file("/tmp/m418_payload.bin")
+print("THIRD-ALLOC-OK len=" + str(len(f)))
+print("EXIT-NORMAL")
