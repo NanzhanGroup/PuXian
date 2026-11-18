@@ -147,6 +147,22 @@ select_baseline() {
     fi
 }
 
+# ⭐ M417 补1（缺陷 837）：**下限判据的分母** = 各档逐负载 min（= 已知最快的参考机）。
+#   下限判据问的是「这台机加上这份代码，快得**不可能**吗」⇒ 参照物只能是**最快**的参考机。
+#   用选定档（本机档 / 合成档 = 各档 max）当分母，等于拿「最慢的机器」当尺子量「最快的机器」，
+#   机器差 3× × 代码真提速 4× ⇒ 0.08× 越线 —— 判的是机器与历史，不是「负载没跑」。
+#   为让下限负控（NC-E）仍有牙：分母源可被 M267_FLOOR_DIR 覆盖（负控把源放大 20×）。
+FLOOR_DIR="${M267_FLOOR_DIR:-$BASELINES}"
+build_floor() {
+    awk '
+      /^#/ { next }
+      NF >= 4 { if (!($1 in mn) || $4+0 < mn[$1]) mn[$1]=$4+0 }
+      END { for (k in mn) printf "%-14s %-10s\n", k, mn[k] }
+    ' "$FLOOR_DIR"/*.tsv 2>/dev/null > "$W/baseline.floor.tsv"
+    return 0
+}
+floor_of() { awk -v n="$1" '$1==n{print $2; exit}' "$W/baseline.floor.tsv" 2>/dev/null; }
+
 # ── 负载清单（单一事实源 = 选定档）────────────────────────────
 read_baseline() { grep -v '^#' "$BASE" | grep -v '^$'; }
 
@@ -260,18 +276,21 @@ run_compare() {
         # ⭐ M305：`only` 支持**空格分隔的多值**（负控用代表性子集 —— 见 NEG_ONLY 的理由）
         if [ -n "$only" ] && [[ " $only " != *" $name "* ]]; then continue; fi
         nenv=$((nenv+1))
-        local got r
+        local got r bf rf
         got=$(measure_one "$name" "$kind")
         if [ "$got" = "-1" ]; then bad "$name 无法测量（未知 kind=$kind）"; continue; fi
-        r=$(echo "$got $base" | awk '{if ($2+0>0) printf "%.3f", $1/$2; else print "0"}')
+        r=$(echo "$got $base" | awk '{if ($2+0>0) printf "%.3f", $1/$2; else print "0"}' )
         local verdict="✅"
-        # ⭐ M303 **下限判据**：实测比基线**快 10 倍以上** ⇒ 负载疑似**根本没执行**
+        # ⭐ M303 **下限判据**：实测比**最快参考机**快 10 倍以上 ⇒ 负载疑似**根本没执行**
         #    （图被空转 / 提前退出 / 输入为空）。比值判据只看得见"变慢"这一侧，
         #    这条补上"快得不可能"那一侧 —— 否则一张坏掉的模型会以"性能大幅提升"
         #    的面目**通过**性能门（比漏报退化更危险：它会把 S3 的基线污染掉）。
-        if [ "$(echo "$r 0.10" | awk '{print ($1 < $2) ? 1 : 0}')" = 1 ]; then
-            printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "$name" "$base" "$got" "${r}x" "❌" "$WARN_R/$FAIL_R"
-            bad "$name 实测 ${r}x —— 比基线快 10 倍以上，负载疑似未真执行（M303 下限判据）"
+        # ⚠️ M417 补1（缺陷 837）：分母 = 各档 min（最快参考机），**不是**选定档 —— 见文件头 ④。
+        bf=$(floor_of "$name"); [ -n "$bf" ] || bf="$base"
+        rf=$(echo "$got $bf" | awk '{if ($2+0>0) printf "%.3f", $1/$2; else print "0"}')
+        if [ "$(echo "$rf 0.10" | awk '{print ($1 < $2) ? 1 : 0}')" = 1 ]; then
+            printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "$name" "$base" "$got" "${rf}x" "❌" "$WARN_R/$FAIL_R"
+            bad "$name 实测 ${rf}x（上限档 ${r}x）—— 比**最快参考机**（${bf}s）还快 10 倍以上，负载疑似未真执行（M303 下限判据 · M417 补1 换分母）"
             continue
         fi
         if [ "$(echo "$r $FAIL_R" | awk '{print ($1 > $2) ? 1 : 0}')" = 1 ]; then
@@ -353,9 +372,18 @@ run_neg() {
     # ── NC-E（M303 新增）**下限判据**必须有牙：基线放大 20 倍 ⇒ 比值 <0.10 ⇒ 必须判红 ──
     #    与 NC-A 方向相反：NC-A 证明"变慢"看得见，NC-E 证明"快得不可能"也看得见。
     #    缺了这条，一张坏掉的 ONNX 模型会以"性能大幅提升"的面目**通过**性能门。
-    echo "── NC-E 下限判据：基线放大 20 倍 ⇒ 比值 <0.10 ⇒ 必须判红"
-    awk '/^#/ {print; next} NF>=4 { $4=$4*20 } { print }' "$W/base.bak" > "$BASE"
+    echo "── NC-E 下限判据：**最快档源**放大 20 倍 ⇒ 比值 <0.10 ⇒ 必须判红"
+    # ⚠️ M417 补1（缺陷 837）：下限判据的分母改成「各档 min」后，光放大选定档不再够
+    #    （选定档只喂上限判据）⇒ 负控必须放大**分母源**，否则它测的是空路径。
+    local fdir_save="$FLOOR_DIR"
+    mkdir -p "$W/negfloor"; rm -f "$W/negfloor"/*.tsv
+    for _f in "$BASELINES"/*.tsv; do
+        [ -f "$_f" ] || continue
+        awk '/^#/ {print; next} NF>=4 { $4=$4*20 } { print }' "$_f" > "$W/negfloor/$(basename "$_f")"
+    done
+    FLOOR_DIR="$W/negfloor"; build_floor
     ne=$(run_compare "$NEG_ONLY" 2>&1 | grep -c '负载疑似未真执行')
+    FLOOR_DIR="$fdir_save"; build_floor
     cp "$W/base.bak" "$BASE"
     if [ "$ne" -ge 1 ]; then echo "  ✅ NC-E 生效（$ne 个负载触发下限判据）"; else echo "  ❌ NC-E 未生效：快得不可能却没判红"; rc_all=1; fi
 
