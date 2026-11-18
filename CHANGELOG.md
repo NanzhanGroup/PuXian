@@ -1,3 +1,59 @@
+## M417 补3：传输层抖包被当成「取不到数」（缺陷 839 · CI 对账误报 ENV-FAIL）
+
+> **一句话**：`gh_get.sh` 对传输失败（code=000）**一次就返回 4**，没有重试 ⇒ 到 api.github.com
+> 路径本来就慢（connect 0.3s / TLS 0.6s），偶发一次 20s 卡顿就让 `ci_parity_check.sh` 判 ENV-FAIL、
+> 让 `dy-ops-ci-parity` 打出 p1 把用户叫醒 —— 而 21 分钟前同一套判据刚判 SYNC 绿。
+
+### 证据（2026-11-18 20:35–20:4x 实测）
+
+```
+journalctl -u dy-ops-ci-parity.service
+20:35:01 Starting dy-ops 远端 CI 对账…          ← 起
+20:35:21 CI-PARITY-ENV-FAIL 取数失败 rc=4（令牌失效 / 网络 / 无 fixture）
+        ↑ 01→21 整 20 秒 = GH_MAX_TIME 超时 ⇒ curl code=000 ⇒ gh_get 直接 return 4
+19:34 / 20:05 两轮：CI-PARITY-SYNC（绿）        ← 同一判据、同一令牌
+
+同机连跑 8 次取数（令牌有效）：
+iter=1..6 rc=0 ms=2868/2637/3670/5626/4164/2826
+iter=7    rc=4 ms=20044        ← 卡满 20s
+iter=8    rc=0 ms=3522
+
+curl 分段耗时：dns=0.005 conn=0.30 tls=0.61 total=1.03 code=200（路径本来就慢，不是令牌问题）
+```
+
+定性：**不是令牌失效，也不是 CI 变红**（对账口径当时是 SYNC，唯一红门 m403_orphan_batch 在册未过期）。
+是把「一次问不到」当成了「问不到」，而契约里 rc=4 的本意是「真的取不到、必须响亮」。
+
+### 修法
+
+```
+A. packaging/gh_get.sh：
+   新增 _gh_retryable（只认 000/429/500/502/503/504 —— 「没有答案」）+ _gh_call_retry
+   （GH_RETRY 默认 3 次 · GH_RETRY_SLEEP 默认 2s 线性退避 · 结果走 GH_LAST_CODE / GH_LAST_ATTEMPTS）
+   带令牌与匿名两条取数路径都改走它；**401/403/404 一次不重试**（答案就是不许，重试只会掩盖真因）
+   重试耗尽仍 rc=4，并在 stderr 打出 `gh_get: 取不到数 code=000 attempts=3`
+   gh_write 保持不重试（写操作非幂等，重试可能重复提交）
+B. examples/m389_gh_auth/verify.sh：新增 C9/C9d/C10/C10d + 负控 N3（带前提自证 P4a/P4b）
+```
+
+负控已实测（禁「应该好了」）：把带令牌调用点 sed 回单次 `_gh_call` 后跑门 ⇒
+
+```
+✅ P4a 负控副本确实被改过（diff 非空）
+✅ P4b 前提自证：带令牌调用点已无重试（retry=0 def=1）
+✅ N3 负控 C 成立：无重试时抖包被判 ENV-FAIL（C9 会红）
+```
+
+修后：`examples/m389_gh_auth/verify.sh` **48 通过 / 0 失败**（原 29 项 + 新增 19 项）；
+`ci_parity_check.sh --selftest` 6/6；真实环境连跑 6 轮对账 **6/6 rc=0（SYNC）**。
+注入式证「重试完仍响亮」：`GH_API=http://10.255.255.1:81 GH_MAX_TIME=2 GH_RETRY=2` ⇒
+`gh_get: 取不到数 code=000 attempts=2` + `CI-PARITY-ENV-FAIL rc=4`，仍是 rc=2 退出。
+
+副作用面：只改 `packaging/gh_get.sh` 与 `examples/m389_gh_auth/verify.sh`（+本 CHANGELOG）；
+不改 runtime / 不动 CI 配置 / 不改令牌。最坏耗时从 20s 变 66s（3×20s + 2+4s 退避），
+仍远小于 `dy-ops-ci-parity.service` 的 TimeoutStartSec=180。
+回滚：`git revert` 本提交（后果＝一次抖包重新被报成测量失败，p1 误叫醒复现）。
+
 ## M417 补2：链尾判据在 worktree 里恒 taken=-1（缺陷 838 · 分片误红）
 
 > **一句话**：`chain_tail.sh` 用 `[ -d "$REPO/.git" ]` 认 git 仓库，而**分片/worktree 里 `.git` 是普通文件**

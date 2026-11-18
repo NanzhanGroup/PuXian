@@ -34,8 +34,17 @@ GH_API="${GH_API:-https://api.github.com}"
 GH_PAT_FILE="${GH_PAT_FILE:-/data/pat.md}"
 GH_ALLOW_ANON="${GH_ALLOW_ANON:-1}"
 GH_MAX_TIME="${GH_MAX_TIME:-20}"
+# M415 · 缺陷 839（2026-11-18 实测）：传输层抖动不重试 ⇒ 一次 20s 超时就判 ENV-FAIL。
+#   实测 8 次取数里 1 次卡满 20s（到 api.github.com connect 0.3s / TLS 0.6s，路径本就慢），
+#   而 gh_get 对 code=000 **一次就返回 4** ⇒ dy-ops-ci-parity 21 分钟前刚绿、这一轮就 p1 叫醒。
+#   「测量失败要响亮」不等于「不许重试」：重试只针对**没有答案**的情形（传输失败 / 限流 / 5xx），
+#   语义答案（401/403/404）一次就够，绝不重试。重试完仍失败 ⇒ 依旧 rc=4（响亮不变）。
+GH_RETRY="${GH_RETRY:-3}"              # 最多尝试次数（含首次）
+GH_RETRY_SLEEP="${GH_RETRY_SLEEP:-2}"  # 退避基数：第 n 次失败后睡 n*base 秒
+GH_QUIET_FAIL="${GH_QUIET_FAIL:-0}"    # 1 = 不把「取不到数」的说明写到 stderr
 
 GH_LAST_CODE=""
+GH_LAST_ATTEMPTS=0
 GH_AUTH_STATE="unset"
 
 # ── 令牌装载：去掉所有空白（文件天然带换行，带进 header 会畸形 → 401）──
@@ -67,6 +76,32 @@ _gh_call() {
     printf '%s' "${code:-000}"
 }
 
+# ── 传输层失败是否值得重试：只重试「没有答案」，不重试「答案就是不许」 ──
+#   000 = 连不上/超时/被截断 · 429 = 限流 · 5xx = 服务端出错；这三种换个时间问可能有答案。
+#   401/403/404 = 令牌/权限/资源，问一百次也是同一个答案，重试只是浪费且掩盖真因。
+_gh_retryable() { case "$1" in 000|429|500|502|503|504) return 0 ;; *) return 1 ;; esac }
+
+# ── 带退避重试的取数：结果写 GH_LAST_CODE，尝试次数写 GH_LAST_ATTEMPTS ──
+#   ⚠️ 结果走全局变量而不是 stdout：`code="$(...)"; 在子 shell 里，GH_LAST_ATTEMPTS 会丢
+_gh_call_retry() {
+    local path="$1" out="$2" tok="${3:-}" code="" n=1
+    while :; do
+        code="$(_gh_call "$path" "$out" "$tok")"
+        if _gh_retryable "$code" && [ "$n" -lt "$GH_RETRY" ]; then
+            [ "${GH_DEBUG:-0}" = "1" ] && printf 'gh_get: 第 %s/%s 次失败 code=%s ⇒ 退避重试\n' "$n" "$GH_RETRY" "$code" >&2
+            sleep $(( n * GH_RETRY_SLEEP ))
+            n=$((n + 1))
+            continue
+        fi
+        break
+    done
+    GH_LAST_CODE="$code"
+    GH_LAST_ATTEMPTS="$n"
+    if _gh_retryable "$code" && [ "$GH_QUIET_FAIL" = "0" ]; then
+        printf 'gh_get: 取不到数 code=%s attempts=%s（重试已用完；测量失败 ≠ 空结果）\n' "$code" "$n" >&2
+    fi
+}
+
 # ── 响应体是否「可解释」（{...} 或 [...]）：防止把 HTML 错误页当 JSON 用 ──
 _gh_json_ok() {
     local f="$1" first
@@ -81,7 +116,7 @@ gh_get() {
     tok="$(_gh_token || true)"
 
     if [ -n "$tok" ]; then
-        code="$(_gh_call "$path" "$out" "$tok")"
+        _gh_call_retry "$path" "$out" "$tok"; code="$GH_LAST_CODE"
         GH_LAST_CODE="$code"
         case "$code" in
             200)
@@ -102,7 +137,7 @@ gh_get() {
         [ "$GH_ALLOW_ANON" = "1" ] || { GH_AUTH_STATE="no-token-no-anon"; return 4; }
     fi
 
-    anon_code="$(_gh_call "$path" "$out" "")"
+    _gh_call_retry "$path" "$out" ""; anon_code="$GH_LAST_CODE"
     GH_LAST_CODE="$anon_code"
     case "$anon_code" in
         200)

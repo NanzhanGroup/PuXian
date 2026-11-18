@@ -53,6 +53,7 @@ TAGS   = json.dumps([{"name": "v0.2.388"}, {"name": "v0.2.387"}]).encode()
 LATEST = json.dumps({"tag_name": "v0.2.388", "id": 4242}).encode()
 EXP    = json.dumps({"id": 4242, "tag_name": "v0.2.388"}).encode()
 BADCRED= json.dumps({"message": "Bad credentials"}).encode()
+FLAKY = {}   # 缺陷 839：按前缀计数的抖包夹具（前两次 503，第三次 200）
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -66,6 +67,12 @@ class H(BaseHTTPRequestHandler):
         auth = self.headers.get('Authorization', '')
         p = self.path
         if p.startswith('/down/'):   return self._send(500, b'{"message":"boom"}')
+        # 缺陷 839：抖包形状 —— 同一前缀前两次 503、第三次 200（按前缀独立计数，测例互不污染）
+        if p.startswith('/flaky'):
+            pre = p.split('/')[1]
+            FLAKY[pre] = FLAKY.get(pre, 0) + 1
+            if FLAKY[pre] <= 2: return self._send(503, b'{"message":"try again"}')
+            return self._send(200, TAGS)
         # /nf/ 只让「一个 Release 都没有」这一个端点 404（tags 仍 200）——
         # 否则 404 测例会被「拿不到 tag 列表」抢先判成环境错，测不到本意
         if p.startswith('/nf/') and '/releases/latest' in p:
@@ -218,6 +225,60 @@ elif [ ! -s "$TMP/argv.txt" ]; then
 else
     ng "C8c 实抓 argv：令牌仍在参数里（argv 里出现 C8SECRET）"
 fi
+
+printf '\n【C9】传输层抖动必须退避重试（缺陷 839：一次超时即 ENV-FAIL）\n'
+# 现场（2026-11-18 20:35 实测）：dy-ops-ci-parity 20:35:01 起、20:35:21 落 —— 整 20s 正好是
+#   GH_MAX_TIME 的超时时间；紧邻的 19:34 / 20:05 两轮都是绿的。同机复跑 8 次取数，第 7 次
+#   也卡满 20044ms 返回 rc=4（到 api.github.com connect 0.3s / TLS 0.6s，路径本就慢）。
+#   ⇒ 一次抖包就把「测量失败」p1 拍给用户，而契约里 rc=4 的本意是「真的取不到」。
+# 判据：抖两次、第三次能答 ⇒ 必须 rc=0，且 attempts=3（证明真的重试过，不是碰巧第一次就通）。
+( export GH_API="$BASE/flaky9" GH_TOKEN="github_pat_good0000000000" GH_RETRY=3 GH_RETRY_SLEEP=0 GH_QUIET_FAIL=1
+  . "$GHGET"; gh_get "/repos/X/Y/tags" "$TMP/c9.json"
+  echo "rc=$? state=$GH_AUTH_STATE attempts=$GH_LAST_ATTEMPTS"
+  grep -q 'v0.2.388' "$TMP/c9.json" && echo body-ok ) > "$TMP/c9.out" 2>&1
+chkg "C9 抖动后取到数 ⇒ rc=0" "$(cat "$TMP/c9.out")" "rc=0"
+chkg "C9b 确实重试到第 3 次（attempts=3）" "$(cat "$TMP/c9.out")" "attempts=3"
+chkg "C9c 答案可用（不是空文件冒充成 success）" "$(cat "$TMP/c9.out")" "body-ok"
+
+printf '\n【C9d】同一抖包，禁止重试（GH_RETRY=1，等同修复前的行为）⇒ 必须 rc=4\n'
+# 这一条是 C9 的「有牙证明」：判据能分开「有重试」与「没重试」，不是两边都绿。
+( export GH_API="$BASE/flaky9d" GH_TOKEN="github_pat_good0000000000" GH_RETRY=1 GH_RETRY_SLEEP=0 GH_QUIET_FAIL=1
+  . "$GHGET"; gh_get "/repos/X/Y/tags" "$TMP/c9d.json"; echo "rc=$? attempts=$GH_LAST_ATTEMPTS" ) > "$TMP/c9d.out" 2>&1
+chkg "C9d 不重试 ⇒ rc=4（修复前的形状）" "$(cat "$TMP/c9d.out")" "rc=4"
+chkg "C9d2 只尝试 1 次" "$(cat "$TMP/c9d.out")" "attempts=1"
+
+printf '\n【C10】重试完仍取不到 ⇒ 依旧 rc=4 响亮失败（重试不许把失败洗成绿）\n'
+( export GH_API="$BASE/down" GH_TOKEN="github_pat_good0000000000" GH_RETRY=3 GH_RETRY_SLEEP=0 GH_QUIET_FAIL=1
+  . "$GHGET"; gh_get "/repos/X/Y/tags" "$TMP/c10.json"; echo "rc=$? state=$GH_AUTH_STATE attempts=$GH_LAST_ATTEMPTS"
+  if grep -q 'v0.2.388' "$TMP/c10.json" 2>/dev/null; then echo body-HAS-DATA; else echo body-empty; fi ) > "$TMP/c10.out" 2>&1
+chkg "C10 3 次都 500 ⇒ rc=4" "$(cat "$TMP/c10.out")" "rc=4"
+chkg "C10b attempts=3（重试确实用完了）" "$(cat "$TMP/c10.out")" "attempts=3"
+chkg "C10c 失败文件里不许有数据" "$(cat "$TMP/c10.out")" "body-empty"
+
+printf '\n【C10d】语义答案（401）不许重试：问一百次也是同一个答案\n'
+( export GH_API="$BASE" GH_TOKEN="github_pat_bad_000000000" GH_ALLOW_ANON=0 GH_RETRY=3 GH_RETRY_SLEEP=0 GH_QUIET_FAIL=1
+  . "$GHGET"; gh_get "/repos/X/Y/releases/latest" "$TMP/c10d.json"; echo "rc=$? state=$GH_AUTH_STATE attempts=$GH_LAST_ATTEMPTS" ) > "$TMP/c10d.out" 2>&1
+chkg "C10d 401 + 禁止匿名 ⇒ rc=4" "$(cat "$TMP/c10d.out")" "rc=4"
+chkg "C10d2 attempts=1（401 不重试）" "$(cat "$TMP/c10d.out")" "attempts=1"
+
+# ── 负控 C：把重试去掉（回到缺陷 839 的形状）⇒ C9 必须红 ──
+printf '\n【N3】负控 C：拿掉重试 ⇒ C9 必须红\n'
+sed 's|_gh_call_retry "$path" "$out" "$tok"; code="$GH_LAST_CODE"|code="$(_gh_call "$path" "$out" "$tok")"|' \
+    "$GHGET" > "$TMP/gh_bad3.sh"
+if ! diff -q "$GHGET" "$TMP/gh_bad3.sh" >/dev/null; then ok "P4a 负控副本确实被改过（diff 非空）"; else ng "P4a 负控没改到（sed 锚点失效）⇒ N3 结论不可信"; fi
+n_retry=$(grep -c '^_gh_call_retry "$path" "$out" "$tok"; code="$GH_LAST_CODE"' "$TMP/gh_bad3.sh" 2>/dev/null || true)
+n_def=$(grep -c '^_gh_call_retry() {' "$TMP/gh_bad3.sh" 2>/dev/null || true)
+# 只断言「带令牌调用点已不带重试、副本结构完好」：函数体内的单次 _gh_call 与调用点同形，
+# 用整行计数会把函数体也算进去（首版就踩了这个坑，假红），所以按定义行/调用点的独占形状判。
+if [ "${n_retry:-1}" = 0 ] && [ "${n_def:-0}" = 1 ]; then
+    ok "P4b 前提自证：带令牌调用点已无重试（retry=$n_retry def=$n_def）"
+else
+    ng "P4b 前提不成立：retry=$n_retry（期望 0）def=$n_def（期望 1）"
+fi
+( export GH_API="$BASE/flaky9n" GH_TOKEN="github_pat_good0000000000" GH_RETRY=3 GH_RETRY_SLEEP=0 GH_QUIET_FAIL=1
+  . "$TMP/gh_bad3.sh"; gh_get "/repos/X/Y/tags" "$TMP/n3.json" >/dev/null 2>&1
+  rc=$?; [ "$rc" = 4 ] && echo NEG-RED-AS-EXPECTED || echo "NEG-STILL-GREEN rc=$rc" ) > "$TMP/n3.out" 2>&1
+chkg "N3 负控 C 成立：无重试时抖包被判 ENV-FAIL（C9 会红）" "$(cat "$TMP/n3.out")" "NEG-RED-AS-EXPECTED"
 
 printf '\n'
 if [ "$F" = 0 ]; then echo "M389 门结果：$P 通过 / 0 失败"; echo "M389-VERIFY-OK"; exit 0
