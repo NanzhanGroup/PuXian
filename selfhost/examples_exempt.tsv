@@ -42,7 +42,6 @@ m24_slice_xml.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未�
 m25_closure_gc.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
 m25_tls_resume.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
 m26_sse_https.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
-m26_ushr.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
 m26_ws_heartbeat.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
 m27a_webprod.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
 m27b_tls_serve.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
