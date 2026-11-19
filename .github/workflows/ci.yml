@@ -328,6 +328,15 @@ jobs:
         #   新增命中未登记 ⇒ 红；台账过期 ⇒ 红；声明 restore 但脚本无还原机制 ⇒ 红。
         run: |
           bash selfhost/check_sed_inplace.sh
+      - name: 示例即文档 · 顶层示例全量编译体检（M422 · 缺陷 856）
+        #   病史：10 个顶层示例（m25_closure_gc / m25_tls_resume / m26_ushr / m29_webprod /
+        #   p0_random_io / p2_crypto_hash / p4_http_server / p5_px_serve / p9_http_adv /
+        #   toolchain_demo）编译不过，而它们全是 BLACKBOX（无 verify.sh）⇒ 全量门天然看不见。
+        #   判据：120 个顶层示例逐条 px build；豁免账只许「确实编译不过」的条目，
+        #   能编译却挂豁免 / 豁免项无对应文件 ⇒ STALE 红；扫描面 < 50 或 px 缺失 ⇒ rc=3。
+        run: |
+          bash selfhost/check_examples_compile.sh --self-test
+          bash selfhost/check_examples_compile.sh
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。
@@ -375,6 +384,7 @@ jobs:
         #    登记：qg-issue 64。⇒ 新增门时**不要**用 `&&` 串联命令。
         run: |
           bash examples/m63_langfix/verify.sh > /tmp/v_m63_langfix.log 2>&1 || { echo "❌ m63_langfix verify 失败"; tail -40 /tmp/v_m63_langfix.log; FAILED="${FAILED:-} v_m63_langfix"; }
+          bash examples/m26_ushr/verify.sh > /tmp/v_m26_ushr.log 2>&1 || { echo "❌ m26_ushr verify 失败"; tail -40 /tmp/v_m26_ushr.log; FAILED="${FAILED:-} v_m26_ushr"; }
           bash examples/m64_fmt/verify.sh > /tmp/v_m64_fmt.log 2>&1 || { echo "❌ m64_fmt verify 失败"; tail -40 /tmp/v_m64_fmt.log; FAILED="${FAILED:-} v_m64_fmt"; }
           bash examples/m64_lint/verify.sh > /tmp/v_m64_lint.log 2>&1 || { echo "❌ m64_lint verify 失败"; tail -40 /tmp/v_m64_lint.log; FAILED="${FAILED:-} v_m64_lint"; }
           python3 -c "import sys; assert sys.version_info[0]==3"

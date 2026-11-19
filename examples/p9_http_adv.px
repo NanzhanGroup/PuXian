@@ -3,27 +3,33 @@
 #       （客户端 http_get 自动解压/解码）；SSE 服务端 sse_serve + sse_send（str/dict 事件）
 #       + sse_close，客户端经 http_get 读取 SSE 帧文本
 # 双模式要求：解释器 run 与编译 build 输出必须逐字节一致
+#
+# M422（缺陷 856）修订：本文件原先用 `http_serve(port, fn(req) { ... if p == "/x": return ... })`
+#   —— 花括号块体里写**冒号式 if 语句**，解析器从 M231 起就不接受（E2001 期望缩进块）。
+#   该写法从未被任何门跑到，所以一直躺在这里。现改为具名 handler（与 m23c/m24 一致）。
+
+def http_handler(req):
+    let p = req["path"]
+    if p == "/gzip":
+        return {"body": "hello gzip world", "gzip": true}
+    if p == "/chunked":
+        return {"body": "hello chunked world", "chunked": true}
+    if p == "/both":
+        return {"body": "hello both world", "gzip": true, "chunked": true}
+    return {"status": 404, "body": "not found"}
+
+def sse_handler(req):
+    let conn = req["conn"]
+    sse_send(conn, "第一条")
+    sse_send(conn, {"event": "msg", "data": "第二条", "id": "1"})
+    sse_send(conn, {"data": "多行\n数据"})
+    sse_close(conn)
 
 def start_http_server():
-    http_serve(39091, fn(req) {
-        p = req["path"]
-        if p == "/gzip":
-            return {"body": "hello gzip world", "gzip": true}
-        if p == "/chunked":
-            return {"body": "hello chunked world", "chunked": true}
-        if p == "/both":
-            return {"body": "hello both world", "gzip": true, "chunked": true}
-        return {"status": 404, "body": "not found"}
-    })
+    http_serve(39091, http_handler)
 
 def start_sse_server():
-    sse_serve(39092, fn(req) {
-        conn = req["conn"]
-        sse_send(conn, "第一条")
-        sse_send(conn, {"event": "msg", "data": "第二条", "id": "1"})
-        sse_send(conn, {"data": "多行\n数据"})
-        sse_close(conn)
-    })
+    sse_serve(39092, sse_handler)
 
 def main():
     spawn start_http_server()
@@ -31,23 +37,23 @@ def main():
     sleep(300)
 
     # ---------- gzip 自动解压 ----------
-    r1 = http_get("http://127.0.0.1:39091/gzip")
+    let r1 = http_get("http://127.0.0.1:39091/gzip")
     assert(r1 == "hello gzip world", "gzip 响应自动解压")
 
     # ---------- chunked 自动解码 ----------
-    r2 = http_get("http://127.0.0.1:39091/chunked")
+    let r2 = http_get("http://127.0.0.1:39091/chunked")
     assert(r2 == "hello chunked world", "chunked 响应自动解码")
 
     # ---------- gzip + chunked 组合 ----------
-    r3 = http_get("http://127.0.0.1:39091/both")
+    let r3 = http_get("http://127.0.0.1:39091/both")
     assert(r3 == "hello both world", "gzip+chunked 组合")
 
     # ---------- 404 未变 ----------
-    r4 = http_get("http://127.0.0.1:39091/nope")
+    let r4 = http_get("http://127.0.0.1:39091/nope")
     assert(r4 == "not found", "404 body 正常")
 
     # ---------- SSE 流式推送 ----------
-    sse_txt = http_get("http://127.0.0.1:39092/stream")
+    let sse_txt = http_get("http://127.0.0.1:39092/stream")
     assert(contains(sse_txt, "data: 第一条"), "SSE 帧1")
     assert(contains(sse_txt, "event: msg"), "SSE 事件名")
     assert(contains(sse_txt, "id: 1"), "SSE id")
@@ -59,3 +65,4 @@ def main():
 
     print("P9 HTTP-ADV (CHUNKED+GZIP+SSE) TESTS PASSED")
 
+main()

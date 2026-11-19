@@ -5,7 +5,7 @@
 
 def make_selfref():
     # 自引用闭包循环：g 的闭包环境捕获 g 自身
-    let g = null
+    let mut g = null
     g = fn() { return 0 }
     return null   # 返回后该循环无外部持有 → 追踪式 GC 可回收
 

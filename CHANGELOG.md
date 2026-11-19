@@ -1,3 +1,74 @@
+## M422：示例即文档 —— 10 个顶层示例编译不过，而没有任何门会红（缺陷 856 / 857）
+
+> **一句话**：M421 的账说「143 个示例连断言都没有」；M422 把第一层捅开：**光编译就过不去的顶层示例有 10 个**，
+> 其中 `m26_ushr` 的注释还与实现相反（M217 已把负数移位计数定为 R1003，示例仍写「按 mod 64 ⇒ 1」）。
+> 两条都不是新 bug，是同一个洞：**示例是产品对外的第一面，却没有任何判据看着它**。
+> 用户照着仓库里的示例写代码，第一步就撞 E3002/E2001 —— 而 295 门全绿。
+
+### 证据（2026-11-19 · 本机实测）
+
+```
+全量编译体检（examples/ 下 909 个 .px 逐条 px build；顶层 120 个是用户可见面）
+  顶层 120：通过 110 / 失败 10
+  E3002（let 默认不可变后仍被赋值）：m25_closure_gc · m25_tls_resume · m26_ushr · m29_webprod
+                                    p0_random_io · p2_crypto_hash · p4_http_server · p5_px_serve · toolchain_demo
+  E2001（花括号块里写冒号式 if）：  p9_http_adv 11:13 期望 缩进块，实际得到 return
+    最小复现（3 行夹具）：let f = fn(req) { if req == 1: return "one" … } ⇒ 3:9 E2001
+语义陈旧（缺陷 857）
+  examples/m26_ushr.px 原文注释：c >>> -1 ⇒「移位量 mod 64 = 63 → 1」
+  实测（解释轨 px run 与 VM 轨 px build 一致）：R1003: 无符号右移 计数不能为负数，实际是 -1
+  该语义由 M217（缺陷 309 · 422b4eb）定稿 ⇒ 示例与实现相反
+  为什么一直没人发现：该示例是 BLACKBOX（无 verify.sh · 未注册 · M421 账上 143 条之一）
+```
+
+### 修法
+
+```
+示例（10 个，全部最小改动，不改语言行为）
+  9 个 E3002：let X = … → let mut X（m29_webprod 另有一处 etag）
+  p9_http_adv：花括号块里的冒号式 if 改成具名 handler（与 m23c/m24 一致）+ 补 main() 调用
+  m26_ushr：打印型 → 断言型（8 条断言），把「负数计数 ⇒ R1003」写进文件头注释
+门（295 → 297）
+  新 m422_examples_compile：120 个顶层示例逐条 px build（并行 8 · 临时树内编译，零污染仓库）
+    豁免账 selfhost/examples_compile_skip.tsv：能编译却挂豁免 / 豁免项无对应文件 ⇒ STALE 红
+    环境守卫：扫描面 < 50 或 px 不可执行 ⇒ rc=3（绝不把「全失败」当产品红）
+    自测 8/8：T1 正控 · T2 负控点名 · T3 登记转绿 · T4 能编译却豁免必红 · T5 无对应文件必红
+              · T6 examples 缺失 rc=3 · T7 扫描面 0 rc=3 · T8 px 缺失 rc=3
+  新 ex_m26_ushr（examples/m26_ushr/verify.sh）：解释轨 + VM 轨双跑 + 负数计数 R1003 负控 + 前提自证
+  ci.yml 两条同步（脚本门 + example 门）· check_gate_registry 13/0
+```
+
+途中被自己抓的两次：
+```
+① 首版 check_examples_compile 在空豁免表上崩：`${!SKIP_REASON[@]}` 遇 set -u 报 unbound variable
+   ⇒ 改 declare -A SKIP_REASON=()（判据不能靠「表非空」这个环境前提）
+② 自测 T4/T5 是「同一张表」的两个方向：能编译却登记 ⇒ 红；登记了却无此文件 ⇒ 红
+   两条都真跑、都真红（否则豁免账就是永久洗白）
+```
+
+### 顺带取证（M423 的料，本轮**不做**）
+
+```
+46 条 orphan（有 verify.sh 但不在任何执行路径）逐条真跑（每条 timeout -k 90s）：
+  43 PASS / 1 TIMEOUT / 2 FAIL
+  FAIL-1 m67_aarch64           缺 qemu-aarch64-static（宿主依赖，非产品缺陷）
+  FAIL-2 m83_s1_http_body_nul  绑定端口 18085 失败（待查：端口冲突 vs 残留进程）
+  TIMEOUT m85_s1               五档体积对比，90s 不够（实测是慢，不是坏）
+  ⇒ 46 条断言里 43 条一直是绿的，却从没在任何一次发布里跑过
+  接入的真实阻碍（已记 NEXT-QUEUE）：固定端口 ⇒ 8 分片并发会撞；宿主依赖必须显式声明
+```
+
+### 未做（如实）
+
+```
+· 46 条 orphan 的 registry 接入（分片端口冲突 + 宿主依赖要显式声明 ⇒ 单独一轮设计）
+· 143 条 blackbox 补断言（本轮只做了 m26_ushr 一条）
+· m25_tls_resume 要外网（www.baidu.com）：编译过，但不进任何门
+· 909 个 .px 里非顶层的 789 个未纳入门（本次只作为一次性证据扫过）
+```
+
+版本 **0.2.422** · 门 **297**（295 + m422_examples_compile + ex_m26_ushr）
+
 ## M421 补3：m284 门的锚点被补2 的新提示顶掉 —— 295 门跑完 96 分钟判 NO-GO（缺陷 849）
 
 > **一句话**：补2 在 `.githooks/pre-commit` 前面插了一条同前缀的冻树提示（第 58 行

@@ -52,7 +52,7 @@ def main():
     print("截断 OK")
 
     print("=== 8. 截断后继续追加 ===")
-    let sz = file_size(path)
+    let mut sz = file_size(path)
     write_at(path, sz, "LOG1")
     sz = file_size(path)
     write_at(path, sz, "LOG2")

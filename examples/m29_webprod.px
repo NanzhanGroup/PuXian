@@ -5,7 +5,7 @@
 # 原始 HTTP 请求助手（tcp 原语）：一次连接发请求，返回完整响应
 def raw_req(method, target, headers_extra):
     let sock = tcp_connect("127.0.0.1", 18089)
-    let req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + headers_extra
+    let mut req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + headers_extra
     req = req + "\r\n"
     tcp_send(sock, req)
     let resp = tcp_recv(sock, 65536)
@@ -36,7 +36,7 @@ assert(contains(r1, "Last-Modified:"), "1 Last-Modified 头")
 assert(contains(r1, "Connection: keep-alive"), "1 keep-alive 默认")
 
 # ---- 2. If-None-Match → 304 ----
-let etag = ""
+let mut etag = ""
 let parts = split(r1, "\r\n")
 for p in parts:
     if starts_with(p, "ETag:"):

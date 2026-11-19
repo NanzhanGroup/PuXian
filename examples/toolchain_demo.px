@@ -30,7 +30,7 @@ def test_sum_even():
     assert(sum_even(nums) == 12, "2+4+6=12")
 
 def bench_add():
-    let x = 0
+    let mut x = 0
     for i in range(100):
         x = add(x, i)
     return x

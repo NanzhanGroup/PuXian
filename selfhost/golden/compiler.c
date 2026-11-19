@@ -22402,7 +22402,7 @@ int main(int argc, char** argv) {
     px_srcpos("<top>", 72);
     px_set_global("g_bcm", px_null());
     px_srcpos("<top>", 74);
-    px_set_global("PXC_VER", px_str("0.2.421"));
+    px_set_global("PXC_VER", px_str("0.2.422"));
     px_srcpos("<top>", 75);
     px_set_global("PXC_MS", px_str("M-B9a"));
     { LXValue _r = fn_main(NULL, 0, NULL); int _code = 0;

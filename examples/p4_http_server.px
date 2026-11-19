@@ -33,7 +33,7 @@ def handler(req):
 # 原始 HTTP 请求助手（tcp 原语）：返回完整响应报文
 def raw_req(method, target, body, ctype):
     let sock = tcp_connect("127.0.0.1", 18080)
-    let req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+    let mut req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
     if body != "":
         req = req + "Content-Type: " + ctype + "\r\nContent-Length: " + str(len(body)) + "\r\n"
     req = req + "\r\n" + body

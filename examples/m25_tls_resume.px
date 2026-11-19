@@ -9,7 +9,7 @@ def worker(d):
     d.send(r.status)
 for i in range(6):
     spawn worker(done)
-let ok = 0
+let mut ok = 0
 for i in range(6):
     let s = done.recv()
     if s == 200:

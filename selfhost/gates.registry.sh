@@ -1245,6 +1245,18 @@ step "示例编译"
 run ex_fib ./tools/pxc build examples/fib.px
 run ex_match ./tools/pxc build examples/match.px
 run ex_struct ./tools/pxc build examples/struct.px
+# M422（缺陷 856）：**顶层示例全量编译体检**。
+#   病史：m25_closure_gc / m25_tls_resume / m26_ushr / m29_webprod / p0_random_io / p2_crypto_hash
+#   / p4_http_server / p5_px_serve / p9_http_adv / toolchain_demo 共 10 个顶层示例编译不过
+#   （9 个 E3002 让 let 常量被赋值；1 个 p9 用花括号块里的冒号式 if ⇒ E2001），
+#   而它们全是 BLACKBOX（M421 账上无 verify.sh）⇒ 292/295 门全绿也看不见。
+#   判据：120 个顶层示例逐条 px build，失败即红；豁免账只许「确实编译不过」的条目，
+#   能编译却挂豁免 / 豁免项无对应文件 ⇒ STALE 红；扫描面 < 50 或 px 缺失 ⇒ rc=3。
+run m422_examples_compile bash selfhost/check_examples_compile.sh
+# M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
+#   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
+#   示例与实现相反，且从没被任何门跑过。
+run ex_m26_ushr bash examples/m26_ushr/verify.sh
 
 step "M276 · 门级互斥锁（晨曦 2026-10-05 回馈：门「就地改仓库」的并发不安全）"
 #   98 个门会在负控里**现场改源码**（`restore_all` / 负控打桩 / `run_neg` …）；原来只有
