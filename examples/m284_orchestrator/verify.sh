@@ -225,10 +225,16 @@ python3 - "$ROOT/$HK" <<'PY'
 import io, sys
 p = sys.argv[1]
 s = io.open(p, encoding='utf-8').read()
-anchor = '⛔ 提交被拦下：'
+# M421：锚点必须**唯一定位**到「真生产者」那一行。旧锚点只写 `⛔ 提交被拦下：`，
+#   M421 补2（缺陷 848）在钩子前面新插了一条同前缀的冻树提示（第 58 行）⇒
+#   s.find() 命中新那条、注释了它，真生产者（108 行）原样在场 ⇒ 本门误判红。
+#   ⇒ ① 锚点加长到带「冻结集」的那条；② 命中数必须恰好 1，否则判 ANCHOR-MISS。
+#   ⚠️ 骨架仍**运行时拼装**（本文件不得成为它自己的生产者）。
+anchor = '⛔ 提交被拦下：改了「' + '发射' + '冻结集' + '」内的 .px'
+n = s.count(anchor)
+if n != 1:
+    print('ANCHOR-MISS n=%d' % n); sys.exit(9)
 i = s.find(anchor)
-if i < 0:
-    print('ANCHOR-MISS'); sys.exit(9)
 ls = s.rfind('\n', 0, i) + 1
 io.open(p, 'w', encoding='utf-8').write(s[:ls] + '# ' + s[ls:])
 PY

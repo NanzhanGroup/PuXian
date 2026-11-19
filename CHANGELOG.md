@@ -1,3 +1,47 @@
+## M421 补3：m284 门的锚点被补2 的新提示顶掉 —— 295 门跑完 96 分钟判 NO-GO（缺陷 849）
+
+> **一句话**：补2 在 `.githooks/pre-commit` 前面插了一条同前缀的冻树提示（第 58 行
+> `⛔ 提交被拦下：门链正在跑…`），而 `examples/m284_orchestrator/verify.sh` 的 579③
+> 用 `s.find('⛔ 提交被拦下：')` 取**第一处** ⇒ 注释了那条新提示，真生产者（第 108 行
+> `…改了「发射冻结集」内的 .px…`）原样在场 ⇒ 579③ 判「仍判在场」⇒ 门红。
+> **判据的锚点比判据本身更容易失配**——今夜第 4 次同族（496① / 491 / 579 / 849）。
+
+### 证据（2026-11-19 · 本机实测）
+
+```
+链日志 /data/gatevm/m421-chain-20261119-182925.log
+  分片全绿（shard1-7 + quiet 16）· shard8 红 1
+  ❌ m284_orchestrator：复跑仍红（rc=1 状态=FAIL 24s）⇒ 产品红
+  CHAIN-VERDICT=RED reason=红 1 门 green=294 red=1 listed=295 expect=295 timeout=0 head=b36384f
+门日志 /data/gatevm/shard-20261119-182928/red/shard8_gate_m284_orchestrator.log
+  ❌ 579③ 生产者改成注释后仍判在场 —— 认的是字面在场，不是输出
+  M284-VERIFY-FAIL（通过 35 / 失败 1）
+复现（补2 后的手动改注释 + --probe）
+  python3 selfhost/check_orchestrator.py --probe "发射冻结集" ⇒ 在场（有生产者）
+  ⇒ 被注释的是第 58 行，第 108 行未动
+```
+
+### 修
+
+- `examples/m284_orchestrator/verify.sh`：锚点加长到唯一形态
+  `'⛔ 提交被拦下：改了「' + '发射' + '冻结集' + '」内的 .px'`（仍**运行时拼装**，
+  本文件不成为它自己的生产者）；并加「命中数必须恰好 1」自证
+  （`s.count(anchor) != 1` ⇒ `ANCHOR-MISS n=N` 退出 9，走 else 分支判红）。
+
+### 负控（判据有牙）
+
+```
+修后正常跑：bash examples/m284_orchestrator/verify.sh ⇒ M284-VERIFY-OK · 通过 36 · 失败 0
+锚点负控（把钩子 108 行「内的 .px」改成「内的 px」）：
+  ❌ 579③ 锚点未命中（生产者行已变？锚点必须同步）⇒ M284-VERIFY-FAIL · 通过 34 · 失败 1
+还原后 git status 干净（钩子源逐字节还原）
+```
+
+### 副作用面 / 回滚
+
+- 只改一个文件 `examples/m284_orchestrator/verify.sh`（门自身，非产品代码、非运行时）。
+- 回滚：`git revert <本提交>` 即回到补2 后的状态（届时 m284 会重新判红，属预期）。
+
 ## M421 补2：链跑期间的提交把绿戳作废 —— 295 门全绿、105 分钟白跑（缺陷 848）
 
 > **一句话**：M421 链 16:41:21 起于 `6cde0c7`，跑完 295 门判绿于 18:26:02；
