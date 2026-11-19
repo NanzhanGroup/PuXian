@@ -1257,6 +1257,13 @@ run m422_examples_compile bash selfhost/check_examples_compile.sh
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。
 run ex_m26_ushr bash examples/m26_ushr/verify.sh
+# M423（缺陷 859 / 860）：**px_exec 的可移植性**。CI 只 `px build`（不安装）⇒ PATH 里没有 px，
+#   旧 px_px_bin() 只看 PATH ⇒ execlp 失败 ⇒ px_exec **静默返回空串** ⇒ m102_s2 在 CI 判红
+#   （本机装了 px 所以恒绿）。同处还有死码：`px --worker` 从不存在 ⇒ M25 进程池从未生效，
+#   每次 px_exec 先派生 4 个必然失败的 worker（8 行「未知子命令」噪音）再退化 fork+exec。
+#   判据：源码形状 3 条（自解析 / 响亮报错 / 假池关闭）+ 无 px 的 PATH 正控 + 两条负控
+#   （找不到解释器必须 rc≠0 且 R1002；PX_BIN 无效必须报「执行失败」）+ 前提自证 2 条。
+run m423_pxexec_portable bash selfhost/check_pxexec_portable.sh
 
 step "M276 · 门级互斥锁（晨曦 2026-10-05 回馈：门「就地改仓库」的并发不安全）"
 #   98 个门会在负控里**现场改源码**（`restore_all` / 负控打桩 / `run_neg` …）；原来只有

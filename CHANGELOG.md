@@ -1,3 +1,71 @@
+## M423：CI 四红的真因 —— px_exec 在「没安装 px」的机器上静默返回空串（缺陷 859 / 860 / 861）
+
+> **一句话**：M422 补3 把那轮 CI 四红里的示例编译判成「默认 PIE 宿主」（已修，缺陷 858）；
+> 剩下三条被记成「同族 CI 计时口径 / 共享 runner 核数」。本轮逐条重查，**其中一条不是计时问题，是产品缺陷**：
+> `px_exec` 只在 `PATH` 里找 `px`，CI 只 `px build`（不安装）⇒ 子进程 exec 失败 ⇒ **静默返回空串**，
+> 调用方分不清「脚本没输出」和「解释器不存在」。同一处还挖出死码：`px --worker` **这个子命令从来不存在**
+> —— M25 的「进程池」自建立起从未生效，每次 `px_exec` 先派生 4 个必然失败的 worker、每个打 2 行
+> 「未知子命令」，再退化 fork+exec。**本机装了 px，所以恒绿。**
+
+### 证据（2026-11-19 CI run 44571916900 · 本机差分复现）
+
+```
+① 缺陷 859（产品 · 可移植性）
+   CI 现场：v_m403.log「C2 m102_s2 判红（rc=1 · 1s · FAIL s2a_probe rc=0）」
+           两行失败：「S2A-PXEXEC-OFFLOAD-OK」与「协程 px_exec 结果 3/3 对拍 slow-ok」
+   算术自洽：px_exec 立即失败 ⇒ once_ms≈0 ⇒ 0 < 0 假 ⇒ 连「wall < 2×once」也一起红（两条同源）
+   本机差分：把 PATH 做成「有 bash/coreutils、没有 px」的分身（/tmp/nopx）⇒ 逐字同两条 FAIL；
+            再跑修复版 ⇒ S2A ok=3（once 439ms / conc 438ms）⇒ 定性成立
+   旧实现：px_px_bin() = getenv("PX_BIN") ?: "px"（**只看 PATH**）
+② 缺陷 860（产品 · 死码）
+   git log -S'"--worker"' -- tools/px 为空；tools/px 认 build/run，pxi 只认脚本，
+   runtime 无 worker 入口 ⇒ `px --worker` 从不存在
+   实测：`px --worker` ⇒「未知子命令: --worker」；例 s2a_probe 每跑一次打 4×2 行噪音
+③ 缺陷 861（判据 · 假红）
+   CI：mixed_vm 0.0752s / mixed_c 0.0784s 触发「比最快参考机快 10× ⇒ 负载未真执行」
+   本机：mixed_vm 0.2703s（0.279x）—— 同样的代码，只是机器慢
+   ⇒ 合成档（各档 max = **最慢**参考机）在快机器上必然把比值压到 0.1 以下 ⇒ 判的是机器代差
+```
+
+### 修法
+
+```
+runtime/runtime.c
+  px_px_bin()：PX_BIN → PATH 的 px → **自身路径推导**（/proc/self/exe 逐级向上 ≤6 层找
+               tools/px、bootstrap/pxi）；找不到返回 NULL
+  px_exec()：解释器 NULL ⇒ px_error（R1002 **响亮报错**）；rc≠0 ⇒ stderr 明写「执行失败」
+  px_run_px_child()：child 以 127 退出且无输出 = exec 失败 ⇒ 返回 2（不再当成「跑完了没输出」）
+  g_px_pool_size 默认 4 → **0**（假池关闭：去掉 4 次无谓 fork 与每请求 8 行 stderr 噪音；
+               真 worker 协议列下一轮候选，PX_POOL_WORKERS=N 仍可显式打开）
+examples/m267_perf/verify.sh
+  新增**输出自证**（check_output）：fib28/while_sum/mixed/jsonwb 的 stdout 必须逐字等于期望值
+    （1589055 / 998500000 / 200000 1178000 / 894075 20000）—— 「负载没真执行」看产物，不看快慢
+  下限判据（<0.10x）：合成档降为 ⚠️（仍打印，不判红）；本机档 / M267_FLOOR_STRICT=1 仍严格判红
+    NC-E 负控显式 M267_FLOOR_STRICT=1 ⇒ 判据仍然有牙
+新门 m423_pxexec_portable（297 → 298）：静态 3 条（自解析/响亮报错/假池关闭）+ 正控 2 + 负控 2
+    + 前提自证 2（farm 里确实没有 px · 扫描面非空），实测 8/8
+```
+
+### 验证（本地）
+
+```
+m423_pxexec_portable 8/0（冷构建 35s）
+examples/m102_s2：CI 模拟 PATH（无 px）⇒ ok=3 PASS；正常 PATH ⇒ 5/5
+examples/m267_perf --only mixed_vm/mixed_c/fib28_vm ⇒ 顺序判据全绿（输出自证 + 双轨 stdout 一致）
+examples/m420_memsan_cron 5/0（ASan 档在 -no-pie 后构建/运行正常）
+check_examples_compile 120/120 rc=0（补3 的 -no-pie 生效）
+```
+
+### 未做（如实）
+
+```
+· 真正的 worker 协议（`px --worker`）—— 本轮只关掉「假池」，池化收益仍为 0
+· m267 的 floor 分母仍是「各档 min」—— 合成档降级是止血，正解是每台机器建本机档
+· CI 侧验证必须 push 后由下一轮 CI 给出（本轮只有本机差分证据）
+```
+
+版本 **0.2.423** · 门 **298**（297 + m423_pxexec_portable）
+
 ## M422：示例即文档 —— 10 个顶层示例编译不过，而没有任何门会红（缺陷 856 / 857 / 858）
 
 > **一句话**：M421 的账说「143 个示例连断言都没有」；M422 把第一层捅开：**光编译就过不去的顶层示例有 10 个**，

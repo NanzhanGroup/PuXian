@@ -112,6 +112,7 @@ PRECHECK_GATES=(
     #   病史：10 个顶层示例编译不过（E3002×9 / E2001×1），而它们全是 BLACKBOX ⇒ 全量门天然看不见，
     #   295 门跑完 100 分钟也照样绿。这门 20 秒就能判掉。
     m422_examples_compile                                # 顶层 120 示例逐条编译 + 豁免账 STALE（实测 ~20s）
+    m423_pxexec_portable                                 # px_exec 定位/假池/响亮报错（实测 ~35s 冷 · 缓存后 ~5s）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

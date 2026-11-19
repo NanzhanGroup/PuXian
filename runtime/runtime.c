@@ -25694,10 +25694,55 @@ static const char* px_mime_type(const char* path) {
     return "application/octet-stream";
 }
 
-// px 解释器二进制定位：PX_BIN 环境变量优先，否则 PATH 中的 "px"
+// px 解释器二进制定位（M423 · 缺陷 859）
+//   CI run 44571916900 实测：旧实现只看 PX_BIN / PATH 中的 "px"，而 CI 只 `px build`
+//   （不安装）⇒ PATH 里没有 px ⇒ execlp 失败 ⇒ px_exec **静默返回空串**
+//   （调用方分不清「脚本没输出」与「解释器找不到」）⇒ examples/m102_s2 判红。
+//   解析顺序（首个 X_OK 即用）：
+//     1. PX_BIN（显式覆盖；不校验存在性 —— 与旧行为一致，错了由 exec 报错）
+//     2. PATH 中的 px
+//     3. 自身可执行文件所在目录逐级向上（≤6 层）的 tools/px、bootstrap/pxi
+//        （仓库内构建产物：<repo>/examples/.../build/x ⇒ 向上找到 <repo>/tools/px）
+//   找不到 ⇒ 返回 NULL；**调用方必须响亮报错**，不得静默返回空串。
 static const char* px_px_bin(void) {
+    static char buf[4096];
+    static int state = 0;   /* 0=未解析 1=成功 2=未找到 */
+    if (state != 0) return state == 1 ? buf : NULL;
     const char* b = getenv("PX_BIN");
-    return (b && *b) ? b : "px";
+    if (b && *b) { snprintf(buf, sizeof buf, "%s", b); state = 1; return buf; }
+    const char* pe = getenv("PATH");
+    if (pe) {
+        const char* p = pe;
+        while (p && *p) {
+            const char* q = strchr(p, ':');
+            size_t n = q ? (size_t)(q - p) : strlen(p);
+            if (n > 0 && n < sizeof buf - 8) {
+                int w = snprintf(buf, sizeof buf, "%.*s/px", (int)n, p);
+                if (w > 0 && (size_t)w < sizeof buf && access(buf, X_OK) == 0) { state = 1; return buf; }
+            }
+            if (!q) break;
+            p = q + 1;
+        }
+    }
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        char* slash = strrchr(exe, '/');
+        if (slash) *slash = '\0';
+        for (int up = 0; up < 6; up++) {
+            static const char* cands[2] = { "/tools/px", "/bootstrap/pxi" };
+            for (int c = 0; c < 2; c++) {
+                int w = snprintf(buf, sizeof buf, "%s%s", exe, cands[c]);
+                if (w > 0 && (size_t)w < sizeof buf && access(buf, X_OK) == 0) { state = 1; return buf; }
+            }
+            slash = strrchr(exe, '/');
+            if (!slash) break;
+            *slash = '\0';
+        }
+    }
+    state = 2;
+    return NULL;
 }
 
 // ==================== M25 .px 进程池（PHP-FPM 风格） ====================
@@ -25706,10 +25751,17 @@ static const char* px_px_bin(void) {
 //   父进程把任务帧（4 字节大端长度 + path\0env_json\0dump\0timeout）写入空闲
 //   worker stdin；worker 执行目标脚本，把结果帧（exit_code\0output）写回 stdout。
 // 超时 → SIGKILL + 补位；worker 崩溃 → 补位重试，最终回退旧 fork+exec 路径保底。
-// M34 配置化：worker 数（PX_POOL_WORKERS，默认 4）+ 空闲回收（PX_POOL_IDLE_MS，0=不回收）
+// M34 配置化：worker 数（PX_POOL_WORKERS）+ 空闲回收（PX_POOL_IDLE_MS，0=不回收）
 //           + 每 worker 最大请求数（PX_POOL_MAX_REQ，0=不限，防泄漏滚动重启）
+// ⚠️ M423（缺陷 859b · 2026-11-20）：**池默认关闭（0）**。
+//   实测：`px --worker` 这个子命令**从来不存在** —— tools/px（shell 包装器）只认
+//   build/run/…，pxi 只认脚本路径，runtime 也没有 worker 模式入口（git log -S'--worker'
+//   -- tools/px 为空）。⇒ M25 起每次 px_exec 先派生 4 个必然失败的 worker
+//   （每个打 2 行「未知子命令」到 stderr），再退化 fork+exec —— 池从未真正生效。
+//   本轮先把「假池」关掉（去掉噪音与 4 次无谓 fork），真正实现 worker 协议列下一轮候选。
+//   要恢复尝试：PX_POOL_WORKERS=N（N≥1）—— 注意 `--worker` 未实现时仍会失败并退化。
 #define PX_POOL_SIZE_MAX 16
-static int g_px_pool_size = 4;
+static int g_px_pool_size = 0;
 
 // 兜底路径前置声明（定义在本节之后）
 static int px_run_px_child(const char* path, const char* env_json, int dump_response,
@@ -25739,6 +25791,9 @@ static char g_last_script_path[1024] = "";
 
 // 派生一个 `px --worker` 进程（返回值 0 成功）
 static int px_pool_spawn(PXWorker* w) {
+    // M423（缺陷 859）：解释器路径在**父进程**解析（子进程里 close_range 后再解析更脆弱）
+    const char* pxbin = px_px_bin();
+    if (!pxbin) return -1;
     int in_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1};
     if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
         if (in_pipe[0] >= 0) { close(in_pipe[0]); close(in_pipe[1]); }
@@ -25764,8 +25819,8 @@ static int px_pool_spawn(PXWorker* w) {
         // musl（M57-S4 交叉编译）无 close_range：循环关闭继承 fd（4096 覆盖常规上限）
         for (int fd = 3; fd < 4096; fd++) close(fd);
 #endif
-        execlp(px_px_bin(), "px", "--worker", (char*)NULL);
-        dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）\n");
+        execlp(pxbin, "px", "--worker", (char*)NULL);
+        dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）: %s\n", pxbin);
         _exit(127);
     }
     close(in_pipe[0]);
@@ -26046,6 +26101,9 @@ static int px_pool_run(const char* path, const char* env_json, int dump_response
 // timeout_ms<=0 无限等待。返回 0=完成, 1=超时, 2=启动失败。
 static int px_run_px_child(const char* path, const char* env_json, int dump_response,
                            int timeout_ms, char** out, int* out_len, int* exit_code) {
+    // M423（缺陷 859）：找不到解释器 ⇒ 返回 2（调用方响亮报错），不再 exec 一个必然失败的名字
+    const char* pxbin = px_px_bin();
+    if (!pxbin) return 2;
     int pfd[2];
     if (pipe(pfd) != 0) return 2;
     pid_t pid = fork();
@@ -26061,8 +26119,8 @@ static int px_run_px_child(const char* path, const char* env_json, int dump_resp
         else unsetenv("PX_INIT_GLOBALS");
         if (dump_response) setenv("PX_DUMP_RESPONSE", "1", 1);
         else unsetenv("PX_DUMP_RESPONSE");
-        execlp(px_px_bin(), "px", "run", path, (char*)NULL);
-        dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）\n");
+        execlp(pxbin, "px", "run", path, (char*)NULL);
+        dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）: %s\n", pxbin);
         _exit(127);
     }
     close(pfd[1]);
@@ -26097,6 +26155,9 @@ static int px_run_px_child(const char* path, const char* env_json, int dump_resp
         if (WIFEXITED(status)) *exit_code = WEXITSTATUS(status);
         else *exit_code = 1;
     }
+    // M423（缺陷 859）：child 以 127 退出且无输出 = **解释器启动失败**（execlp 失败的那一支）。
+    //   旧实现把它当「脚本跑完了、没输出」⇒ px_exec 静默返回 ""（CI 上就是这样判红却又说不清）。
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 127 && total == 0) return 2;
     return timedout ? 1 : (WIFEXITED(status) ? 0 : 2);
 }
 
@@ -30599,8 +30660,15 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {    (void)ctx;
     }
     char* out = NULL;
     int out_len = 0, exit_code = 0;
+    // M423（缺陷 859）：解释器找不到 ⇒ **响亮报错**（旧实现 execlp 失败后静默返回 ""，
+    //   调用方无法区分「脚本没输出」与「解释器不存在」；CI run 44571916900 实证）。
+    if (!px_px_bin())
+        px_error("R1002: px_exec 找不到 px 解释器（PX_BIN 未设，PATH 与自身路径附近均无 px/pxi；"
+                 "M423 缺陷 859 起不再静默返回空串）");
     int rc = px_pool_run(path, env_json, 0, 0, &out, &out_len, &exit_code);
     if (env_json) free(env_json);
+    if (rc != 0)
+        dprintf(STDERR_FILENO, "px: px_exec 执行失败 rc=%d path=%s\n", rc, path);
     LXValue r = rc == 0 ? px_str_len(out, out_len) : px_str("");
     if (out) xfree(out);
     return r;

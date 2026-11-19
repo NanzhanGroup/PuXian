@@ -2,7 +2,7 @@
 # 规则：CI 红门必须逐条登记；未登记 ⇒ GAP(rc=1)；登记过期 ⇒ GAP(rc=1)。
 # 到期前必须：修好，或重新定性并延期（延期要在 CHANGELOG 写清为什么）。
 #
-m403_orphan_batch	CI-only 红：清单内 m126_signal_isolate 4 条 FAIL（「协程 px_exec 结果 3/3 对拍」「并发 wall < 2×单次」）——共享 runner 上并发定量判据失效；本机 M126 门复跑 pass=43 fail=0 全绿 ⇒ 同 M267 族（CI 计时/并发口径）。修法：并发判据按核数自适应或 CI 档改 SKIP，单独一轮	2026-11-27
-m267_perf	CI-only 红（本轮 16a9594 实测）：17 负载里 15 条绿，只有 mixed_vm 0.078x / mixed_c 0.082x 触发下限判据（0.1x「负载疑似未真执行」）——同一负载在 GitHub runner 上比最快参考机快 10×。修法：mixed 负载参考时间按 runner 重建，或把下限判据改成「同机内相对」，单独一轮	2026-11-27
+m403_orphan_batch	**M423 重新定性（推翻 补3 的「核数/并发口径」假设）**：清单内 m102_s2 的 FAIL（「S2A-PXEXEC-OFFLOAD-OK」「协程 px_exec 结果 3/3 对拍」）真因是缺陷 859 —— CI 只 px build 不安装 ⇒ PATH 无 px ⇒ 旧 px_px_bin 只看 PATH ⇒ px_exec 静默返回空串（once_ms≈0 ⇒ 0<0 假 ⇒ 「wall<2×once」也一起红，算术自洽）。本机差分（PATH 去 px）逐字复现两条 FAIL；修复后同条件下 ok=3 PASS。已修（自解析 + 响亮报错 + 关假池），待 push 后由下一轮 CI 验证	2026-11-22
+m267_perf	**M423 已修（缺陷 861）**：mixed_vm 0.078x / mixed_c 0.082x 触发下限判据 —— 根因是合成档（各档 max = 最慢参考机）+ 快 runner ⇒ 比值必然越线（本机同代码 0.279x，只是机器慢）。修法：新增**输出自证**（stdout 必须等于期望值，「负载没真执行」看产物）；下限判据在合成档降为 ⚠️（本机档 / M267_FLOOR_STRICT=1 仍严格判红，NC-E 负控显式打开）。待 push 后由下一轮 CI 验证	2026-11-22
 m420_memsan_cron	两层真因：① 缺陷 847 步吞 rc（已修 ci.yml+verify.sh）② 缺陷 858 —— ASan 档 WRAP 去掉 -static 后链非 PIC 的 mbedtls.a，默认 PIE 宿主上 ld 拒（CI rc=4 构建失败）。②已随 M422 补3（tools/px 显式 -no-pie）修复，本机 5/0 rc=0；待 push 后由下一轮 CI 验证	2026-11-22
 示例即文档 · 顶层示例全量编译体检（M422 · 缺陷 856）	M422 补3 已修（缺陷 858：tools/px 的 -static 在默认 PIE 宿主上仍按 PIE 链接 ⇒ 预置非 PIC 的 mbedtls.a 被 ld 拒；改显式 -no-pie）；本机已复现（-static-pie ⇒ 同一 relocation 错 / 加 -no-pie ⇒ rc=0）且 120/120 绿，待 push 后由下一轮 CI 验证	2026-11-22

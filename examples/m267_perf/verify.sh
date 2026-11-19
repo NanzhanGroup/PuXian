@@ -126,6 +126,7 @@ synth_baseline() {
 }
 
 BASE_LABEL=""
+BASE_SYNTH=0   # M423（缺陷 860）：1 = 合成档（本机无档）⇒ 下限判据降为 ⚠️（见 run_compare）
 select_baseline() {
     SIG="${M267_SIG:-$(machine_sig)}"
     OWN_BASE="$BASELINES/$SIG.tsv"
@@ -142,6 +143,7 @@ select_baseline() {
         else
             BASE="$W/baseline.synth.tsv"
             synth_baseline > "$BASE"
+            BASE_SYNTH=1
             BASE_LABEL="**合成档**（本机无 $SIG 档）· 上限判据 = 相对各档 max ⇒ 跨机宽松，仅防失控"
         fi
     fi
@@ -268,6 +270,36 @@ measure_one() { # $1=name $2=kind
     esac
 }
 
+# ── M423（缺陷 860）**输出自证**：判「负载有没有真执行」要看产物，不是看「跑得比谁快」──
+#   CI run 44571916900 实测：mixed_vm 0.078x / mixed_c 0.082x 被判红（下限判据），
+#   而合成档（各档 max = 最慢参考机）在快机器上恒把比值压到 0.1 以下 ⇒ 判的是机器代差。
+#   形状：每个 run 负载跑一次，stdout **逐字**必须等于这里登记的期望值（单一事实源）。
+#   期望值来历：examples/m267_perf/src/<n>.px 的 print(...)（本轮实测：见 CHANGELOG M423）。
+expect_out_of() {
+    case "$1" in
+        fib28_*)     echo "1589055" ;;
+        while_sum_*) echo "998500000" ;;
+        mixed_*)     echo "200000 1178000" ;;
+        jsonwb_*)    echo "894075 20000" ;;
+        *)           echo "" ;;
+    esac
+}
+check_output() { # $1=name $2=kind；空期望 = 该负载无输出自证（ONNX 等由覆盖门管）
+    local n="$1" k="$2" exp bin got
+    exp="$(expect_out_of "$n")"; [ -z "$exp" ] && return 0
+    [ "$k" = "run" ] || return 0
+    case "$n" in
+        *_vm) bin="$W/vm_${n%_vm}/build/${n%_vm}" ;;
+        *_c)  bin="$W/c_${n%_c}/build/${n%_c}" ;;
+        *) return 0 ;;
+    esac
+    [ -x "$bin" ] || { echo "   ❌ 输出自证无法执行：$bin 不存在"; return 1; }
+    got=$(timeout 120 "$bin" 2>/dev/null | tr -d '\r' | head -1)
+    if [ "$got" = "$exp" ]; then return 0; fi
+    echo "   ❌ 输出自证失败 $n：期望 [$exp] 实得 [$got]（负载未真执行 / 结果错）"
+    return 1
+}
+
 # ── 主比对 ────────────────────────────────────────────────────
 run_compare() {
     local only="${1:-}" nenv=0
@@ -279,6 +311,8 @@ run_compare() {
         local got r bf rf
         got=$(measure_one "$name" "$kind")
         if [ "$got" = "-1" ]; then bad "$name 无法测量（未知 kind=$kind）"; continue; fi
+        # ⭐ M423（缺陷 860）：**先判输出，再判速度** —— 「负载没真执行」最硬的证据是产物不对
+        check_output "$name" "$kind" || bad "$name 输出与期望不一致（负载未真执行 / 结果错）"
         r=$(echo "$got $base" | awk '{if ($2+0>0) printf "%.3f", $1/$2; else print "0"}' )
         local verdict="✅"
         # ⭐ M303 **下限判据**：实测比**最快参考机**快 10 倍以上 ⇒ 负载疑似**根本没执行**
@@ -289,9 +323,18 @@ run_compare() {
         bf=$(floor_of "$name"); [ -n "$bf" ] || bf="$base"
         rf=$(echo "$got $bf" | awk '{if ($2+0>0) printf "%.3f", $1/$2; else print "0"}')
         if [ "$(echo "$rf 0.10" | awk '{print ($1 < $2) ? 1 : 0}')" = 1 ]; then
-            printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "$name" "$base" "$got" "${rf}x" "❌" "$WARN_R/$FAIL_R"
-            bad "$name 实测 ${rf}x（上限档 ${r}x）—— 比**最快参考机**（${bf}s）还快 10 倍以上，负载疑似未真执行（M303 下限判据 · M417 补1 换分母）"
-            continue
+            # M423（缺陷 860）：合成档（各档 max = **最慢**参考机）下的下限判据没有牙 ——
+            #   快机器上 0.1× 是机器代差，不是「负载没跑」。⇒ 合成档降为 ⚠️（不判红，
+            #   仍打印出来），「负载未真执行」由 check_output 的输出自证负责判红。
+            #   本机档 / M267_FLOOR_STRICT=1（负控 NC-E 用）仍严格判红。
+            if [ "$BASE_SYNTH" = 1 ] && [ -z "${M267_FLOOR_STRICT:-}" ]; then
+                printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "$name" "$base" "$got" "${rf}x" "⚠️" "$WARN_R/$FAIL_R"
+                echo "   ⚠️ $name 实测 ${rf}x < 0.10x（合成档基线 = 最慢参考机 ⇒ 快机器必然越线）⇒ 提示不判红；负载未真执行改由输出自证判"
+            else
+                printf "  %-13s %-9s %-10s %-8s %-5s %s\n" "$name" "$base" "$got" "${rf}x" "❌" "$WARN_R/$FAIL_R"
+                bad "$name 实测 ${rf}x（上限档 ${r}x）—— 比**最快参考机**（${bf}s）还快 10 倍以上，负载疑似未真执行（M303 下限判据 · M417 补1 换分母）"
+                continue
+            fi
         fi
         if [ "$(echo "$r $FAIL_R" | awk '{print ($1 > $2) ? 1 : 0}')" = 1 ]; then
             local got2 r2
@@ -382,7 +425,8 @@ run_neg() {
         awk '/^#/ {print; next} NF>=4 { $4=$4*20 } { print }' "$_f" > "$W/negfloor/$(basename "$_f")"
     done
     FLOOR_DIR="$W/negfloor"; build_floor
-    ne=$(run_compare "$NEG_ONLY" 2>&1 | grep -c '负载疑似未真执行')
+    # M423（缺陷 860）：负控必须强行打开**严格下限**（合成档默认降为 ⚠️，负控要的是「判据有牙」）
+    ne=$(M267_FLOOR_STRICT=1 run_compare "$NEG_ONLY" 2>&1 | grep -c '负载疑似未真执行')
     FLOOR_DIR="$fdir_save"; build_floor
     cp "$W/base.bak" "$BASE"
     if [ "$ne" -ge 1 ]; then echo "  ✅ NC-E 生效（$ne 个负载触发下限判据）"; else echo "  ❌ NC-E 未生效：快得不可能却没判红"; rc_all=1; fi

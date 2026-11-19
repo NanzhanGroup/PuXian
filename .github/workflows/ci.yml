@@ -337,6 +337,18 @@ jobs:
         run: |
           bash selfhost/check_examples_compile.sh --self-test
           bash selfhost/check_examples_compile.sh
+      - name: px_exec 可移植性（M423 · 缺陷 859/860）
+        #   CI 只 px build（不安装）⇒ PATH 里没有 px。旧 px_exec 只看 PATH ⇒
+        #   子进程 exec 失败后**静默返回空串** ⇒ m102_s2 在 CI 判红（本机恒绿）。
+        #   本步同时守「假池」（px --worker 从不存在）与「找不到解释器必须响亮报错」。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_pxexec_portable.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_pxexec_portable 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_pxexec_portable rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_pxexec_portable PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。
