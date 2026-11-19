@@ -8,6 +8,11 @@
 #                         ⇒ 守卫必须判红并**指名** route_match
 #   neuter-guard <out>    生成「判据失明」版守卫（清空 DIRECT/INDIRECT 两张表）
 #                         ⇒ 用它跑同一份被植入缺陷的源码**必须不再判红**
+#   inject-probe          往 px_route_respond 注入一条**与旧实现等价**的探测式读
+#                         （px_dict_get(str,"headers")）⇒ 读入口「诊断档」判据的**自持触发器**
+#                         （M420 缺陷 845 修掉运行时的探测读后，旧触发源已不存在）
+#   inject-probe-neuter   inject-probe + 把 px_ctr_livechk_on() 钉成 0（摘掉诊断开关）
+#                         ⇒ 负控 C：诊断档 CTR 必须回到 0，证明「>0」这条判据真的会红
 # ⚠️ 本脚本**只改源码**；还原由 verify.sh 的快照 + trap 负责（逐字节 cmp 自证）。
 # ============================================================
 import io
@@ -18,6 +23,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 RT = os.path.join(ROOT, 'runtime', 'runtime_route.c')
 GUARD = os.path.join(ROOT, 'selfhost', 'check_lock_alloc.py')
+RT_C = os.path.join(ROOT, 'runtime', 'runtime.c')
+
+# M420 补：px_route_respond 里 M420 的 dict 守卫锚点（注入点紧随其后）
+PROBE_ANCHOR = '    if (resp.type == PX_DICT) {   // M420（缺陷 845）'
+PROBE_LINE = ('    { LXValue _pv = px_str("m262-probe"); (void)px_dict_get(_pv, "headers"); }'
+              '  /* M262 门自持探针（旧实现的探测式读） */\n')
+
+
+def inject_probe(neuter=False):
+    src = io.open(RT, encoding='utf-8').read()
+    if PROBE_LINE in src:
+        print("✗ 探针已在位（勿重复注入）")
+        return 1
+    n = src.count(PROBE_ANCHOR)
+    if n != 1:
+        print("✗ 注入锚点失配（%d 处，应为 1）" % n)
+        return 1
+    io.open(RT, 'w', encoding='utf-8').write(src.replace(PROBE_ANCHOR, PROBE_LINE + PROBE_ANCHOR))
+    chk = io.open(RT, encoding='utf-8').read()
+    if chk.count(PROBE_LINE) != 1:
+        print("✗ 注入后自证失败")
+        return 1
+    print("✓ 已注入自持探针（px_dict_get(str,\"headers\")）")
+    return 0
 
 FN_SIG = 'static int route_match(const char* method, const char* path, LXValue* handler_out,'
 
@@ -180,6 +209,27 @@ def main():
             return 1
         io.open(sys.argv[2], 'w', encoding='utf-8').write(s2)
         print("✓ 已生成判据失明版守卫：%s" % sys.argv[2])
+        return 0
+
+    if cmd == 'inject-probe':
+        return inject_probe(neuter=False)
+
+    if cmd == 'inject-probe-neuter':
+        rc = inject_probe(neuter=True)
+        if rc != 0:
+            return rc
+        src = io.open(RT_C, encoding='utf-8').read()
+        a = 'static int px_ctr_livechk_on(void) {\n    static int cached = -1;'
+        if src.count(a) != 1:
+            print("✗ px_ctr_livechk_on 锚点失配（%d 处）" % src.count(a))
+            return 1
+        io.open(RT_C, 'w', encoding='utf-8').write(
+            src.replace(a, 'static int px_ctr_livechk_on(void) {\n    static int cached = 0;  /* 负控 C：诊断开关摘掉 */'))
+        chk = io.open(RT_C, encoding='utf-8').read()
+        if 'static int cached = -1;' in chk.split('px_ctr_livechk_on')[1][:200]:
+            print("✗ 摘开关自证失败")
+            return 1
+        print("✓ 已把 px_ctr_livechk_on() 钉成 0（负控 C：本判据必须转红）")
         return 0
 
     print("未知子命令：%s" % cmd)

@@ -25,7 +25,8 @@
 #   [1] 静态锚点 21 条（R* route_match · S* sse · C* 缺陷 465 · X* 判定器自证 2）
 #   [2] 守卫基线账：待收口 **0** + 有意保留 2
 #   [3] 行为 · 路由（默认档）：5 条路由逐字节正确 + CTR **必须为 0**（缺陷 465 默认静默）
-#   [4] 行为 · 诊断档：`PX_GC_LIVECHK=1` 同程序 ⇒ CTR **必须 > 0**（检测器没丢）
+#   [4] 行为 · 诊断档：**自持探针**（注入旧实现的探测式读）⇒ 默认档 CTR=0 / 诊断档 CTR>0；
+#       负控 C：摘掉诊断开关 ⇒ 诊断档必须回 0（证明本判据会红）。M420 补：原触发器随缺陷 845 被修掉
 #   [5] 负控 A：**忠实退回** route_match 旧实现（锁内构造 params）⇒ 守卫必判红并**指名**
 #   [6] 负控 B（判据自伤）：清空守卫两张表 ⇒ 负控 A 的红**必须消失**
 #   [7] 覆盖边界登记
@@ -98,16 +99,49 @@ else
 fi
 
 echo
-echo "[4/7] 行为 · 诊断档：PX_GC_LIVECHK=1 ⇒ CTR 必须 > 0（检测器没丢）"
-if [ -x "$BIN" ]; then
-  PX_GC_LIVECHK=1 timeout 90 "$BIN" >"$W/live.out" 2>&1; RC=$?
-  N=$(grep -c 'M257-CTR' "$W/live.out" || true)
-  if [ "$N" -gt 0 ]; then ok "诊断档 CTR 计数 = $N（探测式读仍被如实报告）"
-  else bad "诊断档 CTR=0 ⇒ 检测器被误删（rc=$RC）"; fi
-  grep -qxF 'route one: id=42' "$W/live.out" && ok "诊断档路由结果不变（诊断只加噪音、不改语义）" \
-    || bad "诊断档路由结果被改变"
+echo "[4/7] 行为 · 诊断档（**自持探针**）：默认档 CTR=0 / PX_GC_LIVECHK=1 ⇒ CTR>0（检测器没丢）"
+# M420 补（本轮修红）：本判据原先**借运行时的内部误报当触发器** —— M262 当时 px_route_respond
+#   会对「handler 返回非 dict」的 resp 无条件 px_dict_get(resp,"headers")，那条合法探测式读在
+#   诊断档刷 [M257-CTR]（5/5）。而 M420（缺陷 845）给两处 headers 提取加了 PX_DICT 类型守卫
+#   （int 返回值 ⇒ as.obj 是联合体垃圾 ⇒ 必崩）⇒ **触发器随缺陷一起被修掉** ⇒ 诊断档恒 0
+#   ⇒ 本判据变成「结构性假红」（M420 全量门 293 绿 / 本门唯一红，复跑仍红）。
+#   修法：触发器改由本门**自持** —— 注入一条与旧实现等价的探测式读（px_dict_get(str,"headers")），
+#   判据本身**不放宽**：默认档必须 0（静默），诊断档必须 >0（检测器在）。
+#   负控 C：把 px_ctr_livechk_on() 钉成 0（= 检测器被摘）⇒ 诊断档必须回到 0，证明本判据会红。
+build_smoke() { ( cd "$ROOT" && "$PX" build "$DIR/route_smoke.px" ) >"$W/build.$1.log" 2>&1; }
+if [ -x "$BIN" ] && python3 "$DIR/negctl2.py" inject-probe >"$W/probe.log" 2>&1; then
+  ok "$(tail -1 "$W/probe.log")"
+  if build_smoke p1 && [ -x "$BIN" ]; then
+    timeout 90 "$BIN" >"$W/pdef.out" 2>&1; RC=$?
+    N=$(grep -c 'M257-CTR' "$W/pdef.out" || true)
+    if [ "$RC" = 0 ] && [ "$N" = 0 ]; then ok "探针档 · 默认档静默（CTR=0）"
+    else bad "探针档 · 默认档仍在刷 CTR=$N（降噪失效，rc=$RC）"; fi
+    PX_GC_LIVECHK=1 timeout 90 "$BIN" >"$W/live.out" 2>&1; RC=$?
+    N=$(grep -c 'M257-CTR' "$W/live.out" || true)
+    if [ "$N" -gt 0 ]; then ok "诊断档 CTR 计数 = $N（探测式读仍被如实报告）"
+    else bad "诊断档 CTR=0 ⇒ 检测器被误删（rc=$RC）"; fi
+    grep -qxF 'route one: id=42' "$W/live.out" && ok "诊断档路由结果不变（诊断只加噪音、不改语义）" \
+      || bad "诊断档路由结果被改变"
+    # 负控 C：摘掉诊断开关 ⇒ 诊断档必须回 0（= 本判据确实会红）
+    restore_all                       # 负控 C 从**干净源**起注入（内含探针，别叠两次）
+    if python3 "$DIR/negctl2.py" inject-probe-neuter >"$W/ncC.log" 2>&1 && build_smoke p2 && [ -x "$BIN" ]; then
+      PX_GC_LIVECHK=1 timeout 90 "$BIN" >"$W/ncC.out" 2>&1; RC=$?
+      N=$(grep -c 'M257-CTR' "$W/ncC.out" || true)
+      if [ "$N" = 0 ]; then ok "负控 C：摘掉开关后诊断档 CTR=0 ⇒ 本判据能红（不是恒绿）"
+      else bad "负控 C 失败：摘掉开关后仍有 CTR=$N（判据来路不明）"; fi
+    else
+      bad "负控 C 植入/编译失败：$(tail -2 "$W/ncC.log")"
+    fi
+  else
+    bad "探针档编译失败：$(tail -5 "$W/build.p1.log")"
+  fi
+  restore_all                       # 源逐字节还原（trap 之外先还原，后续负控 A 要用干净源）
+  if cmp -s "$W/bak/runtime_route.c" runtime/runtime_route.c \
+     && cmp -s "$W/bak/runtime.c" runtime/runtime.c; then ok "探针注入后源逐字节还原"
+  else bad "探针注入后还原不完整"; fi
+  build_smoke clean >/dev/null 2>&1      # 复位二进制（不把探针版留给后续）
 else
-  bad "无二进制可跑诊断档"
+  bad "无二进制可跑诊断档（或探针注入失败：$(tail -1 "$W/probe.log" 2>/dev/null)）"
 fi
 
 if [ "$NEG_SKIP" = 0 ]; then
