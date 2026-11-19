@@ -20,6 +20,8 @@
 # ============================================================
 set -uo pipefail
 
+. "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败" >&2; exit 2; }
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 RT=$(cd "$HERE/../.." && pwd)
 RC="$RT/runtime/runtime.c"
