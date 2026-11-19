@@ -6,45 +6,9 @@
 # 刷新：不用手跑 —— packaging/chain/release_postupgrade.sh 判绿后自动调 selfhost/refresh_gate_baseline.sh。
 #
 # 本次输入：
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet-lane1.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet-lane2.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet-lane3.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/quiet.times.tsv（16 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard1.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard2.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard3.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard4.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard5.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard6.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard7.times.tsv（291 行）
-#   - chain-20261118-231930 = /data/gatevm/shard-20261118-231930/shard8.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet-lane1.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet-lane2.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet-lane3.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/quiet.times.tsv（16 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard1.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard2.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard3.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard4.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard5.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard6.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard7.times.tsv（291 行）
-#   - chain-20261119-011400 = /data/gatevm/shard-20261119-011400/shard8.times.tsv（291 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/quiet-lane1.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/quiet-lane2.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/quiet-lane3.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/quiet.times.tsv（16 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard1.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard2.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard3.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard4.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard5.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard6.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard7.times.tsv（292 行）
-#   - chain-20261119-034522 = /data/gatevm/shard-20261119-034522/shard8.times.tsv（292 行）
-#   - preflight-20261119-031235 = /data/gatevm/preflight-20261119-031235.times.tsv（292 行）
-#   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-19 05:41:22 +0800
+#   - m420-only-20261119-113603 = /tmp/m116_gates.times.tsv（294 行）
+#   - retain（只补缺）= /tmp/base_old.tsv
+# 生成时间：2026-11-19 11:36:03 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261119-011400
@@ -294,6 +258,8 @@ m414_notify_waiting	4	OK	chain-20261119-011400
 m415_cleanenv	35	OK	chain-20261118-231930
 m418_alloc_fail_budget	8	OK	chain-20261119-011400
 m419_keyword_sync	3	OK	preflight-20261119-031235
+m420_memsan_cron	6	OK	m420-only-20261119-113603
+m420_route_intresp	3	OK	m420-only-20261119-113603
 m63_langfix	5	OK	chain-20261119-034522
 m64_fmt	1	OK	chain-20261119-011400
 m64_lint	0	OK	chain-20261118-231930
