@@ -1,4 +1,48 @@
-## M421 补1：CI 步在 `bash -e` 下吞掉 rc —— 环境 SKIP 与失败现场双双失明（缺陷 847）
+## M421 补2：链跑期间的提交把绿戳作废 —— 295 门全绿、105 分钟白跑（缺陷 848）
+
+> **一句话**：M421 链 16:41:21 起于 `6cde0c7`，跑完 295 门判绿于 18:26:02；
+> 这期间（17:53）又落了提交 `1b30497`（补1），`publish_on_green` 的「head 变了不发」
+> 自锁当场把绿戳作废 —— **自锁是对的，链条是错的**：门跑的是起链那一刻的树，
+> 树在跑的过程中还能变，判绿就不再指向 HEAD。
+
+### 证据（2026-11-19 · 本机实测）
+
+```
+链日志 /data/gatevm/m421-chain-20261119-164121.log
+  16:41:21  == M421 chain start head=6cde0c7
+  18:26:02  == stamp: CHAIN-VERDICT=GREEN rc=0 green=295 listed=295 expect=295 head=6cde0c7
+  18:26:02  == 交 publish_on_green            ⇒ P1-PENDING m421-head-mismatch · rc=2
+publish 日志 /data/autodrive/m421-publish.log
+  18:26:02  ABORT head-mismatch stamp=6cde0c7 now=1b30497
+reflog
+  17:53:22  1b30497 M421 补1（缺陷 847）        ← 链跑到第 72 分钟时落进同分支
+  18:27:26  c75e2e1 chore(基线)：回灌本链耗时   ← 判绿后 84 秒，再来一个 ⇒ 即便没有补1 也照样失配
+```
+
+### 修
+
+- `packaging/chain/run_release_chain.sh`：起链第一件事落 `<git-dir>/chain-freeze`
+  （milestone / head / started），`trap ... EXIT INT TERM` ⇒ 绿、红、被杀三条路径都摘掉；
+  摘不掉也不会静默放行（见下）。
+- `.githooks/pre-commit`：见标即拦提交，把「链在跑、绿戳会被作废、代价 105 分钟」写在脸上；
+  留两条出路 —— ① 等链结束（判绿自动打 tag）；② `PX_UNFREEZE=1` 放行并留痕
+  `.git/px-freeze-skip.log`；标记 >6h 额外提示「先查链是否真在跑，再删残留」。
+- `selfhost/check_emitc_hook.sh`：自证从 10 条加到 12 条（A9 标记在 ⇒ rc≠0；A10 放行 ⇒ rc=0 且留痕）。
+
+### 负控（判据有牙，不是「写了就算」）
+
+```
+bash selfhost/check_emitc_hook.sh   ⇒ HOOK-VERIFY-OK · 通过 12 · 失败 0
+真仓（marker 在）：staged=.freeze-probe.txt ⇒ ⛔ 提交被拦下（rc=1），HEAD 未前进
+真仓（marker 摘）：同一文件 ⇒ rc=0，提交成立
+```
+
+### 遗留
+
+- 耗时基线回灌（缺陷 763）若在**判绿之后**提交，同样会作废本轮绿戳。本轮已把本链的
+  回灌（c75e2e1）提前吃掉，起链后不再提交；长期口径：回灌必须在起链**前**完成。
+
+
 
 > **一句话**：远端 CI 的 m420 步以 rc=3 中断，而日志里**一行门输出都没有**；
 > 步里明明写着 `if [ $rc -eq 3 ]; then … SKIP; exit 0; fi`。门没坏 —— 是 workflow 的

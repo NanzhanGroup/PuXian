@@ -44,6 +44,21 @@ TS="$(date +%Y%m%d-%H%M%S)"
 LOG="${PXC_LOG_DIR:-/data/gatevm}/m${MS}-chain-$TS.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
+# ── 冻树（M421 补2 · 缺陷 848）──────────────────────────────────────────────
+#   门跑的是**起链那一刻的树**。2026-11-19 实测：M421 链 16:41 起于 6cde0c7，
+#   17:53 又落了提交 1b30497，18:26 判绿时 publish_on_green 的「head 变了不发」
+#   自锁把绿戳作废 ⇒ 295 门全绿白跑 105 分钟，tag 没打。
+#   ⇒ 起链即落 <git-dir>/chain-freeze（.githooks/pre-commit 见标即拦提交），
+#     本脚本退出（任何路径：绿/红/被杀）即摘，别让它粘住后续工作。
+FREEZE="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null)/chain-freeze"
+if [ -n "${FREEZE%/chain-freeze}" ] && [ -d "$(dirname "$FREEZE")" ]; then
+    printf 'milestone=M%s\nhead=%s\nstarted=%s\n守护=run_release_chain.sh（EXIT trap 摘除）\n' \
+        "$MS" "$(git -C "$REPO" rev-parse --short=7 HEAD 2>/dev/null)" "$(date -Is)" \
+        > "$FREEZE" 2>/dev/null || true
+    trap 'rm -f "$FREEZE"' EXIT INT TERM
+    echo "== freeze $FREEZE head=$(git -C "$REPO" rev-parse --short=7 HEAD 2>/dev/null)" >> "$LOG"
+fi
+
 # 自驱会话的 mutate-shim 会让门里的 git 被写闸拦成假红（m392_chain.sh 已踩）
 case "$PATH" in *mutate-shim*) echo "❌ PATH 含 mutate-shim ⇒ 拒绝起链" >&2; exit 9 ;; esac
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C

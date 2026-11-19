@@ -34,6 +34,44 @@ git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && exit 0
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)
 [ -z "$STAGED" ] && exit 0
 
+# ── 冻树闸（M421 补2 · 缺陷 848）────────────────────────────────────────────
+#   事故（2026-11-19 实测）：M421 链 16:41 起于 6cde0c7，17:53 又落了提交
+#   1b30497（补1），18:26 判绿时 publish_on_green 的「head 变了不发」自锁把
+#   它拦下 ⇒ 295 门全绿、105 分钟白跑，tag 没打。
+#   门跑的是**起链那一刻的树**；跑的过程中再提交，绿戳就不再覆盖 HEAD。
+#   ⇒ run_release_chain.sh 起链时落 <git-dir>/chain-freeze，退出即摘；
+#     这期间提交一律拦（确有急件用 PX_UNFREEZE=1，留痕后放行）。
+FREEZE="$(git rev-parse --git-dir 2>/dev/null)/chain-freeze"
+if [ -f "$FREEZE" ]; then
+    if [ "${PX_UNFREEZE:-0}" = "1" ]; then
+        printf '%s allow staged=[%s] freeze=[%s]\n' "$(date -Is)" \
+            "$(printf '%s' "$STAGED" | tr '\n' ' ')" "$(head -1 "$FREEZE" 2>/dev/null)" \
+            >> .git/px-freeze-skip.log
+        echo "⚠ 链在跑，已按 PX_UNFREEZE=1 放行提交（留痕 .git/px-freeze-skip.log）" >&2
+    else
+        AGE_H=$(( ( $(date +%s) - $(stat -c %Y "$FREEZE" 2>/dev/null || date +%s) ) / 3600 ))
+        STALE_HINT=""
+        [ "$AGE_H" -ge 6 ] && STALE_HINT="
+   ⚠ 这个标记已 ${AGE_H} 小时 —— 链通常 2h 内结束。先确认没有链在跑
+     （systemctl is-active m<MS>-chain），确是残留再 rm 掉：$FREEZE"
+        cat >&2 <<EOF
+⛔ 提交被拦下：门链正在跑，工作树被冻结（缺陷 848）
+
+   $(sed -n '1,3p' "$FREEZE" 2>/dev/null | tr '\n' ' ')
+
+   门跑的是起链那一刻的树；此刻提交 ⇒ 判绿后 publish 的 head 比对必不匹配
+   ⇒ 一整轮全量门白跑（M421 实测代价 105 分钟）。${STALE_HINT}
+
+   两条出路（选一条，别猜）：
+     ① 等链结束再提交（判绿会自动打 tag，无需你插手）
+     ② 确有急件：PX_UNFREEZE=1 git commit …（留痕 .git/px-freeze-skip.log，
+        接受「本轮绿戳作废、需重跑门」的代价）
+
+EOF
+        exit 1
+    fi
+fi
+
 # ── 冻结集 glob：从门脚本里提取（单一事实源）；提不到才退回内置默认 ──
 GATE=selfhost/emitc_freeze.sh
 PATS=""

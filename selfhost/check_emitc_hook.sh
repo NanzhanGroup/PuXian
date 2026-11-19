@@ -102,6 +102,25 @@ else
     bad "A7 install_hooks.sh 行为不符（$rc1/$rc2/$rc3 · hooksPath='$got'）"
 fi
 
+# A9 冻树闸（缺陷 848）：链在跑 ⇒ 连无关文件也拦
+git reset -q; echo 'b' > README.md; git add README.md
+printf 'milestone=M421\nhead=0123456\nstarted=2026-11-19T18:40:00+08:00\n' > .git/chain-freeze
+rc=$( ( cd "$W" && bash "$HOOK" >"$T/a9.txt" 2>&1 ); echo $? )
+if [ "$rc" -ne 0 ] && grep -q '工作树被冻结' "$T/a9.txt"; then
+    ok "A9 冻树标记在 ⇒ 无关文件也拦（rc=$rc）"
+else
+    bad "A9 冻树标记在却未拦（rc=$rc）"; sed 's/^/     /' "$T/a9.txt" | head -5
+fi
+
+# A10 冻树显式放行：必须放行 + 必须留痕
+rc=$( ( cd "$W" && PX_UNFREEZE=1 bash "$HOOK" >"$T/a10.txt" 2>&1 ); echo $? )
+if [ "$rc" -eq 0 ] && [ -s .git/px-freeze-skip.log ] && grep -q 'staged=' .git/px-freeze-skip.log; then
+    ok "A10 PX_UNFREEZE=1 ⇒ rc=0 且留痕（$(wc -l < .git/px-freeze-skip.log) 行）"
+else
+    bad "A10 冻树放行出口不正常（rc=$rc · 留痕=$( [ -s .git/px-freeze-skip.log ] && echo 有 || echo 无 )）"
+fi
+rm -f .git/chain-freeze; git reset -q
+
 echo "── 结果：通过 $PASS · 失败 $FAIL"
 [ "$FAIL" -eq 0 ] && { echo "HOOK-VERIFY-OK"; exit 0; }
 echo "HOOK-VERIFY-FAIL"; exit 1
