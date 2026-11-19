@@ -1,4 +1,4 @@
-## M422：示例即文档 —— 10 个顶层示例编译不过，而没有任何门会红（缺陷 856 / 857）
+## M422：示例即文档 —— 10 个顶层示例编译不过，而没有任何门会红（缺陷 856 / 857 / 858）
 
 > **一句话**：M421 的账说「143 个示例连断言都没有」；M422 把第一层捅开：**光编译就过不去的顶层示例有 10 个**，
 > 其中 `m26_ushr` 的注释还与实现相反（M217 已把负数移位计数定为 R1003，示例仍写「按 mod 64 ⇒ 1」）。
@@ -68,6 +68,48 @@
 ```
 
 版本 **0.2.422** · 门 **297**（295 + m422_examples_compile + ex_m26_ushr）
+
+### M422 补3（缺陷 858 · 2026-11-20 · 新门在 CI 上第一次跑就红）
+
+```
+现象（CI run 44571916900 · sha 16a9594 · ubuntu-24.04）
+  step 19「示例即文档 · 顶层示例全量编译体检」红：
+    账面：顶层示例=120 编译通过=117 编译失败=3
+    m38_h2_multi / m49_qpack_dyn_verify / m50_h3_mux_client — collect2: error: ld returned 1 exit status
+  本机同门 120/120 绿 ⇒ 典型「本地绿、CI 红」
+
+根因（同族缺陷 311/312 的**未收口面**）
+  tools/px 的链接命令是 `$cc -static -O2 -pthread …`，含 -static ⇒ check_link_flags 判合规。
+  但本仓预置三方静态库**非 PIC**（runtime/mbedtls/lib/libmbedtls.a 的 ssl_ciphersuites.o
+  带 R_X86_64_32 against `.bss`）；Red Hat 系 gcc 默认非 PIE ⇒ 本机恒绿；
+  Ubuntu gcc（--enable-default-pie）**把 -static 仍按 PIE 口径链接** ⇒ ld 拒绝非 PIC 重定位。
+  M219 只修了 selfhost/ 下的三处链接，**tools/px（用户面 px build）没覆盖**（它的 -static 让守卫判绿）。
+
+复现（本机可判，不需要 CI）
+  把 px 生成的链接命令逐字取出，`-static` 换成 `-static-pie`（= 默认 PIE 宿主上 -static 的实际口径）：
+    ⇒ relocation R_X86_64_32 against `.rodata'/`.bss' can not be used when making a PIE object（rc=2）
+  同一条命令加 -no-pie ⇒ rc=0。⇒ 失败只可能来自 PIE 模式。
+
+修法
+  tools/px：pie_flag 默认 ` -no-pie`（mingw 档置空 —— PE 没有 PIE 选项），与 -static 同行。
+    RHEL 上产物口径不变（本来就非 PIE）；Ubuntu 上从「链不上」变「链得上」。
+  同步：check_link_flags 的 $pie_flag 豁免理由改写（如实说明为什么必须显式关 PIE）。
+
+验证（本地）
+  check_examples_compile 120/120 rc=0 · check_link_flags 自证 5/0 + 真判 违例 0 ·
+  m219_link_flags 23/0 rc=0 · m420_memsan_cron 5/0 rc=0（ASan 档 WRAP 去掉 -static 后同样受益）
+  遗留：M219 的判据口径仍是「-static 即合规」⇒ 它**看不见**这一类；口径收口另立一轮（见交接单）。
+  CI 侧验证必须 push 后由下一轮 CI 给出（本轮只有本地证据）。
+
+台账（packaging/ci_known_red.tsv）同轮整理，逐条如实：
+  + 示例即文档门：登记为「已修 · 待 push 后 CI 验证」（到期 2026-11-22）
+  ~ m420_memsan_cron：补上第二层真因（缺陷 858），到期 2026-11-22
+  ~ m267_perf / m403_orphan_batch：定性命名为**同族 CI 计时口径**（不是产品红）——
+      m267：17 负载 15 绿，只有 mixed 两条比参考机快 10× 触发 0.1x 下限判据；
+      m403：清单里 m126_signal_isolate 的「并发 wall < 2×单次」在共享 runner 上不成立
+            （本机复跑 M126 pass=43 fail=0）。修法是并发判据按核数自适应/CI 档 SKIP，单独一轮 ⇒ 延期到 2026-11-27
+  - m256_eintr / m389_gh_auth / m410_criteria_scan：本轮 CI 已绿 ⇒ 移出台账（不再挂着当挡箭牌）
+```
 
 ## M421 补3：m284 门的锚点被补2 的新提示顶掉 —— 295 门跑完 96 分钟判 NO-GO（缺陷 849）
 

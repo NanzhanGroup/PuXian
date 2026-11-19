@@ -46,7 +46,7 @@ SCAN_GLOBS=(
 EXEMPT_VARS=( '$st' '$FLAGS' '$pie_flag' '$fl' )
 EXEMPT_VARS_WHY=( 'rebake_bin.sh：static|dynamic 两档参数化（M114-S2 有意）'
                   'linkit.sh：MODE 参数化，默认 static'
-                  'tools/px：riscv64 交叉档显式 -no-pie（与 -static 同行）'
+                  'tools/px：$pie_flag 默认 -no-pie（M422 补3 缺陷 858：默认 PIE 宿主上预置非 PIC 库必须显式关 PIE）；mingw 档置空（PE 无 PIE 选项）'
                   'M219 门：探针的 flag 段由 extract_flags **从被测脚本源码抽出**（抽出的串就是被测对象；$fl2 是故意去掉 -static 的负例，必须失败）' )
 
 # ---- 豁免：行级（**必须窄**，逐条带理由；失效即判红）----

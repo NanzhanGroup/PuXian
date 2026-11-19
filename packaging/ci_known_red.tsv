@@ -2,9 +2,7 @@
 # 规则：CI 红门必须逐条登记；未登记 ⇒ GAP(rc=1)；登记过期 ⇒ GAP(rc=1)。
 # 到期前必须：修好，或重新定性并延期（延期要在 CHANGELOG 写清为什么）。
 #
-m256_eintr	CI-only 红：[5] 两档逐字节一致不一致（本机 289 门全绿）；诊断已增强（缺陷 828），待下一轮 CI 拿到 diff 后定性	2026-11-20
-m403_orphan_batch	CI-only 红：孤儿门里 M126 verify pass=40 fail=2；明细已增强（缺陷 830），待下一轮 CI 拿到失败行后定性	2026-11-20
-m389_gh_auth	M415 已修（缺陷 829：负控两条失败分支都打）；本轮 CI 结果来自旧 HEAD b2ac180 ⇒ 若下一轮仍红说明修没到位	2026-11-19
-m410_criteria_scan	M415 已修（缺陷 826：宿主面缺席时 host 例外转 SKIP）；本轮 CI 结果来自旧 HEAD b2ac180 ⇒ 若下一轮仍红说明修没到位	2026-11-19
-m267_perf	CI-only 红：M417 补1 已修（下限判据分母改用「各档 min」=最快参考机 · 缺陷 837）；本轮 CI 结果来自旧 HEAD d9cca0b ⇒ 若下一轮仍红说明修没到位	2026-11-21
-m420_memsan_cron	CI 步吞 rc（workflow `bash -e` 下 `cmd; rc=$?` 到不了分支 · 缺陷 847）已在本地修 ci.yml+verify.sh（构建失败改 rc=4），并与本机冷缓存对拍（rc=0·5/5·69s）⇒ 待一次 push 后由下一轮 CI 验证；到期前仍红则说明还有第二层原因	2026-11-21
+m403_orphan_batch	CI-only 红：清单内 m126_signal_isolate 4 条 FAIL（「协程 px_exec 结果 3/3 对拍」「并发 wall < 2×单次」）——共享 runner 上并发定量判据失效；本机 M126 门复跑 pass=43 fail=0 全绿 ⇒ 同 M267 族（CI 计时/并发口径）。修法：并发判据按核数自适应或 CI 档改 SKIP，单独一轮	2026-11-27
+m267_perf	CI-only 红（本轮 16a9594 实测）：17 负载里 15 条绿，只有 mixed_vm 0.078x / mixed_c 0.082x 触发下限判据（0.1x「负载疑似未真执行」）——同一负载在 GitHub runner 上比最快参考机快 10×。修法：mixed 负载参考时间按 runner 重建，或把下限判据改成「同机内相对」，单独一轮	2026-11-27
+m420_memsan_cron	两层真因：① 缺陷 847 步吞 rc（已修 ci.yml+verify.sh）② 缺陷 858 —— ASan 档 WRAP 去掉 -static 后链非 PIC 的 mbedtls.a，默认 PIE 宿主上 ld 拒（CI rc=4 构建失败）。②已随 M422 补3（tools/px 显式 -no-pie）修复，本机 5/0 rc=0；待 push 后由下一轮 CI 验证	2026-11-22
+示例即文档 · 顶层示例全量编译体检（M422 · 缺陷 856）	M422 补3 已修（缺陷 858：tools/px 的 -static 在默认 PIE 宿主上仍按 PIE 链接 ⇒ 预置非 PIC 的 mbedtls.a 被 ld 拒；改显式 -no-pie）；本机已复现（-static-pie ⇒ 同一 relocation 错 / 加 -no-pie ⇒ rc=0）且 120/120 绿，待 push 后由下一轮 CI 验证	2026-11-22

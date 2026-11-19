@@ -856,8 +856,15 @@ cmd_build() {
     done
     # M67-S7：riscv64 musl 默认 static-pie 报 "read-only segment has dynamic
     # relocations" → riscv64 交叉加 -no-pie 传统静态
-    local pie_flag=""
-    case "$cc" in *riscv64*) pie_flag=" -no-pie" ;; esac
+    # M422 补3（缺陷 858 · 2026-11-20 · CI run 44571916900 实测）：**默认 PIE 宿主上 -static 不够**。
+    #   本仓预置三方静态库非 PIC（`runtime/mbedtls/lib/libmbedtls.a` 的 ssl_ciphersuites.o
+    #   带 `R_X86_64_32 against .bss`）；Red Hat 系 gcc 默认非 PIE ⇒ 本机恒绿（120/120）；
+    #   Ubuntu gcc（CI，--enable-default-pie）把 `-static` 仍按 PIE 口径链接 ⇒
+    #   `relocation ... can not be used when making a PIE object` ⇒ 3 个示例链 mbedtls 时红。
+    #   本机复现：同一条链接命令加 `-static-pie`（等价 CI 的实际口径）⇒ 逐字同一个错；
+    #   加 `-no-pie` ⇒ rc=0。⇒ 口径：**显式声明非 PIE**（mingw/Win 无 PIE 选项，除外）。
+    local pie_flag=" -no-pie"
+    case "$cc" in *mingw*) pie_flag="" ;; esac
     # ---- M168：静态 libc 预检（**响亮报因**，不让用户对着 gcc 的 "cannot find -lc" 发呆）----
     #   `px build` 一律以 -static 链接产物（口径见文件头）⇒ 本机必须有静态 libc：
     #     RHEL / openEuler → glibc-static · Debian / Ubuntu → libc6-dev
