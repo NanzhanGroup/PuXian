@@ -2331,3 +2331,26 @@ run m418_alloc_fail_budget bash examples/m418_alloc_fail_budget/verify.sh
 #     · [4] 环境问题 rc=3 不判绿
 gate_timeout m419_keyword_sync 120
 run m419_keyword_sync bash examples/m419_keyword_sync/verify.sh
+
+# ── m420_route_intresp：路由 handler 返回 int 状态码时不得崩（缺陷 845）──────────
+#   病史（2026-11-19 M420 实测 HEAD ad9ac17）：examples/m28_route.px 的
+#     `def health(req, params): return 200` 是**产品允许**语义（route_normalize 有 PX_INT 分支），
+#     但 px_route_respond / px_route_mw_short_respond 归一化后**无条件** px_dict_get(resp,"headers")
+#     ⇒ 非 dict 值的 as.obj 是联合体垃圾（实测 0）⇒ px_dict_get 读 o->type ⇒ SEGV on 0xc8。
+#     常规静态构建 3/3 必崩（rc=139），与 ASan 无关；该示例此前**零门覆盖**，所以 292 门全绿。
+#   本门判据：[1] 两处 headers 提取必须落在 PX_DICT 保护内 · [2] 负控：复原成无条件调用必红
+#     · [3] 真构建 + 真跑 3 次 ⇒ rc=0 · [4] 前提自证：跑到 /health(int) 之后的尾部
+gate_timeout m420_route_intresp 300
+run m420_route_intresp bash examples/m420_route_intresp/verify.sh
+
+# ── m420_memsan_cron：cron 的 job 分配必须 xmalloc/xfree 配对（缺陷 844 · ASan）──────
+#   病史（2026-11-19 M420 实测）：bi_cron 用 malloc 分配 CronJob/args，cron_thread 却 xfree；
+#     xfree 只认 xmalloc 块 ⇒ slab_find 未命中 ⇒ 读 *(size_t*)(p-8)（越界 8 字节）
+#     ⇒ munmap((char*)p-8, total)（对非 mmap 地址是 UB）。
+#     ASan: heap-buffer-overflow READ of size 8 at runtime.c:1315 in xfree ← cron_thread。
+#     常规构建静默（读到的恰好是 chunk header）⇒ 292 门发现不了；spawn(17197)/timer(17378) 均正确。
+#   本门判据：[1] 分配/释放器静态配对 · [2] 负控：复原 malloc/free 必红
+#     · [3] 工具正控：C 夹具越界必被 ASan 抓 · [4] ASan 构建 + 真跑 m28_cron 零报告
+#     · [5] 前提自证：产物含 ASan 符号；环境缺 gcc/libasan ⇒ rc=3
+gate_timeout m420_memsan_cron 600
+run m420_memsan_cron bash examples/m420_memsan_cron/verify.sh

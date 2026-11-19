@@ -364,7 +364,9 @@ void px_route_respond(PxHttpOut* out, LXValue req, const char* method, int head_
     // M109-S1/S3：route() handler 的 headers 与 vhost 走**同一套判定**
     //   （拒绝名单 + CRLF 防护 + 预算）。原实现只取 Content-Type，其余全丢 →
     //   301 连 Location 都发不出（qg-issue 36 的 route 同族缺陷）。
-    {
+    if (resp.type == PX_DICT) {   // M420（缺陷 845）：int 返回值是**产品语义**（route_normalize 已支持），
+        //   但这里无条件 px_dict_get(resp,...) ⇒ resp 非 dict 时 as.obj 是联合体垃圾/NULL ⇒ SEGV。
+        //   实测：m28_route 的 `return 200` handler 之后必崩（3/3，rc=139）。
         LXValue rh = px_dict_get(resp, "headers");
         if (rh.type == PX_DICT)
             rsp_off = px_hdr_append(rh, rsp_extra, rsp_off, (int)sizeof(rsp_extra), 1, NULL);
@@ -392,7 +394,7 @@ void px_route_mw_short_respond(PxHttpOut* out, LXValue req, const char* method, 
     char rsp_extra[PX_HDR_EXTRA_CAP];
     int rsp_off = snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
     if (rsp_off < 0 || rsp_off >= (int)sizeof(rsp_extra)) rsp_off = (int)sizeof(rsp_extra) - 1;
-    {
+    if (r.type == PX_DICT) {   // M420（缺陷 845）同族：middleware 短路返回值可以是 int（如 401）
         LXValue rh = px_dict_get(r, "headers");     // M109-S1/S3：与 vhost 同一套判定
         if (rh.type == PX_DICT)
             rsp_off = px_hdr_append(rh, rsp_extra, rsp_off, (int)sizeof(rsp_extra), 1, NULL);

@@ -2021,6 +2021,29 @@ jobs:
           bash examples/m419_keyword_sync/verify.sh > /tmp/v_m419.log 2>&1 || { echo "❌ m419_keyword_sync 门失败（保留字表已漂移）"; tail -40 /tmp/v_m419.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           echo "✅ m419_keyword_sync（三方对账 + 三扰动负控 + 环境问题不判绿）PASS"
 
+      - name: m420_route_intresp（路由 int 返回不得崩 · M420 · 缺陷 845）
+        # 病史：px_route_respond / mw_short_respond 归一化后无条件 px_dict_get(resp,"headers")
+        #   ⇒ handler 返回 int（示例 `return 200`）时 as.obj 是垃圾 ⇒ SEGV on 0xc8，
+        #   常规静态构建 3/3 必崩；而该示例从来没有门，292 门全绿。
+        # 齿：[1] 静态判据（两处必须落在 PX_DICT 保护内）· [2] 负控（复原为无条件 ⇒ 必红）
+        #   · [3] 真构建 + 真跑 3 次 rc=0 · [4] 前提自证（跑到 int 路由之后的尾部）
+        if: always()
+        run: |
+          bash examples/m420_route_intresp/verify.sh > /tmp/v_m420r.log 2>&1 || { echo "❌ m420_route_intresp 门失败（int 返回路由又崩了）"; tail -40 /tmp/v_m420r.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          echo "✅ m420_route_intresp（类型保护 + 负控 + 3/3 实跑）PASS"
+
+      - name: m420_memsan_cron（cron 分配器配对 · ASan · M420 · 缺陷 844）
+        # 病史：bi_cron 用 malloc、cron_thread 用 xfree ⇒ xfree 读 p-8（越界 8 字节）+ 非法 munmap；
+        #   常规构建静默（读到的恰是 chunk header）⇒ 全量门发现不了。
+        # 齿：[1] 分配器静态配对 · [2] 负控（复原 malloc/free 必红）· [3] 工具正控（C 夹具越界必被 ASan 抓）
+        #   · [4] ASan 构建 + 真跑 m28_cron 零报告 · [5] 前提自证（产物含 ASan 符号）；缺 gcc/libasan ⇒ rc=3
+        if: always()
+        run: |
+          bash examples/m420_memsan_cron/verify.sh > /tmp/v_m420m.log 2>&1; rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m420_memsan_cron SKIP（环境缺 gcc/libasan，rc=3）"; tail -20 /tmp/v_m420m.log | sed 's/^/  | /'; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m420_memsan_cron 门失败（cron 分配器错配回归）"; tail -40 /tmp/v_m420m.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m420_memsan_cron（静态配对 + 负控 + 工具正控 + ASan 零报告）PASS"
+
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
         # 39 扇「写好了但没有任何运行器跑它」的门，由本步逐条串行实跑（清单 selfhost/orphan_revived.txt）。
         # 判据：C1 每条必有 verify.sh · C2 rc=0 · C3 不许打印独立 SKIP · C4 清单⇄孤儿基线不相交

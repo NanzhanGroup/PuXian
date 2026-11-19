@@ -28946,14 +28946,23 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     //   docroot 回退续管道（store vroot + 重入 px_http_dispatch skip_pre=1：不重复
     //   CORS/限流/vhost，直接 route+静态/.px 完成）——vhost 回退与同步路径语义一致。
     if (px_pxpend_stage_of(fd) == 2) {   // M240（缺陷 399）：锁内重新解析
-        LXValue sreq, sresp;
+        LXValue sreq = px_null(), sresp = px_null();   // M420（缺陷 843）：必须初始化
         int sh = 0, sc = 1;
         char srid[64];
         int skind = 0;
         char svroot[1024];
         srid[0] = 0; svroot[0] = 0;
-        px_pxpend_take(fd, &sreq, &sresp, &sh, &sc, srid, sizeof(srid),
-                       &skind, svroot, sizeof(svroot));
+        // M420（缺陷 843）：stage_of 探针（锁内读）与 take（另一次加锁）之间表项可能已
+        //   被并发收尾取走（keep-alive 复用 / 关闭路径）⇒ take 返回 0 且**不改** sreq/sresp。
+        //   旧实现忽略返回值 ⇒ sreq/sresp 保持未初始化栈值，一旦被后续 px_dict_get 使用即 UB。
+        //   （本里程碑实测到的必崩点另有其因 —— 缺陷 845 的 resp 类型；本条是同一分支上的
+        //   第二处未初始化读，未单独构造复现，按「防御性修复 + 注释如实」处理。）
+        if (!px_pxpend_take(fd, &sreq, &sresp, &sh, &sc, srid, sizeof(srid),
+                            &skind, svroot, sizeof(svroot))) {
+            px_pxpend_close(fd);
+            g_cur_conn = NULL;
+            return px_null();
+        }
         const char* sm = "GET";
         const char* spath = "/";
         const char* squery = "";
@@ -31127,11 +31136,14 @@ LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
         px_error("cron: 并发线程数超出上限 %d", g_thread_max);
     }
 
-    CronJob* job = (CronJob*)malloc(sizeof(CronJob));
+    // M420（缺陷 844）：与 spawn_thread/timer_thread 对齐 —— job 必须 xmalloc/xfree 配对；
+    //   旧实现 malloc + cron_thread 里 xfree ⇒ xfree 走 slab_find 未命中分支读 p-8
+    //   （ASan: heap-buffer-overflow READ of size 8），随后 munmap 一个非 mmap 地址。
+    CronJob* job = (CronJob*)xmalloc(sizeof(CronJob));
     memcpy(job, &g_crons[slot], sizeof(CronJob));
     job->fn = args[1];
     job->nargs = nargs - 2;
-    job->args = (LXValue*)malloc(sizeof(LXValue) * (job->nargs > 0 ? job->nargs : 1));
+    job->args = (LXValue*)xmalloc(sizeof(LXValue) * (job->nargs > 0 ? job->nargs : 1));
     if (job->nargs > 0) memcpy(job->args, args + 2, sizeof(LXValue) * (size_t)job->nargs);
     pthread_t t;
     if (pthread_create(&t, NULL, cron_thread, job) != 0) {
@@ -31140,8 +31152,8 @@ LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
         if (gslot >= 0) g_threads[gslot].in_use = 0;
         pthread_mutex_unlock(&g_gc_mu);
         cron_release(id);
-        free(job->args);
-        free(job);
+        xfree(job->args);
+        xfree(job);
         px_error("cron: 创建线程失败");
     }
     if (gslot >= 0) {

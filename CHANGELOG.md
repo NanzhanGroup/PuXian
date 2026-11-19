@@ -1,4 +1,77 @@
-## M419：文档与实现相反，没有任何门会红（缺陷 841 / 842 · 保留字表单一事实源）
+## M420：产品方向 —— 路由 int 返回必崩 + cron 分配器错配（缺陷 843 / 844 / 845）
+
+> **一句话**：`examples/m28_route.px` 的 `return 200` 是**产品允许**的路由语义，
+> 但 `px_route_respond` / `px_route_mw_short_respond` 归一化后无条件 `px_dict_get(resp,"headers")`
+> ⇒ 非 dict 值的 `as.obj` 是联合体垃圾 ⇒ **常规静态构建 3/3 必崩（rc=139）**；
+> 同轮 ASan 首次覆盖全 runtime，抓到 cron 的 `malloc` / `xfree` 错配（越界读 8 字节 + 非法 munmap）。
+> 两条都藏在「292 门全绿」底下 —— 因为**这两处从来没有门，运行时也从没被内存检查器看过**。
+
+### 证据（2026-11-19 11:0x–11:5x 实测 · HEAD ad9ac17）
+
+```
+缺陷 845（P0 · 必崩）
+  examples/build/m28_route（常规 -static 构建）连跑 3 次：rc=139 / rc=139 / rc=139
+  崩溃现场（ASan 插桩版）：SEGV on 0x0000000000c8 · READ
+    #0 px_dict_get            runtime.c:6969
+    #1 px_route_respond       runtime_route.c:368   ← px_dict_get(resp,"headers")
+    #2 px_conn_worker         runtime.c:28997
+  触发条件 = handler 返回 int 状态码（示例 /health 就写 `return 200`）；
+  route_normalize 已支持 PX_INT（runtime_route.c:295）⇒ int 返回是被支持的产品语义，
+  崩的是「提取 headers 那行漏了类型判断」。同一处 pthread 也在 mw_short_respond（:396，401 短路）。
+  覆盖缺口：examples/ 120 个示例里，m28_route 既无 verify.sh 也无门注册 ⇒ 292 门天然看不见。
+
+缺陷 844（ASan · 常规静默）
+  bi_cron: malloc(sizeof(CronJob)) / malloc(args) → cron_thread 退出时 xfree(...)
+  ASan: heap-buffer-overflow READ of size 8 at runtime.c:1315 in xfree ← cron_thread:31060
+        "8 bytes to the left of 16-byte region"（xfree 读 p-8 的 size 头）
+  随后 munmap((char*)p-8, total) 对非 mmap 地址是 UB；常规构建读到的恰是 chunk header ⇒ 静默。
+  同族对照：spawn_thread(17197) / timer_thread(17378) 都是 xmalloc/xfree —— cron 是唯一例外（手抄漏改）。
+
+缺陷 843（防御 · 未单独复现）
+  px_conn_worker 段2：`LXValue sreq, sresp;` 未初始化 + `px_pxpend_take(...)` 返回值被忽略
+  （stage_of 探针与 take 两次加锁之间表项可能已被并发收尾取走）⇒ 一旦走到就是读未初始化栈值。
+  与 845 同在段2 分支，但**不是本次必崩的成因**（845 已实测定位）—— 按防御性修复处理，注释如实。
+
+装置面附带（本轮实测）
+  · runtime.c/runtime_route.c/coro.c 共 1.7 MB C，**零 ASan/UBSan/LSan 覆盖**（全仓无 sanitize 目标）
+  · `timeout N cmd` 全仓 595 处、带 `-k` 仅 35 处 ⇒ 目标不响应 SIGTERM 时超时判据无限等待
+    （现场：两个 `timeout 100/120 git fetch … gh-pages` 已跑 15 h52 m，各吃 ~2 核，无人发现）
+  · examples 里 4 个示例早已编译不过（m25_closure_gc / m25_tls_resume / m26_ushr / m29_webprod，E3002 不可变赋值）
+```
+
+### 修法
+
+```
+A. runtime_route.c：两处 headers 提取加 `resp.type == PX_DICT` / `r.type == PX_DICT` 保护（缺陷 845）
+B. runtime.c bi_cron：job / args 改 xmalloc，pthread_create 失败路径 free → xfree（缺陷 844，与 spawn/timer 对齐）
+C. runtime.c px_conn_worker：sreq/sresp 初始化为 px_null() + 检查 px_pxpend_take 返回值（缺陷 843，防御）
+D. 新门 m420_route_intresp（292 → 293 门）：
+   [1] 静态判据：两处 headers 提取必须在 PX_DICT 保护内
+   [2] 负控：复原成无条件调用的片段 ⇒ 检查器必红（前提自证）
+   [3] 动态正控：真构建 + 真跑 3 次 ⇒ rc=0
+   [4] 前提自证：跑到 /health(int 200) 之后的尾部（含 401 中间件短路、404）
+   实测 4/4 绿
+E. 新门 m420_memsan_cron（293 → 294 门）：
+   [1] 静态判据：cron 的 job/args 是 xmalloc，失败路径 xfree
+   [2] 负控：复原 malloc/free ⇒ 判红
+   [3] 工具正控：C 夹具故意越界 ⇒ ASan 必抓（证明 sanitizer 真在工作）
+   [4] ASan 构建 + 真跑 m28_cron ⇒ 零 AddressSanitizer 报告
+   [5] 前提自证：产物含 ASan 符号；缺 gcc/libasan ⇒ rc=3（不降级成绿）
+   实测 5/5 绿
+```
+
+### 口径
+
+```
+能说  路由 handler 返回 int/str 不再崩（3/3 → 3/3 rc=0 有日志）；cron 的分配器错配已修，
+      且 ASan 首次进链做判据（工具正控保证不是「没生效的假绿」）
+不能说 runtime 内存安全已达标 —— 本轮只覆盖 2 个用例（m28_cron / m28_route 路径），
+      不是全量 312 个 upstream-tests 的 ASan 扫描；UBSan 只在 3 个用例上跑过（零报告）
+不说   「timeout 595 处」已修 —— 只记录证据与现场（两个 15h52m 孤儿进程已清理），修法下一轮
+不说   examples 那 4 个编译不过的示例已修 —— 只登记
+```
+
+
 
 > **一句话**：`try` / `catch` 早在 M392（11-11）就是保留字，但 `docs/spec.md` §2.4 仍列 35 个关键字
 > （多列一个假的 `type`、漏列七个真的 `and/or/not/None/extern/try/catch`），§5.8 与设计决策表第 7 条
