@@ -1,0 +1,192 @@
+# examples 豁免账（M421 · 缺陷 846）
+# 格式：unit<TAB>kind<TAB>owner<TAB>expires<TAB>reason
+# 规矩：未登记 ⇒ 门红；过期 ⇒ 门红；已真覆盖仍挂着 ⇒ STALE-EXEMPT 门红。只减不增。
+concurrent_m3.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+concurrent.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+fib.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+gc_demo.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+hello.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+http_neterr_result.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+https_demo.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+issue28_b1	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+issue28_b2	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m100	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m101_s2	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m102_s2	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m103_s2a	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m103_s2b	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m103_s2c	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m103_s2d	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m108_lock	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m108_s0	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m109_headers_multi	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m109_s0	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m110_s1	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m110_s2	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m115_proc_env.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m117_realworld_defects	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m124_stw	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m125_alloc_fail	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m126_signal_isolate	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m127_unwind_lock	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m22_bitwise_data.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m22_tracing_gc.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m22_websocket.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m23a_sse_ws.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m23b_bytes.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m23c_http_adv.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m23d_proc_signal.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m23d_rsa.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m24_http_adv.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m24_slice_xml.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m25_closure_gc.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m25_tls_resume.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m26_sse_https.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m26_ushr.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m26_ws_heartbeat.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m27a_webprod.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m27b_tls_serve.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m28_cron.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m28_route.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m28_time_sqlite.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m29_jsonpath_web.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m29_webprod.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m30_comp.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m30_int_bytes.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m30_tls_pool.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m31_sandbox.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m31_vhost.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m32_gen.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m32_hot_reload.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m32_sse_reconnect.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m32_ws_url.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m33_access_log.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m33_route_rate_limit.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m33_sni.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m33_udp_alt_svc.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m34_bus_ws.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m34_gen_lazy.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m34_pool_cfg.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m35_gzip_rl.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m35_h2.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m36_log_ctx.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m36_pool_grace.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m36_ws_hb.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m37_h2_tls.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m37_s3.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m38_chunked.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m38_h2_multi.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m38_udp_serve.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m38_ws_reconnect.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m39_err_main.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m39_gc.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m39_result.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m40_str_interp.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m43_webapp	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m45_pkgdemo	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m46_quic_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m46_quic_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m46_quic_smoke.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m47_h3_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m47_h3_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m48_qpack_verify.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m49_qpack_dyn_verify.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m50_h3_mux_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m50_h3_mux_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m51_h3_qpack_wire_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m51_h3_qpack_wire_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m52_qpack_decack_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m52_qpack_decack_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m53_s1_h3echo_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m53_s1_h3echo_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m53_s3_pipe_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m53_s3_pipe_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m53_s4_pxserve_h3_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m53_s4_pxserve_h3_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m53_s5_pxi_h3_smoke.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m54_s1_resume_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m54_s1_resume_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m54_s2_0rtt_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m54_s2_0rtt_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m54_s3_migrate_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m54_s3_migrate_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m54_s4_streams_client.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m54_s4_streams_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m54_s5_pxi_quic_smoke.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m57_s1_ioctl.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m57_s2_mmap.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m57_s3_devctl.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m57_s3_gpio.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m57_s3_i2c.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m57_s5_pxi_smoke.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m57_s7_vhost_headers.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m58_hwmond	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m59_math	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m60_dev	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m60_gpio.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m60_i2c.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m60_pwm.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m60_serial_pty.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m61_gfx	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m61_zlib	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m62_langfix	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m64_bench	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m64_doc	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m64_test	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m66_proc	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m67_aarch64	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m67_multiarch	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m70_langfix	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m83_s1_http_body_nul	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m83_s2_archive_gaps	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m83_s3_ed25519	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m83_s4	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m83_s5	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m83_s6	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m84_s1_http_ct	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m84_s2_hmac	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m84_s3_dns	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m85_s1	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m85_s2	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m86_s0	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m86_s1	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m86_s2	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m88b_bs2	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m88b_bs3	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m88b_s4	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m88_s3	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m89_a2	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m89_c1	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+m89_perf	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m89_s3d	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m91_s1	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m92_precise	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+m93_s2	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m94_s2	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m94_s3	orphan	东月	2026-12-19	孤儿 verify.sh：有断言但不在任何执行路径
+m95_s2	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m95_s4	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m96_s2	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m96_s3	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m98_s2	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+m99_s2	orphan	东月	2026-11-26	高危孤儿：有断言但不在任何执行路径，且含服务端/路由能力
+match.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+net_demo.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+p0_random_io.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p1_mutex_rwlock.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p2_crypto_hash.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p3_regex.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p4_http_server.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+p5_px_serve.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+p6_timer.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p7_aes_xml_zip.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p8_slice_base64.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+p9_http_adv.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+repro_h2_vhost.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+repro_tls_no_sni_handshake.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+s3_neterr_fail.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+s3_neterr_result.px	blackbox	东月	2026-11-26	高危黑盒：含服务端/路由/定时能力，无任何断言（845 同族）
+std_demo.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+struct.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+toolchain_demo.px	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门
+webapp	blackbox	东月	2026-12-19	示例片段：无 verify.sh，未进入任何门

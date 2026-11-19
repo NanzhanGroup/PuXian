@@ -1,3 +1,78 @@
+## M421：examples 覆盖账 —— 谁有断言、谁只是示例、谁在裸奔（缺陷 846）
+
+> **一句话**：M420 修的缺陷 845 是一条「生产级 Web 路由示例常规构建 3/3 必崩」的 SEGV，
+> 而当时 292 门全绿 —— 因为那个示例（`examples/m28_route.px`）**既没有 verify.sh、也没注册进 registry**，
+> 全量门天然看不见它。本轮把这件「看不见」本身做成了机器判据：单元枚举 + 一跳可达 + 豁免账，
+> 未登记 / 过期 / kind 不符 / 已覆盖仍挂（STALE）一律判红。
+
+### 实测账面（2026-11-19 · HEAD 1d38eb8）
+
+```
+单元        352 = 顶层 *.px 120 + 含 .px 的目录 232
+covered     163   被已注册 run 入口或其直属 verify.sh 引用
+orphan       46   有 verify.sh，但不在任何执行路径上（看着有覆盖，其实早就不跑了）
+blackbox    143   连 verify.sh 都没有
+high        134   其中含 serve(/route(/cron/WebServer/listen( 的（845 同族形态）
+豁免        189   本轮入账的欠账（high 85 条到期 2026-11-26 · 其余 104 条到期 2026-12-19）
+```
+
+**这 189 条不是「已覆盖」，是「已入账且带到期」** —— 门绿的含义是「没有未登记的裸奔 + 没有过期欠账」，
+不是「示例都有断言了」。口径写在这里，防止下一轮把它读成「覆盖已补齐」。
+
+### 判据（唯一实现 `selfhost/examples_coverage.sh`）
+
+```
+L1 单元枚举   examples 下每个顶层 *.px、每个含 *.px 的目录
+L2 覆盖判定   COVERED = 路径出现在「已注册 run 入口」或其直属 verify.sh 正文（一跳）
+              ORPHAN  = 有 verify.sh 但不可达
+              BLACKBOX= 没有 verify.sh
+              ⚠ 刻意不做深度递归：宁可假红一次让人看一眼，也不做「猜它可能被跑过」的假绿
+L3 豁免账     selfhost/examples_exempt.tsv（unit/kind/owner/expires/reason）
+              未登记 ⇒ 红 · 过期 ⇒ 红 · kind 不符 ⇒ 红 · 已覆盖仍挂 ⇒ STALE-EXEMPT 红
+环境守卫      registry 缺失 / examples 缺失 / 扫描面为 0 ⇒ rc=3（绝不降级成 0）
+```
+
+### 门（`m421_examples_coverage` · 294 → 295 门）
+
+```
+[1] 夹具自测 10 条：三类分类正确 / high 只标高危 / 3 条未登记 ⇒ rc=1 unlisted=3
+    + 前提自证（三条违例都点名）/ 登记转绿 / 过期红 / kind 不符红 / 已覆盖仍挂红
+    + registry 缺失 rc=3 / 扫描面 0 rc=3
+[2] 真仓对账：打印账面 + 前提自证（registry 可读 · 证据 token 417 条 · 单元 352）
+[3] 真仓镜像 4 扰动（cp -a 到临时根，零污染原仓）：
+    N1 新建 examples/zz_probe_m421/foo.px（含 serve、无断言）⇒ 必红
+    N1b 前提自证：high 134 → 135（证明新单元真被识别，不是空跑）
+    N2 登记后转绿（kind 正确、未过期）
+    N3 把 expires 改成 2020-01-01 ⇒ 必红（欠账不能永久挂着）
+    N4 给一个已 COVERED 单元登记豁免 ⇒ STALE-EXEMPT 必红（防 M410 那类「豁免永不回收」）
+[4] 实测 pass=20 fail=0（81s，含 cp -a 镜像）
+```
+
+### 为什么这一轮不改 runtime / 不补 189 个 verify.sh
+
+- 本轮目标是**让空白可见且有牙**，不是一次性填平。189 条里 134 条是高危形态，
+  逐个人工补断言不是一轮能做的事，硬做只会产出「形式上有 verify.sh、实质不验行为」的假绿。
+- 下一轮（M422 候选）按 high 清单逐个补：优先级 = 顶层 56 个服务端示例（845 的同族宿主）。
+
+### 副作用面
+
+```
+新增  selfhost/examples_coverage.sh（判据唯一实现）
+      examples/m421_examples_coverage/verify.sh（门）
+      selfhost/examples_exempt.tsv（189 条欠账，带到期）
+改动  selfhost/gates.registry.sh（+门，含病史注释）
+      .github/workflows/ci.yml（+step）
+版本  0.2.420 → 0.2.421（9 处，含 2 份自举基准）· 重烘 14 件
+回滚  git revert 本提交（门与账一起消失，回到「空白不可见」的原状——不建议）
+```
+
+### 已知局限（如实记录）
+
+1. 一跳可达：深度 >1 的调用链会被判 ORPHAN，需补注册或进豁免表写理由。
+2. high 判定是**文本形态**（含 serve(/route(/cron 等关键字），不是语义分析；
+   一个引用了名字但从不启动服务的示例也会被标高危 —— 宁可高估。
+3. 豁免粒度是单元，不是文件：一个目录里 10 个 .px 只要有 1 个被引用就整体 COVERED。
+
 ## M420 补2：m262 门判据随缺陷 845 一起被修掉（结构性假红 · 全量门唯一红）
 
 > **一句话**：M420 给 `px_route_respond` 两处 `px_dict_get(resp,"headers")` 加了 `PX_DICT` 类型守卫

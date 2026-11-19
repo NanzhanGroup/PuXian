@@ -2521,3 +2521,13 @@ jobs:
           tail -60 "$RUNNER_TEMP/nb.log" 2>/dev/null || true
           echo "──── pxc0 自证 stderr ────"
           tail -40 "$RUNNER_TEMP/nb/B.err" 2>/dev/null || true
+
+      - name: m421_examples_coverage（examples 覆盖账 · M421 · 缺陷 846）
+        # 病史：m28_route.px 必崩 SEGV 却零门覆盖 —— 既无 verify.sh、也没注册；
+        #   292 门全绿不等于「示例被验过」。本门把「有断言/有断言但不跑/没断言」分开记账，
+        #   未登记、豁免过期、已覆盖仍挂（STALE）一律判红。
+        run: |
+          bash examples/m421_examples_coverage/verify.sh > /tmp/v_m421c.log 2>&1; rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m421_examples_coverage ENV（环境不成立，rc=3）"; tail -20 /tmp/v_m421c.log | sed 's/^/  | /'; exit 1; fi
+          if [ $rc -ne 0 ]; then echo "❌ m421_examples_coverage 门失败（有新黑盒未入账 / 豁免过期 / STALE）"; tail -60 /tmp/v_m421c.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m421_examples_coverage（自测 + 真仓 + 镜像扰动）PASS"

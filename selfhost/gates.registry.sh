@@ -2354,3 +2354,15 @@ run m420_route_intresp bash examples/m420_route_intresp/verify.sh
 #     · [5] 前提自证：产物含 ASan 符号；环境缺 gcc/libasan ⇒ rc=3
 gate_timeout m420_memsan_cron 600
 run m420_memsan_cron bash examples/m420_memsan_cron/verify.sh
+
+# ── m421_examples_coverage：examples 覆盖账（缺陷 846 · 845 的同族宿主）──────────
+#   病史（2026-11-19 M421）：缺陷 845 是 examples/m28_route.px 必崩 SEGV，
+#     而 292 门全绿 —— 因为它既没有 verify.sh、也没注册进 registry，
+#     全量门天然看不见它。同类风险面此前从未被量化。
+#   实测账面（HEAD 1d38eb8）：单元 352 / covered 163 / orphan 46 / blackbox 143 / high 134。
+#     ⇒ 「有断言」「有断言但不跑」「连断言都没有」第一次分得开。
+#   本门判据：[1] 夹具自测 10 条（含 4 负控 + 前提自证）· [2] 真仓对账 + 账面打印
+#     · [3] 真仓镜像 4 扰动：新增无断言单元必红 / 登记转绿 / 豁免过期必红 / 已覆盖仍挂必红
+#     · [4] 环境守卫 rc=3（registry 缺失 / 扫描面为 0 一律不判绿）
+gate_timeout m421_examples_coverage 300
+run m421_examples_coverage bash examples/m421_examples_coverage/verify.sh
