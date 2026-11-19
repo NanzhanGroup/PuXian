@@ -7,3 +7,4 @@ m403_orphan_batch	CI-only 红：孤儿门里 M126 verify pass=40 fail=2；明细
 m389_gh_auth	M415 已修（缺陷 829：负控两条失败分支都打）；本轮 CI 结果来自旧 HEAD b2ac180 ⇒ 若下一轮仍红说明修没到位	2026-11-19
 m410_criteria_scan	M415 已修（缺陷 826：宿主面缺席时 host 例外转 SKIP）；本轮 CI 结果来自旧 HEAD b2ac180 ⇒ 若下一轮仍红说明修没到位	2026-11-19
 m267_perf	CI-only 红：M417 补1 已修（下限判据分母改用「各档 min」=最快参考机 · 缺陷 837）；本轮 CI 结果来自旧 HEAD d9cca0b ⇒ 若下一轮仍红说明修没到位	2026-11-21
+m420_memsan_cron	CI 步吞 rc（workflow `bash -e` 下 `cmd; rc=$?` 到不了分支 · 缺陷 847）已在本地修 ci.yml+verify.sh（构建失败改 rc=4），并与本机冷缓存对拍（rc=0·5/5·69s）⇒ 待一次 push 后由下一轮 CI 验证；到期前仍红则说明还有第二层原因	2026-11-21

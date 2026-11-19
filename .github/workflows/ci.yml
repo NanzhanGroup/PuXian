@@ -2039,9 +2039,15 @@ jobs:
         #   · [4] ASan 构建 + 真跑 m28_cron 零报告 · [5] 前提自证（产物含 ASan 符号）；缺 gcc/libasan ⇒ rc=3
         if: always()
         run: |
-          bash examples/m420_memsan_cron/verify.sh > /tmp/v_m420m.log 2>&1; rc=$?
+          # ⚠ 缺陷 847（M421 补 · 2026-11-19 CI 实测）：workflow 默认 shell 是 `bash -e {0}`，
+          #   写成 `bash verify.sh > log; rc=$?` 时，**rc=3 会在取到 rc 之前就把本步终结**
+          #   （日志实证：只有 `##[error]Process completed with exit code 3`，SKIP 分支一行没打）
+          #   ⇒ 下面所有 rc 分支都是死代码，且失败现场被 log 重定向吞掉。
+          #   正确形态：`rc=0; cmd > log 2>&1 || rc=$?`（失败被 || 吸收，-e 不再触发）。
+          rc=0
+          bash examples/m420_memsan_cron/verify.sh > /tmp/v_m420m.log 2>&1 || rc=$?
           if [ $rc -eq 3 ]; then echo "⚠ m420_memsan_cron SKIP（环境缺 gcc/libasan，rc=3）"; tail -20 /tmp/v_m420m.log | sed 's/^/  | /'; exit 0; fi
-          if [ $rc -ne 0 ]; then echo "❌ m420_memsan_cron 门失败（cron 分配器错配回归）"; tail -40 /tmp/v_m420m.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          if [ $rc -ne 0 ]; then echo "❌ m420_memsan_cron 门失败（rc=$rc · 构建失败/回归，见下）"; tail -40 /tmp/v_m420m.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m420_memsan_cron（静态配对 + 负控 + 工具正控 + ASan 零报告）PASS"
 
       - name: m403_orphan_batch（孤儿门批量复活 · M403 · 缺陷 428 存量）
@@ -2527,7 +2533,9 @@ jobs:
         #   292 门全绿不等于「示例被验过」。本门把「有断言/有断言但不跑/没断言」分开记账，
         #   未登记、豁免过期、已覆盖仍挂（STALE）一律判红。
         run: |
-          bash examples/m421_examples_coverage/verify.sh > /tmp/v_m421c.log 2>&1; rc=$?
+          # 同 m420（缺陷 847）：`cmd; rc=$?` 在 `bash -e` 下取不到 rc ⇒ 用 `rc=0; cmd || rc=$?`
+          rc=0
+          bash examples/m421_examples_coverage/verify.sh > /tmp/v_m421c.log 2>&1 || rc=$?
           if [ $rc -eq 3 ]; then echo "⚠ m421_examples_coverage ENV（环境不成立，rc=3）"; tail -20 /tmp/v_m421c.log | sed 's/^/  | /'; exit 1; fi
           if [ $rc -ne 0 ]; then echo "❌ m421_examples_coverage 门失败（有新黑盒未入账 / 豁免过期 / STALE）"; tail -60 /tmp/v_m421c.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m421_examples_coverage（自测 + 真仓 + 镜像扰动）PASS"

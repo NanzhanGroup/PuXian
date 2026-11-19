@@ -1,4 +1,44 @@
-## M421：examples 覆盖账 —— 谁有断言、谁只是示例、谁在裸奔（缺陷 846）
+## M421 补1：CI 步在 `bash -e` 下吞掉 rc —— 环境 SKIP 与失败现场双双失明（缺陷 847）
+
+> **一句话**：远端 CI 的 m420 步以 rc=3 中断，而日志里**一行门输出都没有**；
+> 步里明明写着 `if [ $rc -eq 3 ]; then … SKIP; exit 0; fi`。门没坏 —— 是 workflow 的
+> 默认 shell `bash -e {0}` 让 `bash verify.sh > log; rc=$?` 这一行在取到 rc 之前就终结本步
+> ⇒ 其后所有 rc 分支是死代码，被重定向进 log 的现场也没人 tail。远端红、本地绿，各说各话。
+
+### 证据（2026-11-19 · CI run 44485203058 / sha 1d38eb8）
+
+```
+CI 步 m420_memsan_cron   failure · 22–30s · 日志仅 `##[error]Process completed with exit code 3`
+本机冷缓存 worktree      git worktree add /data/tmp/ciprobe 1d38eb8 ⇒ rc=0 · 5/5 PASS · 69s
+负控（-e 的形状）        bash -e -c 'bash -c "exit 3" >/dev/null 2>&1; rc=$?; echo 到达' ⇒ rc=3，echo 未执行
+```
+
+### 修
+
+- `.github/workflows/ci.yml`（m420 / m421 两步）：`cmd; rc=$?` ⇒ `rc=0; cmd > log 2>&1 || rc=$?`
+  （失败被 `||` 吸收，`-e` 不再触发），失败提示里带上真实 rc。
+- `examples/m420_memsan_cron/verify.sh`：ASan **构建失败**原先同样返回 rc=3（与「环境缺 gcc/libasan」同码）
+  ⇒ CI 的 SKIP 分支会把「这台机器编不过」当成「这台机器没装 ASan」放行（假绿）。
+  改为 **rc=4** 专表构建失败，CI 必须红并 tail 现场；rc=3 只留给真正的环境缺失。
+- `packaging/ci_step_rc_selftest.sh`（新增）：取 ci.yml 里**真实的 run 块**，在 `bash -e` 下用假 verify.sh
+  跑 rc=0/1/3/4 四条，断言每条分支都到得了；rc=3 的期望 step rc 由 run 块自身声明（m420=0 · m421=1）。
+
+### 负控（本判据有牙）
+
+```
+修后：m420 步 5/5 PASS · m421 步 5/5 PASS
+修前：git show HEAD:.github/workflows/ci.yml > /tmp/ci_old.yml 再跑 ⇒ 2/5
+      FAIL rc=3 ⇒ step rc=3（期望 0）· FAIL rc=4 ⇒ step rc=4（期望 1）· FAIL rc=1（无输出）
+      —— 与 CI 现况逐条吻合（rc 直穿、现场丢失）
+```
+
+### 遗留
+
+- 远端 m420 落进 rc=3 的**具体原因**（环境 vs 构建）本轮无 CI 现场可判：修后下一次 CI 会打印 tail；
+  本轮只断言「rc 被吞」这一层，不预设门本身有病。
+- 需要一次 push 才能让远端验证（本轮档位 local，未推）。
+
+
 
 > **一句话**：M420 修的缺陷 845 是一条「生产级 Web 路由示例常规构建 3/3 必崩」的 SEGV，
 > 而当时 292 门全绿 —— 因为那个示例（`examples/m28_route.px`）**既没有 verify.sh、也没注册进 registry**，

@@ -17,6 +17,7 @@
 #   [4] 动态正控：ASan 构建 m28_cron + 真跑 ⇒ rc==0 且 stderr 无 AddressSanitizer
 #   [5] 前提自证：动态二进制里确实链了 ASan（读符号）
 # 环境缺失（无 gcc / 无 libasan）⇒ rc=3（绝不降级成绿）
+# ASan 构建失败 ⇒ rc=4（**不是**环境缺失：把「编不过」当「没装 ASan」放行 = 假绿 · 缺陷 847）
 # ============================================================
 set -uo pipefail
 
@@ -120,9 +121,12 @@ fi
 # [4] 动态正控：ASan 构建 + 真跑
 [ -f "$SRC" ] || { echo "M420-MEMSAN-ENV rc=3（缺 $SRC）"; exit 3; }
 blog=/tmp/m420-cron-asan-build.$$.log
+# 缺陷 847（M421 补）：**构建失败不等于环境缺失**。此前两者同为 rc=3，
+#   CI 的 SKIP 分支就把「这台机器编译不过」当成「这台机器没装 ASan」放行。
+#   ⇒ rc=4 专表构建失败（CI 必须红）；rc=3 只留给真正的环境缺失。
 if ! PX_CC="$WRAP" "$RT/tools/px" build --no-quic "$SRC" > "$blog" 2>&1; then
-  echo "  [4] 构建失败（见 $blog）"; tail -5 "$blog"
-  echo "M420-MEMSAN rc=3 pass=$pass fail=$fail"; exit 3
+  echo "  [4] ASan 构建失败（不是环境缺失，见 $blog）"; tail -20 "$blog"
+  echo "M420-MEMSAN-BUILD-FAIL rc=4 pass=$pass fail=$fail"; exit 4
 fi
 BIN="$RT/examples/build/m28_cron"
 [ -x "$BIN" ] || { echo "M420-MEMSAN-ENV rc=3（缺产物）"; exit 3; }
