@@ -16042,7 +16042,7 @@ static LXValue bi_bytes_len(LXValue* args, int nargs, void* ctx) {
     return px_int(args[0].as.obj->as.str.len);
 }
 
-// bytes_get(b, i) → int|null（负索引支持；越界 → null）
+// bytes_get(b, i) → int（负索引支持；**越界 R1003** —— M189 起不再返回 null）
 static LXValue bi_bytes_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: bytes_get 需要 (bytes, index) 参数");
@@ -30893,6 +30893,54 @@ static int64_t px_tz_off(const char* tz) {
     return sign * (hh * 3600 + mm * 60);
 }
 
+// ── 时区偏移「严格解析」：区分「合法 0 偏移」与「非法」（M426 · 缺陷 869）────────
+//   来历：tz_offset("+0800") 长期返回 null。bi_tz_offset 自己做了一遍合法性校验，
+//   4 位无冒号分支写的是 `atoll(rest)` —— 把 "0800" 整个当十进制（=800）与 23 比较
+//   ⇒ 所有带非零小时的 ±HHMM 全被判非法（+0000 因 atoll=0 偶然正确）；
+//   而 2 位 / 1 位分支**根本不校验上界** ⇒ tz_offset("+99") 返回 0
+//   （把非法输入回报成「合法的零偏移」，比 null 更危险）。
+//   同一函数的注释、同族入口 time_format(ts, fmt, "+0800")、示例 m28_time_sqlite
+//   都认为 ±HHMM 合法；px_tz_off 自身对 4 位是切两位解析的 —— 只有这层重复校验是错的。
+//   ⇒ 解析 + 校验收成一处：本函数返回 bool，成功写 *out；tz_offset 只问它。
+static bool px_tz_digits(const char* s, size_t n) {
+    if (n == 0) return false;
+    for (size_t i = 0; i < n; i++) if (s[i] < '0' || s[i] > '9') return false;
+    return true;
+}
+static int64_t px_tz_num(const char* s, size_t n) {
+    int64_t v = 0;
+    for (size_t i = 0; i < n; i++) v = v * 10 + (int64_t)(s[i] - '0');
+    return v;
+}
+static bool px_tz_off_checked(const char* tz, int64_t* out) {
+    if (!tz || !*tz) return false;
+    if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) { *out = 0; return true; }
+    if (strcasecmp(tz, "local") == 0) { *out = px_local_off(); return true; }
+    if (tz[0] != '+' && tz[0] != '-') return false;
+    const int64_t sign = (tz[0] == '-') ? -1 : 1;
+    const char* rest = tz + 1;
+    const char* colon = strchr(rest, ':');
+    int64_t hh = 0, mm = 0;
+    if (colon) {
+        const size_t hn = (size_t)(colon - rest), mn = strlen(colon + 1);
+        if (hn < 1 || hn > 2 || mn < 1 || mn > 2) return false;   // "+8:0:0" / "+08:" ⇒ 非法
+        if (!px_tz_digits(rest, hn) || !px_tz_digits(colon + 1, mn)) return false;
+        hh = px_tz_num(rest, hn); mm = px_tz_num(colon + 1, mn);
+    } else {
+        const size_t n = strlen(rest);
+        if (!px_tz_digits(rest, n)) return false;                 // "+ab" ⇒ 非法
+        switch (n) {
+            case 4: hh = px_tz_num(rest, 2); mm = px_tz_num(rest + 2, 2); break;  // ±HHMM
+            case 2: hh = px_tz_num(rest, 2); break;                                // ±HH
+            case 1: hh = px_tz_num(rest, 1); break;                                // ±H
+            default: return false;                                                 // ±HHMMM 等
+        }
+    }
+    if (hh > 23 || mm > 59) return false;
+    *out = sign * (hh * 3600 + mm * 60);
+    return true;
+}
+
 // 拆解 epoch 秒 → (y, mo, d, h, mi, s, wd[0=Sun])
 static void px_breakdown(int64_t ts, int64_t off, int64_t* y, int64_t* mo, int64_t* d,
                          int64_t* h, int64_t* mi, int64_t* s, int64_t* wd) {
@@ -31097,21 +31145,12 @@ LXValue bi_tz_offset(LXValue* args, int nargs, void* ctx) {
     //   没有等价原语（只能手搓 time_format(..., "%z") 再解析）。此处补齐。
     if (strcasecmp(tz, "local") == 0) return px_int(px_local_off());
     if (tz[0] != '+' && tz[0] != '-') return px_null();
-    const char* rest = tz + 1;
-    int ok = 0;
-    if (strchr(rest, ':')) ok = 1;
-    else if (strlen(rest) == 4 || strlen(rest) == 2 || strlen(rest) == 1) ok = 1;
-    if (!ok) return px_null();
-    int64_t off = px_tz_off(tz);
-    // px_tz_off 非法返回 0；此处区分"合法 0 偏移"与"非法"
-    if (strchr(rest, ':')) {
-        const char* colon = strchr(rest, ':');
-        int64_t hh = atoll(rest), mm = atoll(colon + 1);
-        if (hh > 23 || mm > 59) return px_null();
-    } else if (strlen(rest) == 4) {
-        int64_t hh = atoll(rest);
-        if (hh > 23) return px_null();
-    }
+    // M426（缺陷 869）：解析 + 校验统一交给 px_tz_off_checked —— 此前本函数**又实现了一遍**：
+    //   4 位无冒号分支 `atoll("0800")` = 800 > 23 ⇒ 所有带非零小时的 ±HHMM 被判非法
+    //   （+0000 因 atoll=0 偶然通过）；2/1 位分支**不校验上界** ⇒ tz_offset("+99") 返回 0
+    //   （把非法输入回报成「合法的零偏移」，比 null 更危险）。同一件事两处实现，一处对一处错。
+    int64_t off = 0;
+    if (!px_tz_off_checked(tz, &off)) return px_null();
     return px_int(off);
 }
 

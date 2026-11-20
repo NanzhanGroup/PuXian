@@ -100,7 +100,13 @@ var um = munmap(m8)
 assert(um == true, "munmap(m8) 应 true got=" + str(um))
 assert(bytes_len(m8) == 0, "munmap 后 len 应 0 got=" + str(bytes_len(m8)))
 assert(munmap(m8) == false, "重复 munmap 应 false")
-assert(bytes_get(m8, 0) == null, "解除后 bytes_get 应越界 null")
+# M426（缺陷 870）：munmap 后视图长度 0 ⇒ 任何下标都越界；M189 起越界是 R1003（不再返回 null）
+var oob_raised = false
+try:
+    bytes_get(m8, 0)
+catch e:
+    oob_raised = true
+assert(oob_raised == true, "解除后 bytes_get(0) 应越界报错（R1003）")
 print("D: munmap 解除语义 ok")
 var um2 = munmap(m4v)
 assert(um2 == true, "munmap(m4v) 应 true")

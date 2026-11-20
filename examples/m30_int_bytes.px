@@ -37,9 +37,20 @@ assert(bytes_to_int(hex_to_bytes("ff"), "big", true) == -1)
 assert(bytes_to_int(hex_to_bytes("ff"), "big", false) == 255)
 # 小端符号位
 assert(bytes_to_int(hex_to_bytes("0180"), "little", true) == -32767)
-# 长度 0 / >8 -> null
-assert(bytes_to_int(bytes("")) == null)
-assert(bytes_to_int(hex_to_bytes("010203040506070809")) == null)
+# 长度 0 / >8 → R1003 响亮（M201 收口；M426 缺陷 870：示例按新契约写）
+var len0_raised = false
+try:
+    bytes_to_int(bytes(""))
+catch e:
+    len0_raised = true
+assert(len0_raised == true)# 长度 0 → R1003
+
+var len9_raised = false
+try:
+    bytes_to_int(hex_to_bytes("010203040506070809"))
+catch e:
+    len9_raised = true
+assert(len9_raised == true)# 长度 9 → R1003
 # pxdb 场景：定长整数存储 round-trip（随机读写基石）
 let n = 987654321
 let enc = int_to_bytes(n, 4, "big")

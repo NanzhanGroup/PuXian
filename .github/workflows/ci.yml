@@ -337,6 +337,15 @@ jobs:
         run: |
           bash selfhost/check_examples_compile.sh --self-test
           bash selfhost/check_examples_compile.sh
+      - name: 示例即文档 · 顶层示例真跑（M426 · 缺陷 871）
+        #   病史：M422 只保证编译过。实测 120 个里 82 能跑 / 36 红 / 2 超时，而没有任何门跑过它们。
+        #   红项里 4 个是真缺陷：三个示例仍断言 M189/M201 已废止的「越界 → null」；
+        #   m28_time_sqlite 断言 tz_offset("+0800")==28800，而实现返回 null（示例对了、实现错了）。
+        #   判据：非豁免示例 build + 执行产物 rc 必须 0；豁免账六类 category + 只减不增；
+        #   category=local 的豁免项跑通 ⇒ STALE；零污染（不在仓库树构建）。
+        run: |
+          bash selfhost/check_examples_run.sh --self-test
+          bash selfhost/check_examples_run.sh
       - name: px_exec 可移植性（M423 · 缺陷 859/860）
         #   CI 只 px build（不安装）⇒ PATH 里没有 px。旧 px_exec 只看 PATH ⇒
         #   子进程 exec 失败后**静默返回空串** ⇒ m102_s2 在 CI 判红（本机恒绿）。

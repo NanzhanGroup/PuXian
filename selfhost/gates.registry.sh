@@ -1253,6 +1253,18 @@ run ex_struct ./tools/pxc build examples/struct.px
 #   判据：120 个顶层示例逐条 px build，失败即红；豁免账只许「确实编译不过」的条目，
 #   能编译却挂豁免 / 豁免项无对应文件 ⇒ STALE 红；扫描面 < 50 或 px 缺失 ⇒ rc=3。
 run m422_examples_compile bash selfhost/check_examples_compile.sh
+# M426（缺陷 871）：**顶层示例「跑」面 —— 编译过 ≠ 跑得动**。
+#   病史：M422 只保证 120 个顶层示例**编译**过；本轮实测 build 后真跑：82 通过 / 36 红 / 2 超时，
+#   而 300 道门里没有一道跑过它们。红项里 4 个是真缺陷（已在本轮修）：
+#     · m23b_bytes / m30_int_bytes / m57_s2_mmap 仍断言「越界 → null」（M189/M201 早已改 R1003）
+#     · m28_time_sqlite 断言 tz_offset("+0800")==28800，而实现返回 null
+#       ⇒ 这一条是**示例对了、实现错了**（缺陷 869：±HHMM 全被判非法 + ±HH 不校验上界）
+#   判据：每个非豁免示例 build + 执行产物，rc 必须 0（BUILD-FAIL / RUN-FAIL / 超时都红）；
+#        豁免账 examples/examples_run_exempt.tsv（category 六类 + 理由 ≥8 字 + expires 日期 +
+#        只减不增 EXEMPT_MAX）；category=local 的豁免项真跑通 ⇒ STALE 红（其余类别不跑，
+#        防网速抖动假红）；无文件 / 理由过短 / 非法 category ⇒ 红；零污染（不得在仓库树构建）；
+#        自测 10 条（含「编译过但跑挂」负控 + 前提自证：红必须来自运行期而非编译期）。
+run m426_examples_run bash selfhost/check_examples_run.sh
 # M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。

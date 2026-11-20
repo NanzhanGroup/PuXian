@@ -1,3 +1,96 @@
+## M426：示例即判据 —— 120 个顶层示例从来没被跑过（缺陷 869 / 870 / 871）
+
+> **一句话**：M422 只保证「示例**编译**得过」。本轮把 120 个顶层示例逐条 **build + 真跑**：
+> **82 通过 / 36 红 / 2 超时**，而 300 道门里**没有一道**跑过它们。红项里有 4 个是真缺陷——
+> 三个示例仍在教用户写 **M189/M201 早已废止的「越界 → null」**；而 `m28_time_sqlite`
+> 断言 `tz_offset("+0800") == 28800` 时**实现返回 null** ⇒ **这一条是示例对了、实现错了**。
+
+### 证据（2026-11-21 · 本机 · HEAD d2f236b · 编译轨 build 产物后逐条跑）
+
+```
+顶层示例 120 个（examples/*.px）· 每示例独立临时目录 · 产物跑 timeout 20s
+  编译轨（px build → 跑产物）   82 通过 / 36 非零退出 / 2 超时（rc=124，等连接）
+  解释轨（px run，tree-walking） 52 通过 / 64 红 / 3 超时
+    —— interp 只支持 Mini 子集：spawn/chan 类示例必然 R1002「interp 不支持通道/spawn」
+  两轨对照：双轨通 48 · 仅编译轨通 33 · 双轨红 34 ·（仅解释轨通 4：H3/QPACK client-server，
+   编译轨红的原因是「缺对端」，不是解释轨更强）
+
+4 个真缺陷（本轮修）
+  缺陷 869  tz_offset 的 ±HHMM 全部被判非法
+            实测 tz_offset("+0800")=null / ("+0530")=null / ("-0800")=null，而 ("+0000")=0
+            根因：bi_tz_offset 在 px_tz_off 之外**又实现了一遍校验**，4 位无冒号分支写
+                  `atoll("0800")` = 800 > 23 ⇒ 直接返回 null（"+0000" 的 atoll=0 偶然通过）
+            同族两个洞：2/1 位分支**不校验上界** ⇒ tz_offset("+99")=0（把非法回报成合法零偏移）；
+                  px_tz_off 对 "+ab:00" 的 atoll 也返回 0 ⇒ 非法时区被静默当 UTC
+            契约三方对照：同函数注释、同族 time_format(ts,fmt,"+0800")=06:13、示例 m28 ⇒
+                  三者都认为 ±HHMM 合法，只有 bi_tz_offset 那层重复校验是错的
+  缺陷 870  三个示例仍在断言「越界 → null」
+            m23b_bytes `assert(bytes_get(b,99)==null)` —— M189（缺陷 211）已改成 R1003 响亮
+            m30_int_bytes `assert(bytes_to_int(bytes(""))==null)` —— M201（PX-DEF-031）已改成 R1003
+            m57_s2_mmap `assert(bytes_get(m8,0)==null)` —— 同上
+            且 runtime.c 的 bytes_get **头注释摘要行**也还写着「越界 → null」（函数体内注释已改）⇒
+                  示例 + 头注释 + 实现三层里有两层是旧的
+  缺陷 871  没有任何门跑示例（M422 门只 build）⇒ 上面三件事各自都存在了几个里程碑而无人发现
+```
+
+### 修法
+
+```
+runtime/runtime.c
+  新增 px_tz_off_checked(tz, *out) → bool：解析 + 校验**一次实现**
+    · utc|Z|local 三别名  · ±HH:MM（1–2 位时分）· ±HHMM 四位（切两位）· ±HH · ±H
+    · **严格数字校验**（"+ab:00" ⇒ 非法；旧 px_tz_off 会 atoll 成 0 静默当 UTC）
+    · hh ≤ 23、mm ≤ 59 一律校验（"+99" 现在是 null，不是 0）
+  bi_tz_offset 只问它：非法 ⇒ null；合法 ⇒ 偏移（含合法的 0 偏移）
+  px_tz_off 保持原样（time_format / time_parse 走它，行为不变 —— 避免本轮夹带语义变更）
+  bytes_get 头注释：`int|null（越界 → null）` → `int（越界 R1003 —— M189 起）`
+示例（按新契约写，不留「旧契约示例」教坏用户）
+  m23b_bytes / m30_int_bytes / m57_s2_mmap：越界断言从 `== null` 改成 try/except + 必须抛错
+```
+
+### 门（300 → 301）
+
+```
+m426_examples_run（selfhost/check_examples_run.sh · 自测 10/10）
+  C1 顶层枚举 120 个（扫描面 < MIN ⇒ rc=3；提取器坏了不降级成绿）
+  C2 每个非豁免示例：px build → 跑产物 → **rc 必须 0**（BUILD-FAIL / RUN-FAIL / rc=124 都红，打印首行）
+  C3 豁免账 examples/examples_run_exempt.tsv：name.px<TAB>category<TAB>expires<TAB>reason
+     category ∈ network|port|pair|relative|interactive|local|demo-rc1
+     · 无对应文件 ⇒ STALE 红 · 理由 < 8 字 ⇒ 红 · expires 非 YYYY-MM-DD ⇒ 红 · 非法 category ⇒ 红
+     · **category=local 的豁免项本次真跑通 ⇒ STALE 红**（账跟着事实走）；
+       其它类别不跑、不判 STALE —— 否则一次网速抖动就是一条假红
+  C4 豁免集合 ≤ EXEMPT_MAX=40（写死常量，只许缩小）
+  C5 前提自证：真跑 ≥ MIN、非豁免 ≥ 1（全被豁免 ⇒ rc=3，判据不许空转）
+  G2 零污染：跑前后 examples/build 条目数不得增加（示例一律在临时树构建）
+  N1 负控「编译过但跑挂」⇒ 必红并指名 · N2 正控同夹具去坏项 ⇒ 必绿
+  N3 前提自证：N1 的红必须来自**运行期**（输出含 RUN-FAIL/rc=），不是编译期
+  G1 tools/px 或 examples 缺失 ⇒ rc=3
+```
+
+豁免账首批 35 条（六类，全部写明实测理由与到期日）：需外网 2（m25_tls_resume / m26_sse_https）·
+仓库相对路径 8（docroot `../examples/webapp` 等）· 需配对对端 19（H3/QUIC client-server 成对）·
+h2 两例（缺陷 872）· 需预建目录 1（m115_proc_env）· 故意 rc=1 演示 1（m39_err_main）。
+⇒ 85 个真跑（**85/85 通过**），35 个豁免，只减不增。
+
+同步：`selfhost/gates.registry.sh` 一条 · `.github/workflows/ci.yml` 一步（含 --self-test）·
+`packaging/release_preflight.sh` 前置档 28 → 29 门 · 版本 0.2.426（7 处）· 重烘 14/14。
+
+### 诚实边界
+
+```
+能说  「示例跑得动吗」从此有机器判据（85 条真跑全绿 + 10 条自检负控）；7 个示例/实现按新契约对齐
+不能说「120 个示例都能跑了」—— 34 个需要外网/对端/仓库相对资源，如实挂账并写明理由与到期日
+不能说我修的是「示例过期」—— tz_offset 那条是**实现错了**，示例替产品抓到了一个真 bug
+本轮未做  h2 两例（缺陷 872：示例断言 HTTP/2 端到端，而 px-serve 明确拒绝 h2 前导，见
+        docs/HTTP2_DECISION.md）—— 改示例要先读懂 h2 帧语义，宁可下轮做也不本轮夹带
+本轮未做  端口分配器：非豁免里有 12 个调示例自己绑固定端口（net_demo 7891/7892、m46 17999、
+        m57_s1 19057…），门里串行跑避让；与其它门撞端口仍可能红（列 M427）
+本轮未做  配对运行器（H3/QUIC 的 19 对）：8 分片并发下固定端口必撞，需要端口分配器先行
+成本代价  改 runtime.c ⇒ 14 件重烘 + .rtcache 按 rtkey 全部失效 ⇒ 本轮首次跑门约 17 分钟
+        （86 个示例各自重编 runtime 子集），热缓存后约 1–2 分钟。这是 M113 起就有的结构性代价
+```
+
+
 ## M425：px build 的用户级产物缓存 —— 3 行程序每次重编 1.3–1.6 s（缺陷 866）
 
 > **一句话**：`.rtcache` 只缓存 **runtime 的 .o**（按引用集分桶），**用户程序这一层零缓存** ——

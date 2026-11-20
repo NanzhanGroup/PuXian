@@ -1,0 +1,46 @@
+# 顶层示例「跑」豁免账（M426 · 缺陷 871）
+# 格式：name.px<TAB>category<TAB>expires<TAB>reason
+# category ∈ network | port | pair | relative | interactive | local | demo-rc1
+#   · local：本应能独立跑 ⇒ 门会真跑它，若跑通则 STALE 红（账必须跟着事实走）
+#   · 其它：永远不能独立跑通（外网/对端/绝对资源），门不跑，也不判 STALE（防网速抖动假红）
+# 规矩：只减不增（EXEMPT_MAX 写死在 selfhost/check_examples_run.sh）；理由必须 ≥8 字；
+#       expires 必须是 YYYY-MM-DD；条目无对应 examples/<name>.px ⇒ STALE 红。
+# 实测基线（2026-11-21 · HEAD d2f236b · 编译轨 build+跑 · 120 个顶层示例）：
+#   82 跑通 / 36 红 / 2 超时；其中 m23b_bytes·m30_int_bytes·m57_s2_mmap（契约过期）与
+#   m28_time_sqlite（tz_offset ±HHMM）已在 M426 修好，出院。下面 34 条是修完后仍不能独立跑的。
+#
+m25_tls_resume.px	network	2027-03-31	需外网 https://www.baidu.com 且 6 路并发 spawn；离线必失败
+m26_sse_https.px	network	2027-03-31	需公网 SSE 服务端（示例连的是外部服务），离线 connected=false
+m27a_webprod.px	relative	2027-03-31	docroot 写死 ../examples/webapp：依赖仓库内相对路径
+m29_webprod.px	relative	2027-03-31	docroot 写死 ../examples/webapp：依赖仓库内相对路径
+p5_px_serve.px	relative	2027-03-31	docroot 写死 ../examples/webapp：依赖仓库内相对路径
+m53_s3_pipe_server.px	relative	2027-03-31	docroot 写死 examples/m53_s3_docroot：依赖仓库内相对路径
+m53_s4_pxserve_h3_server.px	relative	2027-03-31	docroot 写死 examples/m53_s3_docroot：依赖仓库内相对路径
+repro_h2_vhost.px	relative	2027-03-31	证书/私钥按仓库内相对路径读，独立目录必失败
+m27b_tls_serve.px	relative	2027-03-31	自签证书按相对路径读写，独立目录必失败
+m32_ws_url.px	relative	2027-03-31	自签证书相对路径依赖，独立目录必失败
+m36_log_ctx.px	interactive	2027-03-31	docroot 写死 /tmp/px_m36_ctx，需预建该目录（示例不自包含）
+m46_quic_client.px	pair	2027-03-31	QUIC 客户端：需配套 server 在监听，单独跑必 Connection refused
+m46_quic_server.px	pair	2027-03-31	QUIC 服务端：等客户端连接，单独跑 quic_accept 必失败
+m47_h3_client.px	pair	2027-03-31	H3 客户端：需配对 m47_h3_server 先起，单独跑必拒连
+m47_h3_server.px	pair	2027-03-31	H3 服务端：等客户端连接，单独跑会一直等（20s 超时）
+m50_h3_mux_client.px	pair	2027-03-31	H3 多路复用客户端：需配套 server，单独跑必拒连
+m50_h3_mux_server.px	pair	2027-03-31	H3 多路复用服务端：等客户端连接，单独跑超时
+m51_h3_qpack_wire_client.px	pair	2027-03-31	QPACK wire 客户端：需配套 server，单独跑必拒连
+m51_h3_qpack_wire_server.px	pair	2027-03-31	QPACK wire 服务端：等客户端连接，单独跑超时
+m52_qpack_decack_client.px	pair	2027-03-31	QPACK dec-ack 客户端：需配套 server，单独跑必拒连
+m52_qpack_decack_server.px	pair	2027-03-31	QPACK dec-ack 服务端：等客户端连接，单独跑超时
+m53_s1_h3echo_client.px	pair	2027-03-31	H3 echo 客户端：需配对 server 先起，单独跑断言失败
+m53_s3_pipe_client.px	pair	2027-03-31	pipe 客户端：需配对 server 先起，单独跑必拒连
+m53_s4_pxserve_h3_client.px	pair	2027-03-31	px_serve H3 客户端：需配对 server 先起，单独跑必拒连
+m54_s1_resume_client.px	pair	2027-03-31	0-RTT 会话恢复客户端：需配套 server，单独跑断言失败
+m54_s2_0rtt_client.px	pair	2027-03-31	0-RTT 客户端：需配套 server 完成握手，单独跑断言失败
+m54_s2_0rtt_server.px	pair	2027-03-31	0-RTT 服务端：等客户端连接，单独跑超时
+m54_s3_migrate_client.px	pair	2027-03-31	连接迁移客户端：需配套 server，单独跑必拒连
+m54_s3_migrate_server.px	pair	2027-03-31	连接迁移服务端：等客户端连接，单独跑超时
+m54_s4_streams_client.px	pair	2027-03-31	多流客户端：需配套 server，单独跑必拒连
+m54_s4_streams_server.px	pair	2027-03-31	多流服务端：等客户端连接，单独跑超时
+m35_h2.px	relative	2027-03-31	示例断言 HTTP/2 端到端可用，而 px-serve 明确拒绝 h2 前导（缺陷 872，待改示例）
+m38_h2_multi.px	relative	2027-03-31	示例断言 HTTP/2 多流，产品明确不支持 h2（缺陷 872，待改示例）
+m115_proc_env.px	interactive	2027-03-31	需预建 /tmp/m115_proc_env 目录（示例不自包含，排下一轮改成自建）
+m39_err_main.px	demo-rc1	2027-03-31	示例故意演示错误传播：main 抛错 ⇒ 进程 rc=1 是设计预期，不是失败

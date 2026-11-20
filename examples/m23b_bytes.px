@@ -5,7 +5,13 @@ def main():
     assert(bytes_len(b) == 6)# é 是 2 字节
     assert(bytes_get(b, 0) == 104)# 'h'
     assert(bytes_get(b, 1) == 0xc3)# é 首字节
-    assert(bytes_get(b, 99) == null)# 越界 → null
+    # M426（缺陷 870）：M189 起越界**不再返回 null**，改为 R1003 响亮（与 b[i] / list[i] 同码同文）
+    var oob_raised = false
+    try:
+        bytes_get(b, 99)
+    catch e:
+        oob_raised = true
+    assert(oob_raised == true)# 越界 → R1003（响亮优于静默）
     assert(bytes_get(b, -1) == 111)# 负索引 = 末尾 'o'
 
     # bytes_set：函数式返回新 bytes
