@@ -70,7 +70,7 @@ if [ "${1:-}" = "--self-test" ]; then
   [ "$(hit_verdict 1670 900 12 16)" = FAIL ] && ok "F5 负控：饱和但 900ms > 0.5× ⇒ FAIL" || bad "F5 饱和时把「几乎没加速」判绿"
   [ "$(hit_verdict 1670 500 0.5 16)" = FAIL ] && ok "F6 负控：500ms > 400ms 绝对阈 ⇒ FAIL" || bad "F6 绝对阈失效"
   [ "$(hit_verdict 0 0 0.5 16)" = FAIL ] && ok "F7 负控：冷构建=0（测量没拿到）⇒ FAIL" || bad "F7 零值被判绿"
-  echo "======================================"
+echo "======================================"
   echo "BUILD-CACHE-SELFTEST pass=$PASS fail=$FAIL"
   [ "$FAIL" -eq 0 ] && { echo "SELFTEST=OK"; exit 0; }
   echo "SELFTEST=FAIL"; exit 2
@@ -282,6 +282,98 @@ if [ "$rc" -eq 0 ] && [ "$before" -eq "$after" ]; then
   ok "N3 有模块缺失诊断 ⇒ rc=0 但不写缓存（诊断不被吞掉）"
 else
   bad "N3 带诊断的构建仍写缓存（条目 $before→$after）"
+fi
+
+# ── S4 源码形状：**编译器身份必须进 key**（M425 补1 · 缺陷 867）──
+#   为什么要有这条：M425 首轮链 10 红（m204/m233/m237/m246/m301/m166/m218/m220/m239）
+#   全部是「负控打桩后 `PX_PXC_BIN=/tmp/pxcdev px build` ⇒ 命中旧条目 ⇒ C 轨仍是好实现
+#   ⇒ 负控必须判红失败」。实测（/tmp/diag425）：`PX_PXC_BIN=/bin/false` 也能「编译成功」
+#   —— 缓存把一个不同（甚至坏的）编译器的产物冒充成本次产物，这是**语义**问题不是速度问题。
+grep -q '^comp_fp()' "$PX" && ok "S4a tools/px 定义 comp_fp" || bad "S4a 没有 comp_fp"
+grep -q 'comp_fp' <<< "$kfn" \
+  && ok "S4b build_cache_key 含编译器身份（PX_PXC_BIN/PXC_VM_BIN/PX_PXI_BIN 覆盖口）" \
+  || bad "S4b build_cache_key 漏了编译器身份（换编译器会命中旧产物）"
+runfn="$(awk '/^run_cache_key\(\)/,/^}/' "$PX")"
+grep -q 'comp_fp' <<< "$runfn" \
+  && ok "S4c run_cache_key 含编译器身份（--fast 与 build 同口径）" \
+  || bad "S4c run_cache_key 漏了编译器覆盖口（/tmp/pxidev 类负控会被中和）"
+
+# ── S5 源码形状：stdlib 内容必须进 key（缺陷 867 第②洞）──────
+#   `import std.*` 由 PX_STDLIB 解析，px_resolve_import 对 std.* 直接返回空
+#   （为「沙箱复制不漂移」）⇒ stdlib/*.px **不在依赖闭包**里。实测（diag425）：
+#   改 stdlib/semver.px 后 `px build` 仍打印「缓存命中」⇒ 编译器内联的 stdlib 被缓存忽略。
+cfn="$(awk '/^comp_fp\(\)/,/^}/' "$PX")"
+grep -q 'PX_STDLIB' <<< "$cfn" \
+  && ok "S5a comp_fp 覆盖 PX_STDLIB 下的 *.px（stdlib 每件内容进 key）" \
+  || bad "S5a comp_fp 没有 stdlib 身份（改 stdlib 会命中旧产物）"
+grep -qE 'PX_PXC_BIN|PXC_VM_BIN|PX_PXI_BIN' <<< "$cfn" \
+  && ok "S5b comp_fp 覆盖三个编译器覆盖口（PX_PXC_BIN / PXC_VM_BIN / PX_PXI_BIN）" \
+  || bad "S5b comp_fp 漏了编译器覆盖口"
+
+# ── P13 负控：换「不能产 C 的编译器」⇒ 不许命中，且必须响亮失败 ──
+if [ -x /bin/false ]; then
+  # 前提自证：同一源在 engine=c 下已有可命中条目（否则「不命中」是假绿）
+  ( cd "$W/v1" && PX_BUILD_ENGINE=c PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > o5 2> e5 )
+  ( cd "$W/v1" && PX_BUILD_ENGINE=c PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > o5b 2> e5b )
+  if grep -q '缓存命中' "$W/v1/e5b"; then
+    echo "   · 前提自证：engine=c 同编译器二次构建命中（证明这一组 key 本来是会命中的）"
+  else
+    bad "P13 前提不成立：engine=c 二次构建未命中（后续「换编译器不命中」无从判定）"
+  fi
+  rm -rf "$W/v1/build"
+  ( cd "$W/v1" && PX_BUILD_ENGINE=c PX_PXC_BIN=/bin/false PX_BUILD_VERBOSE=1 \
+      timeout 180 "$PX" build main.px > o6 2> e6 ); rc13=$?
+  grep -q '缓存命中' "$W/v1/e6" \
+    && bad "P13a 换了编译器仍命中缓存（缺陷 867：门的负控会被静默中和）" \
+    || ok "P13a 换编译器 ⇒ 不命中（编译器身份进了 key）"
+  [ "$rc13" -ne 0 ] \
+    && ok "P13b 坏编译器 ⇒ 响亮失败 rc=$rc13（不许拿旧产物冒充成功）" \
+    || bad "P13b 坏编译器仍判成功 rc=0（错误缓存比不缓存更糟）"
+else
+  bad "P13 前提不成立：/bin/false 不可执行（环境异常）"
+fi
+
+# ── P14 正控：**真编译器但换了实现**（输出被改成 WRAPPED）⇒ 必须 miss 且新行为生效 ──
+#   与 P4 不同：P4 变的是 basename，P14 变的是**编译器**（sha 不同、内容不同）。
+#   前提自证：wrapper 的 sha16 与真 pxc 不同（否则这条判据空转）。
+printf 'print("v1")\n' > "$W/v1/main.px"
+cat > "$TMP/wrap_pxc" <<EOF
+#!/usr/bin/env bash
+"$ROOT/bootstrap/pxc" "\$@" | sed 's/"v1"/"WRAPPED"/'
+EOF
+chmod +x "$TMP/wrap_pxc"
+sha_w=$(sha256sum "$TMP/wrap_pxc" | cut -c1-16)
+sha_r=$(sha256sum "$ROOT/bootstrap/pxc" 2>/dev/null | cut -c1-16)
+if [ -n "$sha_r" ] && [ "$sha_w" != "$sha_r" ]; then
+  echo "   · 前提自证：wrapper sha16=$sha_w ≠ 真 pxc sha16=$sha_r"
+  rm -rf "$W/v1/build"
+  ( cd "$W/v1" && PX_BUILD_ENGINE=c PX_PXC_BIN="$TMP/wrap_pxc" PX_BUILD_VERBOSE=1 \
+      timeout 180 "$PX" build main.px > o7 2> e7 ); rc14=$?
+  w_out="$("$W/v1/build/main" 2>/dev/null)"
+  if [ "$rc14" -eq 0 ] && ! grep -q '缓存命中' "$W/v1/e7" && [ "$w_out" = "WRAPPED" ]; then
+    ok "P14 换真编译器（输出 WRAPPED）⇒ miss 且新产物生效（编译器身份真的进 key）"
+  else
+    bad "P14 换编译器未生效（rc=$rc14 out=$w_out hit=$(grep -c '缓存命中' "$W/v1/e7")）"
+  fi
+else
+  bad "P14 前提不成立：拿不到真 pxc 的 sha（或 wrapper 与它同 sha）"
+fi
+
+# ── P15 stdlib 内容进 key（缺陷 867 第②洞 · 真行为）──────────────
+mkdir -p "$TMP/std"
+cp "$ROOT"/stdlib/*.px "$TMP/std"/ 2>/dev/null
+printf 'import std.semver\n\ndef main():\n    print(sv_cmp("1.0.0", "2.0.0"))\n' > "$W/v1/main.px"
+( cd "$W/v1" && PX_STDLIB="$TMP/std" PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > os1 2> es1 )
+( cd "$W/v1" && PX_STDLIB="$TMP/std" PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > os2 2> es2 ); rc15=$?
+if [ "$rc15" -eq 0 ] && grep -q '缓存命中' "$W/v1/es2"; then
+  echo "   · 前提自证：PX_STDLIB 副本同内容二次构建命中（证明这条路径本来会命中）"
+  printf '\n# m425 p15 probe\n' >> "$TMP/std/semver.px"
+  ( cd "$W/v1" && PX_STDLIB="$TMP/std" PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > os3 2> es3 )
+  grep -q '缓存命中' "$W/v1/es3" \
+    && bad "P15 stdlib 内容变更仍命中缓存（编译器内联的 stdlib 被缓存忽略）" \
+    || ok "P15 stdlib 内容变更 ⇒ 不命中（stdlib 每件内容进 key）"
+else
+  bad "P15 前提不成立：PX_STDLIB 副本二次构建未命中（rc=$rc15）"
 fi
 
 echo "======================================"

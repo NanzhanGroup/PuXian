@@ -80,6 +80,61 @@ CI 新增一步；进发布前置档 27 → 28 门（这门 21 秒判掉「缓�
       原子性靠 tmp+mv 的实现形状（S2b）+ 并发一致性（P12），没有做写中断注入
 ```
 
+### 补1（2026-11-20 20:3x）· 缺陷 867：缓存把「换编译器」当成同一个输入
+
+> **一句话**：`PX_PXC_BIN=/bin/false`（**根本不能产 C 的「编译器」**）跑 `px build`，
+> 打印的是「**缓存命中 … 编译成功 3138176 字节**」。M425 首轮链 **10 红里 9 门**由此而来 ——
+> m204/m233/m237/m246/m301/m166/m218/m220/m239 的负控都是「打桩编译器后再构建，C 轨必须判红」，
+> 缓存把打桩前的**好产物**还给了它们 ⇒ 负控失效 ⇒ 门的牙被我自己拔掉。
+
+```
+复现（实测 · /tmp/diag425 · 独立缓存目录 PX_BUILDCACHE_DIR）
+  ① 默认编译器 build hello.px        → 缓存写入 key=adb1c793…
+  ② PX_PXC_BIN=/bin/false 同一份源码 → 「缓存命中 key=adb1c793…（跳过 emit-c + gcc + 链接）· 编译成功」
+根因（两个洞，同一类：key 里少了「真正决定产物的输入」）
+  ① **编译器身份**：build_cache_key = 主脚本 + dep 闭包 + toolchain_fp + flags + basename，
+     toolchain_fp 取的是 **PXC_HOME 下**的 pxc_vm / pxi，**不含** PX_PXC_BIN / PXC_VM_BIN /
+     PX_PXI_BIN 这些覆盖口（也不含 bootstrap/pxc 本体）⇒ 「换编译器」在 key 里完全不可见
+  ② **stdlib 内容**：`import std.*` 由 PX_STDLIB 解析，px_resolve_import 对 std.* 直接返回空
+     （1206 行，为「沙箱复制不漂移」）⇒ stdlib/*.px **不在依赖闭包里**。实测：改
+     stdlib/semver.px 后 `px build` 仍打印「缓存命中」⇒ 编译器内联的 stdlib 被缓存忽略。
+     m302 的 [3B] 就因此红：解释轨读新 stdlib、VM/C 轨拿旧二进制 ⇒ 三轨分叉
+修法（tools/px）
+  comp_fp()：编译器三件（C 轨 / VM 轨 / 解释器）+ **PX_STDLIB 下的 27 个 *.px** 逐件内容 sha16，
+    用 (size,mtime,ino) 记忆化到 $BUILD_CACHE/.compiler.fp
+    （权威仍是内容哈希 —— M271 口径；记忆化只省重复计算，不改变身份定义）
+  build_cache_key 与 run_cache_key **都**加 comp_fp（build 与 --fast 同口径）
+  ⚠️ 性能：首版用 3×stat+3×awk 查 memo ⇒ --fast 从 168–191ms 涨到 209–243ms；
+     第二版只写新算条目、把命中的编译器行 prune 掉 ⇒ 每次重算 3×10MB，涨到 400ms。
+     第三版：单次 stat + mapfile + bash 比对 + 写回时保留本轮结果 ⇒ 148–161ms（比基线还快）
+
+验证
+  修复前  ②：命中 + rc=0（错误缓存，比不缓存更糟）；改 stdlib：仍命中
+  修复后  ②：不命中 + rc=1（require_runnable 响亮拒绝）；改 stdlib：不命中
+  门 新增 9 条判据（31/31 全绿）：
+    S4a/S4b/S4c  源码形状：comp_fp 存在，且被 build_cache_key 与 run_cache_key 各自引用
+    S5a/S5b      comp_fp 覆盖 PX_STDLIB 与三个编译器覆盖口
+    P13a/P13b    engine=c 二次构建命中（前提自证）→ PX_PXC_BIN=/bin/false ⇒ 不命中 且 rc≠0
+    P14          真编译器但换实现（wrapper 把输出改成 WRAPPED）⇒ miss 且新产物生效
+                 （前提自证：wrapper sha16 ≠ 真 pxc sha16）
+    P15          PX_STDLIB 副本同内容二次命中（前提自证）→ 改一件 stdlib ⇒ 必须 miss
+  真门复核（隔离工作树 diag425 @ d25fc9d + 本补丁）
+    m204_assign_op    15 通过 / 7 失败 → **22 / 0**（4 条负控全部恢复）
+    m302_stdlib_surface3  [3B] 三轨分叉 Nr1（interp true / vm,c false）→ 见下
+```
+
+### 补1 的诚实边界
+
+```
+能说  「换编译器」与「改 stdlib」不再是 key 的盲区（各有一条打桩负控 + 前提自证）
+能说  m204 的四条负控（4A–4D）在本补丁下从 FAIL 恢复为 PASS（22/0）
+不能说「M425 首轮 10 红已全部定性」—— 已实证 2 条（m204、m302 之因），其余 8 条按同上机理
+      推定、**未逐门实证**；本轮重跑链会给答案
+不说  这「只是慢了」—— 它是**语义**问题：缓存能让一个坏编译器「编译成功」，
+      也能让「编译器内联进来的 stdlib」与「运行时读的 stdlib」分身（m302 三轨分叉就是这个）
+```
+
+
 ## M424：px_exec 的每次调用白付 30ms —— 直连 pxi（缺陷 864）
 ## M424：px_exec 的每次调用白付 30ms —— 直连 pxi（缺陷 864）
 

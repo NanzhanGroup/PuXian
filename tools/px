@@ -1027,6 +1027,93 @@ RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
 # ══════════════════════════════════════════════════════════════
 BUILD_CACHE="${PX_BUILDCACHE_DIR:-$PXC_HOME/.buildcache}"
 
+# ── M425 补1（缺陷 867）：**编译器身份必须进 key** ─────────────────────────
+# 实测（2026-11-20 20:26 · /tmp/diag425 · 独立缓存目录）：
+#   ① 默认编译器建 hello.px ⇒ 缓存写入 key=adb1c793…
+#   ② `PX_PXC_BIN=/bin/false`（**根本不能产 C 的「编译器」**）再建同一份源码
+#      ⇒ 打印「缓存命中 key=adb1c793…（跳过 emit-c + gcc + 链接）· 编译成功 3138176 字节」
+#   ⇒ 缓存把一个**不同的编译器**（甚至是坏的）的产物冒充成本次产物。
+#   后果不是「慢」，是**语义**：任何「换编译器再构建」的负控都被静默中和 ——
+#   M425 首轮链 10 红（m204/m233/m237/m246/m301/m166/m218/m220/m239）全是这条：
+#   它们打桩后会 `PX_PXC_BIN=/tmp/pxcdev px build …`，命中旧条目 ⇒ C 轨仍是好实现
+#   ⇒ 「负控必须判红」失败 ⇒ 门的牙被我的缓存拔掉了。
+#   （本文件 1030 行的老注释就写着「错误缓存比不缓存更糟」，当时只给 basename 上了锁。）
+# 口径：权威是**内容哈希**（M271）；用 (size,mtime,ino) 记忆化，避免每次多付 ~200 ms 全量 sha。
+# 覆盖：C 轨编译器（PX_PXC_BIN / bootstrap/pxc）、VM 轨编译器（PXC_VM_BIN / bootstrap/pxc_vm）、
+#       解释器（PX_PXI_BIN / bootstrap/pxi）—— 前两者决定产物，后者决定 --fast 契约。
+comp_fp() { # stdout: "comp=<sha16>"（编译器）与 "std=<sha16>"（stdlib 每件一行）；缺失项不写行
+    # ⚠️ 性能纪律：本函数在 `px run --fast` 的每次命中也跑 ⇒ 单次 stat + mapfile + bash 比对，
+    #   不许 fork awk/sha（首版 3×stat+3×awk 实测把 --fast 从 168–191ms 拖到 209–243ms）。
+    #
+    # M425 补1（缺陷 867）两个洞都在这里堵：
+    #   ① **编译器身份**：PX_PXC_BIN / PXC_VM_BIN / PX_PXI_BIN 是门里打桩用的覆盖口，
+    #      不进 key ⇒ 负控「换编译器再构建」会命中旧产物（实测 /bin/false 也能「编译成功」）。
+    #   ② **stdlib 内容**：`import std.*` 由 PX_STDLIB 解析，px_resolve_import 对 std.* 直接
+    #      返回空（1206 行，为沙箱复制不漂移）⇒ stdlib/*.px **不在依赖闭包里** ⇒ 改 stdlib
+    #      仍命中旧产物（实测：改 stdlib/semver.px 后 build 仍「缓存命中」；m302 3B 就因此红：
+    #      解释轨读新 stdlib、VM/C 轨拿旧二进制 ⇒ 三轨分叉）。这里按内容逐件进 key。
+    #   ⚠️ memo 写回必须**保留本轮命中的条目**：首版只写 pend（新算的），把命中的编译器行
+    #      prune 掉了 ⇒ 下一次全部重算 sha（3×10MB ≈ 210ms），--fast 从 190ms 变 400ms。
+    local memo="$BUILD_CACHE/.compiler.fp" out="" p key l sha size mt ino skip k sdir tgt
+    local -a paths=( "${PX_PXC_BIN:-$PXC_HOME/bootstrap/pxc}" \
+                     "${PXC_VM_BIN:-$PXC_HOME/bootstrap/pxc_vm}" \
+                     "${PX_PXI_BIN:-$PXC_HOME/bootstrap/pxi}" )
+    sdir="${PX_STDLIB:-$PXC_HOME/stdlib}"
+    if [ -d "$sdir" ]; then
+        for p in "$sdir"/*.px ; do [ -f "$p" ] || continue; paths+=("$p"); done
+    fi
+    local -A det=() mem=() res=()
+    local stl
+    stl="$(stat --printf='%n\t%s\t%Y\t%i\n' -- "${paths[@]}" 2>/dev/null)"
+    while IFS=$'\t' read -r p size mt ino; do
+        [ -n "$p" ] || continue
+        det["$p"]="$size"$'\t'"$mt"$'\t'"$ino"
+    done <<< "$stl"
+    if [ -f "$memo" ]; then
+        local -a _l=(); mapfile -t _l < "$memo" 2>/dev/null
+        for l in "${_l[@]}"; do
+            [ -n "$l" ] || continue
+            mem["${l%$'\t'*}"]="${l##*$'\t'}"
+        done
+    fi
+    local dirty=0
+    for p in "${paths[@]}"; do
+        [ -n "$p" ] && [ -n "${det[$p]:-}" ] || continue
+        key="$p"$'\t'"${det[$p]}"
+        sha="${mem[$key]:-}"
+        if [ -z "$sha" ]; then
+            sha="$(sha256sum "$p" 2>/dev/null | cut -c1-16)"
+            [ -n "$sha" ] || continue
+            dirty=1
+        fi
+        res["$key"]="$sha"
+        case "$p" in
+            "$sdir"/*) out="$out std=$sha" ;;
+            *)         out="$out comp=$sha" ;;
+        esac
+    done
+    if [ "$dirty" = 1 ] && { [ -d "$BUILD_CACHE" ] || mkdir -p "$BUILD_CACHE" 2>/dev/null; }; then
+        local tmpd="$memo.tmp.$$"
+        {
+            # 保留与本轮**无关**的旧条目（别的 stdlib 路径等），本轮涉及的路径一律用 res 重写
+            for k in "${!mem[@]}"; do
+                skip=""
+                for p in "${paths[@]}"; do
+                    case "$k" in "$p"$'\t'*) skip=1 ;; esac
+                done
+                [ -n "$skip" ] && continue
+                printf '%s\t%s\n' "$k" "${mem[$k]}"
+            done
+            for k in "${!res[@]}"; do
+                printf '%s\t%s\n' "$k" "${res[$k]}"
+            done
+        } > "$tmpd" 2>/dev/null && mv -f "$tmpd" "$memo" 2>/dev/null
+        rm -f "$tmpd" 2>/dev/null
+    fi
+    [ -n "$out" ] && printf '%s\n' "${out# }"
+    return 0
+}
+
 build_cache_key() { # $1=主脚本绝对路径 $2=base $3=engine $4=lto $5=cc $6=no_quic $7=mods $8=cuts $9=full
     local f="$1" base="$2" engine="$3" lto="$4" cc="$5" nq="$6" mods="$7" cuts="$8" full="$9"
     {
@@ -1040,6 +1127,7 @@ build_cache_key() { # $1=主脚本绝对路径 $2=base $3=engine $4=lto $5=cc $6
             sha256sum "$_df" 2>/dev/null | cut -c1-16
         done < <(px_dep_closure "$f" 2>/dev/null) | LC_ALL=C sort
         toolchain_fp
+        comp_fp          # M425 补1（缺陷 867）：编译器身份 —— 少了它就会「换个编译器还命中」
     } | sha256sum | cut -c1-32
 }
 
@@ -1296,6 +1384,11 @@ run_cache_key() { # $1=脚本绝对路径 ⇒ stdout key（只由"会影响产�
         #     （= 缓存改变了语义）。与 .rtcache 的教训同构：
         #     **key 必须由「真正决定行为的输入」驱动**。
         #   （M383：该信号由上面的 toolchain_fp 一并提供）
+        #   ⚠️ M425 补1（缺陷 867）：toolchain_fp 取的是 **PXC_HOME 下的** pxc_vm/pxi，
+        #     不含 PX_PXI_BIN / PXC_VM_BIN / PX_PXC_BIN 这些**覆盖口**。门里的负控正是靠
+        #     覆盖口把「被打桩的解释器/编译器」换进来（/tmp/pxidev、/tmp/pxcdev）——
+        #     覆盖口不进 key ⇒ 负控命中旧条目 ⇒ 门的牙被拔掉（M425 首轮链 10 红同源）。
+        comp_fp
     } | sha256sum | cut -c1-16
 }
 
