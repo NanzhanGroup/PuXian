@@ -1317,9 +1317,28 @@ toolchain_fp() { # stdout=5 行指纹（与旧实现逐字节同流）
     local fp="$RUN_CACHE/.toolchain.fp"
     local stamp="$RUN_CACHE/.toolchain.stamp"
     local ttl="${PX_TOOLCHAIN_FP_TTL:-1800}"
-    local sizes
-    sizes="$(stat -c '%s' "$PXC_HOME/bootstrap/pxc_vm" "$PXC_HOME/bootstrap/pxi" 2>/dev/null | tr '\n' ' ')"
-    if [ -f "$fp" ] && [ -f "$stamp" ] && [ -n "$sizes" ]; then
+    # ── M425 补2（缺陷 868）：有效性判据必须**双向** ──────────────────────────
+    #   病灶（2026-11-20 23:2x M425 全量门红 · m233 负控 B 的「确定性层仍绿」判据）：
+    #   m233 负控 A 把 `runtime.c` 的兜底退回 `fmt_num` ⇒ 该次构建把「**回退版** rt_key」
+    #   写进 memo；`negctl restore` 用 shutil.copy2 **保留原 mtime** ⇒ 复原后的 runtime.c
+    #   比 `$stamp` 还**旧** ⇒ `find -newer` 只看得见「变新」、看不见「改回旧值」⇒ memo 判有效、
+    #   继续吐回退版 rt_key ⇒ 产物缓存把「回退版 runtime」与「正式版 runtime」算成同一输入
+    #   ⇒ A 的坏产物以**正式 key** 落盘，之后 B / 正式构建全部命中坏产物（确定性判据红）。
+    #   修法：额外记一份 **stat 签名**（路径:size:mtime:ino，覆盖 rt_key 的全部源 + 两个
+    #   自举件 + VERSION；单次 stat 聚合 ≈4 ms），要求**逐字节相等**才算命中 —— 变新、变旧、
+    #   换文件都失效。`find -newer` 保留，兜住 runtime/third_party 下**不在 key 内**的源
+    #   （mbedtls 头等）被原地更新的情形。内容哈希仍是权威（慢路径重算 rt_key）。
+    local sig
+    # ⚠️ engine 也是 memo 的输入（指纹最后一行 `engine=…` 在 body 里）—— 必须一起进签名，
+    #    否则「vm 档算出的 memo」会被 c 档复用（实测：同源同内容两次构建拿到两把不同的 key，
+    #    缓存命中率与判据稳定性一起坏）。`cuts`/`lto`/`--cc` 不进这里：它们各自进 build_cache_key。
+    sig="$( { stat -c '%n:%s:%Y:%i' -- \
+             "$PXC_HOME/bootstrap/pxc_vm" "$PXC_HOME/bootstrap/pxi" "$PXC_HOME/VERSION" \
+             "$RT_DIR"/*.c "$RT_DIR"/*.h \
+             "$RT_DIR"/third_party/miniz/*.c "$RT_DIR"/third_party/miniz/*.h \
+             "$RT_DIR"/third_party/sqlite3/sqlite3.h 2>/dev/null
+            echo "engine=${PX_BUILD_ENGINE:-vm}" 2>/dev/null; } | md5sum | cut -c1-16)"
+    if [ -f "$fp" ] && [ -f "$stamp" ] && [ -n "${sig:-}" ]; then
         local now age
         # EPOCHSECONDS 是 bash 5 内建（零 fork）；el7 的 4.2 没有 ⇒ 惰性回退 date
         now="${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}"
@@ -1327,7 +1346,7 @@ toolchain_fp() { # stdout=5 行指纹（与旧实现逐字节同流）
         # mapfile 是内建（零 fork）—— 快路径每省一次 fork 都是真金白银：这条路径走 N 次
         local -a _fp; mapfile -t _fp < "$fp" 2>/dev/null
         if [ "$age" -lt "$ttl" ] \
-           && [ "$sizes" = "${_fp[0]#'#SIZES '}" ] && [ "${_fp[1]:-}" = "#FP" ]; then
+           && [ "${_fp[0]:-}" = "#SIG $sig" ] && [ "${_fp[1]:-}" = "#FP" ]; then
             if [ -z "$(find "$RT_DIR" "$PXC_HOME/bootstrap/pxc_vm" \
                            "$PXC_HOME/bootstrap/pxi" "$PXC_HOME/VERSION" \
                            -newer "$stamp" -print -quit 2>/dev/null)" ]; then
@@ -1347,7 +1366,7 @@ toolchain_fp() { # stdout=5 行指纹（与旧实现逐字节同流）
         echo "engine=${PX_BUILD_ENGINE:-vm}"
     } 2>/dev/null )"
     if mkdir -p "$RUN_CACHE" 2>/dev/null; then
-        { printf '#SIZES %s\n#FP\n%s\n' "$sizes" "$out"; } > "$fp.tmp.$$" 2>/dev/null \
+        { printf '#SIG %s\n#FP\n%s\n' "$sig" "$out"; } > "$fp.tmp.$$" 2>/dev/null \
             && mv "$fp.tmp.$$" "$fp" 2>/dev/null \
             && touch "$stamp" 2>/dev/null
         rm -f "$fp.tmp.$$" 2>/dev/null

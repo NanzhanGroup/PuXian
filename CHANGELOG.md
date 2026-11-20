@@ -123,6 +123,54 @@ CI 新增一步；进发布前置档 27 → 28 门（这门 21 秒判掉「缓�
     m302_stdlib_surface3  [3B] 三轨分叉 Nr1（interp true / vm,c false）→ 见下
 ```
 
+### 补2（2026-11-20 23:2x–00:2x）· 缺陷 868：缓存把「回退版 runtime」当成「正式版 runtime」
+
+> **一句话**：M425 第二轮全量门 **300 门里 1 红**（`m233_text_cstr`），红的不是产品、也不是判据，
+> 是**我给缓存开的第二个盲区**：`toolchain_fp` 的记忆化只用 `find -newer` 判有效 ——
+> 它看得见「文件变新」，**看不见「文件改回旧值」**。负控/回滚/打桩复原的标准手法
+> （`negctl.py restore` 用 `shutil.copy2`、人工 `cp -p`）**刻意保留 mtime**，复原后的
+> `runtime/runtime.c` 比 stamp 还旧 ⇒ 记忆化判「有效」⇒ 继续吐**回退版 rt_key**
+> ⇒ 产物缓存把「`val_cstr` 退回 `fmt_num` 的 runtime」与「修好的 runtime」算成**同一个输入**
+> ⇒ 负控 A 的坏产物以**正式 key** 落盘，随后负控 B / 正式构建全部命中坏产物。
+
+```
+复现（2026-11-20 23:26 门红 · 23:5x 逐层定位）
+  链上：CHAIN-VERDICT=RED reason=红 1 门 green=299 red=1 head=4bc51a3
+        ❌ m233_text_cstr：复跑仍红（rc=1 状态=FAIL 110s）
+  门内：16 条判据里**只红一条** —— 「负控 B：确定性层仍绿（两组判据互相独立）」
+        负控 B 只撤解释轨的 i_cstr_arg（不碰 runtime）⇒ 确定性层**本应保持绿**
+  逐层：
+    ① 手工复跑该门（PX_BUILD_VERBOSE=1）⇒ 复现，且 negB 两次 build 都打印「缓存命中」
+    ② 拿缓存条目里的产物单跑 case 14（sha256([1])）三遍 ⇒ 三个不同哈希（读 union 指针位）
+    ③ 同源 + 空缓存目录冷构建 ⇒ 产物**确定性**（122 例全对；3228112 字节 vs 中毒版 3232072）
+    ④ 把 negctl 的 A 补丁打上再构建（独立缓存目录）⇒ 打印「缓存写入 key=5a1b4cca」——
+       与**正式版**同一把 key ⇒ 两个不同输入共用一条缓存记录，这就是全部病根
+    ⑤ 直查 .runcache/.toolchain.fp：body 里 rt_key 是 b5f1fd07…（A 补丁态的哈希），
+       而 `px rtkey ""` 当场算出 62070502…（正式态）⇒ **记忆化滞留**
+  第二个盲区（同批抓出）：`engine=` 也在指纹 body 里，但有效性判据不比对它
+       ⇒ vm 档算出的 memo 会被 c 档复用（实测同源同内容两次构建拿到两把不同 key）
+修法（tools/px · toolchain_fp）
+  记忆化记录加一行 **stat 签名** `#SIG <md5(路径:size:mtime:ino…)><engine>`：
+    覆盖 rt_key 的全部源 + pxc_vm / pxi + VERSION（**单次 stat 聚合 ≈4 ms**）+ engine，
+    要求**逐字节相等**才算命中 ⇒ 变新、变旧、换文件、换档位，四种都失效
+  `find -newer` 保留：兜住 runtime/third_party 下**不在 key 内**的源（mbedtls 头等）被原地更新
+  内容哈希仍是权威（慢路径重算 rt_key），记忆化只省重复计算 —— M271 口径不变
+验证
+  旧版 px（HEAD 4bc51a3）：补丁态 key=c341910c… → **保留 mtime 复原后仍= c341910c…**（错，滞留）
+  新版 px（本补丁）    ：补丁态 key=b076fbf5… → **保留 mtime 复原后= aef081bf…**（对，回到正式 key）
+  门 m425_build_cache：31 → **33 条判据全绿**（+P16b/P16c，均带前提自证）
+    P16b 改 runtime.c（追加一行注释）⇒ 必须不命中
+    P16c **保留 mtime 复原** ⇒ 必须命中且产物回到 P16 ① 的正式产物（这一条正是旧版会红的那条）
+  门 m233_text_cstr：15/1 → **16/0（M233-VERIFY-OK）**
+诚实边界
+  残留风险：**同 size 且同 mtime 的原地内容改写**仍检测不到（`-newer` 与 stat 签名都看不见），
+    由 TTL（PX_TOOLCHAIN_FP_TTL，默认 1800 s）兜住，最坏滞后一个 TTL。要彻底消除只能每次全算
+    （rt_key 实测 461 ms ≈ 热态 79% 的耗时）—— 这笔账写在 tools/px 的注释里。
+  已中毒的历史条目（key=5a1b4cca…）仍在 .buildcache 里，但**再也不会被正式输入命中**（key 已分开）；
+    它只占 ~3 MB，按「缓存只许影响快慢」的口径无害。
+
+
+
 ### 补1 的诚实边界
 
 ```

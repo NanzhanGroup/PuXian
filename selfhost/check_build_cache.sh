@@ -28,6 +28,8 @@
 #   N1 编译失败的脚本 ⇒ rc≠0 且**不写缓存**
 #   N2 失败脚本重跑仍失败（缓存不许把红变绿）
 #   N3 有编译期诊断（模块缺失）⇒ rc=0 但**不写缓存**（诊断不许被缓存吞掉）
+#   P16 runtime 源内容进 key（缺陷 868）：改 runtime.c ⇒ 不许命中；**保留 mtime 复原**
+#        ⇒ 必须回到原产物（「改回旧值」也算了变化 —— `find -newer` 看不见这一侧）
 #   环境不成立（tools/px 缺失 / 探针构建失败 / 扫描面为空）⇒ rc=3，绝不降级成绿
 #
 # 用法：check_build_cache.sh            # 全跑（默认 ~40s）
@@ -42,7 +44,14 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/m425_buildcache.XXXXXX")"
 PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
-cleanup() { chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"; }
+# M425 补2（缺陷 868）：P16 会**临时改 runtime/runtime.c**，退出路径必须无条件复原。
+RT_BAK=""
+cleanup() {
+  if [ -n "${RT_BAK:-}" ] && [ -f "$RT_BAK" ]; then
+    cp -p "$RT_BAK" "$ROOT/runtime/runtime.c" 2>/dev/null
+  fi
+  chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"
+}
 trap cleanup EXIT
 
 now_ms() { date +%s%N 2>/dev/null | cut -c1-13 | sed 's/^0*//' ; }
@@ -374,6 +383,48 @@ if [ "$rc15" -eq 0 ] && grep -q '缓存命中' "$W/v1/es2"; then
     || ok "P15 stdlib 内容变更 ⇒ 不命中（stdlib 每件内容进 key）"
 else
   bad "P15 前提不成立：PX_STDLIB 副本二次构建未命中（rc=$rc15）"
+fi
+
+# ── P16 runtime 源内容进 key（缺陷 868 · 「改回旧值」也算变）──────────
+#   病灶（2026-11-20 23:2x · M425 全量门 m233 负控 B 红）：toolchain_fp 的 memo 只用
+#   `find -newer` 判有效 ⇒ 用 `cp -p` / `shutil.copy2` **保留 mtime** 复原回来时（负控、
+#   回滚、打桩复原的标准手法）memo 看不见「变旧」这一侧 ⇒ 继续吐旧 rt_key ⇒ 产物缓存
+#   把「回退版 runtime」与「正式版 runtime」算成同一个输入（题眼：坏产物以正式 key 落盘）。
+#   判据三段都要，缺一段都是空转：
+#     ① 前提自证：同内容二次构建**命中**（证明这条路径本来就会命中）
+#     ② 改 runtime.c（追加一行注释）⇒ 必须**不命中**
+#     ③ **保留 mtime 复原** ⇒ 必须回到 ① 的正式产物（命中），且源码逐字节还原
+RT_C="$ROOT/runtime/runtime.c"
+if [ -f "$RT_C" ]; then
+  RT_BAK="$TMP/runtime.c.bak"; cp -p "$RT_C" "$RT_BAK"
+  printf 'print("rt16")\n' > "$W/v1/main.px"
+  ( cd "$W/v1" && PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > oA 2> eA ); rcA=$?
+  sha_rtA=$(sha256sum "$W/v1/build/main" 2>/dev/null | cut -d' ' -f1)
+  ( cd "$W/v1" && PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > oB 2> eB ); rcB=$?
+  if [ "$rcA" -eq 0 ] && [ "$rcB" -eq 0 ] && grep -q '缓存命中' "$W/v1/eB"; then
+    echo "   · 前提自证：同内容二次构建命中（这条路径本来会命中）"
+    sha_rt=$(sha256sum "$RT_C" | cut -d' ' -f1)
+    printf '\n// m425 p16 probe\n' >> "$RT_C"
+    ( cd "$W/v1" && PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > oC 2> eC )
+    grep -q '缓存命中' "$W/v1/eC" \
+      && bad "P16b 改 runtime 源仍命中缓存（缺陷 868：runtime 未进产物缓存 key）" \
+      || ok "P16b 改 runtime 源 ⇒ 不命中（runtime 内容/签名进了 key）"
+    cp -p "$RT_BAK" "$RT_C"          # ③ 刻意保留 mtime —— 正是掩盖病灶的那种复原
+    if [ "$(sha256sum "$RT_C" | cut -d' ' -f1)" = "$sha_rt" ]; then
+      ( cd "$W/v1" && PX_BUILD_VERBOSE=1 timeout 180 "$PX" build main.px > oD 2> eD )
+      sha_rtD=$(sha256sum "$W/v1/build/main" 2>/dev/null | cut -d' ' -f1)
+      if grep -q '缓存命中' "$W/v1/eD" && [ "$sha_rtD" = "$sha_rtA" ]; then
+        ok "P16c 保留 mtime 复原 ⇒ 命中并回到正式产物（memo 双向失效生效）"
+      else
+        bad "P16c 复原后未回到正式产物（hit=$(grep -c '缓存命中' "$W/v1/eD") sha=$([ "$sha_rtD" = "$sha_rtA" ] && echo same || echo diff)）"
+      fi
+    else
+      bad "P16c 前提不成立：runtime.c 未逐字节还原"
+    fi
+  else
+    bad "P16 前提不成立：同内容二次构建未命中（rcA=$rcA rcB=$rcB）"
+  fi
+  RT_BAK=""
 fi
 
 echo "======================================"
