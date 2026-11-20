@@ -32,7 +32,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PX="$ROOT/tools/px"
 PXI="$ROOT/bootstrap/pxi"
 RT="$ROOT/runtime/runtime.c"
-TMP="${TMPDIR:-/tmp}/m424_pxexec.$$"
+# 探针必须落在树内（M426 · 缺陷 864 补）：px_interp_bin 从 exe 目录逐级上溯 ≤6 层找
+#   <dir>/bootstrap/pxi；建在 /tmp 下必找不到 ⇒ 退化到 PATH 找 px ⇒ CI 无 px ⇒ R1002 假红（本机装了 rpm 才恒绿）。
+TMP="$ROOT/tmp/m424_pxexec.$$"   # $ROOT/.gitignore 已含 /tmp/ ⇒ 不脏树
 PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
