@@ -12,3 +12,4 @@ host:tag_notify.sh	发版通知：绿判定是投递回执 USER-NOTIFY-OK，不�
 host:tag_notify_watch.sh	探针外壳：判据委托给 check_tag_notify.sh（那里有 ntags= 与明文缺失清单）
 host:m409_closeout2.sh	M409 收口归档脚本（11-16 15:30 定稿），已过时不再运行；追溯改写无收益
 host:m409_m256_loadcheck_r23.sh	M409 r23 失败复现脚本，一次性已归档；同一形状的现行判据在 m409_verify_m256_shard.sh（有扫描面 + 零值守卫）
+host:m425_chain_tail.sh	M425 R3 链尾补写脚本（11-21 一次性收尾，M425 已发布归档）：判绿＝按 R2 同形状写出 CHAIN-EXIT，不做内容扫描（绿来自标记件字段，不来自 grep 命中）；同形状的现役组件是 repo packaging/chain/chain_tail.sh（已有零载体守卫，见其 ALLOW 条目）

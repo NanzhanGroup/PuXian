@@ -43,8 +43,10 @@
 #   - chain-20261120-234411 = /data/gatevm/shard-20261120-234411/shard7.times.tsv（300 行）
 #   - chain-20261120-234411 = /data/gatevm/shard-20261120-234411/shard8.times.tsv（300 行）
 #   - preflight-20261120-211146 = /data/gatevm/preflight-20261120-211146.times.tsv（300 行）
+#   - preflight-20261121-020458 = /data/gatevm/preflight-20261121-020458.times.tsv（301 行）
+#   - m426-examples-run-118s = /data/gatevm/m426-examples-run.times.tsv（1 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-21 01:30:11 +0800
+# 生成时间：2026-11-21 02:44:30 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261120-182714
@@ -142,19 +144,19 @@ m183_gc_root_handover	187	OK	chain-20261120-234411
 m184_num_fs_strict	202	OK	chain-20261120-234411
 m185_bytes_face	159	OK	chain-20261120-234411
 m186_native_passthrough	139	OK	chain-20261120-234411
-m187_registry_import	304	OK	chain-20261120-234411
+m187_registry_import	313	OK	preflight-20261121-020458
 m188_std_face	160	OK	chain-20261120-234411
 m189_bytes_bounds	160	OK	chain-20261120-234411
 m190_arity	272	OK	chain-20261120-234411
-m191_error_codes	49	OK	chain-20261120-234411
-m192_encfamily	38	OK	chain-20261120-234411
-m193_errcodes2	50	OK	chain-20261120-234411
+m191_error_codes	86	OK	preflight-20261121-020458
+m192_encfamily	169	OK	preflight-20261121-020458
+m193_errcodes2	158	OK	preflight-20261121-020458
 m194_arg_guards	134	OK	chain-20261120-234411
 m195_arg_guards2	128	OK	chain-20261120-234411
-m196_msg_parity	65	OK	chain-20261120-234411
-m197_builtin_arity	53	OK	chain-20261120-234411
+m196_msg_parity	111	OK	preflight-20261121-020458
+m197_builtin_arity	94	OK	preflight-20261121-020458
 m198_argface	143	OK	chain-20261120-234411
-m199_argtype	398	OK	preflight-20261120-211146
+m199_argtype	480	OK	preflight-20261121-020458
 m200_ffi_globals	143	OK	chain-20261120-234411
 m201_bytes_dec	119	OK	chain-20261120-234411
 m201_interp_ffi	63	OK	chain-20261120-182714
@@ -218,8 +220,8 @@ m276_gate_lock	7	OK	chain-20261120-213756
 m278_release_reconcile	2	OK	chain-20261120-182714
 m279_std_surface	16	OK	chain-20261120-234411
 m280_resource_baseline	62	OK	chain-20261120-182714
-m282_registry_020	65	OK	preflight-20261120-211146
-m283_gate_premise	100	OK	chain-20261120-234411
+m282_registry_020	67	OK	preflight-20261121-020458
+m283_gate_premise	103	OK	preflight-20261121-020458
 m284_orchestrator	44	OK	chain-20261120-234411
 m285_gate_assertions	99	OK	chain-20261120-182714
 m286_anchor_multi	51	OK	chain-20261120-182714
@@ -301,7 +303,8 @@ m421_examples_coverage	70	OK	chain-20261120-182714
 m422_examples_compile	89	OK	chain-20261120-213756
 m423_pxexec_portable	5	OK	preflight-20261120-211146
 m424_pxexec_direct	6	OK	preflight-20261120-211146
-m425_build_cache	30	OK	chain-20261120-234411
+m425_build_cache	64	OK	preflight-20261121-020458
+m426_examples_run	118	PASS	m426-examples-run-118s
 m63_langfix	6	OK	chain-20261120-213756
 m64_fmt	1	OK	chain-20261120-182714
 m64_lint	1	OK	chain-20261120-213756
