@@ -142,7 +142,20 @@ fi
 # 负控的负控：只有目录、**没有** CHAIN-COMPLETE.txt（= 正在跑的链）⇒ 不许判红
 rm -f "$TMP/md/shard-20991231-000000/CHAIN-COMPLETE.txt"
 "$CHK" --baseline "$TMP/full.tsv" --list-file "$TMP/gates.txt" --measured-dir "$TMP/md" > "$TMP/n2b.log" 2>&1
-[ "$?" = 0 ] && ok "N2b 未完成的链不计入（否则判据会读自己）" || bad "N2b 未完成链被计入 ⇒ P7 会自激"
+# 缺陷 862（M423 补4 · 2026-11-20）：本行原写作 `[ "$?" = 0 ] && ok || bad` 且失败时不打印任何证据。
+#   病史：11-20 02:16 preflight 这一行判红（「未完成链被计入 ⇒ P7 会自激」），当天复跑 17/17 全绿 ⇒
+#   **无法定性**：rc=1（P7 真有牙地误判）与 rc=3（前提不成立：注册源/基线/清单读不到）被并成一句话，
+#   n2b.log 也没落盘，现场永久丢失。判据的失败必须说得出「哪一条、什么原因」——这是 M371 就立过的纪律。
+rc=$?
+if [ "$rc" = 0 ] && grep -q '没有已判绿的完成链' "$TMP/n2b.log"; then
+    ok "N2b 未完成的链不计入（否则判据会读自己）· 绿的理由是「无已判绿链」而非别处"
+elif [ "$rc" = 3 ]; then
+    bad "N2b rc=3 前提不成立（不是 P7 有牙）：$(grep -E '前提不成立|❌' "$TMP/n2b.log" | head -1)"
+elif [ "$rc" = 0 ]; then
+    bad "N2b rc=0 但不是因为「无已判绿链」（判据的绿来路不明）：$(grep -E '没有|跳过|基线已回灌' "$TMP/n2b.log" | head -2 | tr '\n' ' ')"
+else
+    bad "N2b 未完成链被计入 ⇒ P7 会自激 rc=$rc：$(grep '❌' "$TMP/n2b.log" | head -2 | tr '\n' ' ')"
+fi
 # ── N2d 红链不算「该回灌的实测」（M400 首跑 r2 的锁死形态：红链永不发布 ⇒ 永不回灌）──
 printf 'chain_ts=20991231-000000\nok=1\n' > "$TMP/md/shard-20991231-000000/CHAIN-COMPLETE.txt"
 printf 'GATE-VERDICT=RED reason=no-go\n' > "$TMP/md/shard-20991231-000000/GATE-VERDICT"
