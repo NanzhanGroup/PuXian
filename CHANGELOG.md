@@ -1,3 +1,75 @@
+## M427：px_serve 的 opts 从「逐键猜测」改成「白名单契约」（缺陷 874）
+
+> **一句话**：用户唯一的服务配置面 `px_serve(port, docroot, timeout, opts)` 里，**拼错的键从来不会报错** ——
+> 认得的键生效、不认得的键**静默忽略**，服务照起、配置不生效。本轮加了入口白名单：
+> 未知键 ⇒ **R1002 并列出全部 14 个已知键**；14 个已知键逐个单传都起得来（防过度修复）。
+
+### 证据（2026-11-21 · 本机 · HEAD 4cfa801 + 本树修改）
+
+```
+修前（源码形状 · 可复核）：runtime.c 30206–30305 逐键 px_dict_get 认 14 个键
+                            max_body_size · body_spill · max_conn · rate_limit · access_log · alt_svc
+                            log_json · log_daily · gzip_level · gzip_min_bytes · gzip · h2_demo
+                            http3 · reuse_port
+                          分散在 3 个位置，**没有任何一处校验键名**
+同仓反例（说明口径本来就是「响亮优于静默」）
+  http_stream / ws_stream 的 opts.methods 含未知方法 ⇒ R1002（24460 / 24558）
+  px_serve 的 opts.http3 在 --no-quic 产物上     ⇒ R1002（30286 · M180）
+最小复现（修后实测 · 在 /tmp 构建 · 产物直接跑）
+  $ ./build/typo
+  before
+  rc=1
+  运行时错误 [<top> 行2]: R1002: px_serve opts 里不认识的键 "max_body_sise"（拼错？已知键：
+    max_body_size / body_spill / max_conn / rate_limit / access_log / alt_svc / log_json /
+    log_daily / gzip_level / gzip_min_bytes / gzip / h2_demo / http3 / reuse_port）
+  （修前同一份源码：rc=124 —— 服务起、配置静默不生效）
+```
+
+### 修法
+
+```
+runtime.c：14 键常量表 + 进入逐键解析**之前**一次校验；未知键 ⇒ px_error 报 R1002，
+          消息里现场拼出全部已知键（用户当场自服务，不必翻文档）
+          rate_limit 子字典四个键（max / window_sec / key / whitelist）同办
+          只校验**键名**：值的类型/范围仍走原逻辑（本轮不改语义）
+```
+
+### 门（301 → 302）
+
+```
+m427_opts_whitelist（selfhost/check_opts_whitelist.sh · 自测 6 条离线 · 全跑约 50~60s）
+  S1a 键表常量存在 · S1b 校验在第一个 opts 取值**之前**（行号比较，不猜顺序）
+  S2a 键表恰 14 键且与契约集合**相等**（set 比较，不靠顺序）· S2b R1002 + rate_limit 子字典
+  P1 负控：拼错键 rc≠0 且同时报出错误键名与正确键名 · P2 未知键 foo
+  P5 负控：未知键配 null 值同样报（键名检查与**值无关**）
+  P3 正控（防过度修复，最关键）：14 个已知键**逐个单传**，每例一次真实 GET 200 才算「服务起来」
+  P4 正控：{} 与不传第 4 参
+  P6 负控自证：把 px_serve 的 `if (!known)` 打掉 ⇒ 同一份 typo 源码**不再报错**（阻塞 rc=124）
+     ⇒ 证明 P1 的红来自这条校验，不是别处顺手报的；测完 sha256 原样复原，否则 rc=3
+     P6a 前提自证：补丁树必须**真重建**（若命中构建缓存 ⇒ 跑的还是旧产物，判据空转）
+  G1 环境守卫（tools/px / cc / curl / 探针构建）⇒ rc=3 · G2 零污染（git status 行数前后一致）
+```
+
+### 两个自己踩到的坑（照记）
+
+```
+① P6 第一版用裸 `if (!known)` 做替换锚点 —— runtime.c 里另有一处同形语句
+   （4530 · 枚举变体 R1008）⇒ 补丁打到了枚举上，于是「补丁树仍报错」被读成「P1 走旁路」。
+   这是**判据假红**，不是产品问题。改成唯一锚点（`if (!known)\n px_error("R1002: px_serve opts`）
+   并在补丁前 assert 锚点计数 == 1。（CRITERIA ⑨：判据找不到/不对，先怀疑判据自己）
+② P6 若命中构建缓存，补丁树的二进制还是旧的 ⇒ 判据空转。已加 P6a 前提自证（grep 缓存命中）。
+```
+
+### 边界（不夸大）
+
+```
+只说「键名拼错会响亮报错」。**值域**问题（gzip_level: 99 / max_conn: 0 / rate_limit.window_sec: -5
+这类越界静默回落到默认值）本轮**不碰**，已读源码确认同族存在，列 M428 主项
+不动 h2_demo 语义（M180 有意保留的演示开关）· 不动 http_serve 的 opts（只量：键面仅 host 一个）
+P6 的补丁是 gate 内**临时**改动（<40s 内复原 + sha256 校验）；分片各自独立 worktree，
+     不改其它分片正在读的树
+```
+
 ## M426：示例即判据 —— 120 个顶层示例从来没被跑过（缺陷 869 / 870 / 871）
 
 > **一句话**：M422 只保证「示例**编译**得过」。本轮把 120 个顶层示例逐条 **build + 真跑**：

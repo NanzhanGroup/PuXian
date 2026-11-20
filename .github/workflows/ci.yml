@@ -384,6 +384,23 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_build_cache 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_build_cache rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_build_cache PASS"
+      - name: px_serve opts 键名白名单（M427 · 缺陷 874）
+        #   病史：opts 是用户唯一的服务配置面，而 runtime 逐键 px_dict_get 猜测 ——
+        #   拼成 max_body_sise 不报错、服务照起、配置不生效（同仓 opts.methods / opts.http3 早已 R1002）。
+        #   判据：键表恰 14 键 + 校验在第一个取值之前；未知键 R1002 并列出全部已知键；
+        #   14 个已知键逐个单传都要真实 GET 200（防过度修复）；P6 负控自证（打掉校验 ⇒ 必须不报错，
+        #   且补丁树必须真重建，否则判据空转）。环境不成立 rc=3 视为不适用（不许降级成绿）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_opts_whitelist.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_opts_whitelist 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_opts_whitelist.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_opts_whitelist 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_opts_whitelist rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_opts_whitelist PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

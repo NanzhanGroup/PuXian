@@ -30203,6 +30203,49 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     g_px_h3_listener = 0;
 #endif
     if (nargs >= 4 && args[3].type == PX_DICT) {
+        // M427（缺陷 874）：**opts 键名白名单**（入口一次校验）。
+        //   为什么：本函数原先逐键 px_dict_get，拼错的键只是取到 null ⇒ 程序照跑、配置静默不生效。
+        //   同仓反例：http_stream/ws_stream 的 opts.methods 含未知方法 ⇒ R1002；opts.http3 在 --no-quic ⇒ R1002。
+        //   「响亮优于静默」这一层此前唯独漏了 px_serve 的键名。
+        static const char* const px_opts_keys[] = {
+            "max_body_size", "body_spill", "max_conn", "rate_limit", "access_log",
+            "alt_svc", "log_json", "log_daily", "gzip_level", "gzip_min_bytes",
+            "gzip", "h2_demo", "http3", "reuse_port", NULL
+        };
+        static const char* const px_opts_rl_keys[] = { "max", "window_sec", "key", "whitelist", NULL };
+        char kb[512];
+        size_t kn = 0;
+        kb[0] = '\0';
+        for (int j = 0; px_opts_keys[j]; j++) {
+            int w = snprintf(kb + kn, sizeof(kb) - kn, "%s%s", j ? " / " : "", px_opts_keys[j]);
+            if (w < 0 || kn + (size_t)w >= sizeof(kb)) break;
+            kn += (size_t)w;
+        }
+        LXObject* od = args[3].as.obj;
+        PX_UAFCHK(od, "px_serve(opts)");
+        for (int i = 0; i < od->as.dict.len; i++) {
+            const char* ok = od->as.dict.keys[i];
+            int known = 0;
+            for (int j = 0; px_opts_keys[j]; j++)
+                if (strcmp(ok, px_opts_keys[j]) == 0) { known = 1; break; }
+            if (!known)
+                px_error("R1002: px_serve opts 里不认识的键 \"%s\"（拼错？已知键：%s）", ok, kb);
+            if (strcmp(ok, "rate_limit") == 0) {
+                LXValue rlv = od->as.dict.vals[i];
+                if (rlv.type == PX_DICT) {
+                    LXObject* ro = rlv.as.obj;
+                    for (int t = 0; t < ro->as.dict.len; t++) {
+                        const char* rk = ro->as.dict.keys[t];
+                        int rknown = 0;
+                        for (int j = 0; px_opts_rl_keys[j]; j++)
+                            if (strcmp(rk, px_opts_rl_keys[j]) == 0) { rknown = 1; break; }
+                        if (!rknown)
+                            px_error("R1002: px_serve opts.rate_limit 里不认识的键 \"%s\""
+                                     "（已知键：max / window_sec / key / whitelist）", rk);
+                    }
+                }
+            }
+        }
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
         // M221：请求体落盘开关（缺省开）；关掉则体一律留内存（受 max_body_size 约束）

@@ -129,6 +129,10 @@ PRECHECK_GATES=(
     #   这门 21 秒判掉「缓存改变了语义」的全部已知形态：串味（basename）/源码/依赖/flag 失效/
     #   坏条目不命中/失败与诊断不缓存/并发原子写；环境不成立 rc=3。
     m425_build_cache                                     # px build 产物缓存 + 串味负控（实测 ~21s 冷）
+    # ── M427：opts 键名白名单（302 门里的 m427_opts_whitelist · 实测 ~95s，含一次 runtime 重建）──
+    #   病史：px_serve 的 opts 拼错键**静默忽略**（服务照起、配置不生效）。
+    #   这门 95 秒判掉：键表契约 / 未知键响亮 / 14 键逐个单传必须起服务 / P6 负控自证（真重建）。
+    m427_opts_whitelist                                  # px_serve opts 白名单（实测 ~95s 冷）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

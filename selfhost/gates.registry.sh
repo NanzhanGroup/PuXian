@@ -1265,6 +1265,16 @@ run m422_examples_compile bash selfhost/check_examples_compile.sh
 #        防网速抖动假红）；无文件 / 理由过短 / 非法 category ⇒ 红；零污染（不得在仓库树构建）；
 #        自测 10 条（含「编译过但跑挂」负控 + 前提自证：红必须来自运行期而非编译期）。
 run m426_examples_run bash selfhost/check_examples_run.sh
+# M427（缺陷 874）：**px_serve 的 opts 键名契约**。
+#   病史：opts 是用户唯一的服务配置面，而 runtime 逐键 px_dict_get 猜测 ——
+#   认得的键生效、不认得的键**静默忽略**（拼成 max_body_sise ⇒ 服务照起、配置不生效）。
+#   同仓反例说明口径本来是「响亮优于静默」：opts.methods 未知方法 ⇒ R1002（24460/24558）、
+#   opts.http3 在 --no-quic ⇒ R1002（30286）。
+#   判据：键表恰 14 键且校验在第一个取值之前；未知键 ⇒ R1002 并列出全部已知键（与值无关）；
+#        14 个已知键**逐个单传**都必须起服务（真实 GET 200，防过度修复）；{} 与不传第 4 参不报错；
+#        P6 负控自证（打掉 px_serve 的 if (!known) ⇒ typo 不再报错，且必须真重建，否则判据空转）；
+#        临时改 runtime.c 的任何退出路径都复原（sha256 校验）；环境不成立 rc=3；零污染。
+run m427_opts_whitelist bash selfhost/check_opts_whitelist.sh
 # M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。
