@@ -89,7 +89,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.424"
+SELFHOST_VER="0.2.425"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -738,6 +738,45 @@ cmd_build() {
     local c_path="$build_dir/$base.c"
     local out_path="$build_dir/$base"
 
+    # ── M425（缺陷 866）：**产物缓存** —— 同一份源码重复构建白付 ~1.3 s ────────────
+    #   实测（2026-11-20 本机 · 3 行程序连跑 5 次）：1251/1345/1371/1372/1623 ms，
+    #   产物逐字节相同；拆解 emit-c 11 ms + gcc -c 128 ms + **静态链接 ≈1.1 s**。
+    #   `.rtcache` 只缓存 runtime 的 .o（按引用集分桶），用户程序这一层零缓存。
+    # 口径：缓存只许影响快慢，不许影响语义 ——
+    #   key = 主脚本内容 + 依赖闭包内容 + 工具链指纹 + 构建 flag 签名 + **产物 basename**
+    #     （实测产物内嵌程序名：aaa.px 与 bbb.px 同内容 ⇒ 产物 sha 不同；名不进 key 就串味）
+    #   命中前校验产物 sha16（M271 同口径）；写盘先 tmp 再 mv（读者不会看到半个二进制）
+    #   有编译期诊断（.c.stderr 非空）⇒ 不写缓存（诊断不许被缓存吞掉）
+    #   --print-plan / --target（交叉）/ PX_BUILD_NOCACHE=1 ⇒ 完全绕过
+    local bkey="" bdir="" cache_hit=0
+    if [ "$print_plan" = 0 ] && [ -z "${PX_BUILD_NOCACHE:-}" ] && [ -z "$target" ]; then
+        bkey="$(build_cache_key "$(readlink -f "$file" 2>/dev/null || echo "$file")" \
+                               "$base" "$engine" "$lto" "$cc" "$no_quic" "$mods" "$cuts" "$full")"
+        if [ -n "$bkey" ]; then
+            bdir="$BUILD_CACHE/$bkey"
+            if [ -f "$bdir/prog" ] && [ -f "$bdir/prog.sha16" ] \
+               && [ "$(sha256sum "$bdir/prog" 2>/dev/null | cut -c1-16)" = "$(cat "$bdir/prog.sha16" 2>/dev/null)" ]; then
+                if cp -f "$bdir/prog" "$out_path.pxcache.$$" 2>/dev/null \
+                   && chmod 755 "$out_path.pxcache.$$" 2>/dev/null \
+                   && mv -f "$out_path.pxcache.$$" "$out_path" 2>/dev/null; then
+                    cache_hit=1
+                else
+                    rm -f "$out_path.pxcache.$$" 2>/dev/null
+                fi
+            fi
+        fi
+    fi
+    if [ "$cache_hit" = 1 ]; then
+        [ -f "$bdir/prog.c" ] && cp -f "$bdir/prog.c" "$c_path" 2>/dev/null
+        [ -f "$bdir/prog.o" ] && cp -f "$bdir/prog.o" "$build_dir/$base.o" 2>/dev/null
+        if [ "${PX_BUILD_VERBOSE:-0}" = "1" ]; then
+            echo "[px build] 缓存命中 key=$bkey（跳过 emit-c + gcc + 链接）" >&2
+        fi
+        local _csz; _csz=$(stat -c %s "$out_path" 2>/dev/null || echo 0)
+        echo "编译成功: $out_path （$_csz 字节）"
+        return 0
+    fi
+
     # 1) PuXian 版编译器生成产物 C 源码（stdout）：
     #    VM 轨（默认 engine=vm）= VM 版编译器 --emit-c：BCModule 字节码镜像 C
     #      （M89-S3-C2 试做 / M91 默认化）→ 链 runtime 含 vm.o → 显式帧 VM 执行
@@ -914,6 +953,21 @@ cmd_build() {
     local size
     size=$(stat -c %s "$out_path" 2>/dev/null || echo 0)
     echo "编译成功: $out_path （$size 字节）"
+    # M425：成功且**无编译期诊断** ⇒ 落盘（诊断非空时不写，免得下次命中把警告吞掉）
+    if [ -n "$bkey" ] && [ "$cache_hit" = 0 ] && [ ! -s "$cerr_log" ]; then
+        if mkdir -p "$bdir" 2>/dev/null; then
+            if cp -f "$out_path" "$bdir/prog.tmp.$$" 2>/dev/null \
+               && mv -f "$bdir/prog.tmp.$$" "$bdir/prog" 2>/dev/null; then
+                sha256sum "$bdir/prog" 2>/dev/null | cut -c1-16 > "$bdir/prog.sha16" 2>/dev/null
+                [ -f "$c_path" ] && cp -f "$c_path" "$bdir/prog.c" 2>/dev/null
+                [ -f "$build_dir/$base.o" ] && cp -f "$build_dir/$base.o" "$bdir/prog.o" 2>/dev/null
+                if [ "${PX_BUILD_VERBOSE:-0}" = "1" ]; then
+                    echo "[px build] 缓存写入 key=$bkey" >&2
+                fi
+            fi
+            rm -f "$bdir/prog.tmp.$$" 2>/dev/null
+        fi
+    fi
     # M180（晨曦 QA 清单 P1-4）：**能力行**（默认静默，PV_BUILD_FEATURES=1 时才打）——
     #   判据不该靠 `strings` 猜；但**成功路径不能往 stderr 加噪声**：
     #   `selfhost/engine_parity.sh` 的判据是「正例：默认轨 stderr 必须为空」
@@ -956,6 +1010,38 @@ cmd_build() {
 # ══════════════════════════════════════════════════════════════
 PXPAR_BIN_RUN="$PXPAR_BIN"
 RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
+
+# ══════════════════════════════════════════════════════════════
+# M425（缺陷 866）：`px build` 产物缓存
+# ------------------------------------------------------------
+# 病根：`.rtcache` 只缓存 **runtime 的 .o**（按引用集分桶），用户程序产物零缓存 ⇒
+#   改一行注释重编译、门里重复构建、CI 重跑，每次白付 emit-c 11 ms + gcc -c 128 ms +
+#   静态链接 ≈1.1 s（实测 1251–1623 ms，产物逐字节相同）。
+# key 必须由「真正决定产物的输入」驱动（M169/M271/M378 同一条纪律）：
+#   主脚本内容 · 依赖闭包内容 · 工具链指纹（版本 / rtkey / pxc_vm / pxi / engine）·
+#   构建 flag 签名（engine/lto/cc/no_quic/mods/cuts/full）· cc 版本 · **产物 basename**
+#   ⚠️ basename 必须进 key：实测产物**内嵌程序名**（aaa.px 与 bbb.px 同内容 ⇒ 产物 sha 不同）
+#      —— 名不进 key 就会「拿 aaa 的二进制当 bbb」（错误缓存，比不缓存更糟）。
+# 环境：PX_BUILDCACHE_DIR（默认 $PXC_HOME/.buildcache）· PX_BUILD_NOCACHE=1（禁用）
+#       PX_BUILD_VERBOSE=1（打印 key / 命中 / 写入，走 stderr，stdout 逐字节不变）
+# ══════════════════════════════════════════════════════════════
+BUILD_CACHE="${PX_BUILDCACHE_DIR:-$PXC_HOME/.buildcache}"
+
+build_cache_key() { # $1=主脚本绝对路径 $2=base $3=engine $4=lto $5=cc $6=no_quic $7=mods $8=cuts $9=full
+    local f="$1" base="$2" engine="$3" lto="$4" cc="$5" nq="$6" mods="$7" cuts="$8" full="$9"
+    {
+        printf 'base=%s\nengine=%s\nlto=%s\ncc=%s\nnoquic=%s\nfull=%s\n' \
+               "$base" "$engine" "$lto" "$cc" "$nq" "$full"
+        printf 'mods=%s\ncuts=%s\n' "$mods" "$cuts"
+        "$cc" --version 2>/dev/null | head -1
+        sha256sum "$f" 2>/dev/null | cut -c1-16
+        while IFS= read -r _df; do
+            [ "$_df" = "$f" ] && continue
+            sha256sum "$_df" 2>/dev/null | cut -c1-16
+        done < <(px_dep_closure "$f" 2>/dev/null) | LC_ALL=C sort
+        toolchain_fp
+    } | sha256sum | cut -c1-32
+}
 
 # ── M383-速度：单次 --fast 内主脚本 AST 只解析一次 ──────────────────────────
 # 病根：`run_subset_ok`（子集守卫）打一次 pxpar，`px_dep_closure → px_import_keys`

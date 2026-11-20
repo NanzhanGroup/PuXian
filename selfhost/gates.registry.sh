@@ -2393,3 +2393,21 @@ run m420_memsan_cron bash examples/m420_memsan_cron/verify.sh
 #     · [4] 环境守卫 rc=3（registry 缺失 / 扫描面为 0 一律不判绿）
 gate_timeout m421_examples_coverage 300
 run m421_examples_coverage bash examples/m421_examples_coverage/verify.sh
+
+# ── m425_build_cache：px build 产物缓存（缺陷 866）─────────────────────────────
+#   病史（2026-11-20 本机实测）：`.rtcache` 只缓存 runtime 的 .o（按引用集分桶），
+#     **用户程序产物零缓存** ⇒ 3 行程序连跑 5 次 1251/1345/1371/1372/1623 ms，
+#     产物 sha256 逐字节相同。拆解：emit-c 11 ms + gcc -c 128 ms + 静态链接 ≈1.1 s。
+#     ⇒ 改一行注释重编译、门里重复构建、CI 重跑，每次白付一秒多，而**没有任何门看得见**
+#       （所有门只问「跑通没」）。
+#   判据（缓存只许影响快慢，不许影响语义）：
+#     S1–S3 源码形状：BUILD_CACHE / key 含 basename / 命中前 sha16 校验 + tmp+mv / 有诊断不写
+#     P1 命中产物与冷构建**逐字节相同** · P2 命中 ≤0.25×冷构建（负载饱和降级 0.5×）· P3 stdout 逐字节
+#     **P4 串味负控**：同内容不同 basename 不得互相命中（前提自证：两产物 sha 必须不同）
+#     P5 源码改一字节必 miss · P6 依赖 .px 改一字节必 miss · P7 flag（--no-quic）必 miss
+#     P8/P9 缓存条目被篡改/截断 ⇒ 不命中 + 重建正确（不许产出坏二进制）
+#     P10 PX_BUILD_NOCACHE=1 完全绕过 · P11 缓存目录不可建仍成功（降级）· P12 并发 4 个构建一致
+#     N1/N2 编译失败不写缓存、重跑不许变绿 · N3 有编译期诊断不写缓存（诊断不被吞掉）
+#   环境不成立（tools/px 缺失 / 探针冷构建失败 / 前提自证失败）⇒ rc=3，绝不降级成绿
+gate_timeout m425_build_cache 300
+run m425_build_cache bash selfhost/check_build_cache.sh

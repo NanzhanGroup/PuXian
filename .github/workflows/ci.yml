@@ -362,6 +362,19 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_pxexec_direct 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_pxexec_direct rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_pxexec_direct PASS"
+      - name: px build 产物缓存（M425 · 缺陷 866）
+        #   .rtcache 只缓存 runtime 的 .o，用户程序产物零缓存 ⇒ 3 行程序每次构建 1.3–1.6s。
+        #   本步守的是「缓存只许影响快慢，不许影响语义」：命中产物与冷构建逐字节相同、
+        #   同内容不同 basename 不串味、源码/依赖/flag 变更必失效、坏条目不许命中、
+        #   失败不缓存、有诊断不缓存。环境不成立 rc=3 视为不适用（不许降级成绿）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_build_cache.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_build_cache 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_build_cache rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_build_cache PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

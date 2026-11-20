@@ -55,6 +55,9 @@ examples/m61_gfx/*.png
 .rtcache
 # M268：px run --fast 的用户脚本构建缓存（与 .rtcache 同源策略：都在 $PXC_HOME 下）
 .runcache
+# M425：px build 的产物缓存（默认 $PXC_HOME/.buildcache —— 与 .rtcache/.runcache 同源策略：
+#   都是「按内容寻址的加速缓存」，不入库；删掉即重建，不影响任何语义）
+.buildcache
 examples/m84_s2_hmac/artifacts/
 
 # M84-S3 互通对拍生成物（verify.sh 每次重建）
