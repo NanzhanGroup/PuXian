@@ -44,8 +44,9 @@
 #   - chain-20261121-031753 = /data/gatevm/shard-20261121-031753/shard8.times.tsv（301 行）
 #   - preflight-20261121-020458 = /data/gatevm/preflight-20261121-020458.times.tsv（301 行）
 #   - preflight-20261121-025220 = /data/gatevm/preflight-20261121-025220.times.tsv（301 行）
+#   - preflight-20261121-062844 = /data/gatevm/preflight-20261121-062844.times.tsv（302 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-21 05:17:52 +0800
+# 生成时间：2026-11-21 07:11:27 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	9	OK	chain-20261120-213756
@@ -72,7 +73,7 @@ ex_match	2	OK	chain-20261120-234411
 ex_struct	2	OK	chain-20261121-031753
 fmt_check	33	OK	preflight-20261121-025220
 gate_anchor_sentinel	2	OK	chain-20261120-213756
-gate_inputs	2	OK	chain-20261120-213756
+gate_inputs	3	OK	preflight-20261121-062844
 gate_lock_guard	1	OK	chain-20261120-213756
 gate_registry	1	OK	chain-20261120-213756
 gate_timeouts	34	FAIL	preflight-20261121-020458
@@ -143,13 +144,13 @@ m183_gc_root_handover	187	OK	chain-20261120-234411
 m184_num_fs_strict	206	OK	chain-20261121-031753
 m185_bytes_face	162	OK	chain-20261121-031753
 m186_native_passthrough	139	OK	chain-20261120-234411
-m187_registry_import	313	OK	preflight-20261121-020458
+m187_registry_import	315	OK	preflight-20261121-062844
 m188_std_face	161	OK	chain-20261121-031753
 m189_bytes_bounds	161	OK	chain-20261121-031753
 m190_arity	273	OK	chain-20261121-031753
 m191_error_codes	86	OK	preflight-20261121-020458
-m192_encfamily	169	OK	preflight-20261121-020458
-m193_errcodes2	158	OK	preflight-20261121-020458
+m192_encfamily	196	OK	preflight-20261121-062844
+m193_errcodes2	249	OK	preflight-20261121-062844
 m194_arg_guards	134	OK	chain-20261120-234411
 m195_arg_guards2	129	OK	chain-20261121-031753
 m196_msg_parity	111	OK	preflight-20261121-020458
@@ -302,8 +303,9 @@ m421_examples_coverage	64	OK	chain-20261120-213756
 m422_examples_compile	89	OK	chain-20261120-213756
 m423_pxexec_portable	5	OK	chain-20261121-031753
 m424_pxexec_direct	6	OK	preflight-20261121-020458
-m425_build_cache	64	OK	preflight-20261121-020458
+m425_build_cache	65	OK	preflight-20261121-062844
 m426_examples_run	217	FAIL	chain-20261121-031753
+m427_opts_whitelist	53	OK	preflight-20261121-062844
 m63_langfix	7	OK	chain-20261121-031753
 m64_fmt	1	OK	chain-20261121-031753
 m64_lint	1	OK	chain-20261120-213756
