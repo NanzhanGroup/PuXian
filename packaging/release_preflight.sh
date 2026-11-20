@@ -113,6 +113,11 @@ PRECHECK_GATES=(
     #   295 门跑完 100 分钟也照样绿。这门 20 秒就能判掉。
     m422_examples_compile                                # 顶层 120 示例逐条编译 + 豁免账 STALE（实测 ~20s）
     m423_pxexec_portable                                 # px_exec 定位/假池/响亮报错（实测 ~35s 冷 · 缓存后 ~5s）
+    # ── M424 S1：把「每次 px_exec 白付 30ms」也前置（26 → 27 门，实测 ~90s 冷 · 缓存后 ~10s）──
+    #   病史：M423 关掉假池后，px_exec 每请求仍在 fork+exec 1485 行 bash 包装器（41ms），
+    #   而同一发行版的 bootstrap/pxi 直跑只要 9–12ms ⇒ 产品级固定开销，且没有任何门看得见。
+    #   这门同时钉住「直连」与「与 px run 逐字节等价」（10 例）+ 判据有牙（强制 CLI ≥1.5×）。
+    m424_pxexec_direct                                   # 直连 pxi + 等价性 + 比例负控（实测 ~90s 冷）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

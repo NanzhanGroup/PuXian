@@ -25745,6 +25745,138 @@ static const char* px_px_bin(void) {
     return NULL;
 }
 
+// M424（缺陷 864）：**直连解释器**解析（px_exec / px_serve 的每请求固定开销）
+//   实测（2026-11-20 · 本机 · 隔离克隆）：tools/px run 一次 41ms，bootstrap/pxi 直跑 12ms；
+//   tools/px --version 27ms vs pxi --version 8ms（strace：tools/px 786 syscalls / 7 execve）。
+//   ⇒ tools/px 是 1485 行 bash 包装器，它自己就是瓶颈；pxi 就在同一发行版里且可直接执行
+//     （tools/px 的 `run` 分支本身就是 exec "$PXI_BIN" "$@" "$file"）。
+//   解析顺序（首个可用即用）：
+//     1. PX_BIN（显式覆盖，原样使用；按文件名判定形态：pxi* ⇒ 直连，其余 ⇒ CLI 包装器）
+//     2. PX_PXI_BIN（显式直连解释器，与 tools/px 同口径）
+//     3. 自身可执行文件向上 ≤6 层的 <root>/bootstrap/pxi（仓库内构建产物 / 安装树同构）
+//     4. PATH 中的 px → 若其同发行版旁有 bootstrap/pxi 则直连，否则用该 CLI 包装器
+//     5. 自身可执行文件向上 ≤6 层的 <root>/tools/px（兜底：只有包装器时仍能跑）
+//   找不到 ⇒ NULL（调用方必须响亮报错，见缺陷 859）。
+//   ⚠️ 与旧 px_px_bin 的顺序差异：**仓库/安装树自身的 pxi 优先于 PATH 的 px** ——
+//      若 PATH 里的 px 是另一版本，用它跑本树的脚本会造成版本错配（与 M271 的
+//      「运行器契约」同口径：解释器必须与被跑脚本同源）。显式 PX_BIN 仍然最优先。
+static int px_bin_is_direct(const char* p) {
+    const char* base = strrchr(p, '/');
+    base = base ? base + 1 : p;
+    return strncmp(base, "pxi", 3) == 0;   /* pxi / pxi_vm / pxi-dev … */
+}
+
+// 在 px 前端旁边找同发行版的直连解释器：dirname(dirname(P))/bootstrap/pxi
+//   /usr/bin/px（symlink）→ realpath = /usr/share/puxian/tools/px → /usr/share/puxian/bootstrap/pxi
+//   ⚠️ 必须 realpath：发行版把 /usr/bin/px 做成 symlink（rpm 实测），不解引用就永远找不到 pxi。
+static const char* px_sibling_pxi(const char* pxbin, char* buf, size_t cap) {
+    char real[4096];
+    const char* src = pxbin;
+    if (realpath(pxbin, real)) src = real;
+    char dir[4096];
+    int w0 = snprintf(dir, sizeof dir, "%s", src);
+    if (w0 <= 0 || (size_t)w0 >= sizeof dir) return NULL;
+    char* s = strrchr(dir, '/');
+    if (!s) return NULL;
+    *s = '\0';                    /* …/tools */
+    s = strrchr(dir, '/');
+    if (!s) return NULL;
+    *s = '\0';                    /* …/<home> */
+    int w = snprintf(buf, cap, "%s/bootstrap/pxi", dir);
+    if (w > 0 && (size_t)w < cap && access(buf, X_OK) == 0) return buf;
+    return NULL;
+}
+
+static const char* px_interp_bin(int* is_direct) {
+    static char buf[4096];
+    static int state = 0;            /* 0=未解析 1=成功 2=未找到 */
+    static int direct = 0;
+    if (is_direct) *is_direct = direct;
+    if (state != 0) { if (is_direct) *is_direct = direct; return state == 1 ? buf : NULL; }
+    direct = 0;
+    const char* b = getenv("PX_BIN");
+    if (b && *b) {
+        snprintf(buf, sizeof buf, "%s", b);
+        direct = px_bin_is_direct(buf);
+        state = 1;
+        if (is_direct) *is_direct = direct;
+        return buf;
+    }
+    const char* pb = getenv("PX_PXI_BIN");
+    if (pb && *pb) {
+        snprintf(buf, sizeof buf, "%s", pb);
+        direct = 1; state = 1;
+        if (is_direct) *is_direct = direct;
+        return buf;
+    }
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        char* slash = strrchr(exe, '/');
+        if (slash) *slash = '\0';
+        for (int up = 0; up < 6; up++) {
+            int w = snprintf(buf, sizeof buf, "%s/bootstrap/pxi", exe);
+            if (w > 0 && (size_t)w < sizeof buf && access(buf, X_OK) == 0) {
+                direct = 1; state = 1;
+                if (is_direct) *is_direct = direct;
+                return buf;
+            }
+            slash = strrchr(exe, '/');
+            if (!slash) break;
+            *slash = '\0';
+        }
+    }
+    const char* pe = getenv("PATH");
+    if (pe) {
+        const char* p = pe;
+        while (p && *p) {
+            const char* q = strchr(p, ':');
+            size_t len = q ? (size_t)(q - p) : strlen(p);
+            if (len > 0 && len < sizeof buf - 8) {
+                int w = snprintf(buf, sizeof buf, "%.*s/px", (int)len, p);
+                if (w > 0 && (size_t)w < sizeof buf && access(buf, X_OK) == 0) {
+                    char sib[4096];
+                    const char* sx = px_sibling_pxi(buf, sib, sizeof sib);
+                    if (sx) {
+                        snprintf(buf, sizeof buf, "%s", sx);
+                        direct = 1;
+                    }
+                    state = 1;
+                    if (is_direct) *is_direct = direct;
+                    return buf;
+                }
+            }
+            if (!q) break;
+            p = q + 1;
+        }
+    }
+    if (n > 0) {
+        char exe2[4096];
+        snprintf(exe2, sizeof exe2, "%s", exe);   /* exe 已被逐级截断 ⇒ 重取 */
+        ssize_t m = readlink("/proc/self/exe", exe2, sizeof exe2 - 1);
+        if (m > 0) {
+            exe2[m] = '\0';
+            char* slash = strrchr(exe2, '/');
+            if (slash) *slash = '\0';
+            for (int up = 0; up < 6; up++) {
+                int w = snprintf(buf, sizeof buf, "%s/tools/px", exe2);
+                if (w > 0 && (size_t)w < sizeof buf && access(buf, X_OK) == 0) {
+                    state = 1;
+                    if (is_direct) *is_direct = 0;
+                    return buf;
+                }
+                slash = strrchr(exe2, '/');
+                if (!slash) break;
+                *slash = '\0';
+            }
+        }
+    }
+    state = 2;
+    if (is_direct) *is_direct = 0;
+    return NULL;
+}
+
 // ==================== M25 .px 进程池（PHP-FPM 风格） ====================
 // M17 的每请求 fork+exec `px run` 开销（fork + exec + 解释器启动）较大；
 // M25 预派生 N 个 `px --worker` 解释器进程常驻复用：
@@ -25792,7 +25924,13 @@ static char g_last_script_path[1024] = "";
 // 派生一个 `px --worker` 进程（返回值 0 成功）
 static int px_pool_spawn(PXWorker* w) {
     // M423（缺陷 859）：解释器路径在**父进程**解析（子进程里 close_range 后再解析更脆弱）
-    const char* pxbin = px_px_bin();
+    // M424（缺陷 864）：worker 协议要求「px --worker」这一 CLI 形态；直连解释器（pxi）
+    //   没有 worker 模式 ⇒ 明确不可用（返回 -1 让池初始化失败并退化到 fork+exec，
+    //   不冒充「池在跑」）。真正的 worker 协议列 M425。
+    int direct = 0;
+    const char* pxbin_d = px_interp_bin(&direct);
+    if (direct) return -1;
+    const char* pxbin = pxbin_d;
     if (!pxbin) return -1;
     int in_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1};
     if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
@@ -26102,7 +26240,10 @@ static int px_pool_run(const char* path, const char* env_json, int dump_response
 static int px_run_px_child(const char* path, const char* env_json, int dump_response,
                            int timeout_ms, char** out, int* out_len, int* exit_code) {
     // M423（缺陷 859）：找不到解释器 ⇒ 返回 2（调用方响亮报错），不再 exec 一个必然失败的名字
-    const char* pxbin = px_px_bin();
+    // M424（缺陷 864）：**优先直连 pxi**。tools/px 是 1485 行 bash 包装器，每个 px_exec
+    //   白付 20–30ms（实测 tools/px run 41ms vs pxi 直跑 12ms）；pxi 就在同一发行版里。
+    int direct = 0;
+    const char* pxbin = px_interp_bin(&direct);
     if (!pxbin) return 2;
     int pfd[2];
     if (pipe(pfd) != 0) return 2;
@@ -26119,7 +26260,9 @@ static int px_run_px_child(const char* path, const char* env_json, int dump_resp
         else unsetenv("PX_INIT_GLOBALS");
         if (dump_response) setenv("PX_DUMP_RESPONSE", "1", 1);
         else unsetenv("PX_DUMP_RESPONSE");
-        execlp(pxbin, "px", "run", path, (char*)NULL);
+        // M424（缺陷 864）：直连解释器 ⇒ `pxi <path>`；CLI 包装器 ⇒ `px run <path>`
+        if (direct) execlp(pxbin, "pxi", path, (char*)NULL);
+        else execlp(pxbin, "px", "run", path, (char*)NULL);
         dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）: %s\n", pxbin);
         _exit(127);
     }
@@ -30662,11 +30805,22 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {    (void)ctx;
     int out_len = 0, exit_code = 0;
     // M423（缺陷 859）：解释器找不到 ⇒ **响亮报错**（旧实现 execlp 失败后静默返回 ""，
     //   调用方无法区分「脚本没输出」与「解释器不存在」；CI run 44571916900 实证）。
-    if (!px_px_bin())
+    // M424（缺陷 864）：判据与执行路径同源 —— 用 px_interp_bin（不是 px_px_bin），
+    //   否则「找到的」与「实际要 exec 的」可能不是同一个。
+    int interp_direct = 0;
+    if (!px_interp_bin(&interp_direct))
         px_error("R1002: px_exec 找不到 px 解释器（PX_BIN 未设，PATH 与自身路径附近均无 px/pxi；"
                  "M423 缺陷 859 起不再静默返回空串）");
+    (void)interp_direct;
     int rc = px_pool_run(path, env_json, 0, 0, &out, &out_len, &exit_code);
     if (env_json) free(env_json);
+    if (rc == 2) {
+        // M424（缺陷 864）：解释器**启动失败**（EXEC 失败 / fork 失败）必须响亮 ——
+        //   旧实现只打一行 stderr 然后返回 ""，脚本侧仍然「成功但没输出」（= 缺陷 859 的形态）。
+        dprintf(STDERR_FILENO, "px: px_exec 执行失败 rc=2 path=%s（解释器启动失败）\n", path);
+        if (out) xfree(out);
+        px_error("R1002: px_exec 无法启动 px 解释器（PX_BIN / PATH / 自身路径附近均不可执行）");
+    }
     if (rc != 0)
         dprintf(STDERR_FILENO, "px: px_exec 执行失败 rc=%d path=%s\n", rc, path);
     LXValue r = rc == 0 ? px_str_len(out, out_len) : px_str("");

@@ -349,6 +349,19 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_pxexec_portable 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_pxexec_portable rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_pxexec_portable PASS"
+      - name: px_exec 调用成本 · 直连 pxi（M424 · 缺陷 864）
+        #   M423 关掉假池后，每次 px_exec 仍是 fork+exec 1485 行 bash 包装器（41ms），
+        #   而同一发行版 bootstrap/pxi 直跑 9–12ms。本步：① px_exec 单次中位 ≤20ms
+        #   ② 强制走 CLI 必须 ≥1.5×（判据有牙，防空转）③ 与 px run 逐字节等价 10 例
+        #   ④ 直连下 stdlib import 成立 ⑤ PX_BIN 无效必须响亮（不许回退缺陷 859）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_pxexec_direct.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_pxexec_direct 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_pxexec_direct rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_pxexec_direct PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

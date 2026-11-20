@@ -1264,6 +1264,14 @@ run ex_m26_ushr bash examples/m26_ushr/verify.sh
 #   判据：源码形状 3 条（自解析 / 响亮报错 / 假池关闭）+ 无 px 的 PATH 正控 + 两条负控
 #   （找不到解释器必须 rc≠0 且 R1002；PX_BIN 无效必须报「执行失败」）+ 前提自证 2 条。
 run m423_pxexec_portable bash selfhost/check_pxexec_portable.sh
+# M424（缺陷 864）：**px_exec 的每次调用固定开销**。M423 关掉假池之后，每次 px_exec 都是
+#   fork + exec 一个 1485 行 bash 包装器（tools/px），实测 41ms / 786 syscalls / 7 execve；
+#   而同一发行版里的 bootstrap/pxi 直跑同一脚本只要 9–12ms（`px run` 内部本来就是 exec pxi）
+#   ⇒ 服务端每个 px_exec 白付 ~30ms，且这一开销**任何门都看不见**（都只是「跑通了」）。
+#   判据：源码形状 4 条（px_interp_bin / pxi 优先于 PATH / sibling realpath / rc=2 响亮）
+#        + P1 单次中位 ≤20ms + P2 强制 CLI 必须 ≥1.5×（判据有牙，防空转）
+#        + P3 与 px run 逐字节等价 10 例 + P4 直连下 stdlib import 成立 + N1 PX_BIN 无效响亮
+run m424_pxexec_direct bash selfhost/check_pxexec_direct.sh
 
 step "M276 · 门级互斥锁（晨曦 2026-10-05 回馈：门「就地改仓库」的并发不安全）"
 #   98 个门会在负控里**现场改源码**（`restore_all` / 负控打桩 / `run_neg` …）；原来只有

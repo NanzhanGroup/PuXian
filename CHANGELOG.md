@@ -1,3 +1,61 @@
+## M424：px_exec 的每次调用白付 30ms —— 直连 pxi（缺陷 864）
+
+> **一句话**：M423 把「假池」关掉之后，每次 `px_exec` 都是 fork + exec 一个 **1485 行 bash 包装器**
+> （`tools/px`）：实测 **41ms / 786 syscalls / 7 execve**；而同一发行版里的 `bootstrap/pxi`
+> 直跑同一个脚本只要 **9–12ms**（`px run` 内部本来就是 `exec "$PXI_BIN"`）。
+> ⇒ 服务端每个 `px_exec` 请求白付约 30ms，**而 298 道门全绿也看不见**（它们只关心「跑通没」）。
+
+### 证据（2026-11-20 · 本机 · 隔离克隆 @ 36a0581）
+
+```
+启动成本（python perf_counter，15 次中位）
+  tools/px run  /tmp/h.px      41.0 ms   （min 36 / max 48）
+  bootstrap/pxi /tmp/h.px      12.0 ms   （min  9 / max 17）
+  tools/px --version           27.0 ms   strace: 786 syscalls / 7 execve
+  bootstrap/pxi --version       7.9 ms
+调用链（runtime/runtime.c）
+  px_run_px_child: execlp(pxbin, "px", "run", path)      ← 无论 pxbin 是包装器还是 pxi
+  px_px_bin: PX_BIN → PATH px → 自身树 tools/px → 自身树 bootstrap/pxi
+  ⇒ 只要 PATH 里有 px 或是仓库内运行，拿到的都是**包装器**；pxi 永远排最后（几乎轮不到）
+语义等价（同一台机器，逐字节）
+  10 个顶层示例：tools/px run vs bootstrap/pxi ⇒ stdout/stderr/rc 全部相同（非空 9 例）
+  含 stdlib import 的子脚本在直连路径下同样成立（unique([1,1,2,3,3]) → 3）
+```
+
+### 修法
+
+```
+runtime/runtime.c
+  新增 px_interp_bin()：解析顺序 = PX_BIN → PX_PXI_BIN → 自身树 bootstrap/pxi（≤6 层）
+                        → PATH 的 px（若其同发行版旁有 pxi 则直连）→ 自身树 tools/px（兜底）
+    ⚠️ 顺序变化是**刻意的**：本树 pxi 优先于 PATH 的 px —— 用别处版本的 px 跑本树脚本
+       就是版本错配（与 M271「运行器契约」同口径）。显式 PX_BIN 仍然最优先。
+  新增 px_sibling_pxi()：dirname(dirname(P))/bootstrap/pxi，**必须 realpath**
+    （发行版把 /usr/bin/px 做成 symlink；不解引用就永远找不到 /usr/share/puxian/bootstrap/pxi）
+  px_run_px_child：直连 ⇒ execlp(pxbin, "pxi", path)；包装器 ⇒ execlp(pxbin, "px", "run", path)
+  bi_px_exec：rc=2（解释器**启动**失败）⇒ px_error 响亮，不再静默返回 ""
+  px_pool_spawn：直连形态下 worker 协议不存在 ⇒ 返回 -1（不冒充「池在跑」；真协议列 M425）
+```
+
+### 门（298 → 299）
+
+```
+m424_pxexec_direct（实测 ~90s 冷 · 缓存后 ~10s）
+  S1a/S1b/S2/S2b/S3/S4  源码形状 6 条（px_interp_bin · pxi 先于 PATH · exec pxi · realpath · rc=2 响亮）
+  P1  px_exec 单次中位 ≤ 20ms（实测 7.7–10.4ms）
+  P2  **判据有牙**：同机同时刻强制 CLI（PX_BIN=tools/px）必须 ≥1.5× 直连（实测 4.1–4.5×）
+      —— 若测量是常数（空转），两条相等 ⇒ P2 必红
+  P3  与 px run **逐字节等价** ≥10 例；前提自证：非空 stdout ≥8（否则「空==空」也能过）
+  P4  直连路径下 stdlib import 成立（unique ⇒ 3；单靠 import 不算——缺模块只是警告）
+  N1  PX_BIN 指向不存在 ⇒ rc≠0 且 R1002（缺陷 859 的判据不许回退）
+  --self-test：4 条夹具（含「相等 ⇒ 必须判红」的负控）
+CI 新增一步（rc=3 视为环境不成立，绝不降级成绿）；进发布前置档 26 → 27 门
+```
+
+> **诚实边界**：本轮只做「解释器入口」这一层；`px build` 的用户级编译缓存（3 行脚本
+> 6 次连跑 1307–1584ms、产物逐字节相同）**没有做**，另立项（候选见 NEXT-QUEUE）。
+> `px --worker` 真协议（池化收益仍为 0）列 M425，不在本轮冒充。
+
 ## M423：CI 四红的真因 —— px_exec 在「没安装 px」的机器上静默返回空串（缺陷 859 / 860 / 861）
 
 > **一句话**：M422 补3 把那轮 CI 四红里的示例编译判成「默认 PIE 宿主」（已修，缺陷 858）；
