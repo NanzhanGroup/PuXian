@@ -39,6 +39,24 @@ bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
+median_of() {  # $1=输出的整段文本 ⇒ 打印 MEDIAN 数字
+  printf '%s\n' "$1" | sed -n 's/^M424-MEDIAN-MS=//p' | head -1
+}
+
+# P1 判据（纯函数 · 可自测）：绝对墙钟在**负载饱和**时测的是机器不是产品
+#   → 未达 20ms 且 load > 0.7×核数 时改判**相对口径**（≤0.5×CLI 才放行），并如实标注
+#   ⚠️ 为什么必须有这一条：发布链 8 分片并行时 load≈11/16，fork+exec 会被拖慢一倍，
+#      只留绝对阈值 ⇒ 每轮都假红（M294 的教训：绝对数不得单独作判据）。
+p1_verdict() {  # $1=direct_ms $2=cli_ms $3=load $4=cores ⇒ OK|OK-REL|FAIL
+  local d="$1" c="$2" l="$3" n="$4"
+  if awk -v v="$d" 'BEGIN{exit !(v <= 20)}'; then echo OK; return; fi
+  if awk -v l="$l" -v n="$n" 'BEGIN{exit !(l > 0.7*n)}'; then
+    if awk -v d="$d" -v c="$c" 'BEGIN{exit !(c > 0 && d <= 0.5*c)}'; then echo OK-REL; else echo FAIL; fi
+    return
+  fi
+  echo FAIL
+}
+
 if [ "${1:-}" = "--self-test" ]; then
   # 夹具：判据函数自身的行为（不依赖编译）
   echo "── self-test（判据夹具，不编译）"
@@ -50,6 +68,15 @@ if [ "${1:-}" = "--self-test" ]; then
   # F3 阈值判据：20ms 上限
   if awk 'BEGIN{exit !(9.2 <= 20)}'; then ok "F3 阈值：直连 9.2ms ≤ 20ms ⇒ 过"; else bad "F3 阈值误判"; fi
   if awk 'BEGIN{exit !(41.7 <= 20)}'; then bad "F4 阈值对 41.7ms 判绿（无牙）"; else ok "F4 负控：CLI 41.7ms > 20ms ⇒ 判红"; fi
+  # F5–F8 P1 判据（绝对阈 + 饱和降级的相对口径），每条都要能判红
+  if type p1_verdict >/dev/null 2>&1; then
+    [ "$(p1_verdict 9.2 41 1.0 16)" = OK ] && ok "F5 P1：9.2ms/CLI41/负载低 ⇒ OK" || bad "F5 P1 误判（低负载快路径）"
+    [ "$(p1_verdict 22 26 2.0 16)" = FAIL ] && ok "F6 负控：22ms 且负载低 ⇒ FAIL（真的慢，不许降级）" || bad "F6 P1 低负载时把 22ms 判绿"
+    [ "$(p1_verdict 22 45 12 16)" = OK-REL ] && ok "F7 P1 饱和降级：22ms/CLI45/负载 12-16 ⇒ OK-REL" || bad "F7 饱和降级不生效"
+    [ "$(p1_verdict 22 24 12 16)" = FAIL ] && ok "F8 负控：饱和但相对也不成立（22 vs 24）⇒ FAIL" || bad "F8 饱和时把「无差别」判绿"
+  else
+    bad "F5–F8 p1_verdict 未定义（自测将空转）"
+  fi
   echo "======================================"
   echo "PXEXEC-DIRECT-SELFTEST pass=$PASS fail=$FAIL"
   [ "$FAIL" -eq 0 ] && { echo "SELFTEST=OK"; exit 0; }
@@ -112,20 +139,21 @@ fi
 BIN="$TMP/probe/build/probe"
 [ -x "$BIN" ] || { echo "PXEXEC-DIRECT rc=3（探针产物缺失）"; exit 3; }
 
-median_of() {  # $1=输出的整段文本 ⇒ 打印 MEDIAN 数字
-  printf '%s\n' "$1" | sed -n 's/^M424-MEDIAN-MS=//p' | head -1
-}
 
 out_direct=$( env -u PX_BIN "$BIN" 2>"$TMP/direct.err" ); rc_direct=$?
 out_cli=$( env PX_BIN="$PX" "$BIN" 2>"$TMP/cli.err" ); rc_cli=$?
 md=$(median_of "$out_direct"); mc=$(median_of "$out_cli")
+LOAD=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
+CORES=$(nproc 2>/dev/null || echo 1)
+echo "   · 机器前提：load=${LOAD} / cores=${CORES}（P1 绝对阈 20ms；饱和时改判相对口径）"
 
 if [ $rc_direct -eq 0 ] && [ -n "$md" ]; then
-  if awk -v v="$md" 'BEGIN{exit !(v <= 20)}'; then
-    ok "P1 px_exec 单次中位 ${md}ms ≤ 20ms（直连 pxi）"
-  else
-    bad "P1 px_exec 单次中位 ${md}ms > 20ms（仍未直连？）"
-  fi
+  pv=$(p1_verdict "$md" "${mc:-0}" "${LOAD:-0}" "${CORES:-1}")
+  case "$pv" in
+    OK)     ok "P1 px_exec 单次中位 ${md}ms ≤ 20ms（直连 pxi）" ;;
+    OK-REL) ok "P1 px_exec 单次中位 ${md}ms（负载 ${LOAD}/${CORES} 饱和 ⇒ 相对口径 ≤0.5×CLI ${mc}ms）" ;;
+    *)      bad "P1 px_exec 单次中位 ${md}ms 未达标（CLI ${mc:-?}ms · load ${LOAD}/${CORES}）" ;;
+  esac
 else
   bad "P1 探针未跑通（rc=$rc_direct）"; sed -n '1,5p' "$TMP/direct.err"
 fi
