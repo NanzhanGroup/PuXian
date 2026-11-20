@@ -6,48 +6,9 @@
 # 刷新：不用手跑 —— packaging/chain/release_postupgrade.sh 判绿后自动调 selfhost/refresh_gate_baseline.sh。
 #
 # 本次输入：
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/quiet-lane1.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/quiet-lane2.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/quiet-lane3.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/quiet.times.tsv（16 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard1.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard2.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard3.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard4.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard5.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard6.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard7.times.tsv（295 行）
-#   - chain-20261119-202340 = /data/gatevm/shard-20261119-202340/shard8.times.tsv（295 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/quiet-lane1.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/quiet-lane2.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/quiet-lane3.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/quiet.times.tsv（16 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard1.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard2.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard3.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard4.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard5.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard6.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard7.times.tsv（297 行）
-#   - chain-20261119-230933 = /data/gatevm/shard-20261119-230933/shard8.times.tsv（297 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/quiet-lane1.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/quiet-lane2.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/quiet-lane3.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/quiet.times.tsv（16 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard1.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard2.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard3.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard4.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard5.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard6.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard7.times.tsv（298 行）
-#   - chain-20261120-123047 = /data/gatevm/shard-20261120-123047/shard8.times.tsv（298 行）
-#   - preflight-20261119-221938 = /data/gatevm/preflight-20261119-221938.times.tsv（297 行）
-#   - preflight-20261119-224511 = /data/gatevm/preflight-20261119-224511.times.tsv（297 行）
-#   - preflight-20261120-021657 = /data/gatevm/preflight-20261120-021657.times.tsv（298 行）
-#   - preflight-20261120-120622 = /data/gatevm/preflight-20261120-120622.times.tsv（298 行）
-#   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-20 14:28:47 +0800
+#   - m424-only = /tmp/m116_gates.times.tsv（299 行）
+#   - retain（只补缺）= selfhost/gate_time_baseline.tsv
+# 生成时间：2026-11-20 14:46:36 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261119-230933
@@ -303,6 +264,7 @@ m420_route_intresp	3	OK	chain-20261119-202340
 m421_examples_coverage	66	OK	chain-20261120-123047
 m422_examples_compile	76	OK	chain-20261119-230933
 m423_pxexec_portable	5	OK	preflight-20261120-120622
+m424_pxexec_direct	5	OK	m424-only
 m63_langfix	6	OK	chain-20261119-230933
 m64_fmt	1	OK	chain-20261119-202340
 m64_lint	0	OK	chain-20261119-202340
