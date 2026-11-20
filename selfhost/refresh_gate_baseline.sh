@@ -181,6 +181,26 @@ refresh() {   # $1=repo ; 结果写全局 RESULT_TXT
     say "REFRESH-COVERAGE=OK"
 
     if [ "$DO_COMMIT" = 1 ]; then
+        # ── 冻树标记等待（M423 · 缺陷 865）──────────────────────────────────
+        #   病史（2026-11-20 14:28:50 实测）：M423 判绿 → 本脚本立刻回灌，而链要到
+        #   publish 完（make_tag + push，实测 45s）才在 EXIT trap 里摘 <git-dir>/chain-freeze；
+        #   .githooks/pre-commit 见标即拦（缺陷 848）⇒ REFRESH-COMMIT=FAIL(commit)。
+        #   这是结构性的：判绿后「立刻」回灌，必然落在冻结窗口里。
+        #   ⇒ 提交前有界等待标记消失（默认 900s，5s 一探）；超时则响亮失败，不猜、不硬闯。
+        local gd freeze fwait="${PU_FREEZE_WAIT:-900}" waited=0
+        gd="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)"
+        freeze="${gd:-$repo/.git}/chain-freeze"
+        if [ -f "$freeze" ]; then
+            say "REFRESH-FREEZE=WAIT(链未退，冻树标记在 $freeze；最多等 ${fwait}s)"
+            while [ -f "$freeze" ] && [ "$waited" -lt "$fwait" ]; do
+                sleep 5; waited=$((waited + 5))
+            done
+            if [ -f "$freeze" ]; then
+                say "REFRESH-COMMIT=FAIL(freeze 等了 ${waited}s 仍未摘 · $freeze · 链可能仍在跑；本次不提交，链退出后重跑本脚本即可)"
+                return 1
+            fi
+            say "REFRESH-FREEZE=OK(等了 ${waited}s，冻树标记已摘)"
+        fi
         # 树必须干净（除本文件）：回灌是机械段，不该和在写的东西混在一个提交里
         local dirty
         dirty="$(git -C "$repo" status --porcelain | grep -v " ${BASE}$" | head -5)"
@@ -452,6 +472,60 @@ STUBG2
             bad "T9 rc=$rc9 cnt=$cnt9（应 1/1）；$(grep 'REFRESH-PUSH=' "$T/t9.log" | tail -1)"
         fi
     fi
+
+    # ── T10/T10b：冻树标记等待（M423 · 缺陷 865）────────────────────────────
+    #   病史：2026-11-20 14:28:50 M423 判绿后回灌 REFRESH-COMMIT=FAIL，真因是
+    #         链要到 publish 完（make_tag+push ~45s）才摘 <git-dir>/chain-freeze，
+    #         .githooks/pre-commit 见标即拦（缺陷 848）⇒ 回灌提交必撞冻结窗口。
+    local R3="$T/repo3" M3="$T/md3b"
+    mkdir -p "$R3/selfhost" "$M3/shard-20260401-000000"
+    cp "$SELF_DIR/gate_time_baseline.sh" "$R3/selfhost/"
+    cp "$R/selfhost/run_gates.sh" "$R3/selfhost/"
+    chmod +x "$R3/selfhost/"*.sh
+    printf 'chain_ts=20260401-000000\nok=4\n' > "$M3/shard-20260401-000000/CHAIN-COMPLETE.txt"
+    { printf 'g1\tOK\t11\t-\n'; printf 'g2\tOK\t20\t-\n'
+      printf 'g3\tOK\t30\t-\n'; printf 'g4\tOK\t40\t-\n'; } \
+        > "$M3/shard-20260401-000000/shard1.times.tsv"
+    printf '# x\ng1\t10\tOK\tseed\ng2\t20\tOK\tseed\ng3\t30\tOK\tseed\ng4\t40\tOK\tseed\n' \
+        > "$R3/selfhost/gate_time_baseline.tsv"
+    git -C "$R3" init -q >/dev/null 2>&1
+    git -C "$R3" config user.email t@example.invalid >/dev/null 2>&1
+    git -C "$R3" config user.name t >/dev/null 2>&1
+    git -C "$R3" add -A >/dev/null 2>&1
+    git -C "$R3" commit -qm "fixture3（m423 selftest）" >/dev/null 2>&1
+    local F3 h0 h10
+    F3="$(git -C "$R3" rev-parse --absolute-git-dir 2>/dev/null)/chain-freeze"
+    h0="$(git -C "$R3" rev-parse HEAD)"
+    # T10 正控：冻树标记 2s 后被摘 ⇒ 等完再提交，必须成功且 HEAD 前进
+    printf 'milestone=M998\n' > "$F3"
+    ( sleep 2; rm -f "$F3" ) &
+    PU_FREEZE_WAIT=60 MDIR="$M3" bash "$0" --repo "$R3" --measured-dir "$M3" \
+        --baseline selfhost/gate_time_baseline.tsv --stamps 1 --commit >"$T/t10.log" 2>&1
+    local rc10=$?
+    wait
+    h10="$(git -C "$R3" rev-parse HEAD)"
+    n=$((n+1))
+    if [ "$rc10" = 0 ] && grep -q 'REFRESH-FREEZE=OK' "$T/t10.log" \
+       && grep -q 'REFRESH-COMMIT=OK' "$T/t10.log" && [ "$h0" != "$h10" ]; then
+        ok "T10 正控：冻树标记 2s 后摘 ⇒ 等完再提交（REFRESH-FREEZE=OK · HEAD 前进）"
+    else
+        bad "T10 rc=$rc10 head_moved=$([ "$h0" != "$h10" ] && echo yes || echo no)；$(grep -E 'REFRESH-(FREEZE|COMMIT)=' "$T/t10.log" | tr '\n' ' ')"
+    fi
+    # T10b 负控：冻树标记一直不摘 ⇒ 到点 rc=1 且**不提交**（不许静默跳过、不许硬闯钩子）
+    printf 'milestone=M997\n' > "$F3"
+    local hb; hb="$(git -C "$R3" rev-parse HEAD)"
+    PU_FREEZE_WAIT=3 MDIR="$M3" bash "$0" --repo "$R3" --measured-dir "$M3" \
+        --baseline selfhost/gate_time_baseline.tsv --stamps 1 --commit >"$T/t10b.log" 2>&1
+    local rc10b=$?
+    n=$((n+1))
+    if [ "$rc10b" = 1 ] && grep -q 'REFRESH-FREEZE=WAIT' "$T/t10b.log" \
+       && grep -q 'FAIL(freeze' "$T/t10b.log" \
+       && [ "$(git -C "$R3" rev-parse HEAD)" = "$hb" ]; then
+        ok "T10b 负控：冻树标记不摘 ⇒ rc=1 且未提交（不静默跳过、不硬闯钩子）"
+    else
+        bad "T10b rc=$rc10b head_moved=$([ "$(git -C "$R3" rev-parse HEAD)" = "$hb" ] && echo no || echo yes)；$(grep -E 'REFRESH-(FREEZE|COMMIT)=' "$T/t10b.log" | tr '\n' ' ')"
+    fi
+    rm -f "$F3"
 
     echo "── refresh 自测：$((n-FAIL))/$n 通过 ──"
     [ "$FAIL" = 0 ] || return 1
