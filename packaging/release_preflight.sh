@@ -144,6 +144,13 @@ PRECHECK_GATES=(
     #   TERM·HUP 动态负控（真起服务 + GET 200 自证 + 端口释放）/ 退出码透传 / 提示回归 /
     #   P6 负控自证（仓外副本打掉 trap ⇒ 孤儿必复现）；本门自己不留监听。
     m429_pxrun_signal                                    # px run 信号与进程树（实测 ~15s）
+    # ── M430：门跑完不许留监听（305 门里的 m430_gate_portscan · 实测 ~8s）──
+    #   病史：假门「起监听就退出」⇒ 运行器判 ✅、TSV 记 OK，监听与孤儿留着（缺陷 879）。
+    #   机制：marker 归属（门前缀 PUXIAN_GATE_MARK + /proc/<pid>/environ），不用快照差集
+    #         （分片并发会误归因）；命中即判红 + 回收；失败门同样回收。
+    #   这门 8 秒判：形状 5 条 + P2 前提自证 + P3 认出孤儿 + P4 不误伤 +
+    #   N1 端到端负控（真跑 run_gates.sh）+ P1 正控 + P5 豁免账 + P6 负控自证 + G1/G2/G3。
+    m430_gate_portscan                                   # 端口残留扫描机制（实测 ~8s）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

@@ -71,6 +71,16 @@ FAIL=0
 SKIPPED=0
 REG="${GATE_REGISTRY:-selfhost/gates.registry.sh}"
 
+# ── M430（缺陷 879）：门退出后「不许留监听」的记账 ────────────────────
+#   修前实测（2026-11-21 19:5x）：造一个「起监听就退出」的假门 ⇒ 运行器判
+#   `✅ leaky_demo`、TSV 记 OK，而 ss 里 127.0.0.1:38769 还在 LISTEN、PPID=1。
+#   300+ 门里只有 M429 给自己那扇加了收尾判据 ⇒ 其余全是盲区（本月四起残留
+#   15 个 build/t 挂 7.5h / 6 个 18902 七天 / 18096 / 58717 十二天，没有一起是本门发现的）。
+PORTSCAN="${GATE_PORTSCAN:-1}"            # 0=关闭（仅排障；汇总会明说「本档未扫」）
+PORTSCAN_GRACE="${GATE_PORTSCAN_GRACE:-2}"
+PORTSCAN_TOOL="$GATE_ROOT/selfhost/gate_portscan.sh"
+PORTSCAN_SCANNED=0; PORTSCAN_LEAKS=0; PORTSCAN_UNAVAIL=0
+
 # ── M293（缺陷 506）：末行裁决（rc=0 **不足以**证明门绿）─────────────────
 #   本仓有一批门结尾是「打印 `MNNN-VERIFY-OK` 但**无条件 `exit 0`**」，而本运行器的失败计数
 #   **只看 rc** ⇒ 这类门的**门内 ❌ 被静默吞掉**（实测：m293 内部「失败 1 项 · 通过 37 项」，
@@ -161,6 +171,46 @@ GATE_ALL0=$SECONDS
 #   ⇒ 分片侧传 GATE_LOG_DIR_HINT=<宿主可见目录>，打印时用它拼**宿主可读**的路径。
 gate_log_path(){ if [ -n "${GATE_LOG_DIR_HINT:-}" ]; then printf '%s/gate_%s.log' "$GATE_LOG_DIR_HINT" "$1"; else printf '/tmp/gate_%s.log' "$1"; fi; }
 
+# ── M430（缺陷 879）：门跑完不许留监听 ─────────────────────────────
+#   归属靠环境 marker（PUXIAN_GATE_MARK）而不是「前后快照差集」：
+#   分片档 8 个 run_gates.sh 并发 ⇒ 差集必然把别片正在跑的门算成自己的泄漏。
+_gate_portleak() {   # $1=门名 $2=marker $3=耗时；返回 1 = 已按失败记账
+    [ "$PORTSCAN" = 1 ] || return 0
+    local name="$1" mark="$2" el="$3" out rc
+    out="$(bash "$PORTSCAN_TOOL" scan --mark "$mark" --gate "$name" --grace "$PORTSCAN_GRACE" --reap 2>&1)"; rc=$?
+    case "$rc" in
+        0) PORTSCAN_SCANNED=$((PORTSCAN_SCANNED+1)); return 0 ;;
+        1) : ;;   # 唯一一条「真泄漏」的路径，往下记账
+        *)  PORTSCAN_UNAVAIL=$((PORTSCAN_UNAVAIL+1))
+            echo "⚠️ $name 端口残留扫描**未成立**（rc=$rc）：$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+            echo "     ⇒ 这一门的「不留监听」没人守（计数进汇总，不静默）"
+            return 0 ;;
+    esac
+    PORTSCAN_SCANNED=$((PORTSCAN_SCANNED+1)); PORTSCAN_LEAKS=$((PORTSCAN_LEAKS+1))
+    printf '%s\tFAIL\t%d\tportleak\n' "$name" "$el" >> "$GATE_TSV"
+    echo "❌ $name（rc=0 但**门退出后仍占着端口** · ${el}s）"
+    printf '%s\n' "$out" | sed 's/^/     /'
+    echo "     ⇒ 判据（M430 · 缺陷 879）：门退出后，本门起的进程不许还 LISTEN。"
+    echo "        要么在门里 trap 收尾，要么证明那不是本门起的（按 environment marker 归属）"
+    echo "     （完整日志：$(gate_log_path "$name")）"
+    FAIL=$((FAIL+1))
+    _maybe_fail_fast
+    return 1
+}
+
+_gate_portclean() {   # $1=门名 $2=marker —— 门已判红：只回收残留，不重复记账
+    [ "$PORTSCAN" = 1 ] || return 0
+    local name="$1" mark="$2" out rc
+    out="$(bash "$PORTSCAN_TOOL" scan --mark "$mark" --gate "$name" --grace 0 --reap --quiet 2>&1)"; rc=$?
+    PORTSCAN_SCANNED=$((PORTSCAN_SCANNED+1))   # 失败门也扫过（汇总的「扫 N 门」要含它）
+    if [ "$rc" = 1 ]; then
+        echo "     🔻 失败门的残留已回收（M430）："
+        printf '%s\n' "$out" | sed 's/^/        /'
+        PORTSCAN_LEAKS=$((PORTSCAN_LEAKS+1))
+    fi
+    return 0
+}
+
 run() {  # $1=名 $2..=命令
     local name="$1"; shift
     # ── M243：--list 只报门名（check_gate_registry.sh 靠它做清单↔实现对拍）──
@@ -174,14 +224,18 @@ run() {  # $1=名 $2..=命令
         printf '%s\tSKIP\t0\t-\n' "$name" >> "$GATE_TSV"; SKIPPED=$((SKIPPED+1)); return 0
     fi
     local t0=$SECONDS
+    # M430：本门的归属 marker（进程树继承；孤儿化后仍在 /proc/<pid>/environ 里）
+    local mark="puxian-${name}-$$-${RANDOM}${RANDOM}"
     # ── M311：三层优先级（env > 注册源声明 > 默认）—— 记住来源，红的时候能读出真因 ──
     local tmo_var="GATE_TIMEOUT_${name}"
     local tmo="$GATE_TIMEOUT_DEFAULT" tmo_src="默认"
     if [ -n "${GATE_TMO_DECL[$name]:-}" ]; then tmo="${GATE_TMO_DECL[$name]}"; tmo_src="注册源"; fi
     if [ -n "${!tmo_var:-}" ]; then tmo="${!tmo_var}"; tmo_src="env"; fi
-    if timeout -k 20 "$tmo" "$@" > "/tmp/gate_$name.log" 2>&1; then
+    if PUXIAN_GATE_MARK="$mark" timeout -k 20 "$tmo" "$@" > "/tmp/gate_$name.log" 2>&1; then
         local el=$((SECONDS-t0))
-        if _gate_adjudicate_ok_rc "$name" "$el" && _gate_adjudicate_skips "$name" "$el"; then
+        # M430：**先查残留监听，再判 OK** —— 顺序是判据的一部分（先记绿就再也改不回来了）
+        if _gate_portleak "$name" "$mark" "$el" \
+           && _gate_adjudicate_ok_rc "$name" "$el" && _gate_adjudicate_skips "$name" "$el"; then
             printf '%s\tOK\t%d\t-\n' "$name" "$el" >> "$GATE_TSV"
             echo "✅ $name（${el}s）"
             # M311：**配额告警**（用掉 ≥80% 生效上限）—— 不判红，只点名。
@@ -196,6 +250,8 @@ run() {  # $1=名 $2..=命令
         fi
     else
         local rc=$?; local el=$((SECONDS-t0))
+        # M430：失败门同样回收自己漏下的监听（不重复记账 —— 这扇门已经红了）
+        _gate_portclean "$name" "$mark"
         printf '%s\tFAIL\t%d\t%d\n' "$name" "$el" "$rc" >> "$GATE_TSV"
         if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
             echo "⏱  $name（**超时**：${el}s ≥ 上限 ${tmo}s · 来源 ${tmo_src}，rc=$rc）"
@@ -269,6 +325,13 @@ gate_summary() {
         echo "══ 汇总：失败 $FAIL 项（总耗时 $((SECONDS-GATE_ALL0))s）══"
     fi
     echo "   逐门时序（name<TAB>状态<TAB>秒<TAB>rc）：$GATE_TSV"
+    # M430（缺陷 879）：端口残留扫描的覆盖面必须**可见** ——
+    #   关闭或未成立都要在汇总里说出来，否则「没人守」会被读成「守住了」。
+    if [ "$PORTSCAN" = 1 ]; then
+        echo "   端口残留扫描：扫 $PORTSCAN_SCANNED 门 · 泄漏 $PORTSCAN_LEAKS · 未成立 $PORTSCAN_UNAVAIL（M430）"
+    else
+        echo "   ⚠️ 端口残留扫描**本次关闭**（GATE_PORTSCAN=0）—— 门跑完不留监听这一档没人守"
+    fi
     # M311：**配额告警汇总**（≥80% 上限的门 —— 下一个顶穿的就是它们）
     if [ "${#QUOTA_WARN[@]}" -gt 0 ]; then
         echo "   ⚠️ 配额告警 ${#QUOTA_WARN[@]} 门（用掉 ≥80% 生效上限）："

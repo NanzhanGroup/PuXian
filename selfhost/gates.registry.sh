@@ -1295,6 +1295,19 @@ run m428_opts_valuerange bash selfhost/check_opts_valuerange.sh
 #        P6 负控自证（仓外副本打掉 4 条 trap ⇒ 孤儿必须复现，且打掉后服务照样起得来）；
 #        本门自己不留监听；环境不成立 rc=3；零污染。
 run m429_pxrun_signal bash selfhost/check_pxrun_signal.sh
+# M430（缺陷 879）：**门跑完不许留监听** —— 全局机制（此前 300+ 门只有 M429 自己守）
+#   修前实测：假门「起监听就退出」⇒ 运行器判 `✅ leaky_demo`、TSV 记 OK，
+#   而 ss 里 127.0.0.1:38769 仍 LISTEN、PPID=1。本月四起真实残留（15 个 build/t 挂 7.5h /
+#   6 个 18902 七天 / 18096 每跑一次漏一个 / 58717 十二天）**没有一起是本门自己发现的**。
+#   修法：运行器在跑门时把 PUXIAN_GATE_MARK 放到**这一条命令**的环境里（进程树继承 ⇒
+#   孤儿化后 /proc/<pid>/environ 仍带它），门退出后按 marker 归属扫 LISTEN/UNCONN，
+#   命中即判红 + 回收。为什么不用「前后快照差集」：分片 8 片并发 ⇒ 必然把别片算成自己的。
+#   这门判：形状（扫描在判 OK 之前 / marker 只按门前缀 / 失败分支也回收 / 判绿路径无差集）/
+#   P2 前提自证（孤儿 environ 里真能读到 marker）/ P3 按 marker 认出孤儿 / P4 不误伤别人的监听 /
+#   N1 端到端负控（真跑 run_gates.sh：泄漏门必红 + 回收后端口真空）/ P1 正控（干净门不许误红）/
+#   P5 豁免账（理由≥8 + 到期日 + 只减不增）/ P6 负控自证（摘除判据 ⇒ 同一泄漏门必须变绿）/
+#   G1 ss 缺失 rc=3 / G2 零污染 / G3 本门自己不留监听。
+run m430_gate_portscan bash selfhost/check_gate_portscan.sh
 # M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。
