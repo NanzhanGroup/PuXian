@@ -133,6 +133,11 @@ PRECHECK_GATES=(
     #   病史：px_serve 的 opts 拼错键**静默忽略**（服务照起、配置不生效）。
     #   这门 95 秒判掉：键表契约 / 未知键响亮 / 14 键逐个单传必须起服务 / P6 负控自证（真重建）。
     m427_opts_whitelist                                  # px_serve opts 白名单（实测 ~95s 冷）
+    # ── M428：opts 值域契约（303 门里的 m428_opts_valuerange · 实测 ~120s，含一次 runtime 重建）──
+    #   病史：键名 M427 已响亮，但「值不对」仍静默 —— rate_limit{window_sec:-5} ⇒ 限流**根本不启用**
+    #   （安全面）；max_body_size:500 静默夹到 1024；max_conn:0 / gzip_level:99 / http3.port:70000 静默忽略。
+    #   这门判：A 类响亮（键名+区间+实收值）/ B 类夹取必须留痕 / 限流必须真限流 / 边界值仍能起服务 / P6 负控自证。
+    m428_opts_valuerange                                 # px_serve opts 值域（实测 ~120s 冷）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

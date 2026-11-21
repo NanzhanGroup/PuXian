@@ -1,3 +1,72 @@
+## M428：px_serve 的 opts **值域**契约 —— 键拼对了、值不对也曾静默（缺陷 875）
+
+> **一句话**：M427 让「拼错的键名」响亮了，但「键拼对了、值写错」当时仍然静默 ——
+> `rate_limit:{max:3, window_sec:-5}` ⇒ **限流根本不启用**（6 次请求全 200，用户以为开了保护），
+> `max_body_size:500` ⇒ 静默夹到 1024，`max_conn:0` / `gzip_level:99` / `http3.port:70000` ⇒ 静默忽略，
+> `rate_limit:"3/60"`（类型错）⇒ 同样静默。最贵的一条是限流越界：**安全面配置静默失效**。
+
+### 证据（2026-11-21 · 本机 · 修前基线 /tmp/m428r/repro.sh 六条留档）
+
+```
+修前（HEAD 1 轮前 · 同一份源码 + 一次真实请求）
+  REPRO1 rate_limit{max:3,window_sec:-5} 6 次请求 => 200 200 200 200 200 200   （限流不存在）
+  CTRL1  rate_limit{max:3,window_sec:60}  6 次请求 => 200 200 200 429 429 429   （限流本身可用）
+  REPRO2 max_body_size=500   启动日志 max_body=1024  报错行数=0
+  REPRO3 max_conn=0          启动日志 max_conn=32    报错行数=0
+  REPRO4 gzip_level=99       rc=124（服务照起）      报错行数=0
+  REPRO5 rate_limit="3/60"   rc=124（服务照起）      报错行数=0
+  REPRO6 http3.port=70000    rc=124  启动行 HTTP/3 listening udp/18600（静默用默认端口）
+
+修后（同一批 probe · 只改了 runtime.c）
+  REPRO1 => rc=1  R1002: px_serve opts.rate_limit.window_sec = -5 超出合法区间 1..1000000000 秒
+  REPRO3 => rc=1  R1002: px_serve opts.max_conn = 0 超出合法区间 1..1000000
+  REPRO4 => rc=1  R1002: px_serve opts.gzip_level = 99 超出合法区间 1..9
+  REPRO5 => rc=1  R1002: px_serve opts.rate_limit 需要字典 {max, window_sec, key?, whitelist?}，实收类型 str
+  REPRO6 => rc=1  R1002: px_serve opts.http3.port = 70000 超出合法区间 1..65535
+  REPRO2 => 服务照起 + stderr「警告：opts.max_body_size=500 小于下限 1024，已夹到 1024」
+```
+
+### 分类（先分类，再决定响亮还是留痕）
+
+```
+A 类「用户明确写错」⇒ R1002（键名 + 合法区间 + 实收值/类型）
+  max_body_size 类型错 / 0 或负数 / >1GiB · body_spill·log_json·log_daily·gzip·h2_demo 非 bool
+  max_conn <1 · rate_limit 非字典 · rate_limit.max/window_sec <1 · rate_limit.key 非字符串
+  whitelist 非列表 / 含非字符串项 · access_log·alt_svc 非字符串
+  gzip_level ∉ 1..9 · gzip_min_bytes <1 · http3.port ∉ 1..65535 · http3 子字典未知键 · reuse_port 非 bool/int
+B 类「保护性夹取」（改报错会打死合法小站 / 资源上限不是写错）⇒ 保留夹取，但**必须 stderr 留痕**
+  max_body_size < 1024 ⇒ 夹到 1024 + 警告（实测：REPRO2）
+  max_conn > 256       ⇒ 夹到 256  + 警告（实测：max_conn=300 ⇒ 日志 max_conn=256 + 警告）
+  whitelist > 64 项    ⇒ 截断到 64 + 警告（实测：70 项 ⇒ 服务起 + 警告）
+```
+
+### 门：`m428_opts_valuerange`（302 → 303 · 自测 8/8 · 全跑 28 PASS / 0 FAIL）
+
+```
+S1a 值域校验块在第一个 opts 取值之前（行号比较 · 实测 L30289 < L30290）
+S1b 6 个关键键各有校验调用 · S2 B 类三条夹取路径都有 stderr 留痕
+P1  负控（安全面）：window_sec=-5 ⇒ rc≠0 且文本含 键名 + 区间 + 实收值
+P2  正控：合法 rate_limit ⇒ **真限流**（200 200 200 429 429 429）
+P2b 负控对照（N1 前提自证）：无 rate_limit ⇒ 6 次全 200 ⇒ 429 来自限流本身
+P3  五个越界值逐个响亮（max_conn 0 / gzip_level 99 / gzip_min_bytes 0 / http3.port 70000 / rate_limit.max 0）
+P4  边界合法值照常起服务（max_conn 1 / gzip_level 1 / gzip_level 9 / gzip_min_bytes 1 / max_body_size 1024 /
+    rate_limit{1,1} / http3.port 边界端口真起 H3；本二进制 no-quic 时要求 R1002 说明原因）
+P5  B 类留痕两面（max_body_size 500 / whitelist 70 项）
+P6  负控自证：把 px_opt_expect_int 打成 return ⇒ P1 信号消失（NOCACHE 真重建，防判据空转）
+P7/P8 类型错（rate_limit 字符串 / max_conn 字符串 / whitelist 字符串 / 列表含 int）逐个响亮
+G1 环境不成立 rc=3 · G2 零污染
+```
+
+### 边界（不夸大）
+
+```
+能说  六条静默各有「修前复现 + 修后响亮」，且 rate_limit 那条有「真限流 / 真不限流」的正反控
+能说  14 个已知键的边界合法值都仍然能起服务（防过度修复）
+不能说「所有配置错误都会报错」：只覆盖 opts 的键名（M427）与本文列出的值域；值语义（如 key 组合串）不校验
+不做  http_serve 的 opts（键面仅 host，另轮）· 不做 JSON schema 之类新依赖 · 不动 h2_demo 语义
+代价  改 runtime.c ⇒ .rtcache 失效，本轮首次跑门要冷建（历史实测 ~17min）
+```
+
 ## M427 补1：m426_examples_run 登记出网 —— 出网示例被塞进隔离分片（缺陷 876）
 
 > **一句话**：M427 全量门第一次分片跑，唯一红是 `m426_examples_run`：它非豁免集合里有 2 条**真出网**示例

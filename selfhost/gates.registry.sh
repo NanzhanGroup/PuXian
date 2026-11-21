@@ -1275,6 +1275,15 @@ run m426_examples_run bash selfhost/check_examples_run.sh
 #        P6 负控自证（打掉 px_serve 的 if (!known) ⇒ typo 不再报错，且必须真重建，否则判据空转）；
 #        临时改 runtime.c 的任何退出路径都复原（sha256 校验）；环境不成立 rc=3；零污染。
 run m427_opts_whitelist bash selfhost/check_opts_whitelist.sh
+# M428（缺陷 875）：px_serve 的 opts **值域**契约 —— 键拼对了、值不对也曾静默。
+#   实测（修前）：rate_limit{max:3,window_sec:-5} ⇒ 6 次请求全 200（**限流根本不启用**，安全面）；
+#   max_body_size:500 ⇒ 静默夹到 1024；max_conn:0 / gzip_level:99 / http3.port:70000 ⇒ 静默忽略；
+#   rate_limit:"3/60"（类型错）⇒ 同样静默。
+#   判据：A 类（类型/区间）R1002 带键名+区间+实收值；B 类（保护性夹取）保留夹取但必须 stderr 留痕；
+#        限流必须**真限流**（200 200 200 429）+ 无 rate_limit 对照全 200；边界合法值仍能起服务（防过度修复）；
+#        P6 负控自证（打掉 px_opt_expect_int ⇒ 信号消失，且 NOCACHE 真重建）；临时改 runtime.c 必复原（sha256）；
+#        环境不成立 rc=3；零污染。
+run m428_opts_valuerange bash selfhost/check_opts_valuerange.sh
 # M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。

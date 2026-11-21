@@ -531,6 +531,46 @@ static int px_want_reuse_port(LXValue opts) {
     if (e && (strcmp(e, "1") == 0 || strcasecmp(e, "true") == 0 || strcasecmp(e, "yes") == 0)) return 1;
     return 0;
 }
+// ==================== M428（缺陷 875）：px_serve opts 的**值域**契约 ====================
+// M427 修了「键名」（拼错的键响亮拒绝），但「键拼对了、值不对」此前仍然静默 —— 实测（修前，
+//   /tmp/m428r/repro.sh · 六条复现全部留档）：
+//     rate_limit {max:3, window_sec:-5} ⇒ **限流根本不启用**（6 次请求全 200；而合法配置第 4 次起 429）
+//     max_body_size:500 ⇒ 静默夹到 1024 · max_conn:0 / gzip_level:99 / http3.port:70000 ⇒ 静默忽略
+//     rate_limit:"3/60"（类型错）⇒ 同样静默
+//   最贵的一条是 rate_limit 越界：用户以为开了保护，实际没有任何限流。
+// 口径（与 M427 / http_stream opts.methods / opts.http3 一致：响亮优于静默）：
+//   A 类 = 用户明确写错（类型 / 区间）⇒ R1002，消息带 键名 + 合法区间 + 实收值（或类型）；
+//   B 类 = 保护性夹取（max_body_size 下限 / max_conn 上限 / whitelist 上限）⇒ 保留夹取，
+//          但**必须 stderr 留痕** —— 「无声夹取」和「静默忽略」同样让人以为配置生效了。
+static const char* px_opt_typename(const LXValue* v) {
+    switch (v->type) {
+        case PX_NULL:  return "null";
+        case PX_BOOL:  return "bool";
+        case PX_INT:   return "int";
+        case PX_FLOAT: return "float";
+        case PX_STR:   return "str";
+        case PX_LIST:  return "list";
+        case PX_DICT:  return "dict";
+        default:       return "其他类型";
+    }
+}
+// A 类：整数值域。键不存在（PX_NULL）⇒ 通过（缺省语义不变）。
+static void px_opt_expect_int(const char* key, LXValue v, long long lo, long long hi, const char* range) {
+    if (v.type == PX_NULL) return;
+    if (v.type != PX_INT)
+        px_error("R1002: px_serve opts.%s 需要整数（合法区间 %s），实收类型 %s",
+                 key, range, px_opt_typename(&v));
+    if (v.as.i < lo || v.as.i > hi)
+        px_error("R1002: px_serve opts.%s = %lld 超出合法区间 %s", key, (long long)v.as.i, range);
+}
+static void px_opt_expect_bool(const char* key, LXValue v) {
+    if (v.type == PX_NULL || v.type == PX_BOOL) return;
+    px_error("R1002: px_serve opts.%s 需要 bool（true/false），实收类型 %s", key, px_opt_typename(&v));
+}
+static void px_opt_expect_str(const char* key, LXValue v) {
+    if (v.type == PX_NULL || v.type == PX_STR) return;
+    px_error("R1002: px_serve opts.%s 需要字符串，实收类型 %s", key, px_opt_typename(&v));
+}
 // 失败必须**响亮**：用户要的是「零停机」这个保证，内核不支持就不能假装设上了。
 static void px_sock_set_reuseport(int fd, const char* what) {
     int one = 1;
@@ -30246,13 +30286,102 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
                 }
             }
         }
+        // ── M428（缺陷 875）：值域校验 —— 必须在**任何取值之前**（与 M427 的键名校验同一位置口径）──
+        px_opt_expect_int("max_body_size", px_dict_get(args[3], "max_body_size"),
+                          1, 1073741824LL, "1024..1073741824 字节（512 会被夹到 1024 并告警，0/负数报错）");
+        px_opt_expect_bool("body_spill", px_dict_get(args[3], "body_spill"));
+        px_opt_expect_int("max_conn", px_dict_get(args[3], "max_conn"), 1, 1000000, "1..1000000（256 以上会夹到 256 并告警）");
+        {
+            LXValue rl0 = px_dict_get(args[3], "rate_limit");
+            if (rl0.type != PX_NULL && rl0.type != PX_DICT)
+                px_error("R1002: px_serve opts.rate_limit 需要字典 {max, window_sec, key?, whitelist?}，实收类型 %s",
+                         px_opt_typename(&rl0));
+            if (rl0.type == PX_DICT) {
+                // 越界 ⇒ 限流**根本不会启用**（修前实测：window_sec:-5 时 6 次请求全 200）
+                px_opt_expect_int("rate_limit.max", px_dict_get(rl0, "max"), 1, 1000000000,
+                                  "1..1000000000（正整数；0/负数会让限流静默不启用）");
+                px_opt_expect_int("rate_limit.window_sec", px_dict_get(rl0, "window_sec"), 1, 1000000000,
+                                  "1..1000000000 秒（正整数；0/负数会让限流静默不启用）");
+                px_opt_expect_str("rate_limit.key", px_dict_get(rl0, "key"));
+                LXValue wl0 = px_dict_get(rl0, "whitelist");
+                if (wl0.type != PX_NULL && wl0.type != PX_LIST)
+                    px_error("R1002: px_serve opts.rate_limit.whitelist 需要字符串列表（IP），实收类型 %s",
+                             px_opt_typename(&wl0));
+                if (wl0.type == PX_LIST) {
+                    LXObject* wo = wl0.as.obj;
+                    PX_UAFCHK(wo, "px_serve(opts.rate_limit.whitelist)");
+                    for (int i = 0; i < wo->as.list.len; i++) {
+                        if (wo->as.list.items[i].type != PX_STR)
+                            px_error("R1002: px_serve opts.rate_limit.whitelist 第 %d 项需要字符串（IP），实收类型 %s"
+                                     "（修前该项被静默跳过）", i + 1, px_opt_typename(&wo->as.list.items[i]));
+                    }
+                }
+            }
+        }
+        px_opt_expect_str("access_log", px_dict_get(args[3], "access_log"));
+        px_opt_expect_str("alt_svc", px_dict_get(args[3], "alt_svc"));
+        px_opt_expect_bool("log_json", px_dict_get(args[3], "log_json"));
+        px_opt_expect_bool("log_daily", px_dict_get(args[3], "log_daily"));
+        px_opt_expect_int("gzip_level", px_dict_get(args[3], "gzip_level"), 1, 9,
+                          "1..9（0/10/99 修前被静默忽略）");
+        px_opt_expect_int("gzip_min_bytes", px_dict_get(args[3], "gzip_min_bytes"), 1, 1073741824LL,
+                          "1..1073741824 字节（0/负数修前被静默忽略）");
+        px_opt_expect_bool("gzip", px_dict_get(args[3], "gzip"));
+        px_opt_expect_bool("h2_demo", px_dict_get(args[3], "h2_demo"));
+        {
+            LXValue rp0 = px_dict_get(args[3], "reuse_port");
+            if (rp0.type != PX_NULL && rp0.type != PX_BOOL && rp0.type != PX_INT)
+                px_error("R1002: px_serve opts.reuse_port 需要 bool（或 0/1 整数），实收类型 %s",
+                         px_opt_typename(&rp0));
+        }
+        {
+            // M428：http3 与 M427 同办 —— 子字典键名白名单 + 值域（修前 {"port":70000} 静默用默认端口）
+            static const char* const px_opts_h3_keys[] = { "port", "cert", "key", NULL };
+            LXValue h30 = px_dict_get(args[3], "http3");
+            if (h30.type != PX_NULL && h30.type != PX_BOOL && h30.type != PX_DICT)
+                px_error("R1002: px_serve opts.http3 需要 bool 或字典 {port?, cert?, key?}，实收类型 %s",
+                         px_opt_typename(&h30));
+            if (h30.type == PX_DICT) {
+                LXObject* ho = h30.as.obj;
+                PX_UAFCHK(ho, "px_serve(opts.http3)");
+                for (int i = 0; i < ho->as.dict.len; i++) {
+                    const char* hk0 = ho->as.dict.keys[i];
+                    int hknown = 0;
+                    for (int j = 0; px_opts_h3_keys[j]; j++)
+                        if (strcmp(hk0, px_opts_h3_keys[j]) == 0) { hknown = 1; break; }
+                    if (!hknown)
+                        px_error("R1002: px_serve opts.http3 里不认识的键 \"%s\"（已知键：port / cert / key）", hk0);
+                }
+                px_opt_expect_int("http3.port", px_dict_get(h30, "port"), 1, 65535,
+                                  "1..65535（修前 70000 被静默忽略、用默认端口）");
+                px_opt_expect_str("http3.cert", px_dict_get(h30, "cert"));
+                px_opt_expect_str("http3.key", px_dict_get(h30, "key"));
+            }
+        }
         LXValue mb = px_dict_get(args[3], "max_body_size");
-        if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
+        if (mb.type == PX_INT) {
+            long long m = mb.as.i;
+            if (m < 1024) {
+                // B 类：夹取是防御性的（改报错会打死「我只收小请求」的小站），但夹取必须留痕
+                fprintf(stderr, "[px-serve] 警告：opts.max_body_size=%lld 小于下限 1024，已夹到 1024\n", m);
+                m = 1024;
+            }
+            g_px_max_body = (int)m;
+        }
         // M221：请求体落盘开关（缺省开）；关掉则体一律留内存（受 max_body_size 约束）
         LXValue bs = px_dict_get(args[3], "body_spill");
         if (bs.type == PX_BOOL) g_px_body_spill = bs.as.b ? 1 : 0;
         LXValue mc = px_dict_get(args[3], "max_conn");
-        if (mc.type == PX_INT && mc.as.i >= 1) max_conn = (int)(mc.as.i > PX_POOL_MAX ? PX_POOL_MAX : mc.as.i);
+        if (mc.type == PX_INT) {
+            long long m = mc.as.i;
+            if (m > PX_POOL_MAX) {
+                // B 类：资源上限，夹取保留，但必须留痕（修前静默夹到 256）
+                fprintf(stderr, "[px-serve] 警告：opts.max_conn=%lld 超过上限 %d，已夹到 %d\n",
+                        m, PX_POOL_MAX, PX_POOL_MAX);
+                m = PX_POOL_MAX;
+            }
+            max_conn = (int)m;
+        }
         LXValue rl = px_dict_get(args[3], "rate_limit");
         if (rl.type == PX_DICT) {
             LXValue rm = px_dict_get(rl, "max");
@@ -30269,6 +30398,10 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             if (wl.type == PX_LIST) {
                 g_px_rate_whitelist_n = 0;
                 int wn = wl.as.obj->as.list.len;
+                if (wn > PX_RATE_WL_MAX)
+                    // B 类：数量上限是资源保护（不是用户写错），夹取保留但必须留痕（修前静默截断）
+                    fprintf(stderr, "[px-serve] 警告：opts.rate_limit.whitelist 有 %d 项，超过上限 %d，只取前 %d 项\n",
+                            wn, PX_RATE_WL_MAX, PX_RATE_WL_MAX);
                 for (int i = 0; i < wn && g_px_rate_whitelist_n < PX_RATE_WL_MAX; i++) {
                     LXValue item = wl.as.obj->as.list.items[i];
                     if (item.type == PX_STR) {

@@ -401,6 +401,24 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_opts_whitelist 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_opts_whitelist rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_opts_whitelist PASS"
+      - name: px_serve opts 值域契约（M428 · 缺陷 875）
+        #   病史：键名 M427 已响亮，但「键拼对了、值不对」仍静默 —— rate_limit{window_sec:-5}
+        #   ⇒ **限流根本不启用**（安全面）；max_body_size:500 静默夹到 1024；max_conn:0 /
+        #   gzip_level:99 / http3.port:70000 静默忽略；rate_limit:"3/60"（类型错）同样静默。
+        #   判据：A 类（类型/区间）R1002 带键名+区间+实收值；B 类（保护性夹取）保留但必须留痕；
+        #   限流必须真限流（200 200 200 429）+ 无 rate_limit 对照全 200；边界合法值仍能起服务；
+        #   P6 负控自证（打掉 px_opt_expect_int ⇒ 信号消失，NOCACHE 真重建）。环境不成立 rc=3 视为不适用。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_opts_valuerange.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_opts_valuerange 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_opts_valuerange.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_opts_valuerange 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_opts_valuerange rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_opts_valuerange PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

@@ -305,6 +305,7 @@ m424_pxexec_direct	5	OK	chain-20261121-031753
 m425_build_cache	65	OK	preflight-20261121-062844
 m426_examples_run	218	FAIL	chain-20261121-074636
 m427_opts_whitelist	53	OK	preflight-20261121-062844
+m428_opts_valuerange	120	OK	manual-20261121-m428
 m63_langfix	7	OK	chain-20261121-031753
 m64_fmt	1	OK	chain-20261121-031753
 m64_lint	1	OK	chain-20261121-094628
