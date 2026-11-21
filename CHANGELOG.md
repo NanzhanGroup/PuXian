@@ -114,6 +114,32 @@ registry 305 门（+1）· 前置档 33 门（+1）· ci.yml 同步（check_gate
 版本 0.2.430（bump_version.sh 9 处）· rebake --rebake-all 14/14 一致 · VERSION-GOLDEN-OK
 ```
 
+## M430 补3：判红不许毁尸 —— red() 覆盖了 chain_stamp 的详细戳（缺陷 884）
+
+> **一句话**：派生台账 `m430-pipeline-criteria-empty` 自报「判据没说清为什么红」，
+> 实为 `run_release_chain.sh` 的 `red()` 用一行短戳把 `chain_stamp.sh` 刚写的
+> `green=303 red=2 listed=305 head=e086279` 整行覆盖掉 ⇒ 下游 `m430_pipeline.sh`
+> 取不到 `green=` ⇒ rc=4 `criteria-empty`。**两门真红反被埋**，白查一轮。
+
+### 实账
+
+```
+chain.log：[chain_stamp] RED 已写 … green=303 red=2 listed=305 …（此刻戳完整）
+紧接：    == stamp: CHAIN-VERDICT=RED reason=红 2 门 green=303 …
+末尾：    == RED no-go   ⇒ 戳变 "CHAIN-VERDICT=RED reason=no-go"（31 字节，仅 2 个 '='）
+m430_pipeline.sh:117 grep -oE 'green=[0-9]+' ⇒ 空 ⇒ nverify=0 ⇒ criteria-empty(4)
+```
+
+### 修法
+
+```
+判红写戳抽成 packaging/chain/chain_red_lib.sh（唯一实现 · 可被负控直接 source）
+$STAMP_FROM_THIS_RUN=1 且戳含 green= ⇒ 只追加 CHAIN-RED-REASON=<reason>，逐字保留详细戳
+前置自证阶段（=0）⇒ 仍写短戳，且替换上轮残留（不许把上轮绿数当本轮）
+负控 selfhost/check_chain_red_keeps_stamp.sh：6/6（含 T2 老写法必须丢 green= = 夹具自证）
+集成复核：run_release_chain.sh --ms 430 --dry-run（脏树）⇒ rc=2 · 短戳 reason=dirty-tree
+```
+
 ## M430 补1：新门入册 ⇒ preflight 必红一次（缺陷 881 · 已接自愈）
 
 > **一句话**：本轮 preflight 20:16:39 起、20:47:21 判红 —— 唯一红门是 `m400_baseline_feedback`
