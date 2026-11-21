@@ -1,3 +1,40 @@
+## M427 补1：m426_examples_run 登记出网 —— 出网示例被塞进隔离分片（缺陷 876）
+
+> **一句话**：M427 全量门第一次分片跑，唯一红是 `m426_examples_run`：它非豁免集合里有 2 条**真出网**示例
+> （`https_demo.px` 连 example.com / api.github.com · `m24_http_adv.px` 连 www.baidu.com），
+> 而调度器把这道门派到了 `unshare --net` 的隔离片 ⇒ 断网 ⇒ 语言面按 M117 语义返回 `Err(result)`
+> ⇒ 示例拿到的是 result 而不是字符串 ⇒ 报 R1002 / R1007。**装置问题，不是产品红。**
+
+### 证据（2026-11-21 · 本机 · HEAD 5394dc4）
+
+```
+隔离档（链日志 · /data/gatevm/m427-chain-20261121-074633.log · shard4 = net 隔离）
+  RUN-FAIL  https_demo.px   — 运行时错误 [main 行9]: R1002: len 不支持类型 result
+  RUN-FAIL  m24_http_adv.px — 运行时错误 [<top> 行60]: R1007: 类型 result 没有字段 'status'
+  EXAMPLES-RUN=FAIL rc=1 违例=2
+同一份二进制在宿主网络（/tmp/repro426 现场构建 · 逐条复跑）
+  $ ./build/https_demo    ⇒ len=577 contains_html=true / … / HTTPS_DEMO OK     rc=0
+  $ ./build/m24_http_adv  ⇒ M24 HTTP-ADV TESTS PASSED                          rc=0
+负控（同一二进制塞进 netns，证明断网就是真因）
+  $ unshare -n ./build/https_demo   ⇒ R1002: len 不支持类型 result
+  $ unshare -n ./build/m24_http_adv ⇒ R2001 断言失败（行36 · http_get_stream）
+```
+
+### 修法（1 行登记，不动门判据）
+
+```
+selfhost/net_needed.txt 增一行 m426_examples_run
+  ⇒ shard_run.sh 把它 pin 到 shard1（唯一宿主网络分片），218s 门 + 85 条真跑示例
+  ⇒ 不选「加进豁免账」：这 2 条在宿主网络下**是绿的**，豁免等于凭空丢掉真跑覆盖
+```
+
+### 验证
+
+```
+shard_run.sh 8 --only m426_examples_run,registry_external --dry ⇒ 出网门在 shard1（两条）
+check_gate_registry.sh ⇒ GATE-REGISTRY-OK（13/13 · 出网表 3 条 · 两表未漂移）
+```
+
 ## M427：px_serve 的 opts 从「逐键猜测」改成「白名单契约」（缺陷 874）
 
 > **一句话**：用户唯一的服务配置面 `px_serve(port, docroot, timeout, opts)` 里，**拼错的键从来不会报错** ——

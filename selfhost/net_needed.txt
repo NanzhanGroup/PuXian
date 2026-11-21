@@ -19,3 +19,9 @@
 upstream_tests
 # M363（2026-10-30 全量门实测）：registry 外链自证门必须出网 —— 被塞进隔离分片 ⇒ 8 次探测全 000 ⇒ rc=3 UNKNOWN ⇒ 门清单内判红（装置问题，不是外链又坏了）。
 registry_external
+# M427 补1（2026-11-21 · 缺陷 876）：示例真跑门里有 2 条**真出网**示例（https_demo.px 连
+#   example.com / api.github.com · m24_http_adv.px 连 www.baidu.com）。它们在隔离片里必红：
+#   网络失败现在按语言面语义返回 Err(result) ⇒ 示例拿到 result 而不是字符串 ⇒
+#   `len(b1)` 报 R1002「len 不支持类型 result」· `r.status` 报 R1007「类型 result 没有字段 'status'」
+#   （M427 实测 shard4 隔离档 · 与宿主网络同二进制复跑双绿 ⇒ 装置问题，不是产品红）。
+m426_examples_run
