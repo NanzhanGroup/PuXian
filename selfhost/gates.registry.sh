@@ -1252,6 +1252,10 @@ run ex_struct ./tools/pxc build examples/struct.px
 #   而它们全是 BLACKBOX（M421 账上无 verify.sh）⇒ 292/295 门全绿也看不见。
 #   判据：120 个顶层示例逐条 px build，失败即红；豁免账只许「确实编译不过」的条目，
 #   能编译却挂豁免 / 豁免项无对应文件 ⇒ STALE 红；扫描面 < 50 或 px 缺失 ⇒ rc=3。
+# M431（2026-11-22 · 东月 · 缺陷 887）：实测 764s（chain-20261122-002723）贴默认 900s 的 84% ⇒ P2 红
+#   （远端 CI「门超时口径守卫」与本机首跑同一条红，本地可复现 ⇒ 真红，非环境差）。
+#   1.5×764 = 1146 ⇒ 取 1200（与 m231/m227 同口径：ceil(1.5×实测/60)×60）。
+gate_timeout m422_examples_compile 1200
 run m422_examples_compile bash selfhost/check_examples_compile.sh
 # M426（缺陷 871）：**顶层示例「跑」面 —— 编译过 ≠ 跑得动**。
 #   病史：M422 只保证 120 个顶层示例**编译**过；本轮实测 build 后真跑：82 通过 / 36 红 / 2 超时，

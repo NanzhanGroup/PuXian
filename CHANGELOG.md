@@ -114,6 +114,43 @@ registry 305 门（+1）· 前置档 33 门（+1）· ci.yml 同步（check_gate
 版本 0.2.430（bump_version.sh 9 处）· rebake --rebake-all 14/14 一致 · VERSION-GOLDEN-OK
 ```
 
+## M430 补6：m422_examples_compile 贴默认上限 84% —— 一红串三红（缺陷 887）
+
+> **一句话**：补5 之前那一轮链把 `m422_examples_compile` 实测 **764s** 回灌进基线，
+> 而该门**没有 `gate_timeout` 声明** ⇒ 走默认 900s ⇒ P2 判「实测 ≥80% 上限」红。
+> 一条声明缺口，串出**两条 CI 红 step**：
+> ① 「门超时口径守卫」本身红；② `m400_baseline_feedback` 里 N1b/N2b/N2d/N2c 四条
+> 「期望绿」的用例全被这条 P2 红打断（实测 CI 日志逐字如此：`pass=13 fail=4`）。
+
+### 证据（2026-11-22 06:4x–07:0x · 本机 + CI run 44955641965 / job 137002983341）
+
+```
+远端 CI（HEAD 212856f · 305 门）：红 2 step，同一个 job
+  STEP10  门超时口径守卫 …… ❌ m422_examples_compile 实测 764s / 上限 900s = 84%（≥80%）· chain-20261122-002723
+  STEP139 m400_baseline_feedback …… ❌ N1b 正控 / N2b / N2d / N2c 四条，红源全同上
+本机复现（同一棵树，非环境差）：
+  bash selfhost/check_gate_timeouts.sh      修前 rc=1（23 项里 1 失败，同一条）
+                                           修后 rc=0（23 通过 / 0 失败）
+  bash examples/m400_baseline_feedback/verify.sh
+                                           修前 pass=13 fail=4 → 修后 pass=17 fail=0
+```
+
+### 修法（只补声明，不动判据）
+
+```
+selfhost/gates.registry.sh
+  gate_timeout m422_examples_compile 1200
+  理由：1.5 × 764 = 1146 ⇒ ceil(1146/60)×60 = 1200（与 m231/m227 同口径）
+  该门是「120 个顶层示例逐条 px build」，随示例数增长而线性变慢 ⇒ 声明必须跟上实测
+```
+
+### 边界
+
+```
+真跑 764s 是**本机满载**下的实测（cold .rtcache）；CI runner 更快，但判据看的是声明裕度，
+不是「CI 会不会超时」。改动只影响 P2 判据的输入，不影响门的任何断言。
+```
+
 ## M430 补5：m422 冷缓存并行全超时 —— 40 条 rc=124 被当「编译失败」（缺陷 886）· 补4 自己撞了 pipe-grep 棘轮
 
 > **一句话**：M430 r4（head=0b4e09c）绿 303 · 红 2，两门都不是产品缺陷：
