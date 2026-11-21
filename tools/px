@@ -278,18 +278,20 @@ rt_src_files() {
 }
 rt_key() {
     # 参数：cuts cc [lto] → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希 + cuts + lto）
-    local cuts="$1" cc="$2" lto="${3:-0}" f key_src=""
+    # M430-补：产物缓存（缺陷 883）现在每次 build 都要 rt_key ⇒ 逐文件 `sha256sum` 是 30 次
+    #   fork（实测把 m425_build_cache 的 P2 命中耗时顶到 692ms，判据 ≤400ms/≤0.25×冷构建）。
+    #   改成**一次** sha256sum 多文件（输出行序由参数序固定，与逐文件拼接等价）。
+    local cuts="$1" cc="$2" lto="${3:-0}" f files="" key_src=""
     for f in $(rt_src_files "$cuts") \
              third_party/miniz/miniz.c third_party/miniz/miniz_tinfl.c \
              third_party/miniz/miniz_tdef.c third_party/miniz/miniz.h \
              third_party/miniz/miniz_common.h third_party/miniz/miniz_tinfl.h \
              third_party/miniz/miniz_tdef.h third_party/miniz/miniz_export.h \
              third_party/sqlite3/sqlite3.h; do
-        if [ -f "$RT_DIR/$f" ]; then
-            key_src="$key_src $(sha256sum "$RT_DIR/$f" | cut -c1-16)"
-        fi
+        [ -f "$RT_DIR/$f" ] && files="$files $RT_DIR/$f"
     done
-    echo "$key_src cc=$(basename "$cc") cuts=$cuts lto=$lto" | sha256sum | cut -c1-16
+    key_src="$(sha256sum $files 2>/dev/null | cut -c1-16 | tr '\n' ' ')"
+    echo " $key_src cc=$(basename "$cc") cuts=$cuts lto=$lto" | sha256sum | cut -c1-16
 }
 rt_cache_compile() {
     # 参数：dir（cache 目录）cuts cc [lto] —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
@@ -853,6 +855,13 @@ cmd_build() {
         rm -f "$refs_tmp"
     fi
     cuts="$mods"; [ "$no_quic" = "1" ] && cuts="$cuts quic"
+    # M430-补（缺陷 883）：cuts 是「被裁模块的**集合**」，但它的书写顺序直接进了
+    #   rt_ensure 的缓存键 ⇒ `--min`（sqlite ws zip xml aes rsa ed25519 img route zlib h2）
+    #   与手写的等价组合（同集合、不同顺序）命中两份不同 .rtcache，各自现编一遍 ⇒
+    #   同一组裁剪却产出两份字节不同的产物（实测 m85_s2：3138640 vs 3142736，.rodata 差 32B，
+    #   文件因页对齐差 4096）。集合语义不该带顺序 ⇒ 统一去重排序后再进键与编译。
+    #   注意：源码挑选走 rt_src_files 的固定清单（cut_has 只看集合），与顺序无关，故安全。
+    cuts="$(printf '%s\n' $cuts | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ *$//')"
     cache_dir="$(rt_ensure "$cuts" "$cc" "$lto")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
     # 3) 编译生成的 C 单文件 + 链接预编译 .o（不再每次全量现编 runtime）
     local mbedtls_inc="$RT_DIR/mbedtls/include"
@@ -1120,6 +1129,14 @@ build_cache_key() { # $1=主脚本绝对路径 $2=base $3=engine $4=lto $5=cc $6
         printf 'base=%s\nengine=%s\nlto=%s\ncc=%s\nnoquic=%s\nfull=%s\n' \
                "$base" "$engine" "$lto" "$cc" "$nq" "$full"
         printf 'mods=%s\ncuts=%s\n' "$mods" "$cuts"
+        # M430-补（缺陷 883）：**runtime 源指纹必须进产物缓存的键**。
+        #   实测（2026-11-21 23:5x · m85_s2）：默认缓存下 `--min` 命中一条旧条目返回
+        #   3138640，而同一源码现编（PX_BUILD_NOCACHE=1 / 空 BUILDCACHE）是 3142736 ——
+        #   同一份源码，缓存给出的是**当时源码**的产物。根因是 key 只靠 toolchain_fp
+        #   （stat 签名 + 30min memo）与 mods 书写形式，任何一处漏项就能让「改了 runtime」
+        #   或「等价但写法不同的裁剪集」复用旧产物。rt_key 是 .rtcache 的权威键
+        #   （runtime 源内容 + miniz/sqlite 头 + cc + cuts + lto，截 16 位），直接并进来。
+        printf 'rtkey=%s\n' "$(rt_key "$cuts" "$cc" "$lto")"
         "$cc" --version 2>/dev/null | head -1
         sha256sum "$f" 2>/dev/null | cut -c1-16
         while IFS= read -r _df; do
