@@ -412,6 +412,50 @@ G3  本门收尾：自己也不许留监听、不许留 pxi（判据自己守同
 > `max_body_size:500` ⇒ 静默夹到 1024，`max_conn:0` / `gzip_level:99` / `http3.port:70000` ⇒ 静默忽略，
 > `rate_limit:"3/60"`（类型错）⇒ 同样静默。最贵的一条是限流越界：**安全面配置静默失效**。
 
+## M427 补2：示例真跑门自备「本树工具链」—— CI 只 build 不安装（缺陷 877）
+
+> **一句话**：CI 那颗红门（`示例即文档 · 顶层示例真跑`）不是产品红，是**门没给前提**：
+> CI 只 `px build`、**不安装**（与缺陷 859 同源）⇒ runner 的 PATH 里没有 `px`；
+> 而本门把示例拷到**树外**临时目录执行，示例内部还要再找一次解释器
+> （`px_exec` / 裸 `px run` / `px_serve` 的 .px 执行池）⇒ 5 条示例「本地绿、CI 红」。
+
+### 证据（2026-11-21 · run 44836043842 @ 5394dc4 · job 136632586613 + 本机差分）
+
+```
+CI（Ubuntu runner · 只 build 未安装）
+  RUN-FAIL m30_tls_pool.px   rc=1 [<top> 行31]: R2001: 断言失败
+  RUN-FAIL m32_hot_reload.px rc=1 [<top> 行5]: R1002: px_exec 找不到 px 解释器（PX_BIN 未设…）
+  RUN-FAIL m33_sni.px        rc=1（首行是 px-serve banner）
+  RUN-FAIL m34_pool_cfg.px   rc=1（端口 18162）
+  RUN-FAIL m36_pool_grace.px rc=1（端口 18168）
+  EXAMPLES-RUN=FAIL rc=1 违例=5
+
+本机三控（/tmp/sim/farm2 = coreutils/openssl 齐全但**剔除所有 px*** ⇒ 等价 CI runner）
+  正控（打了补丁）  env PATH=/tmp/sim/farm2 bash selfhost/check_examples_run.sh
+                    ⇒ EXAMPLES-RUN=OK 顶层=120 非豁免=85 通过=85 豁免=35   rc=0
+  负控（旧版脚本）  同一棵树、同一 PATH ⇒ EXAMPLES-RUN=FAIL rc=1 违例=4（m30/m32/m34/m36，**与 CI 逐字相同**）
+  前提自证负控      删掉「export PATH=$ROOT/tools:$PATH」一行 ⇒ EXAMPLES-RUN=ENV rc=3（不降级成 0）
+真仓（宿主网络 · HEAD d824a59 + 本补丁） ⇒ 85/85 绿 · 自测 10/10 · 「仓库树零污染=是」
+```
+
+### 修法（不动判据，只补前提 + 修一条示例的解析口径）
+
+```
+selfhost/check_examples_run.sh
+  export PATH="$ROOT/tools:$PATH"     # 裸 `px run` / px_serve 的 .px 池
+  export PX_BIN="${PX_BIN:-$PX}"      # px_exec 契约
+  + 前提自证：command -v px 必须解析到树内，否则 rc=3（装置坏了不装绿）
+examples/m33_sni.px
+  s_client 输出经 `tr -d ' '` 归一 —— openssl 3.0（Ubuntu 24.04）打「subject=CN = a.test」
+  带空格，3.5（本机）不带 ⇒ 断言 contains("CN=a.test") 在 CI 恒红、本机恒绿（缺陷 877 的第二面）
+packaging/ci_known_red.tsv
+  登记「示例即文档 · 顶层示例真跑」到期 2026-11-23（下一轮 CI 绿后删条目）
+```
+
+### 待落地（不在本条落）
+补丁 `/data/autodrive/ci-parity-gap-A2.patch`（3 文件 75 行，可干净应用到 d824a59）；
+本机实测已证绿，但**落提交需 local 档、push 需 publish 档** —— 见交接单。
+
 ### 证据（2026-11-21 · 本机 · 修前基线 /tmp/m428r/repro.sh 六条留档）
 
 ```

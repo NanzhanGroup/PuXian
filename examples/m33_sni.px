@@ -24,28 +24,28 @@ spawn serve()
 sleep(1000)
 
 # SNI a.test → 证书 CN=a.test
-os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername a.test 2>/dev/null | grep subject > /tmp/px_m33_sni_a.txt"])
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername a.test 2>/dev/null | grep subject | tr -d ' ' > /tmp/px_m33_sni_a.txt"])
 sleep(500)
 sa = read_file("/tmp/px_m33_sni_a.txt")
 assert(contains(sa, "CN=a.test"))
 print("SNI a.test:", trim(sa))
 
 # SNI b.test → 证书 CN=b.test
-os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername b.test 2>/dev/null | grep subject > /tmp/px_m33_sni_b.txt"])
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername b.test 2>/dev/null | grep subject | tr -d ' ' > /tmp/px_m33_sni_b.txt"])
 sleep(500)
 sb = read_file("/tmp/px_m33_sni_b.txt")
 assert(contains(sb, "CN=b.test"))
 print("SNI b.test:", trim(sb))
 
 # 无 SNI → 默认证书 CN=default.test
-os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " 2>/dev/null | grep subject > /tmp/px_m33_sni_def.txt"])
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " 2>/dev/null | grep subject | tr -d ' ' > /tmp/px_m33_sni_def.txt"])
 sleep(500)
 sd = read_file("/tmp/px_m33_sni_def.txt")
 assert(contains(sd, "CN=default.test"))
 print("SNI default:", trim(sd))
 
 # 未注册域名 → 默认证书（SNI 未匹配回落）
-os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername unknown.test 2>/dev/null | grep subject > /tmp/px_m33_sni_unk.txt"])
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername unknown.test 2>/dev/null | grep subject | tr -d ' ' > /tmp/px_m33_sni_unk.txt"])
 sleep(500)
 su = read_file("/tmp/px_m33_sni_unk.txt")
 assert(contains(su, "CN=default.test"))

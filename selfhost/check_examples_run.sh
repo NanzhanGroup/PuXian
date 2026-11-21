@@ -140,6 +140,24 @@ EXEMPT="$EX/examples_run_exempt.tsv"
 [ -d "$EX" ] || { echo "EXAMPLES-RUN=ENV rc=3 原因=examples 目录不存在（$EX）"; exit 3; }
 [ -x "$PX" ] || { echo "EXAMPLES-RUN=ENV rc=3 原因=px 工具不可执行（$PX）"; exit 3; }
 
+# ── CI 可移植性（缺陷 871 补 · 2026-11-21）────────────────────────────────
+#   CI 只 `px build`、**不安装**（缺陷 859 同源）。本门把示例复制到临时树里构建 ⇒
+#   产物的「自身路径向上找 tools/px」永远找不到仓库，而 PATH 里也没有 px，
+#   于是三类失败全指向「环境缺解释器」而不是示例本身：
+#     · m32_hot_reload   px_exec → R1002 找不到解释器
+#     · m30_tls_pool     示例里写死 `exec px run` ⇒ 服务没起 ⇒ 断言失败
+#     · m34/m36          px_serve 的 .px 执行池要 `px --worker` ⇒ 起不来
+#   实测差分（本机把 PATH 里的 px 变不可执行 ⇒ 上述 4 条红；补下面两行 ⇒ 全绿）。
+#   ⇒ 显式交出本树工具链：PATH 前置 $ROOT/tools（示例按名调 px）+ PX_BIN（px_exec 契约）。
+export PATH="$ROOT/tools:$PATH"
+export PX_BIN="${PX_BIN:-$PX}"
+# 前提自证（M427 补2 · 不降级成 0）：PATH 必须真解析到**树内** px，否则整门没有意义
+_px_self="$(readlink -f "$PX")"
+_px_res="$(command -v px 2>/dev/null || true)"
+if [ -z "$_px_res" ] || [ "$(readlink -f "$_px_res" 2>/dev/null)" != "$_px_self" ]; then
+  echo "EXAMPLES-RUN=ENV rc=3 原因=PATH 解析不到树内 px（res=${_px_res:-无} tree=$_px_self）"; exit 3
+fi
+
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 ls -1 "$EX"/*.px 2>/dev/null | xargs -r -n1 basename | sort > "$TMP/units.txt"
 N=$(wc -l < "$TMP/units.txt")
