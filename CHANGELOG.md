@@ -114,6 +114,62 @@ registry 305 门（+1）· 前置档 33 门（+1）· ci.yml 同步（check_gate
 版本 0.2.430（bump_version.sh 9 处）· rebake --rebake-all 14/14 一致 · VERSION-GOLDEN-OK
 ```
 
+## M430 补1：新门入册 ⇒ preflight 必红一次（缺陷 881 · 已接自愈）
+
+> **一句话**：本轮 preflight 20:16:39 起、20:47:21 判红 —— 唯一红门是 `m400_baseline_feedback`
+> 的 **T3b 覆盖不全（门清单 305 / 基线 304）**，缺的正是本轮新门 `m430_gate_portscan`。
+> 这不是缺陷 879 修错了，而是**新门首次入册**的必经一步没接到流程里。
+
+### 实账
+
+```
+20:16:39  STEP1 preflight（33 门）开始
+20:47:21  rc=4 · 红门仅 1 扇：m400_baseline_feedback（302s）
+          T3b 覆盖不全：门清单 305 / 基线 304 · ℹ️ 基线暂缺 1 门口：m430_gate_portscan
+其余 32 门全绿（含本轮新门 m430_gate_portscan 22/22 · 9s）
+
+处置（按 refresh 工具自己的口径）：
+  selfhost/refresh_gate_baseline.sh \
+      --extra-tsv /data/gatevm/preflight-20261121-201639.times.tsv preflight-20261121-201639
+  ⇒ REFRESH-RESULT=CHANGED · REFRESH-COVERAGE=OK（305 门 / 305 行 / 缺 0）
+  ⇒ 基线新增一行：m430_gate_portscan  9  OK  preflight-20261121-201639
+```
+
+### 为什么会反复发生（M427 → M428 → M429 每轮都白烧一次 ≈30 分钟）
+
+```
+「门耗时基线」的单一入口是 refresh_gate_baseline.sh：
+  · 正常档吃最近 3 个**已完成**的链 stamp（避免拿半截数据回灌）；
+  · 新门第一次入册时还没有任何 stamp 含它 ⇒ 必须用 --extra-tsv 手工 bootstrap。
+这个参数存在（就是为新门准备的），但**没有任何脚本调用它** ⇒ 每个里程碑都要先红一次
+preflight、再有人想起来回灌、再重跑。M427（11:47 红 → 12:27 修）、M428（11:47 红 → 12:46 绿）、
+M429（15:55 前一轮）都是同一形状。
+```
+
+### 修法：pipeline 自愈（严格条件，不许掩盖别的红）
+
+```
+触发条件（四条全中才动）：
+  ① 本次红门**只有** m400_baseline_feedback 一扇（按 $LOG 里的「❌ <门>（」逐行数）；
+  ② 该门日志里的红是 **T3b 覆盖不全**（不是它的别的判据）；
+  ③ 回灌后必须 REFRESH-COVERAGE=OK；
+  ④ 只重试一次（不循环）。
+动作：refresh --extra-tsv <本次 preflight 计时表> <标签> → commit 基线（只这一份数据文件）
+      → 重跑 preflight 一次 → 仍红才 pipeline_fail 叫醒。
+为什么允许 pipeline commit：它只提交 gate_time_baseline.tsv 这一份**实测数据**，
+  不含代码；且提交后立刻重跑 preflight（树净判据仍然生效）。
+```
+
+### 口径
+
+```
+能说  preflight 的红门是 1 扇、名字、原因（T3b 305/304）都在日志里，回灌后覆盖 305/305
+能说  这是**流程缺口**（工具参数没人调），不是产品缺陷、也不是本轮机制门的判据错
+不说  「自愈已经验证过」—— 它要到下一轮里程碑才会被真正走到；
+      本轮 R2 走的是「我已手工回灌 + 已提交」这条路
+不做  不改 m400 的判据（把 T3b 放宽成「允许缺 1 门」等于把覆盖判据自己拆掉）
+```
+
 ## M429：`px run` 的信号与进程树 —— 杀父留孙，端口永不释放（缺陷 878）
 
 > **一句话**：用户照示例用 `px run srv.px` 起服务、`kill` 掉 px 的 pid 停服务 ——

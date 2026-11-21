@@ -45,8 +45,10 @@
 #   - preflight-20261121-114712 = /data/gatevm/preflight-20261121-114712.times.tsv（303 行）
 #   - preflight-20261121-124612 = /data/gatevm/preflight-20261121-124612.times.tsv（303 行）
 #   - preflight-20261121-155524 = /data/gatevm/preflight-20261121-155524.times.tsv（304 行）
+#   - preflight-20261121-201639 = /data/gatevm/preflight-20261121-201639.times.tsv（305 行）
+#   - preflight-20261121-201639 = /data/gatevm/preflight-20261121-201639.times.tsv（305 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-21 18:24:36 +0800
+# 生成时间：2026-11-21 20:47:52 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	10	OK	chain-20261121-162637
@@ -308,6 +310,7 @@ m426_examples_run	228	OK	chain-20261121-162637
 m427_opts_whitelist	79	OK	preflight-20261121-114712
 m428_opts_valuerange	60	OK	preflight-20261121-124612
 m429_pxrun_signal	9	OK	preflight-20261121-155524
+m430_gate_portscan	9	OK	preflight-20261121-201639
 m63_langfix	7	OK	chain-20261121-162637
 m64_fmt	1	OK	chain-20261121-094628
 m64_lint	1	OK	chain-20261121-094628
@@ -351,5 +354,5 @@ spec_consistency	1	OK	chain-20261121-094628
 upstream_confirm_selftest	5	OK	chain-20261121-131315
 upstream_tests	1367	OK	chain-20261121-094628
 version_drift	1	OK	chain-20261121-162637
-version_golden	0	OK	chain-20261121-094628
+version_golden	1	OK	preflight-20261121-201639
 zombie_reap	26	OK	chain-20261121-094628
