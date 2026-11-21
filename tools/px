@@ -89,7 +89,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.428"
+SELFHOST_VER="0.2.429"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -1556,8 +1556,42 @@ cmd_run() {
     #   本提示**不改默认、不编译、不影响 CI 计时**，只把能力放到需要它的人眼前。
     #   实现用 bash 内建 `SECONDS`（**零 fork**）—— 秒起场景（4.7 ms）多 fork 一次
     #   `date` 就是 +40% 开销，这条提示不能自己变成瓶颈。
-    local _t0=$SECONDS _rc=0 _el=0
-    "$PXI_BIN" "$@" "$file"; _rc=$?
+    # M429（缺陷 878）：**px 不再「杀父留孙」** —— 解释轨必须把信号转给 pxi。
+    #   修前形状（实锤 2026-11-21 15:50 · /tmp/m429）：
+    #     px(3251927) ── child ──> pxi(3251933) 监听 :18931
+    #     kill -TERM 3251927 ⇒ px 退出、**pxi 照旧 LISTEN**（端口永不释放、进程永久孤儿）
+    #   为什么不是简单加 `exec`：M271 的发现性提示要在**子进程退出之后**打印耗时，
+    #   exec 之后脚本就没机会说话了（那 378× 只有读过文档的人能拿到 —— 缺陷 470 的口径）。
+    #   ⇒ 保留 fork，补三件事：① 转发 INT/TERM/HUP/QUIT 给子进程；② 等子进程**真消失**
+    #     再返回（被 trap 打断的 wait 会提前返回）；③ 只有正常退出才打提示。
+    #   ⚠️ 转发不到的情形：px 自身被 SIGKILL（不可捕获）⇒ 孙进程仍会孤儿 —— 文档写明。
+    #   ⚠️ 组杀（kill -9 -<pgid>）本来就有效，本轮只补「单杀父进程」这条最容易被写进示例的路。
+    local _t0=$SECONDS _rc=0 _el=0 _child=0 _sig=0 _n=0
+    _px_fwd() {
+        [ "$_sig" = 0 ] && _sig="$1"
+        if [ "$_child" -gt 0 ] && kill -0 "$_child" 2>/dev/null; then
+            kill -"$1" "$_child" 2>/dev/null || true
+        fi
+    }
+    trap '_px_fwd TERM' TERM
+    trap '_px_fwd INT'  INT
+    trap '_px_fwd HUP'  HUP
+    trap '_px_fwd QUIT' QUIT
+    "$PXI_BIN" "$@" "$file" &
+    _child=$!
+    while :; do
+        wait "$_child"; _rc=$?
+        kill -0 "$_child" 2>/dev/null || break
+        # 转发过信号而子进程 5 秒仍未退（0.2s × 25）⇒ 兜底 KILL，不许 px 挂死在这里
+        _n=$((_n + 1))
+        if [ "$_n" -ge 25 ]; then
+            kill -KILL "$_child" 2>/dev/null || true
+            wait "$_child"; _rc=$?
+            break
+        fi
+        sleep 0.2
+    done
+    trap - TERM INT HUP QUIT
     _el=$((SECONDS - _t0))
     # M271 补（缺陷 470）：发现性提示**只对 TTY 说话**。
     #   修前无条件写 stderr ⇒ 任何 `px run x.px > out 2>&1` 的单流捕获都会多出一行
@@ -1565,7 +1599,8 @@ cmd_run() {
     #    被 diff 的解释轨输出里）。**发现性提示的前提是不改变任何可观测输出** ——
     #   它是给人看的，不是给脚本看的。
     #   `PX_RUN_HINT=1` 可强制打开（供门做动态断言）；非 TTY 且未强制 ⇒ 不打。
-    if [ "$_el" -ge "${PX_RUN_HINT_SEC:-2}" ] && { [ -t 2 ] || [ "${PX_RUN_HINT:-0}" = "1" ]; }; then
+    #   M429：被信号收走的那一路不打提示（用户是在停服务，不是在学习怎么提速）。
+    if [ "$_sig" = 0 ] && [ "$_el" -ge "${PX_RUN_HINT_SEC:-2}" ] && { [ -t 2 ] || [ "${PX_RUN_HINT:-0}" = "1" ]; }; then
         echo "提示：本脚本解释执行耗时 ${_el}s。可用 px run --fast 或 px build 获得约 378×（首次编译 +0.5–1 s）" >&2
     fi
     return $_rc

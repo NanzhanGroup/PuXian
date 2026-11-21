@@ -1284,6 +1284,17 @@ run m427_opts_whitelist bash selfhost/check_opts_whitelist.sh
 #        P6 负控自证（打掉 px_opt_expect_int ⇒ 信号消失，且 NOCACHE 真重建）；临时改 runtime.c 必复原（sha256）；
 #        环境不成立 rc=3；零污染。
 run m428_opts_valuerange bash selfhost/check_opts_valuerange.sh
+# M429（缺陷 878）：**px run 的信号与进程树** —— 杀父留孙（端口永不释放）。
+#   实测（2026-11-21 15:50）：px(3251927) ──child──> pxi(3251933) LISTEN :18931；
+#   kill -TERM px ⇒ px 退出、**pxi 照旧 LISTEN**。同形状残留实锤：M427 探测服务 15 个挂 7 小时、
+#   m30_tls_pool 每跑一次漏一个 18096、一个 12 天 10 小时的 m312 残留。
+#   根因：解释轨必须 fork pxi（M271 提示要在子进程退出后打印，exec 会丢掉它），却没转发信号。
+#   判据：形状（4 信号 trap + wait 循环 + KILL 兜底 + 不许改 exec + 提示条件带 _sig 守卫）；
+#        TERM/HUP 动态负控（真起服务、真实 GET 200 自证、端口必须释放、px 必须及时退出）；
+#        退出码仍透传（失败脚本 rc=1）+ stdout 纯净 + M271 提示回归 + --fast 不回归；
+#        P6 负控自证（仓外副本打掉 4 条 trap ⇒ 孤儿必须复现，且打掉后服务照样起得来）；
+#        本门自己不留监听；环境不成立 rc=3；零污染。
+run m429_pxrun_signal bash selfhost/check_pxrun_signal.sh
 # M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。

@@ -306,6 +306,7 @@ m425_build_cache	61	OK	preflight-20261121-114712
 m426_examples_run	219	OK	chain-20261121-131315
 m427_opts_whitelist	79	OK	preflight-20261121-114712
 m428_opts_valuerange	60	OK	preflight-20261121-124612
+m429_pxrun_signal	15	OK	m429-local
 m63_langfix	7	OK	chain-20261121-074636
 m64_fmt	1	OK	chain-20261121-074636
 m64_lint	1	OK	chain-20261121-094628

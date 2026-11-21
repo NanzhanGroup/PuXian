@@ -419,6 +419,26 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_opts_valuerange 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_opts_valuerange rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_opts_valuerange PASS"
+      - name: px run 的信号与进程树（M429 · 缺陷 878）
+        #   病史：用户按示例 `px run srv.px` 起服务、kill 掉 px 的 pid 停服务 ——
+        #   修前 px 是 bash 包装器，pxi 是它的子进程 ⇒ **杀父留孙**：px 退、pxi 照旧 LISTEN，
+        #   端口永不释放（下次 EADDRINUSE）、进程挂到 init 名下。实锤残留：15 个挂 7 小时 /
+        #   每跑一次 m30_tls_pool 漏一个 18096 / 一个 12 天 10 小时的 m312 残留。
+        #   判据：形状（4 信号 trap + wait 循环 + KILL 兜底 + 不许改 exec + 提示带 _sig 守卫）；
+        #   TERM/HUP 动态负控（真起服务 + 真实 GET 200 自证 + 端口释放 + 及时退出）；
+        #   退出码透传 / stdout 纯净 / M271 提示回归 / --fast 不回归；P6 负控自证（打掉 trap 必复现孤儿）。
+        #   注：SIGINT 不做动态负控 —— bash 给后台异步命令在启动时置 SIG_IGN，测到的是 shell 语义。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_pxrun_signal.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_pxrun_signal 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_pxrun_signal.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_pxrun_signal 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_pxrun_signal rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_pxrun_signal PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

@@ -1,3 +1,122 @@
+## M429：`px run` 的信号与进程树 —— 杀父留孙，端口永不释放（缺陷 878）
+
+> **一句话**：用户照示例用 `px run srv.px` 起服务、`kill` 掉 px 的 pid 停服务 ——
+> 修前 **px 退出了、pxi 还在监听**：端口不释放（下一次 `EADDRINUSE`）、进程挂到 init 名下成永久孤儿。
+> 示例里的 `os_kill(p, 15)` 全是这个写法 ⇒ **每照文档停一次服务，就漏一个进程**。
+
+### 证据（2026-11-21 15:50 · 本机 · /tmp/m429）
+
+```
+修前（HEAD 303ad72 · 同一份源码 · 一次真实请求）
+  px(3251927) ──child──> pxi(3251933) LISTEN :18931 · GET / = 200
+  kill -TERM 3251927
+  2s 后：px 已退出 · pxi 仍 LISTEN :18931（PPID=1）· GET / 仍 200
+
+修后（同一批动作）
+  kill -TERM px ⇒ PORT-FREE · pxi 已消失 · px 退出码 = 子进程退出码（0，pxi 优雅关停）
+  kill -HUP  px ⇒ PORT-FREE · px 退出码 129
+  起服务 1.5s 内真实 GET 200（前提自证：不是「没起服务」才「端口空」）
+```
+
+同形状的历史残留（本轮清理时逐条点出来的，都是这套写法漏的）：
+
+```
+15 个 ./build/t（M427 opts 探测服务）挂 7–7.5 小时 · 占 39711–39724
+6 个 python3（m96_s3/verify.sh 的 18902 UDP echo）· 1 个 pxi 18096（m30_tls_pool）
+1 个 ./build/srv 58717（m312 门）跑了 12 天 10 小时
+```
+
+### 根因：不是示例作者粗心，是工具链没把信号转下去
+
+```
+tools/px 的 cmd_run 是 bash 包装器：fork pxi 再 wait。
+为什么不能简单 exec：M271 的发现性提示要**在子进程退出之后**打印耗时（缺陷 470 的口径），
+exec 之后脚本就没机会说话了 —— 保留 fork 是对的，缺的是：
+  ① INT/TERM/HUP/QUIT 转发给子进程
+  ② 等子进程**真消失**再返回（被 trap 打断的 wait 会提前返回）
+  ③ 只有正常退出才打提示（用户在停服务，不是在学习怎么提速）
+```
+
+### 修法（只动解释轨；`--fast` 命中缓存本来就是 exec，信号直达，不动）
+
+```bash
+trap '_px_fwd TERM' TERM        # INT / HUP / QUIT 同办
+"$PXI_BIN" "$@" "$file" &
+_child=$!
+while :; do
+    wait "$_child"; _rc=$?
+    kill -0 "$_child" 2>/dev/null || break
+    # 转发过信号而 5 秒（0.2s × 25）仍未退 ⇒ kill -KILL 兜底，不许 px 挂死在这里
+done
+trap - TERM INT HUP QUIT
+```
+
+退出码 = 子进程退出码（失败脚本仍 rc=1，实测）；被信号收走那一路不打 M271 提示。
+
+### 新门 m429_pxrun_signal（303 → 304 · 自测 7/7 · 全跑 18 PASS / 0 FAIL · 15s）
+
+```
+S1  形状：4 信号 trap + wait 循环 + KILL 兜底 + wait 子进程（缺一即红）
+S1b 形状：解释轨仍是 fork —— **不许**改成 exec（那会丢 M271 提示，由 S2 反证）
+S2  形状：提示条件带 _sig = 0 守卫
+P1  主判据：真起服务 → LISTEN + **真实 GET 200**（前提自证）→ TERM px → 3s 内端口释放
+P1b pxi 必须消失（进程表层面，不只看端口）
+P1c px 退出码 = 子进程退出码；8 秒不退则由看门狗 KILL ⇒ 137 判红
+P2  正控（防过度修复）：失败脚本 rc=1 仍透传 · 非 TTY 不打提示 · stdout 只含程序输出
+P3  HUP 动态负控（端口释放 + 及时退出）；INT 只做形状断言（见下「判据假红 #2」）
+P4  M271 提示回归：PX_RUN_HINT=1 仍能打到提示
+P5  --fast 路径不得被改坏（信号直达产物）
+P6  负控自证：仓外副本打掉 4 条 trap ⇒ **孤儿必须复现**，且打掉后服务照样起得来（GET 200）
+    —— 证明 P1 的红来自这条转发，不是别处顺手报的
+G1  环境守卫 rc=3（tools/px / pxi / curl / ss 任一不可用，绝不降级成 0）
+G2  零污染：git status 行数前后一致
+G3  本门收尾：自己也不许留监听、不许留 pxi（判据自己守同一条契约）
+```
+
+### 本轮我自己的三个错（照记）
+
+```
+① 判据假红 #1：wait 拿到 127。后台任务是在 start_srv 的**命令替换子 shell** 里起的，
+   不是主 shell 的子进程 ⇒ 我把「wait 失败」读成了「进程树异常」。
+   改：start_srv 用全局变量回传 pid；先收尸再轮询。
+② 判据假红 #2：SIGINT 动态负控恒红。bash 对**后台异步命令**在启动时把 INT/QUIT 置 SIG_IGN，
+   而「忽略进入」的 shell 不能再 trap（POSIX/bash 既有语义）⇒ 测到的是 shell 语义不是产品。
+   改：HUP 做动态负控，INT 只做形状断言。真实 Ctrl-C 由内核发给整个前台进程组，本就都退。
+   两次都是「假红比缺陷更该先修」（CRITERIA ⑨ / HONESTY）：判据自己没牙或乱咬，后来者就不信门了。
+③ 我的操作事故：清理测试树时用了 pkill -f '<脚本名>'，把自己的工具 shell 一起打死
+   （违反 EXEC_BACKGROUND「禁用 pkill -f」）。之后全部改逐 PID kill，收尾复扫监听集合。
+```
+
+### 边界（不许当结论的地方）
+
+```
+能说  kill -TERM / -HUP px ⇒ pxi 消失、端口释放（两种信号都做了动态实测）
+能说  退出码仍透传、stdout 不被污染、M271 提示仍在、--fast 未回归
+不能说 SIGKILL px 也能收干净 —— SIGKILL 不可捕获，孙进程必然孤儿（本机文档写明）
+不能说「所有示例都不再残留」—— 本轮只修了**工具链** + 新门自带收尾判据；
+      「每道门跑完都扫一遍残留监听」的全局机制**没做**（缺陷 879 · 列下一轮）
+```
+
+## M429 补1：链尾「判绿但未打 tag」的假 p1 —— 判据贴表象不贴契约（缺陷 877）
+
+> 2026-11-21 11:46:59（M427 R2 链尾）实测：脚本报 p1「判绿但未打 tag」，而 tag 存在且已推远端。
+> 一次假 p1（auto-ae998b86，已 resolve），白叫醒一次会话。
+
+```
+现象  tag v0.2.427 → 对象 1495aa0 → 提交 fb7c2f6（远端同 sha）
+      HEAD d824a59（发布后自动回灌基线的提交）
+根因  脚本用 `git tag --points-at HEAD` 判「有没有打 tag」。发布后基线回灌会**再提交一笔**，
+      HEAD 前移 ⇒ tag 不再指向 HEAD ⇒ --points-at 为空 ⇒ 假红。
+      契约是「tag 存在且指向**被测 head**」，不是「tag 指向当前 HEAD」。
+修法  判据改成：`git rev-parse -q --verify refs/tags/v<ver>` 存在 **且**
+      `refs/tags/v<ver>^{}` == 本轮被测 head（从 CHAIN-VERDICT 戳里的 head= 取），两者分开报错。
+      负控：① 删 tag 副本 ⇒ 必红；② 只把 HEAD 前移（模拟回灌提交）⇒ **不得**红。
+应用  M428 的 pipeline 起链前已按契约写（查 refs/tags 存在性，不用 --points-at）；
+      /data/autodrive 下 m427_chain_tail_r2.sh 已改成「tag 存在 **且** 指向 CHAIN-VERDICT 戳里的
+      被测 head」双判（实测复核过）；m425_chain_tail.sh 用的是 `git tag --list`（存在性判），
+      本来就没踩 --points-at 的坑，保持原样（不带「指向被测 head」这一条，属更弱的判据，记着）。
+```
+
 ## M428：px_serve 的 opts **值域**契约 —— 键拼对了、值不对也曾静默（缺陷 875）
 
 > **一句话**：M427 让「拼错的键名」响亮了，但「键拼对了、值写错」当时仍然静默 ——

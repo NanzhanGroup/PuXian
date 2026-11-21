@@ -138,6 +138,12 @@ PRECHECK_GATES=(
     #   （安全面）；max_body_size:500 静默夹到 1024；max_conn:0 / gzip_level:99 / http3.port:70000 静默忽略。
     #   这门判：A 类响亮（键名+区间+实收值）/ B 类夹取必须留痕 / 限流必须真限流 / 边界值仍能起服务 / P6 负控自证。
     m428_opts_valuerange                                 # px_serve opts 值域（实测 ~120s 冷）
+    # ── M429：px run 的信号与进程树（304 门里的 m429_pxrun_signal · 实测 ~15s）──
+    #   病史：kill 掉 px 的 pid 停服务 ⇒ **pxi 照旧 LISTEN**（杀父留孙、端口永不释放）。
+    #   这门 15 秒判：形状（4 信号转发 + wait 循环 + KILL 兜底 + 不许改 exec）/
+    #   TERM·HUP 动态负控（真起服务 + GET 200 自证 + 端口释放）/ 退出码透传 / 提示回归 /
+    #   P6 负控自证（仓外副本打掉 trap ⇒ 孤儿必复现）；本门自己不留监听。
+    m429_pxrun_signal                                    # px run 信号与进程树（实测 ~15s）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错
