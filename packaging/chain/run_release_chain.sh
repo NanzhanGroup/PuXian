@@ -75,11 +75,13 @@ say() { echo "== $*" >> "$LOG"; }
     echo "== quiet_lanes=$QUIET_LANES expect_gates=$EXPECT dirty=$(git status --porcelain | wc -l)"
 } > "$LOG"
 
+# 缺陷 884（M430 补3）：判红写戳改成独立可测实现 —— 老实现会**整行覆盖** chain_stamp.sh
+#   刚写的详细戳（green=/red=/listed=/head= 全丢），害得 m430_pipeline.sh 报 criteria-empty。
+STAMP_FROM_THIS_RUN=0
+# shellcheck source=chain_red_lib.sh
+. "$SELF_DIR/chain_red_lib.sh"
 red() {  # red <reason> <键> <标题>
-    echo "CHAIN-VERDICT=RED reason=$1" > "$DONE"
-    say "RED $1"
-    [ "$DRY" = "1" ] || DY_NOTIFY_MUTATE=publish "$NOTIFY_SH" p1 "$2" "$3" \
-        "M${MS} head=$(git rev-parse --short HEAD) · 证据 $LOG · 修后重起 launch_release_chain.sh" || true
+    chain_red "$1" "$2" "$3"
 }
 
 # ① 前置自证（都是 O(秒)：树净 / 版本位 / 14 件重烘一致）
@@ -117,6 +119,7 @@ if [ -f "$STAMP_SH" ]; then
 else
     echo "CHAIN-VERDICT=RED reason=no-chain-stamp-sh" > "$DONE"
 fi
+STAMP_FROM_THIS_RUN=1   # 缺陷 884：此后 red() 只追加 CHAIN-RED-REASON，不许覆盖详细戳
 say "stamp: $(cat "$DONE" 2>/dev/null)"
 
 # ── 判绿标记回落到实测目录（M400 首跑 r2 教训：P7 与回灌动作不同口径 ⇒ 链自锁死）──
