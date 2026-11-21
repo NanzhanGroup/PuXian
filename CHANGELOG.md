@@ -114,6 +114,48 @@ registry 305 门（+1）· 前置档 33 门（+1）· ci.yml 同步（check_gate
 版本 0.2.430（bump_version.sh 9 处）· rebake --rebake-all 14/14 一致 · VERSION-GOLDEN-OK
 ```
 
+## M430 补4：m410 把「重定向目标」当绿输出 —— 判红写戳库被误判（缺陷 885）
+
+> **一句话**：补3 新建的 `packaging/chain/chain_red_lib.sh` 里只有
+> `printf '...' >> "$DONE"`，`$DONE` 是**标记文件名**；m410 的绿词正则却把
+> `> $DONE` 里的 `DONE` 当「判绿输出」⇒ 判红库命中 R1（判绿未证扫描面）⇒
+> m410 红 ⇒ m415 的**动态正控**（「宿主面缺席时 m410 必绿」）跟着红。两门红，同一个假阳性。
+
+### 实账
+
+```
+M430 r3（head=1bf00b7）分片汇总：绿 303 · 红 2
+  ❌ m410_criteria_scan（2s）  FAIL repo:packaging/chain/chain_red_lib.sh 命中 R1
+  ❌ m415_cleanenv（34s）      FAIL m410 在宿主面缺席下仍红（fails=1）
+复跑仍红 ⇒ 判成「产品红」（M411 分类正确，是本门自己的假阳性）
+```
+
+### 修法（只动「绿词从哪来」这一寸）
+
+```
+绿词判定前先剥掉**重定向目标**里的变量名：`> "$DONE"` / `>> "${LOGF}"` → `> _FILE`
+strip_redir_targets() + green_out_hit() 统一供 r1_hit / r2_hit 用
+不动普通 echo/printf 实参 ⇒ 牙不掉（字面量 echo "DONE" 仍被抓）
+连带：start_release_watcher.sh 原来命中的也只是 >> "$RUN_HOOK" ⇒ 白名单条目按规则删掉（防烂账）
+```
+
+### 负控（`m410_criteria_scan --selftest` 夹具三件 → 五件）
+
+```
+✅ 正控 R1：无扫描面必被抓
+✅ 正控 R1：字面量 DONE 仍被抓（剥变量不掉牙）        ← 新增夹具 bad_literal_done.sh
+✅ 负控 R1：重定向目标不算绿输出（缺陷 885）          ← 新增夹具 good_redir.sh（= chain_red_lib.sh 形状）
+✅ 全跑：nscan=69 R1=11 R2=0 allow=11 · M410-CRITERIA-SCAN-OK
+✅ m415_cleanenv 全跑：M415-CLEANENV-OK（正控 m410 绿 · 负控回滚后 fails=5 仍红）
+```
+
+### 边界
+
+```
+只剥「> / >> 后面紧跟的变量」，`echo "$STATUS"`（变量里存 DONE）不在抓的范围 —— 这是口径缺陷，
+写在这里不隐瞒；本门的牙主要由「字面量绿词 + 扫描面 0 」两件承担。
+```
+
 ## M430 补3：判红不许毁尸 —— red() 覆盖了 chain_stamp 的详细戳（缺陷 884）
 
 > **一句话**：派生台账 `m430-pipeline-criteria-empty` 自报「判据没说清为什么红」，

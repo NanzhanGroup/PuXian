@@ -64,16 +64,24 @@ SURFACE_RE='nscan|ntags|nfiles|n_files|nrows|nhits|nverify|matched=|scanned=|扫
 GREEN_RE='(echo|printf)[^#]*(OK|PASS|DONE|-DONE)|^[[:space:]]*exit 0'
 SURFVAR_RE='(^|[^A-Za-z0-9_])(nscan|ntags|nfiles|n_files|nrows|nhits|nverify)='
 
+# strip_redir_targets <file> → 剥掉「重定向目标」里的变量名后再看绿词
+#   为什么（2026-11-22 M430 r4 · 缺陷 885）：`printf '...' >> "$DONE"` 里的 DONE 是**标记文件名**，
+#   不是「判绿输出」。旧口径把变量名当绿词 ⇒ 判红写戳库 packaging/chain/chain_red_lib.sh 被误判 R1，
+#   连带 m415 动态正控（「m410 在宿主面缺席下必绿」）一起红。
+#   只剥重定向目标（> / >> 后面那个变量），普通 echo/printf 的实参一个字不动 —— 牙不掉。
+strip_redir_targets(){ sed -E 's/(>>?[[:space:]]*)"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?/\1_FILE/g' "$1" 2>/dev/null; }
+green_out_hit(){ strip_redir_targets "$1" | grep -qE "$GREEN_RE"; }
+
 # r1_hit <file> → 0 命中 R1
 r1_hit(){
     grep -q 'grep ' "$1" 2>/dev/null || return 1
-    grep -qE "$GREEN_RE" "$1" 2>/dev/null || return 1
+    green_out_hit "$1" || return 1
     grep -qE "$SURFACE_RE" "$1" 2>/dev/null && return 1
     return 0
 }
 # r2_hit <file> → 0 命中 R2（打了扫描面变量、有绿输出、却没有该变量的零值守卫）
 r2_hit(){
-    grep -qE "$GREEN_RE" "$1" 2>/dev/null || return 1
+    green_out_hit "$1" || return 1
     local v hit=1
     for v in $(grep -oE "$SURFVAR_RE" "$1" 2>/dev/null | sed 's/[^A-Za-z0-9_]//g' | sort -u); do
         # 该变量必须出现在零值比较里（$v 或 ${v}）
@@ -128,11 +136,27 @@ if [ "$nscan" -le 0 ]; then echo "SCAN-FACE-EMPTY"; exit 1; fi
 echo "nscan=$nscan"
 echo "VERIFY-OK"
 EOS
-    say "[自检] 夹具三件"
+    # 好 2（缺陷 885）：判红写戳库 —— 绿词只出现在**重定向目标**（$DONE 是标记文件名），不是输出
+    cat > "$T/fx/good_redir.sh" <<'EOS'
+#!/usr/bin/env bash
+if grep -q 'green=' "$DONE" 2>/dev/null; then
+    printf 'CHAIN-RED-REASON=%s\n' "$1" >> "$DONE"
+else
+    printf 'CHAIN-VERDICT=RED reason=%s\n' "$1" > "$DONE"
+fi
+EOS
+    # 坏 3：字面量 echo "DONE" 仍是绿输出 ⇒ 剥变量不许把牙也剥掉
+    cat > "$T/fx/bad_literal_done.sh" <<'EOS'
+#!/usr/bin/env bash
+grep -q ROOT "$FX" && echo "DONE"
+EOS
+    say "[自检] 夹具五件"
     r1_hit "$T/fx/bad_no_surface.sh" && ok "正控 R1：无扫描面必被抓" || bad "正控 R1 漏抓"
+    r1_hit "$T/fx/bad_literal_done.sh" && ok "正控 R1：字面量 DONE 仍被抓（剥变量不掉牙）" || bad "正控 R1 漏抓字面量 DONE"
     r2_hit "$T/fx/bad_no_guard.sh"   && ok "正控 R2：无零值守卫必被抓" || bad "正控 R2 漏抓"
     r2_hit "$T/fx/good.sh" && bad "负控 R2 误报好样例" || ok "负控 R2：有守卫不误报"
     r1_hit "$T/fx/good.sh" && bad "负控 R1 误报好样例" || ok "负控 R1：打印了扫描面不误报（本案按 R1 也不该红）"
+    r1_hit "$T/fx/good_redir.sh" && bad "负控 R1 误报：重定向目标 \$DONE 被当成绿输出" || ok "负控 R1：重定向目标不算绿输出（缺陷 885）"
     # ── 宿主面缺席的口径（M415 · 缺陷 826：CI 无 /data/autodrive ⇒ 旧版 4 条 STALE 必红）──
     say "[自检] 宿主面缺席 ≠ 白名单烂账"
     judge_stale "host:tag_notify.sh" 1 && bad "正控：面缺席时 host 条目仍判 STALE（CI 必红）" || ok "正控：面缺席 ⇒ host 条目跳过"

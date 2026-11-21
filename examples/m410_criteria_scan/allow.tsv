@@ -4,7 +4,6 @@
 repo:packaging/chain/launch_release_chain.sh	编排脚本：绿判定是「伴生单元逐个 is-active」不是 grep 扫描面，规则不适用（M410 复核）
 repo:packaging/chain/run_release_chain.sh	主链编排：绿判定是门返回码汇总，扫描面由各门自己打印（M410 复核）
 repo:packaging/chain/release_watch.sh	看护脚本：绿判定是链进程/标记文件状态，不做内容扫描（M410 复核）
-repo:packaging/chain/start_release_watcher.sh	启动器：无判据无扫描，exit 0 只是启动成功（M410 复核）
 repo:packaging/chain/release_postupgrade.sh	升级后状态核验：判据是镜像 version.json / 标记件 / 报告件的存在与取值，不是内容扫描 ⇒ 无扫描面概念（M410 复核）
 repo:packaging/chain/release_red_guard.sh	红守卫：判据方向相反（发现 FAIL 即红），有命中就是结论；不存「判绿却漏测」的面（M410 复核）
 repo:packaging/chain/chain_tail.sh	链尾接力：绿(OK)只可能出现在 open/pending/busy 至少一个 >0 时；零载体一律 STALE(rc=1) ⇒ 不存在「判绿却漏测」的面。负控实测：空 AD/空 pending/busy=0 ⇒ CHAIN-TAIL=STALE rc=1（M412 复核）
