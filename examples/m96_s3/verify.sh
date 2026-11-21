@@ -36,7 +36,9 @@ chk "build(VM 轨)" 0
 # 本地 python tcp/udp echo（18901/18902）—— /dev/null 重定向：fork 的 echo 服务
 #   不持有 verify.sh 的 stdout 管道（否则 exec 工具 WaitDelay 等管道关闭）
 ECHO_PID=0
-python3 - >/dev/null 2>&1 <<'PYEOF' &
+ECHO_PIDFILE="${TMPDIR:-/tmp}/m96s3_echo.$$.pid"
+rm -f "$ECHO_PIDFILE"
+python3 - "$ECHO_PIDFILE" >/dev/null 2>&1 <<'PYEOF' &
 import sys, socket, threading, os
 # 内嵌 echo 服务（detach 子进程，父即退避免 exec 等待）
 def tcp_srv():
@@ -61,15 +63,33 @@ def udp_srv():
     s.bind(('127.0.0.1', 18902))
     while True:
         d, a = s.recvfrom(65536); s.sendto(d, a)
-if os.fork() == 0:
+pid = os.fork()
+if pid == 0:
     os.setsid()
     threading.Thread(target=tcp_srv, daemon=True).start()
     udp_srv()
+else:
+    # M430 缺陷 879：子进程 setsid 后脱离进程树（PPID=1），父 shell 的 $! 抓不到它 ⇒
+    #   必须把 pid 落盘，EXIT trap 才好按 pid 回收。否则 18901/18902 一挂就是一整轮门
+    #   （历史账：6 个 python3 占 18902 七天，就是这里漏的）。
+    open(sys.argv[1], "w").write(str(pid))
 PYEOF
 sleep 0.5
+ECHO_PID="$(cat "$ECHO_PIDFILE" 2>/dev/null || echo 0)"
+case "$ECHO_PID" in ''|*[!0-9]*) ECHO_PID=0 ;; esac
 
 SRV_PID=0
-trap 'if [ -n "$SRV_PID" ] && [ "$SRV_PID" -gt 0 ] 2>/dev/null; then kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null; fi; pkill -f "m96s3_echo" 2>/dev/null' EXIT
+reap_echo() {
+    # M430 缺陷 879：fork+setsid 的 echo 子进程不在本 shell 的子进程表里 ⇒ 不能 wait，只能 kill
+    case "${ECHO_PID:-0}" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$ECHO_PID" -gt 0 ] 2>/dev/null || return 0
+    kill "$ECHO_PID" 2>/dev/null
+    local i=0
+    while [ $i -lt 20 ] && kill -0 "$ECHO_PID" 2>/dev/null; do sleep 0.1; i=$((i+1)); done
+    kill -KILL "$ECHO_PID" 2>/dev/null
+    ECHO_PID=0
+}
+trap 'if [ -n "$SRV_PID" ] && [ "$SRV_PID" -gt 0 ] 2>/dev/null; then kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null; fi; reap_echo; rm -f "${ECHO_PIDFILE:-}"' EXIT
 PX_SERVE_WORKERS=2 PX_CORO_WORKERS=2 "$DIR/build/m96_s3_daemon" \
     >/tmp/m96s3_srv.log 2>&1 < /dev/null &
 SRV_PID=$!
