@@ -70,7 +70,10 @@ SURFVAR_RE='(^|[^A-Za-z0-9_])(nscan|ntags|nfiles|n_files|nrows|nhits|nverify)='
 #   连带 m415 动态正控（「m410 在宿主面缺席下必绿」）一起红。
 #   只剥重定向目标（> / >> 后面那个变量），普通 echo/printf 的实参一个字不动 —— 牙不掉。
 strip_redir_targets(){ sed -E 's/(>>?[[:space:]]*)"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?/\1_FILE/g' "$1" 2>/dev/null; }
-green_out_hit(){ strip_redir_targets "$1" | grep -qE "$GREEN_RE"; }
+# 为什么用 grep -c 而不是 grep -q（2026-11-22 M430 r4 · pkg_pipe_grep 门抓到的真红）：
+#   本脚本有 `set -uo pipefail`，`生产者 | grep -q` 里 grep 一命中就退出 ⇒ 生产者吃 EPIPE（rc=141）
+#   ⇒ pipefail 把「命中」读成「失败」。grep -c 读完整输入，不提前退出，无 SIGPIPE。
+green_out_hit(){ local n; n=$(strip_redir_targets "$1" | grep -cE "$GREEN_RE"); [ "${n:-0}" -gt 0 ]; }
 
 # r1_hit <file> → 0 命中 R1
 r1_hit(){

@@ -114,6 +114,54 @@ registry 305 门（+1）· 前置档 33 门（+1）· ci.yml 同步（check_gate
 版本 0.2.430（bump_version.sh 9 处）· rebake --rebake-all 14/14 一致 · VERSION-GOLDEN-OK
 ```
 
+## M430 补5：m422 冷缓存并行全超时 —— 40 条 rc=124 被当「编译失败」（缺陷 886）· 补4 自己撞了 pipe-grep 棘轮
+
+> **一句话**：M430 r4（head=0b4e09c）绿 303 · 红 2，两门都不是产品缺陷：
+> `m422_examples_compile` 在 8 分片满载 + `.rtcache` 因补2 rt_key 变更全失效下，
+> 门内 JOBS=8 并行编译 120 条示例集体撞 120s ⇒ 40 条 rc=124 被记成 COMPILE-FAIL；
+> 低负载复跑 11s 全绿（120/120）。另一门 `pkg_pipe_grep` 抓到的是**补4 自己引入**的
+> `strip_redir_targets "$1" | grep -qE`（pipefail 下假否定）—— 这是本轮唯一的真红，且是本轮自己写的。
+
+### 实账
+
+```
+M430 r4（head=0b4e09c）分片汇总：绿 303 · 红 2（门清单 305 · 全覆盖 · 泄漏 0）
+  shard3 ❌ m422_examples_compile（rc=1, 763s）  40 条 COMPILE-FAIL 全为 rc=124
+  shard7 ❌ pkg_pipe_grep（rc=1, 4s）  examples/m410_criteria_scan/verify.sh：1 条 > 基线 0
+M411 复跑分类：m403_orphan_batch 豁免（447s 绿）· m422 ESCALATED（11s 绿，但连续两轮 LOAD-SENSITIVE）
+  · pkg_pipe_grep 复跑仍红 ⇒ 产品红
+```
+
+### 修法
+
+```
+① m410 green_out_hit：`| grep -qE` → `| grep -cE`（读全输入、不提前退出 ⇒ 无 SIGPIPE）
+   门口径一个字不动；pkg_pipe_grep 复跑 PIPE-GREP-VERDICT=OK remaining=8 files=5（基线内）
+② m422：并行 TIMEOUT(124) 不当结论 ⇒ 对这批文件降并发**串行**重跑一次（EX_TIMEOUT_RETRY，默认 600s）；
+   串行仍 124 ⇒ COMPILE-TIMEOUT 判红。真语法错是非 0 非 124 ⇒ 立刻红，牙不掉。
+   EX_TIMEOUT / EX_TIMEOUT_RETRY 可覆盖（自测用 1s 夹具，不然自测要等 2 分钟）
+```
+
+### 负控
+
+```
+check_examples_compile --self-test：9/9（T1–T8 原样 + 新增）
+  ✅ T9 负控：px 桩 sleep 30 + EX_TIMEOUT=1/EX_TIMEOUT_RETRY=1 ⇒ rc=1 且点名 COMPILE-TIMEOUT
+真仓复验（缓存热 · pxdbg 隔离）：
+  m410_criteria_scan：nscan=69 R1=11 R2=0 allow=11 · M410-CRITERIA-SCAN-OK
+  m422：顶层=120 通过=120 失败=0 · EXAMPLES-COMPILE=OK · 1m30s（JOBS=8）
+  pkg_pipe_grep：PIPE-GREP-VERDICT=OK
+```
+
+### 边界
+
+```
+串行重试解决的是「满载 + 冷缓存」这一种环境红，**不是**给慢编译开无限预算：仍受
+EX_TIMEOUT_RETRY（默认 600s）约束，且必须并行、串行两次都超时才判红。
+`.rtcache` 全失效是一次性代价（补2 rt_key 变更所致），热缓存下本门 ~1.5 分钟。
+```
+
+
 ## M430 补4：m410 把「重定向目标」当绿输出 —— 判红写戳库被误判（缺陷 885）
 
 > **一句话**：补3 新建的 `packaging/chain/chain_red_lib.sh` 里只有

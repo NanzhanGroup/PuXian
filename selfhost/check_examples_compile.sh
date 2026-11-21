@@ -24,7 +24,7 @@
 #   check_examples_compile.sh              真仓判定
 #   check_examples_compile.sh --root DIR   指定仓库根（夹具用）
 #   check_examples_compile.sh --list       逐条打印（不判定）
-#   check_examples_compile.sh --self-test  8 条正/负控（含负控必须真红）
+#   check_examples_compile.sh --self-test  9 条正/负控（含负控必须真红）
 #   check_examples_compile.sh --emit-skip  打印豁免草稿
 # 退出码：0 全过 / 1 有违例 / 2 自测失败 / 3 环境不成立（不降级成 0）
 # ============================================================
@@ -32,6 +32,13 @@ set -u
 
 MIN_EXAMPLES=${MIN_EXAMPLES:-50}
 JOBS=${JOBS:-8}
+# 超时口径（2026-11-22 M430 r4 · 缺陷 886）：
+#   冷缓存（.rtcache 全失效）叠加 8 分片满载时，本门内 JOBS=8 的并行编译会集体撞 120s
+#   ⇒ 40 条 rc=124 被当成「编译失败」，而低负载复跑 11s 全绿。**这是环境红，不是产品红**。
+#   现口径：并行 124 不算结论 ⇒ 对这批文件**降并发串行重跑一次**（TIMEOUT_RETRY 秒）；
+#   串行仍 124 ⇒ 判红（真挂死的编译器/死循环仍跑不掉）。真语法错是非 0 非 124 ⇒ 立刻红，牙不掉。
+TIMEOUT_SEC=${EX_TIMEOUT:-120}
+TIMEOUT_RETRY_SEC=${EX_TIMEOUT_RETRY:-600}
 MODE=check
 ROOT=""
 while [ $# -gt 0 ]; do
@@ -97,6 +104,17 @@ EOF
   mkfix "$T/r8"; rm -f "$T/r8/tools/px"
   MIN_EXAMPLES=1 bash "${BASH_SOURCE[0]}" --root "$T/r8" > "$T/o8" 2>&1; r8=$?
   [ "$r8" = 3 ] && ok "T8 环境守卫：px 工具缺失 ⇒ rc=3" || bad "T8 期望 rc=3 实得 $r8"
+  # T9 负控：并行+串行都超时 ⇒ 必须判红（不得当「环境不成立」放过；缺陷 886）
+  mkfix "$T/r9"
+  rm -f "$T/r9/tools/px"
+  cat > "$T/r9/tools/px" <<'EOX'
+#!/bin/sh
+sleep 30
+EOX
+  chmod +x "$T/r9/tools/px"
+  : > "$T/r9/selfhost/examples_compile_skip.tsv"
+  EX_TIMEOUT=1 EX_TIMEOUT_RETRY=1 MIN_EXAMPLES=1 bash "${BASH_SOURCE[0]}" --root "$T/r9" > "$T/o9" 2>&1; r9=$?
+  if [ "$r9" = 1 ] && grep -q 'COMPILE-TIMEOUT' "$T/o9"; then ok "T9 负控：并行+串行均超时 ⇒ rc=1 且点名 COMPILE-TIMEOUT"; else bad "T9 期望 rc=1 且点名 COMPILE-TIMEOUT，实得 rc=$r9"; cat "$T/o9"; fi
   echo "---- self-test: PASS=$P FAIL=$F ----"
   [ "$F" -eq 0 ] || exit 2
   echo "EXAMPLES-COMPILE-SELFTEST=OK"
@@ -123,16 +141,34 @@ cp "$EX"/*.px "$TMP/src/" 2>/dev/null || true
 
 export PX TMP
 compile_one() {
-  f="$1"
-  out=$( cd "$TMP/src" && timeout --kill-after=5 120 "$PX" build "$f" 2>&1 )
+  f="$1"; tmo="${2:-$TIMEOUT_SEC}"
+  out=$( cd "$TMP/src" && timeout --kill-after=5 "$tmo" "$PX" build "$f" 2>&1 )
   rc=$?
-  if [ $rc -eq 0 ]; then echo "OK	$f"; else
-    first=$(printf '%s' "$out" | grep -m1 -E '编译错误|错误:|error' | cut -c1-160)
-    echo "FAIL	$f	${first:-rc=$rc}"
+  if [ "$rc" -eq 0 ]; then printf 'OK\t%s\n' "$f"; else
+    if [ "$rc" -eq 124 ]; then
+      printf 'TIMEOUT\t%s\trc=124 tmo=%ss\n' "$f" "$tmo"
+    else
+      first=$(printf '%s' "$out" | grep -m1 -E '编译错误|错误:|error' | cut -c1-160)
+      printf 'FAIL\t%s\t%s\n' "$f" "${first:-rc=$rc}"
+    fi
   fi
 }
 export -f compile_one
-xargs -r -n1 -P "$JOBS" bash -c 'compile_one "$0"' < "$TMP/units.txt" | sort -k2 > "$TMP/res.txt"
+export TIMEOUT_SEC TIMEOUT_RETRY_SEC
+xargs -r -n1 -P "$JOBS" bash -c 'compile_one "$0"' < "$TMP/units.txt" | sort -k2 > "$TMP/res0.txt"
+
+# 并行超时 ⇒ 降并发串行重跑（见文件头 TIMEOUT_SEC 段）；串行仍 124 ⇒ 保留 TIMEOUT 行 ⇒ 下面按失败判红
+if grep -q '^TIMEOUT' "$TMP/res0.txt"; then
+  awk -F'\t' '$1=="TIMEOUT"{print $2}' "$TMP/res0.txt" > "$TMP/retry.txt"
+  n_retry=$(wc -l < "$TMP/retry.txt")
+  echo "并行超时 $n_retry 条 ⇒ 串行重跑（每条上限 ${TIMEOUT_RETRY_SEC}s）"
+  : > "$TMP/retry_res.txt"
+  while IFS= read -r f; do compile_one "$f" "$TIMEOUT_RETRY_SEC"; done < "$TMP/retry.txt" | sort -k2 >> "$TMP/retry_res.txt"
+  awk -F'\t' 'NR==FNR{k[$2]=$0; next} $1=="TIMEOUT"{if ($2 in k) print k[$2]; else print $0; next} {print}' \
+      "$TMP/retry_res.txt" "$TMP/res0.txt" | sort -k2 > "$TMP/res.txt"
+else
+  sort -k2 "$TMP/res0.txt" > "$TMP/res.txt"
+fi
 
 if [ "$MODE" = list ]; then cat "$TMP/res.txt"; exit 0; fi
 
@@ -163,7 +199,12 @@ while IFS=$'\t' read -r st f rest; do
     if [ -n "${SKIP_REASON[$f]:-}" ]; then
       n_skip=$((n_skip+1))
     else
-      fail=$((fail+1)); echo "COMPILE-FAIL $f — ${rest:-无错误行}" >> "$TMP/viol.txt"
+      fail=$((fail+1))
+      if [ "$st" = TIMEOUT ]; then
+        echo "COMPILE-TIMEOUT $f — ${rest:-无错误行}（并行+串行均超时 ⇒ 真红）" >> "$TMP/viol.txt"
+      else
+        echo "COMPILE-FAIL $f — ${rest:-无错误行}" >> "$TMP/viol.txt"
+      fi
     fi
   fi
 done < "$TMP/res.txt"
