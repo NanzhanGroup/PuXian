@@ -45,8 +45,9 @@
 #   - preflight-20261122-132415 = /data/gatevm/preflight-20261122-132415.times.tsv（306 行）
 #   - preflight-20261122-141322 = /data/gatevm/preflight-20261122-141322.times.tsv（306 行）
 #   - preflight-20261122-172943 = /data/gatevm/preflight-20261122-172943.times.tsv（307 行）
+#   - m434-bootstrap = /tmp/m434-times.tsv（1 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-22 19:54:20 +0800
+# 生成时间：2026-11-22 20:19:19 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	11	OK	chain-20261122-144011
@@ -311,6 +312,7 @@ m429_pxrun_signal	9	OK	chain-20261122-144011
 m430_gate_portscan	9	OK	preflight-20261122-172943
 m432_request_framing	86	OK	chain-20261122-144011
 m433_publish_scope	1	OK	chain-20261122-180020
+m434_header_syntax	102	OK	m434-bootstrap
 m63_langfix	6	OK	chain-20261122-102953
 m64_fmt	1	OK	chain-20261122-144011
 m64_lint	1	OK	chain-20261122-102953
