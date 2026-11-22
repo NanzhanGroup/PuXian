@@ -2493,3 +2493,19 @@ run m425_build_cache bash selfhost/check_build_cache.sh
 #   N1 注回老口径必 REJECT + N2 摘掉版本源判据必变 OK + G1/G2/G3。
 gate_timeout m433_publish_scope 180
 run m433_publish_scope bash selfhost/check_publish_scope.sh
+
+# ── m434_header_syntax（M434 · 缺陷 897/898/899）────────────────────────────
+#   病史（2026-11-22 19:5x 实测 · px_serve，13 条判据 10 条不符）：字段行只找第一个冒号，
+#   名字/值/重复都不校验 ⇒ 失败方式全是**静默**：
+#     `Content-Length : 5` ⇒ 名带空格认不出 ⇒ 体静默丢弃（体分片到达时被当成下一条请求执行 = 走私入口）
+#     `Content-Length\t: 5` / `Content Length: 5` / `X@Y: 1` ⇒ 同上
+#     `GARBAGE`（无冒号）/ `: v`（空名）/ obs-fold 续行 ⇒ 整行静默丢弃
+#     `Host: a` + `Host: b` ⇒ last-win 静默覆盖（Host 注入面）· `Host: a b` ⇒ 照收
+#   判据：H0 正控 · H1-H3/H5/H6/H6b/H9/H10 非法头 ⇒ 400 · H8 重复 Host ⇒ 400 ·
+#     H7 折行 ⇒ 拒绝集合(400/501) · H11-H16 合法头（含 HTAB / obs-text / IPv6 字面量）⇒ 200 防过度修复 ·
+#     H17 端到端 desync（体分片到达只许一条 400）· H18 响应可读（缺陷 892 的 RST 坑）·
+#     N1 负控（摘字段三条 + obs-fold ⇒ 非法头必须放行、H17 必须回到 2 条；**含服务存活前提自证**，
+#       缺陷 898：负控服务崩了会让「不是 400」被当成「放行」= 假绿）· G1/G2/G3。
+#     ⚠ 负控不得摘 `if (!colon)`：摘了 `*colon = 0` 解引用 NULL 直接崩（实测）。
+gate_timeout m434_header_syntax 420
+run m434_header_syntax bash selfhost/check_header_syntax.sh

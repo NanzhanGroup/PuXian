@@ -497,6 +497,29 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_publish_scope 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_publish_scope rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_publish_scope PASS"
+      - name: 头部字段语法契约（tchar / obs-fold / 重复 Host · M434 · 缺陷 897/898）
+        #   来历（2026-11-22 19:5x 实测 · px_serve，13 条判据 10 条不符）：字段行只找第一个冒号，
+        #   名字/值/重复都不校验 ⇒ 失败方式全是**静默**：
+        #     `Content-Length : 5`（冒号前空格）⇒ 名带空格认不出 ⇒ 体静默丢弃；体分片到达时
+        #       那批字节被当成**下一条请求执行**（同一连接两个 200）= 与前置代理的消息边界分歧
+        #       = 请求走私入口（RFC 9112 §6.4）。
+        #     `GARBAGE`（无冒号）/ `: v`（空名）/ obs-fold 续行 ⇒ 整行静默丢弃。
+        #     `Host: a` + `Host: b` ⇒ last-win 静默覆盖（Host 注入面）。
+        #   判据：H0 正控 + 10 条非法头 ⇒ 400 + H11-H16 合法头 ⇒ 200（防过度修复）+
+        #     H17 端到端 desync（只许一条 400）+ H18 响应可读（RST 坑）+
+        #     N1 负控自证（摘字段三条 + obs-fold ⇒ 非法头必须放行；**含负控服务存活前提自证**——
+        #     服务崩了会让「NA」被当成「放行」= 假绿，缺陷 898）+ G1/G2/G3。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_header_syntax.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_header_syntax 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_header_syntax.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_header_syntax 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_header_syntax rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_header_syntax PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

@@ -22259,6 +22259,61 @@ static int px_te_strict(const char* v) {
     return 0;
 }
 
+// ==================== M434（缺陷 897）：头部**字段语法**的单一判定 ====================
+// 与 M432 同族但不同面：M432 管「体到哪儿结束」（长度声明），本段管「字段这一行本身合不合法」。
+// 修前实测（px_serve，2026-11-22 19:5x，13 条判据 10 条不符契约）：
+//   `Content-Length : 5`（冒号前空格）⇒ 字段名成为 "Content-Length " ⇒ 认不出来 ⇒ 体当空 ⇒ **200 且体被静默丢弃**
+//     更强的一条：体分片到达时，那 43 字节「代理认为是体」被本服务端**当成下一条请求执行**
+//     （实测 A'：一条连接两个 200）—— 与前置代理的消息边界分歧 = 请求走私入口（RFC 9112 §6.4）
+//   `Content-Length\t: 5`（制表）· `Content Length: 5`（名内空格）· `X@Y: 1`（非 token）⇒ 同上，静默
+//   `GARBAGE`（无冒号）· `: value`（空名）· obs-fold 续行 ⇒ **静默丢弃该行**（既不拒也不报）
+//   `Host: a` + `Host: b` ⇒ last-win 静默覆盖（Host 注入面）· `Host: a b` ⇒ 照收
+// 口径（RFC 9112 §5.1 / §5.2 / §3.2 的服务端最小集合，宁拒不含糊）：
+//   · 字段名必须是 **tchar 串**（RFC 9110 §5.6.2）：空名/空格/制表/其它分隔符 ⇒ 400；
+//     「冒号前空白」因此自然被判掉 —— 这类正是各家中间件归一化不一致的地方；
+//   · 以 SP / HTAB 开头的行 = obs-fold ⇒ 400（RFC 要求拒，或替换为 SP；本实现取拒）；
+//   · 无冒号的非空字段行 ⇒ 400（静默丢弃 = 与对端语义分歧，绝不静默）；
+//   · 字段值不许含 CTL（裸 CR / 裸 LF / NUL；HTAB 允许）⇒ 400；
+//   · Host：**最多一个**，且值非空、不含空白 / 逗号 / 斜杠 / 反斜杠 / `@` ⇒ 否则 400。
+//   与 M432 一致：任何拒绝都先 drain 再 close（缺陷 892 的教训），且绝不在污染连接上继续读。
+static int px_hdr_tchar(unsigned char c) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return 1;
+    switch (c) {
+        case '!': case '#': case '$': case '%': case '&': case '\'': case '*': case '+':
+        case '-': case '.': case '^': case '_': case '`': case '|': case '~':
+            return 1;
+    }
+    return 0;
+}
+
+// 字段名：非空 + 全 tchar（这一条同时挡掉「冒号前空白」「名内空格」「非 token 字符」）
+static int px_hdr_name_ok(const char* k) {
+    if (!k || !*k) return 0;
+    for (const unsigned char* p = (const unsigned char*)k; *p; p++)
+        if (!px_hdr_tchar(*p)) return 0;
+    return 1;
+}
+
+// 字段值：不许含 CTL（裸 CR/LF/NUL 及其它 0x00-0x1F、0x7F）；HTAB 与 obs-text 允许
+static int px_hdr_value_ok(const char* v) {
+    if (!v) return 0;
+    for (const unsigned char* p = (const unsigned char*)v; *p; p++) {
+        if (*p == '\t') continue;
+        if (*p < 0x20 || *p == 0x7f) return 0;
+    }
+    return 1;
+}
+
+// Host 值：非空、无空白/控制、不含逗号（多值）/ 斜杠 / 反斜杠 / `@`（userinfo）
+static int px_host_value_ok(const char* v) {
+    if (!v || !*v) return 0;
+    for (const unsigned char* p = (const unsigned char*)v; *p; p++) {
+        if (*p <= 0x20 || *p == 0x7f) return 0;
+        if (*p == ',' || *p == '/' || *p == '\\' || *p == '@') return 0;
+    }
+    return 1;
+}
+
 // 逐个头喂入：返回 0 继续 / 400 / 501（**首个**致命项即返回，后续头不再采信）
 static int px_framing_feed(PxReqFraming* f, const char* k, const char* v) {
     if (strcasecmp(k, "Content-Length") == 0) {
@@ -22406,6 +22461,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         PxReqFraming fr;      // M432（缺陷 891）：长度声明的单一判定状态
         px_framing_reset(&fr);
         int fr_reject = 0;    // 首个致命项（400/413/501）—— 头读完统一回绝
+        int host_n = 0;       // M434（缺陷 897）：Host 字段行计数（>1 ⇒ 400 · RFC 9112 §3.2）
         char* hline = sp2 ? sp2 + 1 : target + strlen(target);
         char* nl0 = strchr(hline, '\n');
         hline = nl0 ? nl0 + 1 : head + len;
@@ -22417,21 +22473,36 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             int cl = linelen < 4095 ? linelen : 4095;
             memcpy(line, hline, (size_t)cl);
             line[cl] = 0;
-            char* colon = strchr(line, ':');
-            if (colon) {
-                *colon = 0;
-                char* k = line;
-                char* v = colon + 1;
-                while (*v == ' ') v++;
-                char* ve = v + strlen(v);
-                while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
-                *ve = 0;
-                if (!fr_reject) {   // M432：严格判定（非法即记账，读完头再统一回绝）
-                    int frc = px_framing_feed(&fr, k, v);
-                    if (frc) fr_reject = frc;
+            // M434（缺陷 897）：字段级语法（RFC 9112 §5.1/§5.2 · §3.2）
+            //   obs-fold / 无冒号 / 空名 / 非 token（含冒号前空白）/ 值含 CTL / 重复或非法 Host ⇒ 400
+            if (line[0] == ' ' || line[0] == '\t') {
+                if (!fr_reject) fr_reject = 400;      // obs-fold 续行：RFC 要求拒（绝不静默丢行）
+            } else {
+                char* colon = strchr(line, ':');
+                if (!colon) {
+                    if (!fr_reject) fr_reject = 400;  // 无冒号的非空字段行：静默丢弃 = 与对端语义分歧
+                } else {
+                    *colon = 0;
+                    char* k = line;
+                    char* v = colon + 1;
+                    while (*v == ' ') v++;
+                    char* ve = v + strlen(v);
+                    while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
+                    *ve = 0;
+                    if (!px_hdr_name_ok(k) || !px_hdr_value_ok(v)) {
+                        if (!fr_reject) fr_reject = 400;   // 名字非 tchar（含冒号前 OWS）/ 值含裸 CR-LF
+                    }
+                    if (strcasecmp(k, "Host") == 0) {
+                        host_n++;
+                        if (host_n > 1 || !px_host_value_ok(v)) { if (!fr_reject) fr_reject = 400; }
+                    }
+                    if (!fr_reject) {   // M432：严格判定（非法即记账，读完头再统一回绝）
+                        int frc = px_framing_feed(&fr, k, v);
+                        if (frc) fr_reject = frc;
+                    }
+                    if (strcasecmp(k, "Connection") == 0 && strcasecmp(v, "close") == 0) client_close = 1;
+                    px_dict_set(headers, k, px_str(v));
                 }
-                if (strcasecmp(k, "Connection") == 0 && strcasecmp(v, "close") == 0) client_close = 1;
-                px_dict_set(headers, k, px_str(v));
             }
             hline = eol ? eol + 2 : hline + strlen(hline);
         }
@@ -29445,6 +29516,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         PxReqFraming fr;      // M432（缺陷 891）：长度声明的单一判定状态
         px_framing_reset(&fr);
         int fr_reject = 0;    // 首个致命项（400/413/501）—— 头读完统一回绝
+        int host_n = 0;       // M434（缺陷 897）：Host 字段行计数（>1 ⇒ 400 · RFC 9112 §3.2）
         while (hline && *hline && *hline != '\r' && *hline != '\n') {
             char* eol = strstr(hline, "\r\n");
             if (!eol) eol = strchr(hline, '\n');
@@ -29452,21 +29524,36 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             char line[4096];
             int cl = linelen < 4095 ? linelen : 4095;
             memcpy(line, hline, (size_t)cl); line[cl] = 0;
-            char* colon = strchr(line, ':');
-            if (colon) {
-                *colon = 0;
-                char* k = line;
-                char* v = colon + 1;
-                while (*v == ' ') v++;
-                char* ve = v + strlen(v);
-                while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
-                *ve = 0;
-                if (!fr_reject) {   // M432：严格判定（非法即记账，读完头再统一回绝）
-                    int frc = px_framing_feed(&fr, k, v);
-                    if (frc) fr_reject = frc;
+            // M434（缺陷 897）：字段级语法（RFC 9112 §5.1/§5.2 · §3.2）
+            //   obs-fold / 无冒号 / 空名 / 非 token（含冒号前空白）/ 值含 CTL / 重复或非法 Host ⇒ 400
+            if (line[0] == ' ' || line[0] == '\t') {
+                if (!fr_reject) fr_reject = 400;      // obs-fold 续行：RFC 要求拒（绝不静默丢行）
+            } else {
+                char* colon = strchr(line, ':');
+                if (!colon) {
+                    if (!fr_reject) fr_reject = 400;  // 无冒号的非空字段行：静默丢弃 = 与对端语义分歧
+                } else {
+                    *colon = 0;
+                    char* k = line;
+                    char* v = colon + 1;
+                    while (*v == ' ') v++;
+                    char* ve = v + strlen(v);
+                    while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
+                    *ve = 0;
+                    if (!px_hdr_name_ok(k) || !px_hdr_value_ok(v)) {
+                        if (!fr_reject) fr_reject = 400;   // 名字非 tchar（含冒号前 OWS）/ 值含裸 CR-LF
+                    }
+                    if (strcasecmp(k, "Host") == 0) {
+                        host_n++;
+                        if (host_n > 1 || !px_host_value_ok(v)) { if (!fr_reject) fr_reject = 400; }
+                    }
+                    if (!fr_reject) {   // M432：严格判定（非法即记账，读完头再统一回绝）
+                        int frc = px_framing_feed(&fr, k, v);
+                        if (frc) fr_reject = frc;
+                    }
+                    if (strcasecmp(k, "Connection") == 0 && strncasecmp(v, "close", 5) == 0) client_keep_alive = 0;
+                    px_dict_set(headers, k, px_str(v));
                 }
-                if (strcasecmp(k, "Connection") == 0 && strncasecmp(v, "close", 5) == 0) client_keep_alive = 0;
-                px_dict_set(headers, k, px_str(v));
             }
             hline = eol ? eol + 2 : hline + strlen(hline);
         }
@@ -29488,7 +29575,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             const char* msg;
             if (fr_reject == 501)      msg = "501 Not Implemented：Transfer-Encoding 只接受唯一编码 chunked";
             else if (fr_reject == 413) msg = "413 Payload Too Large：Content-Length 超出可接受范围";
-            else                       msg = "400 Bad Request：Content-Length 非法 / 重复冲突 / 与 Transfer-Encoding 同时出现";
+            else                       msg = "400 Bad Request：Content-Length 非法 / 重复冲突 / 与 Transfer-Encoding 同时出现 / 头部字段语法非法（M434）";
             snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
             out.respond(&out, fr_reject, "text/plain; charset=utf-8", msg, (int)strlen(msg), 0, 0, extra);
             px_reject_drain(fd);   // M432：先吸干未读体再关，否则 RST 会吞掉这条拒绝响应
