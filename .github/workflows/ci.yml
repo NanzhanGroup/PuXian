@@ -520,6 +520,28 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_header_syntax 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_header_syntax rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_header_syntax PASS"
+      - name: 响应头行级防护（CRLF 注入 / 重复 CL / TE+CL / 状态码域 · M435 · 缺陷 902/903）
+        #   病史（2026-11-22 22:0x 实测 · http_serve，20 条判据 12 条不符）：
+        #   px_serve 主路早已有 px_hdr_append（拒绝名单 + CRLF 防护 + 预算，M109-S1/S4），
+        #   但 px_http_build_response 自己手揂 "K: V\r\n" ⇒ 同一件事两份实现，防护只在一份上：
+        #     headers {"X-A": "a\r\nInjected: yes"} ⇒ 响应里真的多出两行（响应头注入 / 响应拆分）；
+        #     名字方向同样成立；handler 自设 Content-Length ⇒ 响应两条 CL；
+        #     自设 TE: chunked ⇒ TE + CL 并存（RFC 9112 §6.1 明禁）；
+        #     {"status": -5} ⇒ `HTTP/1.1 -5 status code -5`；999 原样；100 当最终响应。
+        #   判据：R0 正控 + 注入 5 条 + 非法名 2 条 + 重复 CL/TE/Connection/Date +
+        #     R12-R14 防过度修复 + R17-R20 状态码域 + R21 px_serve 同口径对拍 +
+        #     N1 负控（手揂注回 ⇒ 注入复现 · CL=2 · -5 不再 500；含存活+基线 200 前提自证）+ G1/G2/G3。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_resp_header_guard.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_resp_header_guard 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_resp_header_guard.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_resp_header_guard 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_resp_header_guard rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_resp_header_guard PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

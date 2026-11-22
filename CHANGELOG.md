@@ -1,3 +1,65 @@
+## M435：响应头方向的防护是「两份实现」—— 注入、重复 CL、TE+CL 并存、状态码越界（缺陷 902 / 903）
+
+> **一句话**：M434 把「请求头」这一行校验了，但**响应头**这边只有 px_serve 主路有防护；
+> `px_http_build_response`（http_serve 与 http_stream manual 错误分支）自己手搓 `"K: V\r\n"`。
+> 于是 handler 给什么就写什么：值带 CRLF ⇒ 响应拆分；自设 CL ⇒ 响应两条 CL；自设 TE ⇒ TE+CL 并存；
+> `{"status": -5}` ⇒ `HTTP/1.1 -5 status code -5`。
+
+### 一 病史（2026-11-22 22:0x 实测 · http_serve · /tmp/m435probe，20 条判据 12 条不符）
+
+```
+handler headers                              修前响应                        性质
+{"X-A": "a\r\nInjected: yes"}                X-A: a\r\nInjected: yes       响应头注入（响应拆分）
+{"X-A\r\nInjected4": "1"}                    X-A\r\nInjected4: 1          名字方向同样可注入
+{"X-A": "a\rInjected2: yes"} / 裸 LF         同样注入                     裸 CR / 裸 LF 都放行
+{"X Bad": "1"}                               X Bad: 1                     名非 tchar 原样写出
+{"": "1"}                                    : 1                          空名原样写出
+{"Content-Length": "0"}（体 "ok"）            CL: 2 与 CL: 0 各一条         重复 CL ⇒ 边界分歧
+{"Transfer-Encoding": "chunked"}（体未分块）  TE: chunked + CL: 2           TE+CL 并存（RFC 9112 §6.1 禁）
+{"Connection": "keep-alive"}                  Connection 两条               重复
+{"Date": "x"}                                 Date: x                       覆盖服务器该自己生成的头
+{"status": -5}                                HTTP/1.1 -5 status code -5    非法状态行
+{"status": 999} / {"status": 100}             原样 / 100 当最终响应          状态码域 + 1xx 语义
+```
+
+共同病灶：**同一件事两份实现**。px_serve 主路走 `px_hdr_append`（拒绝名单 + CRLF 防护 + 预算，
+M109-S1/S4 早已有），`px_http_build_response` 却自己拼 —— 防护只覆盖了其中一份。
+
+### 二 修法
+
+```
+① px_http_build_response 的 headers 一律走 px_hdr_append（缺陷 902）
+   ⇒ 一次收敛四件事：CRLF/非法名丢弃 + 拒绝名单（CL/TE/Connection/Date/Server…）+ 预算 + 多值头
+② 手写拼头路径补行级校验 px_hdr_line_ok（复用 M434 的 px_hdr_name_ok/px_hdr_value_ok）
+   ⇒ sse_start 的 headers dict · http_stream 的 opts.headers 覆写与未消费额外头
+③ 状态码域（缺陷 903）：< 200 或 > 599 ⇒ 500；1xx 不是最终响应（本构造器发的是最终响应）⇒ 500
+   任何拒绝都留可观测计数 g_hdr_drop_syntax + 限频 stderr（与 px_serve 的计数口径一致，不静默）
+```
+
+**边界（明确未做，已登记）**：`http_request` / `http_unix` 的**请求**头仍是手搓（客户端方向，
+对外攻击面需应用自己把关）；WS 握手重建头来自**已过 M434 校验**的 req.headers ⇒ 本轮不加二次校验；
+handler 设 `204` 仍会写 `Content-Length: 0`（RFC 9110 §15.3.5 语义上不宜，下一轮处理）。
+
+### 三 门 m435_resp_header_guard（308 → 309 · 27 条判据 · 自测 7/7）
+
+```
+R0 正控 · R1-R3 值 CRLF/CR/LF · R5/R6/R7 名空格/名 CRLF/空名 ⇒ 注入标记与非法行**不得出现**
+R8 handler 自设 CL ⇒ 响应只许一条 CL · R9 自设 TE ⇒ TE 不得出现且 CL 仍单条
+R10 自设 Connection ⇒ 单条 · R11 自设 Date ⇒ 不得写出
+R12/R13/R14 值含 HTAB / 空值 / 多值头 ⇒ 必须保留（防过度修复）
+R16 多值其中一项带 CRLF ⇒ 合法项保留、注入不出现 · R17/R18/R19 status -5/999/100 ⇒ 500
+R20 status 204 ⇒ 204（合法域不许被挡）· R21 px_serve 路径跑同一组 ⇒ 同样不注入（两路同口径）
+N1 负控：把手搓拼装注回 + 摘状态码域 ⇒ 注入复现 · CL=2 · status -5 不再是 500
+   （前提自证：负控服务必须存活且 R0 仍 200 —— 缺陷 898 的教训：NA 不等于「放行」）
+G1 环境守卫（tools/px / python3 / cc / 构建失败）⇒ rc=3 · G2 runtime.c 原样回滚（sha + git status）· G3 不留监听
+```
+
+### 四 下一轮候选（已登记）
+
+`http_request`/`http_unix` 请求头同源问题（客户端方向）· `204` 不带 CL · `px_vhost_normalize` 与
+`route_normalize` 的 headers 路径是否共用同一份（本轮只证了 px_serve 与 http_serve 两路同口径）。
+
+
 ## M434：头部字段语法全静默放行 —— 「只找第一个冒号」的代价（缺陷 897 / 898 / 899 / 901）
 
 > **一句话**：请求体的长度声明（M432）修完了，但**字段这一行本身**从没校验过。
