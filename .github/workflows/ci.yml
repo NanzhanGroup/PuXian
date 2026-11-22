@@ -2033,7 +2033,10 @@ jobs:
           set +e
           bash examples/m406_struct_field_default/verify.sh > /tmp/v_m406.log 2>&1 || { echo "❌ m406_struct_field_default 门失败（结构体字段默认值三轨对拍）"; tail -40 /tmp/v_m406.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m406.log | tail -6
-          M406_NC=ref bash examples/m406_struct_field_default/verify.sh > /tmp/v_m406_nc.log 2>&1 && { echo "❌ m406 负控失败：期望值扰动后门仍判绿（判据无鉴别力）"; exit 1; }
+          # 负控日志**不许**落进 /tmp/v_*.log 命名空间：那是 ci_diagnose 的「门日志语料」，
+          #   负控按设计必红（含 ❌）⇒ 混进语料会让诊断器把负控当失败门，并让诊断器自测的
+          #   「真实语料 0 误报」假红（M432 补2 · 缺陷 895，2026-11-22 CI step 166 实测）。
+          M406_NC=ref bash examples/m406_struct_field_default/verify.sh > /tmp/nc_m406.log 2>&1 && { echo "❌ m406 负控失败：期望值扰动后门仍判绿（判据无鉴别力）"; exit 1; }
           echo "✅ m406_struct_field_default（三轨逐字节 + 6 类错误同码同文 + 判据/前提自证）PASS"
 
       - name: m407_rt_error_format（运行时错误报文三轨统一 · M407 · 缺陷 186 族）
@@ -2046,7 +2049,8 @@ jobs:
           set +e
           bash examples/m407_rt_error_format/verify.sh > /tmp/v_m407.log 2>&1 || { echo "❌ m407_rt_error_format 门失败（运行时错误报文三轨统一）"; tail -40 /tmp/v_m407.log | sed 's/^/  | /'; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^  ✅' /tmp/v_m407.log | tail -6
-          M407_NC=ref bash examples/m407_rt_error_format/verify.sh > /tmp/v_m407_nc.log 2>&1 && { echo "❌ m407 负控失败：期望扰动后门仍判绿（判据无鉴别力）"; exit 1; }
+          # 同 m406：负控日志不进 /tmp/v_*.log 语料命名空间（缺陷 895）
+          M407_NC=ref bash examples/m407_rt_error_format/verify.sh > /tmp/nc_m407.log 2>&1 && { echo "❌ m407 负控失败：期望扰动后门仍判绿（判据无鉴别力）"; exit 1; }
           echo "✅ m407_rt_error_format（三轨逐字节 + 归因正确性 + 判据/前提自证）PASS"
 
       - name: m408_builtin_err_trap（内置失败可捕获 · M408 · PX-002/PX-003）

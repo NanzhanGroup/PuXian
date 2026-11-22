@@ -1,0 +1,27 @@
+# M432 补2 · 缺陷 895 —— ci_diagnose 的**受控语料**期望表
+#
+# 为什么要有它（2026-11-22）：原来的「真实语料 ⇒ 0 误报」拿 /tmp/v_*.log 当判据，
+#   而 /tmp 里同时躺着**设计上就该红**的日志（m406/m407 的期望扰动负控）与本机残留的
+#   失败日志 ⇒ 「拿必须红的日志要求 0 非 ok」= 自相矛盾 ⇒ CI step「发布侧守卫自测」恒红
+#   （270 份语料里 2 份非 ok，连红两轮）。判据不能依赖环境的临时目录。
+#
+# 规则（三条都硬）：
+#   1 本目录里**每一份** *.log 都必须在表里出现，表里每一行也必须在目录里有对应文件
+#     （漏登记 = 覆盖不全；多出来的 = 语料漂移没人管）⇒ 两个方向都判红。
+#   2 期望值只许 ok / fail / unknown 三值，必须与 verdict() 的实际裁决逐份相等。
+#   3 受控语料**不许**放负控产物（`*_nc.log`）：那种日志按设计必红且无裁决语义，
+#     属于噪声，不是门日志（放了会判「语料为空/被排除」）。
+#
+# 覆盖的形态（每一条都对应一次真实事故）：
+#   ok_verify_ok.log      M216s2 正常绿门（`-VERIFY-OK` 末行）
+#   ok_trap_tail.log      M225s1 trap 尾巴把裁决行顶掉 ⇒ 旧版判 unknown 假红
+#   ok_negative_first.log M225s1 负控 ❌ 在前、裁决行在后 ⇒ 窗口扫 ❌ 会误判 fail
+#   fail_mixed_line.log   M216s1 末行「通过 165 · 失败 3」⇒ 旧版含「通过」判绿（真盲区）
+#   fail_verify_fail.log  真失败 ⇒ 必须判 fail 且被点名为「最后写入」
+#   unknown_no_verdict.log 无任何裁决行 ⇒ unknown（不是 ok，也不是 fail）
+ok_verify_ok.log	ok
+ok_trap_tail.log	ok
+ok_negative_first.log	ok
+fail_mixed_line.log	fail
+fail_verify_fail.log	fail
+unknown_no_verdict.log	unknown

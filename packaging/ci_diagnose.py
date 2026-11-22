@@ -45,6 +45,26 @@ BAD_LAST = re.compile(
 HARD_CAP = 4096          # GitHub workflow command 的 message 硬上限（实测）
 DEFAULT_BUDGET = 3800    # 留 296 字符给 `::error::` 前缀与编码余量
 
+# M432 补2 · 缺陷 895（2026-11-22 CI 实测）：
+#   **负控日志不属于「门日志」**。m406/m407 的期望扰动负控把日志写到
+#   /tmp/v_m406_nc.log · /tmp/v_m407_nc.log ⇒ 与门日志同命名空间 ⇒
+#   ① 诊断器按 mtime 取「最后写入」时会把负控当失败门（真因被顶掉）；
+#   ② 本文件自测的「真实语料 ⇒ 0 误报」因负控**按设计必含 ❌** 而假红
+#      （CI step 166：`非 ok 2 份 ['v_m406_nc.log','v_m407_nc.log']`）。
+#   治本在调用方（负控日志落 /tmp/nc_*.log，已随本补丁改 ci.yml）；
+#   这里是**第二道**：即便将来有人又写回 v_*.log，也不会污染语料。
+#   ⚠️ 只排除 `_nc.log`（**判决被故意反转**的负控产物：末行就是「失败 N」，没有裁决语义）。
+#      不要顺手排除 `_neg.log` —— 那是「开了负控的门日志」，末行是权威裁决行，
+#      正是自测 ②d 守的场景（❌ 在前 + `-VERIFY-OK` 在后 ⇒ 必须判 ok）。
+SKIP_SUFFIX = ('_nc.log',)
+
+# M432 补2 · 缺陷 895：**受控语料**（判据不许依赖 /tmp 的临时残留）
+#   旧的自测拿 /tmp/v_*.log 当「真实语料」要求「0 非 ok」，而 /tmp 里同时躺着**设计上就该红**
+#   的日志（负控）与本机残留的失败日志 ⇒ 判据与环境耦合 ⇒ CI 连红两轮。
+#   现改为：受控夹具打包进仓库 + 双向覆盖对照（见 check_corpus），/tmp 只报信息不计分。
+CORPUS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'fixtures', 'ci_diagnose_corpus')
+
 
 def qlen(s):
     """URL 编码后的长度（这才是 GitHub 看到的大小）。"""
@@ -119,6 +139,8 @@ def collect(pat):
     for f in sorted(glob.glob(pat)):
         if any(k in os.path.basename(f) for k in skip_self):
             continue
+        if os.path.basename(f).endswith(SKIP_SUFFIX):   # 缺陷 895：负控不是门日志
+            continue
         try:
             t = open(f, encoding='utf-8', errors='replace').read()
         except Exception:
@@ -130,6 +152,46 @@ def collect(pat):
                           last=last, v=verdict(lines)))
     infos.sort(key=lambda x: x['mtime'])
     return infos
+
+
+def check_corpus(d, tsv=None):
+    """受控语料对照 ⇒ (问题列表, 命中份数, 期望行数, 被排除负控数)。
+
+    M432 补2 · 缺陷 895 的「0 误报」**可判定版**（替代「拿 /tmp 当语料」）：
+      · 目录里的门日志集合 ⇄ expect.tsv 的键集合**双向相等**
+        （期望表登记了但目录里没有 = 覆盖不全；目录里有但没登记 = 语料漂移）
+      · 每一份的 `verdict()` 必须等于期望值（ok / fail / unknown）
+      · 一份都没有（全被当负控排除）⇒ 问题 —— **空集不许判绿**
+      · 受控语料里不许出现负控产物（`*_nc.log` 应改名到 /tmp/nc_*.log）
+    """
+    tsv = tsv or os.path.join(d, 'expect.tsv')
+    expect = {}
+    for ln in open(tsv, encoding='utf-8'):
+        ln = ln.rstrip('\n')
+        if not ln.strip() or ln.lstrip().startswith('#'):
+            continue
+        parts = ln.split('\t')
+        if len(parts) < 2:
+            return (['期望表格式错（缺 TAB）：%r' % ln], 0, len(expect), 0)
+        expect[parts[0].strip()] = parts[1].strip()
+    names = [os.path.basename(f)
+             for f in sorted(glob.glob(os.path.join(d, '*.log')))]
+    skipped = [n for n in names if n.endswith(SKIP_SUFFIX)]
+    infos = collect(os.path.join(d, '*.log'))
+    got = {i['name']: i['v'] for i in infos}
+    probs = []
+    if not infos:
+        probs.append('语料为空（全被当负控排除？）—— 空集不许判绿')
+    if skipped:
+        probs.append('受控语料含负控产物（应改名 /tmp/nc_*.log）：%s' % skipped[:5])
+    for n in sorted(set(expect) - set(got)):
+        probs.append('期望表登记了但目录里没有：%s' % n)
+    for n in sorted(set(got) - set(expect)):
+        probs.append('目录里有但期望表没登记（语料漂移）：%s' % n)
+    for n in sorted(set(expect) & set(got)):
+        if expect[n] != got[n]:
+            probs.append('%s 期望 %s 实测 %s' % (n, expect[n], got[n]))
+    return (probs, len(infos), len(expect), len(skipped))
 
 
 def build_annotations(infos, budget):
@@ -339,6 +401,16 @@ def selftest():
         chk(ins_n and ins_n[0]['v'] == 'ok',
             '负控 ❌ 在前 + 裁决行在后 ⇒ 判 ok（窗口内扫 ❌ 会误判绿门）')
 
+        # ②e M432 补2（缺陷 895 · 2026-11-22 CI step 166 实测）：
+        #   **判决被故意反转的负控产物**（`*_nc.log`，末行就是「失败 N」）不许进语料 ——
+        #   否则 ①它会以「最后写入」冒充失败门（真因被顶掉）②本门「真实语料 0 误报」假红。
+        #   （CI 实测 `非 ok 2 份 ['v_m406_nc.log','v_m407_nc.log']`）
+        _mk(tmp, 'v_x_nc.log', '  ✅ N1 负控：期望扰动应判红\n'
+                               '  ❌ 期望扰动后门仍判绿（判据无鉴别力）\n== FAIL 1 ==\n')
+        ins_nc = collect(os.path.join(tmp, 'v_*.log'))
+        chk(all(not i['name'].endswith('_nc.log') for i in ins_nc),
+            '负控产物 *_nc.log ⇒ 不进语料（缺陷 895）')
+
         # ③ 末行 VERIFY-FAIL 必须判 fail 且**点名**
         import time
         time.sleep(0.01)
@@ -378,19 +450,54 @@ def selftest():
         # ⑤ 一条注解一件事 ⇒ 注解条数 ≥ 3（摘要 / 尾 / 头）
         chk(len(anns) >= 3, '注解拆成 ≥3 条（互不挤占）⇒ 实测 %d 条' % len(anns))
 
-        # ⑥ 真实语料（若本机有 /tmp/v_*.log ⇒ 上一次 CI 复跑留下的）：
-        #    **必须 0 非 ok** —— 这是「0 误报」判据的真实语料版。
-        #    本机曾用 100 份实测：旧判据漏了 `verify done` / `10P/0F/0S` / `fail=0`
-        #    三类成功末行 ⇒ 会假报 6 个「可疑门」（刷屏）。已补进 OK_LAST。
-        real = sorted(glob.glob('/tmp/v_*.log'))
+        # ⑥ 受控语料（M432 补2 · 缺陷 895）：判据**不许依赖 /tmp 的临时残留**。
+        #   旧写法拿 /tmp/v_*.log 当「真实语料」要求 0 非 ok —— 而 /tmp 里同时躺着
+        #   设计上就该红的负控日志（m406/m407）与本机残留的失败日志 ⇒ 判据自相矛盾
+        #   ⇒ CI step「发布侧守卫自测」连红两轮（270 份语料里 2 份非 ok）。
+        probs, nhit, nexp, nskip = check_corpus(CORPUS_DIR)
+        print('  · 受控语料 %d 份 / 期望表 %d 行 / 负控排除 %d' % (nhit, nexp, nskip))
+        for p in probs:
+            print('      ✗ ' + p)
+        chk(not probs, '受控语料 ⇄ 期望表双向相等且逐份裁决相符（缺陷 895）')
+
+        # ⑥b 反控：判据自己有没有牙（少了这些，「改判据把红改绿」就无从发现）
+        src = os.path.join(CORPUS_DIR, 'expect.tsv')
+        bd = tempfile.mkdtemp(prefix='cidg_neg_', dir=tmp)
+        for f in glob.glob(os.path.join(CORPUS_DIR, '*.log')):
+            shutil.copy(f, bd)
+        base = open(src, encoding='utf-8').read()
+        #   b1 期望被改错（fail 那份写成 ok）⇒ 必报问题
+        open(os.path.join(bd, 'expect.tsv'), 'w', encoding='utf-8').write(
+            base.replace('fail_mixed_line.log\tfail', 'fail_mixed_line.log\tok'))
+        p1 = check_corpus(bd)[0]
+        chk(bool(p1), '反控 b1：期望值被改错 ⇒ 必报问题（判据有牙）')
+        #   b2 期望表漏登记一份 ⇒ 必报「语料漂移」
+        open(os.path.join(bd, 'expect.tsv'), 'w', encoding='utf-8').write(
+            '\n'.join([l for l in base.splitlines()
+                       if not l.startswith('unknown_no_verdict.log')]) + '\n')
+        p2 = check_corpus(bd)[0]
+        chk(any('语料漂移' in x for x in p2),
+            '反控 b2：期望表漏登记一份 ⇒ 必报语料漂移（覆盖不全不许过）')
+        #   b3 只含负控产物 ⇒ 必须「排除 N 份」且判「空集不许判绿」
+        bd3 = tempfile.mkdtemp(prefix='cidg_nc_', dir=tmp)
+        open(os.path.join(bd3, 'v_x_nc.log'), 'w', encoding='utf-8').write(
+            '   ❌ 期望扰动后门仍判绿\n== FAIL 1 ==\n')
+        open(os.path.join(bd3, 'expect.tsv'), 'w', encoding='utf-8').write('')
+        p3, _, _, s3 = check_corpus(bd3)
+        chk(bool(p3) and s3 == 1,
+            '反控 b3：只含负控 ⇒ 排除 1 份且判「空集不许判绿」')
+
+        # ⑥c /tmp 真实语料：**只报信息、不计分** —— 环境残留不该决定判据生死。
+        real_all = sorted(glob.glob('/tmp/v_*.log'))
+        negs = [f for f in real_all if os.path.basename(f).endswith(SKIP_SUFFIX)]
+        real = [f for f in real_all if not os.path.basename(f).endswith(SKIP_SUFFIX)]
         if real:
             rins = collect('/tmp/v_*.log')
             nbad = [i['name'] for i in rins if i['v'] != 'ok']
-            print('  · 真实语料 %d 份 ⇒ 非 ok %d 份 %s'
-                  % (len(rins), len(nbad), nbad[:5]))
-            chk(not nbad, '真实语料 %d 份 ⇒ **0 误报**（旧判据在此假报 6 份）' % len(rins))
+            print('  · 信息性：本机 /tmp 语料 %d 份 ⇒ 非 ok %d 份 %s（另排除负控 %d 份）'
+                  % (len(rins), len(nbad), nbad[:5], len(negs)))
         else:
-            print('  · 真实语料缺失（跳过，非失败）')
+            print('  · 信息性：本机 /tmp 无语料（不影响判据）')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
