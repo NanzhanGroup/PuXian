@@ -1,4 +1,81 @@
-## M432：请求体的「长度声明」四种非法形态全是 200 —— 同一句 atoi 的四个副本（缺陷 891 · 892 · 893 · 894）
+## M433：链绿之后发布被「工作树脏」拦下 —— 把工作副本的卫生当成了证据的完整性（缺陷 896）
+
+> **一句话**：306 道门全绿，发布脚本却因为主树上有我在建的补丁而拒发。
+> 而门**从来不在主工作树里跑** —— 分片与 quiet 档都在
+> `git worktree add --detach <被测 commit>` 里跑，门清单也取自 `git show HEAD:`。
+> ⇒ 主树的未提交改动进不了测试面。「树脏即不发」是**错杀**。
+
+### 一 病史（2026-11-22 16:40 实测 · M432）
+
+```
+16:40:03  CHAIN-VERDICT=GREEN rc=0 green=306 listed=306 head=3b15806
+16:40:03  交 publish_on_green → **ABORT dirty-tree**（rc=2）
+          脏的 5 个文件 = 我同时在建的补丁（ci.yml / ci_diagnose.py / fixtures …）
+16:40:22  pipeline 报 publish-no-tag p1，正文却是「扫描面 日志47行 · 红项 0 条」
+          —— 真因（ABORT dirty-tree）就在日志里，判据只认 ❌/FAIL 行
+16:42:50  人工 reset → 16:43:14 提交补2 → 16:43:18 回灌基线 → 手工 tag
+⇒ 306 门全绿没错；错的是「绿之后自动发不出去」，且失败态说了假话
+```
+
+不是偶发：链尾会回灌基线、我又常在链跑时写补丁 ⇒ 树脏是常态，
+自动发布被拒也就成了常态（M427/M428/M429 都靠人工补过一次 tag）。
+
+### 二 修法：把口径收敛成一个实现
+
+`packaging/chain/publish_scope_check.sh`（唯一口径，publish 与门共用）
+
+```
+SCOPE-OK      head 一致；WIP 计数 + 明细落盘（$AD/m<ms>-wip-at-publish.txt），不阻断
+SCOPE-REJECT  reason=stamp-head-missing   stamp 无 head=<sha>（老实现空值直接放行 = 静默缺口）
+SCOPE-REJECT  reason=head-mismatch        被测提交 ≠ 当前 HEAD
+SCOPE-REJECT  reason=wip-version-source   WIP 碰 tools/px
+```
+
+**为什么唯独 tools/px 还得拦**：`packaging/make_tag.sh` 3.5 节的版本链闸读的是
+`$REPO/tools/px` 的**工作树** —— 主树 WIP 改版本串，闸看到的就是 WIP 的值 ⇒
+tag 与源码版本号可能错配。这一类必拒，且 p1 出声。
+
+`publish_on_green.sh` 改为只调这一个实现；老的「head 一致」+「树必须干净」两段退场。
+
+### 三 顺手两件
+
+```
+① lib_pipeline_fail.sh 入仓（packaging/chain/lib_pipeline_fail.sh）
+   红项 0 条时打印**真因候选**（ABORT / SCOPE-REJECT / VERDICT-NOT-GREEN / STOP / TIMEOUT）
+   负控 F14：日志无线索 ⇒ 如实说「没有」（不许编造）；自测 15/15
+② m388_publish_chain 子自测 30 条
+   C4 改口径：非版本源 WIP ⇒ rc=0 且留证（缺陷 896 回归）
+   新增 C4d/C4e：WIP 碰 tools/px ⇒ rc=2 且 p1 恰好一次
+   新增 C4f：stamp 无 head ⇒ rc=2
+```
+
+### 四 新门 `m433_publish_scope`（306 → 307 · 11 条判据 · ~6s）
+
+```
+P1  helper 自测 7/7（净树 / 脏树 / 版本源 / head 不一致 / 无 head / 环境守卫）
+P2  真仓净树只读实测：SCOPE-OK 且 wip=0（不碰真仓）
+A1  worktree@commit 读到提交内容、主树读到 WIP —— **前提自证**：先证主树真的脏
+A2  机制锚（shard_run.sh：HEAD_SHA=rev-parse HEAD · worktree add --detach $HEAD_SHA ·
+    门清单来自 git show HEAD:）；**负控**：把建树换成「复制主树含 WIP」⇒ 判据必红
+A3  口径唯一（publish 调 helper 且无 ABORT dirty-tree）；**负控**：注回 ABORT ⇒ 必红
+N1  **负控**：把阻断条件注回「任何 WIP 都拒」⇒ 同一脏夹具从 OK 变 REJECT
+N2  **负控**：摘掉版本源判据 ⇒ tools/px 脏夹具从 REJECT 变 OK（这道拦有牙且只拦它）
+G1 环境守卫 rc=3 · G2 零污染 · G3 本门不留监听
+```
+
+### 五 口径
+
+```
+能说  主树 WIP 不再阻断发布；每次发布都留 WIP 明细；tools/px 被改仍拦且 p1
+能说  「测试面=commit」有代码锚点 + 动态自证 + 两条能把它打红的负控
+不能说 preflight 也免疫 WIP —— release_preflight.sh --gates 在主仓里跑，读到含 WIP 的树；
+      preflight 是前置自检，证据面仍是链（worktree@commit）。让 preflight 也跑在
+      冻结副本上 = 下一轮待办，本轮未做（docs/PUBLISH_SCOPE.md §6 已写明）
+不说  这次能防「链跑起来之后又改了被测 commit」—— 那是 chain-freeze（pre-commit 拦提交）
+      + publish 的 head-mismatch 两道在守
+```
+
+
 
 > **一句话**：服务端决定「请求体到哪里结束」全靠 `atoi(Content-Length)`，而 `atoi` 对
 > `abc` / `-1` / 重复冲突 / 与 `Transfer-Encoding` 并存**一律不报错**。

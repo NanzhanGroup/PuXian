@@ -19,7 +19,14 @@
 #
 # 输出：/data/autodrive/m<ms>-publish.log（纯文本时间线）
 #
-# 自锁五道：不绿不发 · 树脏不发 · head 变了不发 · 落后不发 · 抢不到锁不发
+# 自锁五道：不绿不发 · 发布面≠被测面不发 · 落后不发 · 抢不到锁不发 · 判据缺失不发
+#   ⚠ M433（缺陷 896）改口径：老的第 2 道是「主工作树脏就不发」——错杀。
+#     306 道门跑的是 `git worktree add --detach ... <被测 commit>`（分片 + quiet 档都是），
+#     门清单也取自 `git show HEAD:gates.registry.sh` ⇒ 主树 WIP 进不了测试面。
+#     现在的口径收敛到唯一实现 packaging/chain/publish_scope_check.sh：
+#       · head 不一致 ⇒ 拒（门测的不是这棵树）
+#       · WIP 碰 tools/px ⇒ 拒（make_tag 的版本链闸读工作树）
+#       · 其余 WIP ⇒ 只留证（$AD/m<ms>-wip-at-publish.txt），不阻断
 # 退出码：0 已发布 / 1 判红不可发 / 2 前置条件不满足 / 3 孤儿锁（已 p1）
 # ============================================================================
 set -uo pipefail
@@ -129,22 +136,33 @@ fi
 cd "$REPO" || die "no-repo $REPO"
 HEAD="$(git rev-parse --short=7 HEAD)"
 
-# ── 3 head 一致（门跑的是不是现在这棵树） ──────────────────────────────────
-STAMP_HEAD="$(grep -oE 'head=[0-9a-f]{7}' "$STAMP" 2>/dev/null | head -1 | cut -d= -f2)"
-if [ -n "${STAMP_HEAD:-}" ] && [ "$STAMP_HEAD" != "$HEAD" ]; then
-    say "ABORT head-mismatch stamp=$STAMP_HEAD now=$HEAD"
+# ── 3 发布面 ⇄ 被测面（M433 · 缺陷 896）：唯一口径在 publish_scope_check.sh ──
+#   老的第 3/4 道是「head 一致」+「树必须干净」两段各自为政的实现：
+#   前者把「stamp 里没 head=」当放行（空值跳过），后者把主树 WIP 当不发布理由。
+#   2026-11-22 16:40 实测：306 门全绿，只因我在建补丁（ci.yml/ci_diagnose.py…）
+#   就 ABORT dirty-tree，靠人工补 tag —— 而那 5 个文件从没进过测试面。
+SCOPE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/chain/publish_scope_check.sh"
+WIP_OUT="$AD/m${MS}-wip-at-publish.txt"
+SCOPE=""; SCOPE_RC=0
+if [ -r "$SCOPE_SH" ]; then
+    SCOPE="$(bash "$SCOPE_SH" --repo "$REPO" --stamp "$STAMP" --wip-out "$WIP_OUT" 2>&1)"; SCOPE_RC=$?
+else
+    # 判据失效时不放行（与 make_tag 版本链闸「读不到版本就拒绝」同口径）
+    SCOPE="SCOPE-REJECT reason=no-scope-check path=$SCOPE_SH"; SCOPE_RC=3
+fi
+say "SCOPE $SCOPE"
+if [ "$SCOPE_RC" != "0" ]; then
+    say "ABORT publish-scope（$SCOPE）"
     [ "$DRY" = "0" ] && [ -x "$NOTIFY_SH" ] && DY_NOTIFY_MUTATE=publish "$NOTIFY_SH" p1 \
-        "m${MS}-head-mismatch" "M${MS} 门绿但 HEAD 已变：stamp=$STAMP_HEAD 现=$HEAD" "不发布" || true
+        "m${MS}-publish-scope" "M${MS} 门绿但发布面≠被测面，拒绝发布" \
+        "$SCOPE" \
+        "口径唯一实现：packaging/chain/publish_scope_check.sh（缺陷 896）" || true
     exit 2
 fi
-
-# ── 4 树必须干净 ───────────────────────────────────────────────────────────
-DIRTY="$(git status --porcelain | head -5)"
-if [ -n "$DIRTY" ]; then
-    say "ABORT dirty-tree"
-    [ "$DRY" = "0" ] && [ -x "$NOTIFY_SH" ] && DY_NOTIFY_MUTATE=publish "$NOTIFY_SH" p1 \
-        "m${MS}-dirty-tree" "M${MS} 门绿但工作树脏，拒绝发布" "$DIRTY" || true
-    exit 2
+WIPN="$(printf '%s' "$SCOPE" | grep -oE 'wip=[0-9]+' | cut -d= -f2)"
+if [ "${WIPN:-0}" -gt 0 ] 2>/dev/null; then
+    # 留证不阻断：分片与 quiet 档都在 worktree@被测 commit 里跑，主树 WIP 进不了测试面
+    say "WIP-AT-PUBLISH n=$WIPN 明细=$WIP_OUT（不阻断：测试面是 worktree@被测 head）"
 fi
 
 # ── 5 不落后（缺陷 682/690：用 ls-remote 不 fetch；方向是 remote 为 HEAD 祖先） ─

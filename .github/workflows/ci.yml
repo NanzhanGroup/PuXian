@@ -475,6 +475,28 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_request_framing 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_request_framing rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_request_framing PASS"
+      - name: 发布自锁口径 · 被测面 ⇄ 发布面（M433 · 缺陷 896）
+        #   病史（2026-11-22 16:40 实测 · M432）：链 306/306 全绿 → publish_on_green
+        #   **ABORT dirty-tree**，只因我在建补丁；2 分 47 秒后靠人工补 tag，并发出了一条
+        #   假文案 p1（「扫描面 日志47行 · 红项 0 条」—— 真因是树脏）。
+        #   地基：306 道门跑在 `git worktree add --detach <被测 commit>` 里（分片 + quiet 档，
+        #   门清单取自 `git show HEAD:`），主树未提交改动**进不了测试面** ⇒ 老口径是错杀。
+        #   唯一口径：packaging/chain/publish_scope_check.sh（WIP 留证不阻断；
+        #   只拦 tools/px —— make_tag 版本链闸读工作树）。
+        #   判据：helper 自测 7 例 + 真仓只读实测 + A1 worktree 地基动态自证 +
+        #   A2 机制锚（负控：换成「复制主树」必红）+ A3 口径唯一（负控：注回 ABORT 必红）+
+        #   N1 注回老口径必 REJECT + N2 摘掉版本源判据必变 OK + G1/G2/G3。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_publish_scope.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_publish_scope 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_publish_scope.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_publish_scope 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_publish_scope rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_publish_scope PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

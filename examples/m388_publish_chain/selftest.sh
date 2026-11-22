@@ -48,7 +48,8 @@ setup_repo() {
     local d="$1"; rm -rf "$d"; mkdir -p "$d"
     git init -q --bare "$d/remote.git"
     git init -q -b main "$d/repo"
-    ( cd "$d/repo" && echo a > a.txt && git add -A \
+    ( cd "$d/repo" && echo a > a.txt && mkdir -p tools \
+      && printf 'SELFHOST_VER="0.2.393"\n' > tools/px && git add -A \
       && git -c user.email=t@t -c user.name=t commit -qm init \
       && git remote add origin "$d/remote.git" && git push -q origin main ) >/dev/null 2>&1
 }
@@ -95,14 +96,38 @@ export FAKE_NOTIFY_OUT="$W/n3.txt"; : > "$FAKE_NOTIFY_OUT"
 bash "$PUB" --ms 392 --repo "$REPO1" --stamp "$S3" >/dev/null 2>&1
 chk C3 $? 1 "判红 ⇒ rc=1 不发布"
 
-# ── C4 树脏 ⇒ exit 2 ──────────────────────────────────────────────────────
+# ── C4 主树 WIP（非版本源）⇒ **不再阻断**（M433 · 缺陷 896 的口径改正） ──────
+#   为什么改：306 道门跑在 `git worktree add --detach <被测 commit>` 里（分片 + quiet 档），
+#   主树未提交改动进不了测试面。老口径「树脏即 rc=2」在 2026-11-22 16:40 实测错杀过一次
+#   306/306 全绿（只因我在建补丁），逼出人工补 tag + 一条假文案 p1。
+#   新口径唯一实现：packaging/chain/publish_scope_check.sh（WIP 留证、不阻断）。
 S4="$W/stamp4"; stamp_green "$S4"
 echo dirtyoops >> "$REPO1/a.txt"
+echo untracked > "$REPO1/u.txt"
 export FAKE_NOTIFY_OUT="$W/n4.txt"; : > "$FAKE_NOTIFY_OUT"
-bash "$PUB" --ms 393 --repo "$REPO1" --stamp "$S4" >/dev/null 2>&1
-chk C4 $? 2 "树脏 ⇒ rc=2"
-chk C4b "$(cnt p1 "$FAKE_NOTIFY_OUT")" 1 "树脏 ⇒ p1 一次（出声）"
-( cd "$REPO1" && git checkout -q -- a.txt )
+bash "$PUB" --ms 393 --repo "$REPO1" --stamp "$S4" --dry-run >/dev/null 2>&1
+chk C4 $? 0 "主树 WIP（非版本源）⇒ rc=0 不阻断（缺陷 896）"
+chk C4b "$(cnt p1 "$FAKE_NOTIFY_OUT")" 0 "主树 WIP ⇒ 不 p1（它不是失败）"
+WIPF="$DY_PUBLISH_AD/m393-wip-at-publish.txt"
+if [ -f "$WIPF" ] && grep -q 'a.txt' "$WIPF" && grep -q 'u.txt' "$WIPF"; then
+    ok C4c "WIP 明细落盘（含 tracked 改 + untracked）"
+else
+    no C4c "WIP 明细没落盘或不全：${WIPF}"
+fi
+( cd "$REPO1" && git checkout -q -- a.txt ); rm -f "$REPO1/u.txt"
+
+# ── C4d 但 WIP 碰 tools/px ⇒ 必须拒（make_tag 版本链闸读的是工作树） ─────────
+printf 'SELFHOST_VER="0.2.999"\n' > "$REPO1/tools/px"
+export FAKE_NOTIFY_OUT="$W/n4d.txt"; : > "$FAKE_NOTIFY_OUT"
+bash "$PUB" --ms 398 --repo "$REPO1" --stamp "$S4" >/dev/null 2>&1
+chk C4d $? 2 "WIP 改 tools/px ⇒ rc=2（版本闸失真，必须拒）"
+chk C4e "$(cnt p1 "$FAKE_NOTIFY_OUT")" 1 "版本源 WIP ⇒ p1 恰好一次（出声）"
+( cd "$REPO1" && git checkout -q -- tools/px )
+
+# ── C4f stamp 里没有 head= ⇒ 必须拒（老实现空值直接放行） ────────────────────
+S4f="$W/stamp4f"; printf 'CHAIN-VERDICT=GREEN rc=0 green=264\n' > "$S4f"
+bash "$PUB" --ms 399 --repo "$REPO1" --stamp "$S4f" --dry-run >/dev/null 2>&1
+chk C4f $? 2 "stamp 无 head= ⇒ rc=2（不许默认放行）"
 
 # ── C5 head 不一致 ⇒ exit 2 ───────────────────────────────────────────────
 S5="$W/stamp5"; stamp_green "$S5" "deadbee"

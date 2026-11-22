@@ -157,6 +157,10 @@ PRECHECK_GATES=(
     #   附带缺陷 892：拒绝后直接 close，未读体触发 RST ⇒ 客户端可能收不到这条 400。
     #   这门判：16 条状态判据 + P14「响应真读得到」+ N1 负控自证（摘掉 feed+resolve 必失效）+ G1/G2/G3。
     m432_request_framing                                 # 请求体长度声明契约（实测 ~180s）
+    # ── M433：发布自锁口径（307 门里的 m433_publish_scope · 实测 ~6s）──
+    #   病史：链全绿却因主树 WIP 被 ABORT（缺陷 896）；门跑在 worktree@被测 commit，
+    #   主树未提交改动进不了测试面 ⇒ 老口径错杀。只拦 tools/px（版本闸读工作树）。
+    m433_publish_scope                                   # 被测面⇄发布面口径（实测 ~6s）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

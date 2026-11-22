@@ -2483,3 +2483,13 @@ run m421_examples_coverage bash examples/m421_examples_coverage/verify.sh
 #   环境不成立（tools/px 缺失 / 探针冷构建失败 / 前提自证失败）⇒ rc=3，绝不降级成绿
 gate_timeout m425_build_cache 300
 run m425_build_cache bash selfhost/check_build_cache.sh
+
+# ── m433_publish_scope（M433 · 缺陷 896）──────────────────────────────────
+#   病史（2026-11-22 16:40 实测 · M432）：链 306/306 全绿 → 发布脚本 ABORT dirty-tree，
+#   只因我在建补丁。306 道门跑的是 worktree@被测 commit（门清单也取自 HEAD）⇒
+#   主树未提交改动进不了测试面，「树脏即不发」把工作副本卫生当成了证据完整性。
+#   判据：helper 自测 7 例 + 真仓只读实测 + A1 worktree 地基动态自证 +
+#   A2 机制锚（负控：换成「复制主树含 WIP」必红）+ A3 口径唯一（负控：注回 ABORT 必红）+
+#   N1 注回老口径必 REJECT + N2 摘掉版本源判据必变 OK + G1/G2/G3。
+gate_timeout m433_publish_scope 180
+run m433_publish_scope bash selfhost/check_publish_scope.sh
