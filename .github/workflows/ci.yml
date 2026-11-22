@@ -458,6 +458,23 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_gate_portscan 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_gate_portscan rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_gate_portscan PASS"
+      - name: 请求体长度声明契约（CL 严格 / 重复冲突 / CL+TE 歧义 / TE 白名单 · M432 · 缺陷 891/892）
+        #   来历（2026-11-22 实测）：CL:abc ⇒ 200(len=0，后续字节当下一请求) · CL:-1 ⇒ 200 ·
+        #   双 CL 5/10 ⇒ 200(最后一个赢) · CL+TE:chunked ⇒ 200(静默按 chunked)。
+        #   前三条 = 本服务端与反向代理的请求边界分歧 = 经典请求走私（RFC 9112 §6.2/§6.3）。
+        #   判据：16 条状态（含回归 413 与防过度修复的 200）+ P14 拒绝响应**真读得到**（RST 坑）+
+        #   N1 负控自证（摘掉 px_framing_feed/resolve ⇒ 7 条非法请求必须全部放行）+ G1/G2/G3。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_request_framing.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ check_request_framing 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_request_framing.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_request_framing 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_request_framing rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_request_framing PASS"
       - name: 判据取数棘轮 · 「生产者 | grep -q」（口径 19 · M355 · 缺陷 621/622/624）
         #   来历：pipefail 下 `producer | grep -q PAT` 是**假否定**制造机 —— grep 命中即退出，
         #   生产者后续 write 拿 EPIPE ⇒ rc=141 ⇒ 管线被 pipefail 判失败 ⇒「命中」读成「不含」。

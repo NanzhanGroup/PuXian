@@ -1312,6 +1312,19 @@ run m429_pxrun_signal bash selfhost/check_pxrun_signal.sh
 #   P5 豁免账（理由≥8 + 到期日 + 只减不增）/ P6 负控自证（摘除判据 ⇒ 同一泄漏门必须变绿）/
 #   G1 ss 缺失 rc=3 / G2 零污染 / G3 本门自己不留监听。
 run m430_gate_portscan bash selfhost/check_gate_portscan.sh
+# M432（缺陷 891/892）：HTTP/1.1 请求体的**长度声明**契约（CL 严格 / 重复冲突 / CL+TE 歧义 / TE 白名单）
+#   修前实测（px_serve）：CL:abc ⇒ 200 len=0（atoi=0，后续字节当下一请求）· CL:-1 ⇒ 200 ·
+#   双 CL 5/10 ⇒ 200（最后一个赢）· CL+TE:chunked ⇒ 200（静默按 chunked）。
+#   前三条让本服务端的请求边界与反向代理（多数取第一个 CL）分歧 = 经典请求走私（RFC 9112 §6.2/§6.3）。
+#   修法：四处 atoi 收敛成一份判定（px_cl_strict / px_te_strict / px_framing_feed / px_framing_resolve），
+#   两个服务端 worker（http_serve / px_serve）共用；拒绝一律 400/413/501 + Connection: close。
+#   附带（缺陷 892）：拒绝后直接 close，接收队列未读数据会让内核发 RST ⇒ 客户端收不到该 400；
+#   修法是先 px_reject_drain（≤64KB / 20ms 一次）再关。
+#   这门判：P1/P2 回归（413 不退化）· P3/P4/P5/P6/P6b/P6d ⇒ 400 · P4b/P6c/P7/P10 ⇒ 200（防过度修复）·
+#   P8/P9 ⇒ 501 · P11 ⇒ 400 · P12 ⇒ 413 · P14 拒绝响应**真读得到**（RST 坑）·
+#   N1 负控自证（摘除 feed+resolve ⇒ 7 条非法请求必须全部放行）· G1 rc=3 / G2 零污染 / G3 不留监听。
+gate_timeout m432_request_framing 420
+run m432_request_framing bash selfhost/check_request_framing.sh
 # M422（缺陷 857）：m26_ushr 从「打印型」变「断言型」+ 双轨真跑 + 负数计数 R1003 负控。
 #   病史：示例注释写「-1 >>> 1 ⇒ 1（按 mod 64 折成 63）」，而 M217 已定为 R1003；
 #   示例与实现相反，且从没被任何门跑过。

@@ -308,6 +308,7 @@ m427_opts_whitelist	79	OK	preflight-20261122-092838
 m428_opts_valuerange	116	OK	chain-20261122-022632
 m429_pxrun_signal	9	OK	chain-20261122-022632
 m430_gate_portscan	8	OK	preflight-20261122-100434
+m432_request_framing	180	OK	m432-bootstrap-preflight
 m63_langfix	6	OK	chain-20261122-042535
 m64_fmt	1	OK	chain-20261122-022632
 m64_lint	1	OK	chain-20261122-102953
@@ -318,8 +319,8 @@ m66_pxml	14	OK	chain-20261122-022632
 m66_yaml	4	OK	chain-20261122-022632
 m71_mcp_build	2	OK	chain-20261122-022632
 m82_http_serve_unix	3	OK	chain-20261122-102953
-m97_s2b_http_hpool_dead	4	OK	chain-20261122-042535
 m97_s2_http_keepalive	5	OK	chain-20261122-022632
+m97_s2b_http_hpool_dead	4	OK	chain-20261122-042535
 m97_s3_http_keepalive_long	4	OK	chain-20261122-022632
 neg_residue	1	OK	chain-20261122-022632
 onnx_load_coverage	0	OK	chain-20261122-022632

@@ -1,4 +1,75 @@
-## M431：三层误报同源 —— 一条假高值串起的「远端红 / 本地绿」（缺陷 888 · 889 · 890）
+## M432：请求体的「长度声明」四种非法形态全是 200 —— 同一句 atoi 的四个副本（缺陷 891 · 892）
+
+> **一句话**：服务端决定「请求体到哪里结束」全靠 `atoi(Content-Length)`，而 `atoi` 对
+> `abc` / `-1` / 重复冲突 / 与 `Transfer-Encoding` 并存**一律不报错**。
+> 这四种形态正是反向代理与源站读法分歧的入口 —— 请求走私（RFC 9112 §6.2/§6.3）。
+> 附带修掉一个**判据自己的坑**：拒绝后直接 close，未读体让内核发 RST，客户端可能收不到那条 400。
+
+### 一 修前实测（2026-11-22 12:4x · /tmp/m432probe · px_serve · max_body_size=1024）
+
+```
+请求                                                     修前                    应为
+CL: 3000（> max）                                         413  ✅                413
+TE: chunked（体 3000 > max）                              413  ✅                413
+CL: 5 + TE: chunked                                       200  ❌（静默按 chunked） 400
+CL: 5 + CL: 10                                            200  ❌（len=10，最后一个赢） 400
+CL: abc                                                   200  ❌（len=0，后续字节当下一请求） 400
+CL: -1                                                    200  ❌（负值当「无体」） 400
+TE: gzip                                                  200  ❌（不支持的编码被忽略） 501
+```
+
+四处副本：`http_conn_worker`（http_serve / http_serve_unix）、`px_conn_worker`（px_serve），
+外加两处客户端读响应（本轮未改，docs/HTTP_REQUEST_FRAMING.md §4 如实登记）。
+
+### 二 修法（收敛成一份判定，两个服务端 worker 共用）
+
+```
+px_cl_strict    纯十进制（只允许首尾 OWS；≤18 位防溢出）—— 失败 ⇒ 400
+px_te_strict    只接受唯一 token chunked —— 其余 ⇒ 501
+px_framing_feed 逐个头喂入：CL 语法/冲突、TE 白名单（首个致命项即返回）
+px_framing_resolve  终判：400（冲突/CL+TE 并存）· 501（TE 不支持）· 413（CL > INT_MAX）· 0
+```
+
+- 重复 CL **数值相同** ⇒ 接受（RFC 允许）；冲突 ⇒ 400。
+- CL 与 TE 同时出现 ⇒ **400**（不猜、不「TE 优先」—— 这正是走私面）。
+- 任何拒绝：`Connection: close`。
+- 缺陷 892：拒绝前先 `px_reject_drain`（≤64KB / 单次 20ms）吸干未读体再关 ——
+  实测同一请求，修前客户端看到**空响应**，修后能读到 91 字节的 400 正文。
+
+### 三 门 `m432_request_framing`（305 → 306 · 20/20 · 自测 6/6 · ~180s）
+
+```
+P1/P2   回归：CL/chunked 超 max ⇒ 413（不退化）
+P3/P4/P5/P6/P6b/P6d  CL+TE · 双 CL 冲突 · abc · -1 · +5 · 内嵌空格 ⇒ 400
+P4b/P6c/P7/P10       双 CL 相同 · 首尾 OWS · GET · 正常 chunked ⇒ 200（防过度修复）
+P8/P9   TE: gzip / chunked,gzip ⇒ 501
+P11     CL 20 位（溢出）⇒ 400 · P12 CL 超 int ⇒ 413
+P14     拒绝响应**真读得到**（body 长度 > 20）—— 守缺陷 892
+N1      负控自证：摘掉 px_framing_feed + px_framing_resolve 重建 ⇒ 7 条非法请求**全部放行**
+        （前提自证：rt_key 含 runtime 源码 ⇒ 补丁树真重建，不是旧对象）
+G1/G2/G3  python3/cc/px 缺失 rc=3 · 仓库零污染 · 本门不留监听
+```
+
+登记：registry 306 门 · 前置档 34 门 · ci.yml 同步 · `docs/HTTP_REQUEST_FRAMING.md` 立口径。
+
+### 四 本轮我自己的两个错（照记）
+
+```
+① 第一次写门时负控只摘了 px_framing_resolve —— P3 变绿但 P4/P5/P6/P8/P9/P11 仍红，
+   因为 feed 里也有早退。负控要摘「判据的全部入口」，不是摘我最后加的那一个。
+② 探针脚本第一版把 headers 传进了名字参数（bug(n, hdrs, b)），14 条全 <<EMPTY>>；
+   差点据此判「修法无效」。教训：探针先打印一次实际字节再断言。
+```
+
+### 五 口径
+
+```
+能说   四种非法形态从「静默 200」变成 400/501，且有 16 条状态判据 + 7 条负控 + 1 条可读性判据
+能说   两个服务端 worker（px_serve / http_serve）共用同一份判定（四处 atoi 收敛为一处）
+不能说 客户端读响应的 CL 也已严格 —— 本轮未动（§4 已登记）
+不假装 RST 那条是小问题 —— 它会让「已经拒绝」在客户端表现为「空响应」，看起来像服务挂了
+```
+
 
 > **一句话**：M430 发布后远端 CI 亮红灯，而我第一反应是「对账器解析错了」。**错了。**
 > 那两条 step 在 GitHub 上是**真红**：`m422_examples_compile` 在冷缓存并行那轮留下

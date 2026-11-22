@@ -22198,6 +22198,109 @@ fin:
     return rc;
 }
 
+// ==================== M432（缺陷 891）：请求体「长度声明」的单一判定 ====================
+// 病灶：Content-Length 在**四处各解析一遍**，且全部是 `atoi(v)`：
+//   ① 非数字（`Content-Length: abc`）⇒ atoi=0 ⇒ 体被当「无体」，后续字节按**下一个请求**解析；
+//   ② 负数 / 带符号（`-1` / `+5`）⇒ atoi 给负数或照收 ⇒ 负 CL 被当「无体」；
+//   ③ 重复 CL 且值冲突（`0` 与 `5`）⇒ **最后一个赢**（前面的静默覆盖）；
+//   ④ CL 与 Transfer-Encoding 同时出现 ⇒ 静默按 chunked 处理、CL 被丢弃。
+//   前三条让「本服务端认为的请求边界」与反向代理（多数取**第一个** CL）产生分歧
+//   = 经典请求走私（RFC 9112 §6.2/§6.3）。实测（M432 立项，px_serve，修前）：
+//     P3 CL=5 + TE:chunked ⇒ 200 · P4 双 CL 5/10 ⇒ 200(len=10) · P5 CL=abc ⇒ 200(len=0) · P6 CL=-1 ⇒ 200
+// 口径（RFC 9112 §6.1–§6.3 的**服务端最小集合**，宁拒不含糊）：
+//   · CL 值必须是**纯十进制**（只允许首尾 OWS；不许 `+`/`-`/内嵌空格；≤18 位防溢出）；
+//   · 重复 CL 只允许**数值相同**；冲突 ⇒ 400；
+//   · CL 与 TE 同时出现 ⇒ 400（不猜、不「TE 优先」——这正是走私面）；
+//   · TE 只接受**唯一编码 `chunked`**（大小写不敏感）；其它编码（含 `chunked, gzip`）⇒ 501；
+//   · CL 超过 int 表达范围 ⇒ 413（与 max_body_size 同族，不静默截断）；
+//   · 任何拒绝都必须 `Connection: close`：绝不在已污染的连接上继续读下一个请求。
+typedef struct {
+    int  cl_seen, cl_conflict, cl_bad;
+    long cl;
+    int  te_seen, te_bad;
+} PxReqFraming;
+
+static void px_framing_reset(PxReqFraming* f) {
+    memset(f, 0, sizeof(*f));
+    f->cl = -1;
+}
+
+// 严格十进制解析：只允许首尾 OWS，中间必须全是数字；成功写 *out 返回 0
+static int px_cl_strict(const char* v, long* out) {
+    if (!v) return -1;
+    const char* s = v;
+    while (*s == ' ' || *s == '\t') s++;
+    const char* e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+    if (e == s) return -1;                       // 空值
+    long n = 0; int digits = 0;
+    for (const char* p = s; p < e; p++) {
+        if (*p < '0' || *p > '9') return -1;     // 符号 / 内嵌空格 / 十六进制 一律拒
+        if (++digits > 18) return -1;            // 溢出（int64 19 位；18 位安全）
+        n = n * 10 + (*p - '0');
+    }
+    *out = n;
+    return 0;
+}
+
+// TE 严格解析：只接受**唯一** token `chunked`（大小写不敏感）；其它/额外编码返回 -1
+static int px_te_strict(const char* v) {
+    if (!v) return -1;
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "%s", v);
+    char* s = tmp;
+    while (*s == ' ' || *s == '\t') s++;
+    char* e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+    *e = 0;
+    if (!*s) return -1;
+    if (strchr(s, ',')) return -1;               // 列表（含 `chunked, gzip`）⇒ 不支持
+    if (strcasecmp(s, "chunked") != 0) return -1;
+    return 0;
+}
+
+// 逐个头喂入：返回 0 继续 / 400 / 501（**首个**致命项即返回，后续头不再采信）
+static int px_framing_feed(PxReqFraming* f, const char* k, const char* v) {
+    if (strcasecmp(k, "Content-Length") == 0) {
+        long n = 0;
+        if (px_cl_strict(v, &n) != 0) { f->cl_bad = 1; return 400; }
+        if (f->cl_seen && f->cl != n) { f->cl_conflict = 1; return 400; }
+        f->cl_seen = 1;
+        f->cl = n;
+        return 0;
+    }
+    if (strcasecmp(k, "Transfer-Encoding") == 0) {
+        if (px_te_strict(v) != 0) { f->te_bad = 1; return 501; }
+        f->te_seen = 1;
+        return 0;
+    }
+    return 0;
+}
+
+// 拒绝后「吸干」对端已发的未读字节，再关连接。
+//   为什么必须做：close() 时内核若发现接收队列里还有未读数据，会发 **RST**，
+//   客户端可能**收不到**刚写出的 400/413/501（实测：同一请求，客户端看到空响应）。
+//   上限 64KB / 单次 20ms 超时 —— 只吸「已经在线上的那部分」，不为慢客户端长期占线程。
+static void px_reject_drain(int fd) {
+    if (fd < 0) return;
+    char sink[4096];
+    int total = 0;
+    while (total < 65536) {
+        ssize_t n = px_recv_wait(fd, sink, (int)sizeof(sink), 20);
+        if (n <= 0) break;
+        total += (int)n;
+    }
+}
+
+// 头部读完后的终判：0 通过 / 400 / 413 / 501
+static int px_framing_resolve(const PxReqFraming* f) {
+    if (f->cl_bad || f->cl_conflict) return 400;
+    if (f->te_bad) return 501;
+    if (f->te_seen && f->cl_seen) return 400;    // 歧义 ⇒ 拒绝（不猜）
+    if (f->cl_seen && f->cl > 0x7fffffffL) return 413;
+    return 0;
+}
+
 static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
@@ -22300,6 +22403,9 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         PX_KEEP(headers);   // M92-S2c precise：headers 裸局部跨 px_dict_set/px_str 分配
         int content_length = 0;
         int client_close = 0; // Connection: close
+        PxReqFraming fr;      // M432（缺陷 891）：长度声明的单一判定状态
+        px_framing_reset(&fr);
+        int fr_reject = 0;    // 首个致命项（400/413/501）—— 头读完统一回绝
         char* hline = sp2 ? sp2 + 1 : target + strlen(target);
         char* nl0 = strchr(hline, '\n');
         hline = nl0 ? nl0 + 1 : head + len;
@@ -22320,12 +22426,30 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 char* ve = v + strlen(v);
                 while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
                 *ve = 0;
-                if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
+                if (!fr_reject) {   // M432：严格判定（非法即记账，读完头再统一回绝）
+                    int frc = px_framing_feed(&fr, k, v);
+                    if (frc) fr_reject = frc;
+                }
                 if (strcasecmp(k, "Connection") == 0 && strcasecmp(v, "close") == 0) client_close = 1;
                 px_dict_set(headers, k, px_str(v));
             }
             hline = eol ? eol + 2 : hline + strlen(hline);
         }
+
+        // M432（缺陷 891）：长度声明终判 —— 非法/歧义一律回绝并关连接（不在污染连接上继续读）
+        if (!fr_reject) fr_reject = px_framing_resolve(&fr);
+        if (fr_reject) {
+            const char* msg;
+            if (fr_reject == 501)      msg = "HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            else if (fr_reject == 413) msg = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            else                       msg = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            px_send_all(fd, msg, strlen(msg));
+            px_reject_drain(fd);   // M432：先吸干未读体再关，否则 RST 会吞掉这条拒绝响应
+            px_evc_close(fd);
+            px_root_pop();   // M92-S2c precise
+            return px_null();
+        }
+        content_length = fr.cl_seen ? (int)fr.cl : 0;
 
         // 4. 读 body（Content-Length）——M83-S1（Issue 16 GAP-SRV-2）：
         //    固定 64KB 栈缓冲（content_length>65535 静默截断且不报错 → handler 拿残缺 body
@@ -22372,8 +22496,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         } else {
             // M144（缺陷 123）：Transfer-Encoding: chunked 请求体（Go net/http 服务端支持，
             //   本 worker 此前**只**认 Content-Length ⇒ handler 拿到空体却回 200）。
-            LXValue te_v = px_dict_get_ci(headers, "Transfer-Encoding");
-            if (te_v.type == PX_STR && strcasestr(te_v.as.obj->as.str.data, "chunked")) {
+            if (fr.te_seen) {   // M432：到这步 TE 只可能是「唯一 chunked」（resolve 已挡掉其余）
                 char* cbuf = NULL;
                 int clen = 0;
                 int crc = px_read_chunked_body(fd, buf + header_end + 4, len - (header_end + 4),
@@ -29319,6 +29442,9 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         char* nl0 = strchr(hline, '\n');
         hline = nl0 ? nl0 + 1 : head + len;
         int client_keep_alive = 1;
+        PxReqFraming fr;      // M432（缺陷 891）：长度声明的单一判定状态
+        px_framing_reset(&fr);
+        int fr_reject = 0;    // 首个致命项（400/413/501）—— 头读完统一回绝
         while (hline && *hline && *hline != '\r' && *hline != '\n') {
             char* eol = strstr(hline, "\r\n");
             if (!eol) eol = strchr(hline, '\n');
@@ -29335,7 +29461,10 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 char* ve = v + strlen(v);
                 while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
                 *ve = 0;
-                if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
+                if (!fr_reject) {   // M432：严格判定（非法即记账，读完头再统一回绝）
+                    int frc = px_framing_feed(&fr, k, v);
+                    if (frc) fr_reject = frc;
+                }
                 if (strcasecmp(k, "Connection") == 0 && strncasecmp(v, "close", 5) == 0) client_keep_alive = 0;
                 px_dict_set(headers, k, px_str(v));
             }
@@ -29352,14 +29481,27 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         char req_id[64];
         px_new_req_id(req_id, sizeof(req_id));
         // M36：每请求清除线程局部上下文（防跨请求泄漏）
-        g_px_ctx_n = 0;
+        // M432（缺陷 891）：长度声明终判（放在 req_id 生成之后：拒绝响应要带 X-Request-Id）
+        if (!fr_reject) fr_reject = px_framing_resolve(&fr);
+        if (fr_reject) {
+            char extra[256];
+            const char* msg;
+            if (fr_reject == 501)      msg = "501 Not Implemented：Transfer-Encoding 只接受唯一编码 chunked";
+            else if (fr_reject == 413) msg = "413 Payload Too Large：Content-Length 超出可接受范围";
+            else                       msg = "400 Bad Request：Content-Length 非法 / 重复冲突 / 与 Transfer-Encoding 同时出现";
+            snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+            out.respond(&out, fr_reject, "text/plain; charset=utf-8", msg, (int)strlen(msg), 0, 0, extra);
+            px_reject_drain(fd);   // M432：先吸干未读体再关，否则 RST 会吞掉这条拒绝响应
+            goto req_done;   // 拒绝即结束本连接（respond 已带 Connection: close）
+        }
+        content_length = fr.cl_seen ? (int)fr.cl : 0;
 
         // 4. 读 body（M221：CL 与 chunked **共用一份实现**；超阈值落盘，语义见上）
         int body_len = 0;
         int body_size = 0;      // 本次请求体的真实字节数（不论内存/落盘）
         {
-            LXValue te_v = px_header_get(&headers, "Transfer-Encoding");
-            int is_chunked = te_v.type == PX_STR && strcasestr(te_v.as.obj->as.str.data, "chunked");
+            // M432（缺陷 891）：resolve 已挡掉「CL+TE 并存」与「非 chunked 编码」，此处只剩二选一
+            int is_chunked = fr.te_seen;
             if (is_chunked || content_length > 0) {
                 int body_status = 200;
                 if (!is_chunked && content_length > g_px_max_body) {
