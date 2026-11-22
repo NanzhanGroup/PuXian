@@ -141,9 +141,22 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
 
     # ── P2 贴上限（含走默认档的门）──
     echo "── P2 裕度（实测 ≥80% 生效上限 ⇒ 红）──"
-    local g s st src cap pct maxg="" maxp=0 near=0
+    local g s st src cap pct maxg="" maxp=0 near=0 nonok=0 nonok_sample=""
     while IFS=$'\t' read -r g s st src; do
         [ -n "$g" ] || continue
+        # ── M431 · 缺陷 889：只有 VERDICT=OK 的行才代表「这门的常态耗时」──
+        #   2026-11-22 实测事故：m422 在冷缓存并行那轮 764s/FAIL 被回灌进基线，
+        #   声明 900 ⇒ P2 判「84% 贴上限」红；而它绿轮远低于此。一条假高值
+        #   先在远端 CI 串红 m400 的四条正控（N1b/N2b/N2d/N2c），再被对账器
+        #   当成「未登记红门」叫醒 —— 三层误报同源。
+        #   口径：P2 管的是「绿门离上限多近」。失败轮次的耗时是被拖长的病态值，
+        #   拿它判裕度等于用病态证常态；而 FAIL 行自己就是红，不需要 P2 再说。
+        #   不许静默排除：下面把跳过的门数报出来（否则「排除了谁」没人看得见）。
+        if [ "$st" != "OK" ]; then
+            nonok=$((nonok+1))
+            [ -z "$nonok_sample" ] && nonok_sample="$g ${s}s/$st"
+            continue
+        fi
         cap="$DEFTMO"
         local dec
         dec="$(printf '%s\n' "$decl" | awk -F'\t' -v n="$g" '$1==n{print $2; exit}')"
@@ -158,6 +171,9 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
             fi
         fi
     done <<< "$base_rows"
+    if [ "$nonok" -gt 0 ]; then
+        info "$nonok 门只有非 OK 实测（例：$nonok_sample）⇒ P2 不判其裕度（失败轮次耗时不是常态；该门自身另有红）"
+    fi
     if [ "$near" = 0 ]; then
         if [ "$NEAR_ON" = 1 ]; then
             ok "无门贴上限（最高：${maxg:-无数据} = ${maxp}%，阈值 80%）"
@@ -171,10 +187,16 @@ check_all() {   # $1=registry $2=baseline $3=listfile(可空)
     local hbad=0
     while IFS=$'\t' read -r dname dsec; do
         [ -n "$dname" ] || continue
-        local bsec bden ratio100
-        bsec="$(printf '%s\n' "$base_rows" | awk -F'\t' -v n="$dname" '$1==n{print $2; exit}')"
+        local bsec bden ratio100 anyrow
+        # M431 · 缺陷 889 同源：P3 也只认 OK 行的耗时（理由见 P2 处注释）。
+        bsec="$(printf '%s\n' "$base_rows" | awk -F'\t' -v n="$dname" '$1==n && $3=="OK"{print $2; exit}')"
         if [ -z "$bsec" ]; then
-            info "$dname 声明 $dsec 秒，但**基线里没有它的实测值** ⇒ 裕度不可判（刷新基线后再看）"
+            anyrow="$(printf '%s\n' "$base_rows" | awk -F'\t' -v n="$dname" '$1==n{print $3; exit}')"
+            if [ -n "$anyrow" ]; then
+                info "$dname 声明 $dsec 秒，但基线里只有非 OK 实测（$anyrow）⇒ 裕度不可判（等一回绿轮）"
+            else
+                info "$dname 声明 $dsec 秒，但**基线里没有它的实测值** ⇒ 裕度不可判（刷新基线后再看）"
+            fi
             continue
         fi
         bden="$bsec"; [ "$bden" -gt 0 ] || bden=1     # 0 秒门：用 1 防除零，裕度必然 ≥1.5×
@@ -313,6 +335,25 @@ selftest() {
         st_no "S3b 关掉 P2 仍红（说明红不只来自 P2）"
     fi
     NEAR_ON=1
+
+    # ── S3c/S3d（M431 · 缺陷 889）：失败轮次的耗时不许当「常态」判裕度 ──
+    #   事故形状：m422 在冷缓存并行那轮 764s/FAIL 被回灌，声明 900 ⇒ 84% 红，
+    #   串红远端 CI 的 m400 四条正控。这里用同一份 96% 的数值，只改 VERDICT 列。
+    { for i in $(seq 1 160); do if [ "$i" = 2 ]; then echo -e "g$i\t864\tFAIL\ts"; else echo -e "g$i\t10\tOK\ts"; fi; done; } > "$W/base_near_fail.tsv"
+    if check_all "$W/reg_ok.sh" "$W/base_near_fail.tsv" "$W/list.txt" > "$W/s3c.log" 2>&1; then
+        st_ok "S3c 负控：96% 但是 FAIL 行 ⇒ P2 不判红"
+    else
+        st_no "S3c FAIL 行仍被判贴上限（失败轮次耗时被当常态）"
+    fi
+    # 不静默：必须报出「有 1 门只有非 OK 实测」，否则「排除了谁」没人看得见
+    grep -q '只有非 OK 实测' "$W/s3c.log" && st_ok "S3c2 排除必须可见（报出跳过门数）" || st_no "S3c2 静默排除（没报出被跳过的门）"
+    # S3d 前提自证：同一份数值把 VERDICT 改回 OK ⇒ 必须重新判红（S3c 的绿确有来源）
+    { for i in $(seq 1 160); do if [ "$i" = 2 ]; then echo -e "g$i\t864\tOK\ts"; else echo -e "g$i\t10\tOK\ts"; fi; done; } > "$W/base_near_ok.tsv"
+    if check_all "$W/reg_ok.sh" "$W/base_near_ok.tsv" "$W/list.txt" > "$W/s3d.log" 2>&1; then
+        st_no "S3d 前提自证失败：改回 OK 仍绿 ⇒ S3c 的绿不是由 VERDICT 列驱动"
+    else
+        grep -q 'g2.*864s / 上限 900s = 96%' "$W/s3d.log" && st_ok "S3d 前提自证：改回 OK ⇒ 重新判红" || st_no "S3d 重红但没指名"
+    fi
 
     # S4 声明裕度不足（1000 / 963 = 1.03×）
     printf 'gate_timeout g1 1000\n' > "$W/reg_tight.sh"
