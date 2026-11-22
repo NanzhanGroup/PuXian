@@ -169,6 +169,10 @@ PRECHECK_GATES=(
     #   这门判：H0 正控 + 10 条非法头 ⇒ 400 + 6 条合法头 ⇒ 200（防过度修复）+ H17 端到端 desync
     #   + H18 响应可读（缺陷 892 RST 坑）+ N1 负控（**含负控服务存活前提自证**，缺陷 898）+ G1/G2/G3。
     m434_header_syntax                                   # 头部字段语法契约（实测 ~240s）
+    # ── M435：响应头行级防护（309 门里的 m435_resp_header_guard · 实测 ~300s，含一次负控重建）──
+    #   病史（2026-11-22 22:0x）：px_serve 有 px_hdr_append 防护，但 px_http_build_response
+    #   自己手揂 "K: V\r\n" ⇒ 响应头注入（CRLF 响应拆分）+ 重复 CL + TE+CL 并存 + 状态码越界。
+    m435_resp_header_guard                               # 响应头行级防护（实测 ~300s）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错

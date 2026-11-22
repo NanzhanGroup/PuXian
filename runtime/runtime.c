@@ -409,6 +409,8 @@ static void px_vhost_normalize(LXValue v, int* status, const char** ct, const ch
 // M109-S1：handler 响应头透传（拒绝名单 + CRLF 防护 + 预算），定义见文件尾部
 int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct, int* out_dropped);
 int px_hdr_blocked(const char* k);
+// M435（缺陷 902）：响应头行级拒绝计数（与 M434 的请求头 400 口径对称；不静默）
+static long g_hdr_drop_syntax;
 static void px_vhost_docroot_store(const char* root);
 static const char* px_vhost_docroot(void);
 int px_rate_limit_try(const char* key, long long max, long long window_sec);
@@ -21666,29 +21668,14 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
         }
         LXValue h = px_dict_get(v, "headers");
         if (h.type == PX_DICT) {
-            LXObject* ho = h.as.obj;
-            int off = 0;
-            for (int i = 0; i < ho->as.dict.len && off < (int)sizeof(extra_headers) - 64; i++) {
-                // M136（qg-issue 87 缺陷 88）：**多值头**（值为 list）此前被静默丢弃 ——
-                //   值非 PX_STR 即 continue ⇒ 透传上游响应时同名多头（Set-Cookie 等）
-                //   **全部消失**（Go 的 `w.Header()[k] = v` 会把 []string 逐行写出）。
-                //   实证：媒体代理透传 `Set-Cookie: a=1` + `Set-Cookie: b=2`
-                //         ⇒ 修前 0 行 / 修后 2 行（examples/m135_multi_header）。
-                LXValue hv = ho->as.dict.vals[i];
-                if (hv.type == PX_LIST) {
-                    LXObject* lo = hv.as.obj;
-                    for (int j = 0; j < lo->as.list.len && off < (int)sizeof(extra_headers) - 64; j++) {
-                        if (lo->as.list.items[j].type != PX_STR) continue;
-                        off += snprintf(extra_headers + off, sizeof(extra_headers) - (size_t)off,
-                                        "%s: %s\r\n", ho->as.dict.keys[i],
-                                        lo->as.list.items[j].as.obj->as.str.data);
-                    }
-                    continue;
-                }
-                if (hv.type != PX_STR) continue;
-                off += snprintf(extra_headers + off, sizeof(extra_headers) - (size_t)off,
-                                "%s: %s\r\n", ho->as.dict.keys[i], hv.as.obj->as.str.data);
-            }
+            // M435（缺陷 902）：响应头**一律走统一拼装** px_hdr_append —— 与 px_serve 主路同一份实现。
+            //   修前此处自己手搓 "K: V\r\n"，四类问题同时成立：
+            //     ① 名字/值含 CRLF ⇒ 响应头注入（响应拆分）；② 名字非 tchar（空格/空/怪字符）原样写出；
+            //     ③ handler 自设 Content-Length ⇒ 与构造器自带那条重复（重复 CL = 边界分歧）；
+            //     ④ handler 自设 Transfer-Encoding ⇒ TE + CL 并存（RFC 9112 §6.1 禁止，响应走私面）。
+            //   多值头（list）语义由 px_hdr_append 保持（M136），拒绝名单/预算/CRLF 防护同 px_serve。
+            int dropped_hdr = 0;
+            (void)px_hdr_append(h, extra_headers, 0, (int)sizeof(extra_headers), 0, &dropped_hdr);
         }
         // M21：gzip / chunked 标志
         LXValue gz = px_dict_get(v, "gzip");
@@ -21717,6 +21704,16 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
         char* chd = px_chunked_encode(body, body_len, &body_len);
         if (chd) { if (owned) xfree(owned); owned = chd; body = chd; }
     }
+    // M435（缺陷 903）：状态码必须落在 200-599 —— 本构造器发的是**最终响应**，
+    //   1xx 不是最终响应（客户端收到会继续等下一个响应，而 body 已跟着写出 ⇒ 协议错位）。
+    //   修前 `{"status": -5}` ⇒ `HTTP/1.1 -5 status code -5`、`{"status": 999}` ⇒ 999 原样放行。
+    if (status < 200 || status > 599) {
+        long n = __atomic_add_fetch(&g_hdr_drop_syntax, 1, __ATOMIC_RELAXED);
+        if (n <= 10 || n % 1000 == 0)
+            fprintf(stderr, "[http_serve] 非法响应状态码 %d ⇒ 500（累计=%ld）\n", status, n);
+        status = 500;
+    }
+
     const char* reason = px_http_status_reason(status);
     int has_ct = strstr(extra_headers, "Content-Type") != NULL || strstr(extra_headers, "content-type") != NULL;
     char* out = xmalloc(8192 + body_len);
@@ -22302,6 +22299,13 @@ static int px_hdr_value_ok(const char* v) {
         if (*p < 0x20 || *p == 0x7f) return 0;
     }
     return 1;
+}
+
+// M435（缺陷 902）：响应头**行级**校验 —— 与 M434 的请求头判定同一份口径。
+//   名字必须是 tchar 串（非空）；值不许含 CTL（裸 CR/LF/NUL/0x7F…），HTAB 与 obs-text 允许。
+//   用于那些不走 px_hdr_append 的手写拼头路径（sse_start / http_stream / WS 握手）。
+static int px_hdr_line_ok(const char* k, const char* v) {
+    return px_hdr_name_ok(k) && px_hdr_value_ok(v);
 }
 
 // Host 值：非空、无空白/控制、不含逗号（多值）/ 斜杠 / 反斜杠 / `@`（userinfo）
@@ -24532,6 +24536,14 @@ static LXValue bi_sse_start(LXValue* args, int nargs, void* ctx) {
         LXValue vv = ho->as.dict.vals[i];
         if (vv.type != PX_STR)
             px_error("R1002: sse_start 的 headers 值必须是字符串（键: %s）", ho->as.dict.keys[i]);
+        // M435（缺陷 902）：手写响应头同样过行级校验 —— 名字非 tchar / 值含 CTL（含 CRLF）一律不写出。
+        if (!px_hdr_line_ok(ho->as.dict.keys[i], vv.as.obj->as.str.data)) {
+            long nh = __atomic_add_fetch(&g_hdr_drop_syntax, 1, __ATOMIC_RELAXED);
+            if (nh <= 10 || nh % 1000 == 0)
+                fprintf(stderr, "[sse_start] 响应头被拒（名非 tchar 或值含 CTL）: %s 累计=%ld\n",
+                        ho->as.dict.keys[i], nh);
+            continue;
+        }
         off += snprintf(block + off, sizeof(block) - (size_t)off, "%s: %s\r\n",
                         ho->as.dict.keys[i], vv.as.obj->as.str.data);
     }
@@ -24904,12 +24916,28 @@ static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
             for (int j = 0; j < novr; j++) {
                 if (!used[j] && strcasecmp(oname[j], dname[i]) == 0) { v = oval[j]; used[j] = 1; break; }
             }
+            // M435（缺陷 902）：opts.headers 的覆写值同样校验；非法则回落到默认值（不让注入进响应）
+            if (!px_hdr_line_ok(dname[i], v)) {
+                long nh = __atomic_add_fetch(&g_hdr_drop_syntax, 1, __ATOMIC_RELAXED);
+                if (nh <= 10 || nh % 1000 == 0)
+                    fprintf(stderr, "[http_stream] 响应头被拒（%s 覆写值非法）累计=%ld\n", dname[i], nh);
+                v = dval[i];
+            }
             off += snprintf(block + off, sizeof(block) - (size_t)off, "%s: %s\r\n", dname[i], v);
         }
         for (int j = 0; j < novr; j++) {
-            if (!used[j])
+            if (!used[j]) {
+                // M435（缺陷 902）：未消费的额外头同样过行级校验
+                if (!px_hdr_line_ok(oname[j], oval[j])) {
+                    long nh = __atomic_add_fetch(&g_hdr_drop_syntax, 1, __ATOMIC_RELAXED);
+                    if (nh <= 10 || nh % 1000 == 0)
+                        fprintf(stderr, "[http_stream] 响应头被拒（名非 tchar 或值含 CTL）: %s 累计=%ld\n",
+                                oname[j], nh);
+                    continue;
+                }
                 off += snprintf(block + off, sizeof(block) - (size_t)off, "%s: %s\r\n",
                                 oname[j], oval[j]);
+            }
         }
         off += snprintf(block + off, sizeof(block) - (size_t)off, "\r\n");
         px_conn_write(c, block, (size_t)off);
@@ -30143,6 +30171,16 @@ int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct,
         LXValue hv = ho->as.dict.vals[i];
         const char* hk = ho->as.dict.keys[i];
         if (!hk || !*hk) continue;
+        // M435（缺陷 902）：名字必须是 tchar 串 —— px_hdr_append 原来只有拒绝名单 + CRLF 判据，
+        //   于是 "X Bad: 1" 这种非法名字被原样写出（门 R5 实测；M435 首次跑门抓到的真缺口）。
+        //   与 M434 的请求头口径同一份（px_hdr_name_ok）。
+        if (!px_hdr_name_ok(hk)) {
+            long nb = __atomic_add_fetch(&g_hdr_drop_syntax, 1, __ATOMIC_RELAXED);
+            if (nb <= 10 || nb % 1000 == 0)
+                fprintf(stderr, "[px-serve] 响应头名非 tchar（已丢弃）: %s 累计=%ld\n", hk, nb);
+            dropped++;
+            continue;
+        }
         // M109-S4：值可为 str 或 list[str]（同名多值）。其余类型**不再静默跳过**。
         int is_list = (hv.type == PX_LIST);
         int nvals = is_list ? hv.as.obj->as.list.len : 1;

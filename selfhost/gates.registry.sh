@@ -2509,3 +2509,19 @@ run m433_publish_scope bash selfhost/check_publish_scope.sh
 #     ⚠ 负控不得摘 `if (!colon)`：摘了 `*colon = 0` 解引用 NULL 直接崩（实测）。
 gate_timeout m434_header_syntax 420
 run m434_header_syntax bash selfhost/check_header_syntax.sh
+
+# ── m435_resp_header_guard（M435 · 缺陷 902/903）───────────────────
+#   病史（2026-11-22 22:0x 实测 · http_serve，20 条判据 12 条不符）：
+#   px_serve 主路早已有 px_hdr_append（拒绝名单 + CRLF 防护 + 预算，M109-S1/S4），
+#   但 px_http_build_response 自己手揂 "K: V\r\n" ⇒ 同一件事两份实现，防护只在一份上：
+#     headers {"X-A": "a\r\nInjected: yes"} ⇒ 响应里真的多出两行（响应头注入 / 响应拆分）
+#     名字方向同样成立（X-A\r\nInjected4）· 空名/名含空格原样写出
+#     handler 自设 Content-Length: 0 ⇒ 响应两条 CL（2 与 0）⇒ 中间件/缓存取不同值
+#     handler 自设 TE: chunked ⇒ TE + CL 并存（RFC 9112 §6.1 明禁；响应走私面）
+#     {"status": -5} ⇒ `HTTP/1.1 -5 status code -5`；999 原样；100 当最终响应（体还带 CL）
+#   判据：R0 正控 + 注入 5 条（CRLF/CR/LF/名 CRLF/多值项）+ 非法名 2 条 + 重复 CL/TE/Connection/Date +
+#     R12-R14 防过度修复（HTAB/空值/多值）+ R17-R20 状态码域（-5/999/100 ⇒ 500，204 合法）+
+#     R21 px_serve 路径同口径对拍 + N1 负控（手揂注回 ⇒ 注入复现 · CL=2 · -5 不再 500；
+#     含负控服务存活 + 基线 200 前提自证，缺陷 898 的教训）+ G1/G2/G3。
+gate_timeout m435_resp_header_guard 420
+run m435_resp_header_guard bash selfhost/check_resp_header_guard.sh
