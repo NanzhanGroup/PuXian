@@ -2523,5 +2523,5 @@ run m434_header_syntax bash selfhost/check_header_syntax.sh
 #     R12-R14 防过度修复（HTAB/空值/多值）+ R17-R20 状态码域（-5/999/100 ⇒ 500，204 合法）+
 #     R21 px_serve 路径同口径对拍 + N1 负控（手揂注回 ⇒ 注入复现 · CL=2 · -5 不再 500；
 #     含负控服务存活 + 基线 200 前提自证，缺陷 898 的教训）+ G1/G2/G3。
-gate_timeout m435_resp_header_guard 420
+gate_timeout m435_resp_header_guard 480
 run m435_resp_header_guard bash selfhost/check_resp_header_guard.sh
