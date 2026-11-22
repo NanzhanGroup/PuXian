@@ -17,7 +17,9 @@
 #
 # 层：
 #   ① 审计器自证 **25/25**（19 旧 + 6 新；其中 hit11/hit12/hit13 是三条规则的**反向判据**）
-#   ② 真实审计 **候选 0**，且三类豁免计数**逐个非零**（R-A=1 · R-B=2 · R-C=1）
+#   ② 真实审计 **候选 1**（= M436 在册的 http_conn_worker ← http_send_resp( · fr,fs，
+#      M435 新增触发点暴露的静态模型缺口；判「假阳」理由见 m206 BASELINE §①），
+#      且三类豁免计数**逐个非零**（R-A=1 · R-B=2 · R-C=1）
 #   ③ A/B 三档各自独立：`--no-postdead`⇒1 · `--no-globalout`⇒2 · `--no-argread`⇒1 · 全关⇒4
 #   ④ **判据回放（precision replay）**：撤掉 `px_route_try_dispatch` 的
 #      `px_root_push_keep(params)` ⇒ 必须报出 `params@<行>`（**行号从源码派生**，不硬编码），而**同一个调用**上的
@@ -97,26 +99,29 @@ for a in hit11 miss10 hit12 miss11 hit13 miss12; do
     fi
 done
 
-# ---------- ② 候选 0 + 三类豁免计数 ----------
-step "② 真实审计：候选 0，且三类豁免逐个非零"
+# ---------- ② 候选 1（M436 基数）+ 三类豁免计数 ----------
+step "② 真实审计：候选 1（M436 在册），且三类豁免逐个非零"
 SUM="$(audit | sed -n '/^扫描 /p')"
 echo "  $SUM"
 N="$(printf '%s' "$SUM"  | sed -n 's/.*\*\*候选 \([0-9]*\)\*\*.*/\1/p')"
 RA="$(printf '%s' "$SUM" | sed -n 's/.*R-A 豁免 \([0-9]*\).*/\1/p')"
 RB="$(printf '%s' "$SUM" | sed -n 's/.*R-B 豁免 \([0-9]*\).*/\1/p')"
 RC="$(printf '%s' "$SUM" | sed -n 's/.*R-C 豁免 \([0-9]*\).*/\1/p')"
-[ "$N" = "0" ]  && ok "候选 = 0"     || bad "候选 = $N（应为 0）"
+# ⚠️ M436（缺陷 907）：本层全部期望值 **+1** —— 默认档基线从 0 变 1
+#   （`http_conn_worker ← http_send_resp( · fr,fs`，M435 新增触发点暴露，已在
+#    m206 BASELINE §① 判「假阳」）。三条豁免的**增量**仍是 1/2/1，三档全关仍是 5。
+[ "$N" = "1" ]  && ok "候选 = 1（M436 在册 1 条）"     || bad "候选 = $N（应为 1）"
 [ "$RA" = "1" ] && ok "R-A 豁免 = 1" || bad "R-A 豁免 = $RA（应为 1）"
 [ "$RB" = "2" ] && ok "R-B 豁免 = 2" || bad "R-B 豁免 = $RB（应为 2）"
 [ "$RC" = "1" ] && ok "R-C 豁免 = 1" || bad "R-C 豁免 = $RC（应为 1）"
 
 # ---------- ③ A/B 三档 ----------
-step "③ A/B：每条规则**独立**生效（全关回到 4）"
-c1="$(cand_n --no-postdead)";  [ "$c1" = "1" ] && ok "--no-postdead ⇒ 1"  || bad "--no-postdead ⇒ $c1（应 1）"
-c2="$(cand_n --no-globalout)"; [ "$c2" = "2" ] && ok "--no-globalout ⇒ 2" || bad "--no-globalout ⇒ $c2（应 2）"
-c3="$(cand_n --no-argread)";   [ "$c3" = "1" ] && ok "--no-argread ⇒ 1"   || bad "--no-argread ⇒ $c3（应 1）"
+step "③ A/B：每条规则**独立**生效（全关回到 5）"
+c1="$(cand_n --no-postdead)";  [ "$c1" = "2" ] && ok "--no-postdead ⇒ 2"  || bad "--no-postdead ⇒ $c1（应 2）"
+c2="$(cand_n --no-globalout)"; [ "$c2" = "3" ] && ok "--no-globalout ⇒ 3" || bad "--no-globalout ⇒ $c2（应 3）"
+c3="$(cand_n --no-argread)";   [ "$c3" = "2" ] && ok "--no-argread ⇒ 2"   || bad "--no-argread ⇒ $c3（应 2）"
 c4="$(cand_n --no-postdead --no-globalout --no-argread)"
-[ "$c4" = "4" ] && ok "三档全关 ⇒ 4（= M213 的人工判定面）" || bad "三档全关 ⇒ $c4（应 4）"
+[ "$c4" = "5" ] && ok "三档全关 ⇒ 5（= M213 的人工判定面 4 + M436 在册 1）" || bad "三档全关 ⇒ $c4（应 5）"
 
 # ---------- ④ 判据回放（precision replay） ----------
 step "④ 判据回放：撤 params 的登记 ⇒ 必须报出 params，而同一调用的 handler 仍豁免"
@@ -145,7 +150,7 @@ if [ -n "$KEEP_LN" ] && patch_line runtime/runtime_route.c "$KEEP_LN" '    /* NE
     cmp -s "$SNAP/runtime/runtime_route.c" runtime/runtime_route.c \
         && ok "回放后源码逐字节还原（与快照 cmp 一致）" || bad "回放后源码未还原"
     AFTER="$(cand_n)"
-    [ "$AFTER" = "0" ] && ok "还原后候选回到 0" || bad "还原后候选 = $AFTER（应 0）"
+    [ "$AFTER" = "1" ] && ok "还原后候选回到 1" || bad "还原后候选 = $AFTER（应 1）"
 else
     bad "回放失败：找不到唯一的 \`    px_root_push_keep(params);\` 行"
 fi
@@ -166,8 +171,8 @@ else
        && patch_one selfhost/gcroot_audit.py '    ARG_READ_FIRST_ON = not args.no_argread' \
             '    ARG_READ_FIRST_ON = False   # NEGCTL-M214-A' a; then
         n="$(cand_n)"
-        [ "$n" = "4" ] && ok "NC-A 三规则全关 ⇒ 候选 4（第②层必红）✅" \
-                       || bad "NC-A 三规则全关后候选 = $n（应 4）"
+        [ "$n" = "5" ] && ok "NC-A 三规则全关 ⇒ 候选 5（第②层必红）✅" \
+                       || bad "NC-A 三规则全关后候选 = $n（应 5）"
     else
         bad "NC-A 补丁锚点未命中"
     fi

@@ -1,3 +1,96 @@
+## M436：`px run` 吞 stdin（缺陷 905）· `px --deps` 只读出口（缺陷 906）· GC 根面审计器的静态模型缺口（缺陷 907）
+
+> **一句话**：三件事同一晚落地 —— ① `px run` 解释轨在**管道/重定向**下读到空 stdin（M429 的 `&` 撞上 bash 非交互默认 `fd0←/dev/null`）；
+> ② 新增 `px --deps`，把「依赖闭包 + 缓存 key」做成只读出口，让构建调度能算精确 key（改一个脚本不必重编同目录全部）；
+> ③ M435 暴露的 GC 根面候选（`http_conn_worker ← http_send_resp( · fr,fs`）不是新缺陷，是审计器**看不见上一次调用建立的根栈作用域**。
+
+### 一 缺陷 905：`px run` 吞 stdin（晨曦 CX 报 · 2026-11-23 01:35）
+
+```
+修前（HEAD 909244c · px 0.2.435）
+printf 'hello=world' | px run t.px          ⇒ len=0    ❌
+printf 'hello=world' | px run --fast t.px   ⇒ len=11   ✅
+printf 'hello=world' | bootstrap/pxi t.px   ⇒ len=11   ✅
+```
+
+病因不是「解释器不读 stdin」，是 **M429 的 fork 方式**：为了能转发信号（防「杀父留孙」），
+前台直调被改成 `"$PXI_BIN" … &`；而 bash 在**非交互**模式下对异步命令默认把 fd0 接到
+`/dev/null`（无 job control）⇒ pxi 拿到空 stdin，管道内容被**静默丢弃**（不报错、不阻塞）。
+M429 之前是前台直调、stdin 天然继承 ⇒ 这是 M429 引入的回归，与解释器本身无关。
+
+修法一行：`0<&0`（显式把调用方 stdin 复制给子进程）。不动 trap / wait 循环，
+「kill px ⇒ pxi 一起消失」的语义不变（新门 G2 静态守形状，m429 门动态守行为）。
+
+### 二 缺陷 906：`px --deps <file.px> [--json]`
+
+来历：晨曦的 Ma 按「脚本所在目录下的**全部** .px」算缓存 key ⇒ 改一个脚本要重编同目录 17 个；
+一站 200 脚本时改一处 = 200 次重建 + 640MB 产物轮转。
+
+```
+文本：                            --json：
+file /abs/main.px                 {"file":"/abs/main.px","key":"<16hex>",
+key  1a2b3c4d5e6f7a8b              "deps":[{"path":"…","sha256_16":"…"}, …]}
+deps 3
+<sha16>  /abs/main.px
+<sha16>  /abs/lib.px
+<sha16>  /abs/sub/deep.px
+```
+
+口径：**直接复用** `px_dep_closure` + `run_cache_key`（`--fast` 的命中判据），**不另写** import
+解析器 —— 两份实现必然漂移（M435 缺陷 902 的病根就是「同一件事两份实现」）。
+门 D3 是这条的硬证：`deps` 输出的 key **等于** `px run --fast` 实际建的缓存目录名。
+只读：不建目录、不写缓存、不编译、不跑 pxi。退出码 0/1（文件不存在或取不到 key）/2（用法）。
+
+### 三 缺陷 907：审计器看不见「上一次调用建立的根栈作用域」
+
+```
+候选：runtime/runtime.c · http_conn_worker ← http_send_resp( · fr,fs（conservative）
+真相：fr/fs 由 http_pend_take 在持 g_hpend_mu + gc_block_stop 的**同一临界区**内
+      px_root_push_keep2(*req, *resp) 原子入根栈（runtime.c:23154），
+      调用方在 http_send_resp **之后**配对 px_root_pop()（runtime.c:22389）
+      ⇒ 触发点全程落在根栈作用域内（M310 判据：从根面消失到重新入栈之间无安全点）
+```
+
+审计器只认两种可见形态：「**本调用点实参**被被调方登记（F1）」与「形参名直写登记」，
+看不见「上一次调用 push、本调用仍在作用域内」这一层。
+
+本轮做了两件事，**证据等级分开写**：
+1. **判据扩展（确证）**：F1 认得**出参解引用**形式 `px_root_push_keep(*p)` /
+   `px_root_push_keep2(*p,*q)` —— F1 表 7 → 8 条（新增 `http_pend_take`），自证 19/19 仍全绿。
+2. **候选登记（静态论证，不是判据化）**：并入 `examples/m206_gcroot/BASELINE.tsv` §①，
+   判定「假阳」，理由含行号与 M310 判据。
+   ⚠️ **动态未覆盖**（如实）：另造 `probe_pend.px`（handler 内 sleep 强制走 pending 路径），
+   撤掉 `push_keep2` 后**基线档与压力档仍 40/40 绿** —— 没观测到该窗口红 ⇒ 这一行的辩护
+   **全部是静态的**。探针未入库（不留无门引用的僵尸夹具），形状与结论都记在 BASELINE 里。
+   F2「出参根栈托管」判据 + 动态覆盖列入 NEXT-QUEUE（M437）。
+
+### 四 门（309 → 311）
+
+```
+m436_pxrun_stdin（10 条）
+  S1 三轨小输入 11 · S2 1 MiB 分块（管道单次 read ≤64KiB）· S3 /dev/null 不阻塞
+  S4 空管道 · S5 文件重定向 · S6 stdout 无污染（interp == fast 逐字节）
+  N1 负控：撤 0<&0 ⇒ interp 回 len=0、fast 仍 11（含前提自证：补丁必须真落地）
+  G1 tools/px 零污染（sha + git status）· G2 M429 形状仍在（4 trap + wait + KILL 兜底）
+m436_px_deps（13 条）
+  D1 单文件 · D2 递归闭包 3 · D3 **同一真源**（deps key == --fast 缓存目录名）
+  D4 无关文件不改 key · D5 依赖变更必改 key · D6 --json 形态 · D7 只读无副作用
+  D8 错误码 1/2 · N1 负控（闭包退化 ⇒ D2 红）· N2 负控（key 去依赖 ⇒ D5 红）· G1 零污染
+```
+
+同步改动：`examples/m213_gcroot_precision/verify.sh` 的 F1 口径（默认候选 0 → 1、
+`--no-callee-keep` 3 → 4、F1 表 7 → 8、负控 A 的判红阈值 4 → 1）。
+
+### 五 已知代价与边界（不藏）
+
+```
+px --deps 耗时   3 个依赖 ≈ 270 ms（单文件 ≈ 90 ms）—— 每文件一次 pxpar fork。
+                 原计划「<50ms」不成立，如实记：Ma 的收益是「不再重编 17~200 个」，
+                 这一次解析成本相对重建（≈1 s/个）仍是纯赚。优化（复用一次 parser 进程）未做。
+std.*            import std.* 由 PX_STDLIB 解析，**不进** deps 闭包（与 --fast 的 key 口径一致：
+                 编译器/stdlib 内容由 comp_fp 覆盖，不在依赖闭包里）。
+M435 的发布      本轮一并把 M435 带出（用户选 B：不单独发 435，假阳登记并进 M436 跑一轮链）。
+```
 ## M435：响应头方向的防护是「两份实现」—— 注入、重复 CL、TE+CL 并存、状态码越界（缺陷 902 / 903）
 
 > **一句话**：M434 把「请求头」这一行校验了，但**响应头**这边只有 px_serve 主路有防护；

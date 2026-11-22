@@ -89,7 +89,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.435"
+SELFHOST_VER="0.2.436"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -183,6 +183,10 @@ px $RELEASE_VER
                                              （缓存只许影响快慢，不许影响语义）
                                              PX_RUNCACHE_DIR 覆盖缓存根 · PX_RUN_NOCACHE=1 关
   px run --interp <file.px> [args...]        显式强制解释轨（同默认；与 --fast 成对，供脚本自述）
+  px --deps <file.px> [--json]               依赖闭包 + 缓存 key 的**只读**出口（M436-2）
+                                             key 与 px run --fast 的命中判据同一真源；
+                                             给构建调度算精确缓存 key（改一个脚本不必
+                                             重编同目录全部）。--json 供机器消费
                                              （M106-S4 注：解释器约定的脚本位置是**最后一个
                                              参数**（selfhost/interp.px a[len(a)-1]）；px run
                                              已自动把脚本置于末尾，前面的 [args...] 按数据
@@ -1543,6 +1547,72 @@ cmd_run_fast() {
     exec "$prog" "$@"
 }
 
+# ============================================================
+# M436-2（晨曦 CX 请求 2026-11-23 03:22 · 缺陷 906）· `px --deps <file.px> [--json]`
+# ------------------------------------------------------------
+# 为什么有它：晨曦的 Ma（构建调度）现在按「脚本所在目录下的**全部** .px」算缓存 key
+#   ⇒ 改一个脚本要重编同目录 17 个；一站 200 个脚本时改一处 = 200 次重建 + 640MB
+#   产物轮转。她要的是「与 px run --fast 缓存 key **同一个闭包真源**」的**只读**出口，
+#   不要她另写一份 import 解析器。
+# 口径（关键）：直接复用 px_dep_closure + run_cache_key —— **不许另写一份** import
+#   解析器：两份实现必然漂移（M435 缺陷 902 的病根就是「同一件事两份实现」，
+#   防护只落在其中一份上）。
+# 输出（文本）：
+#   file <abs>
+#   key  <16 hex>          ← 与 px run --fast 的命中判据**逐字节相同**
+#   deps <n>
+#   <sha256 前16>  <abs>   ← 每行一个；BFS 闭包顺序，第一行是主脚本自己
+# --json：{"file":…,"key":…,"deps":[{"path":…,"sha256_16":…}, …]}
+# 退出码：0 成功 / 1 文件不存在或取不到 key / 2 用法错误
+# 只读：不建目录、不写缓存、不编译、不跑 pxi。
+# ============================================================
+cmd_deps() {
+    local json=0 file=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=1; shift ;;
+            --) shift; break ;;
+            -h|--help) echo "用法: px --deps <file.px> [--json]"; return 0 ;;
+            *) file="$1"; shift ;;
+        esac
+    done
+    [ -n "$file" ] || { echo "用法: px --deps <file.px> [--json]" >&2; return 2; }
+    [ -f "$file" ] || { echo "[px --deps] 读取文件失败: $file" >&2; return 1; }
+    local abs key
+    abs="$(readlink -f "$file")"
+    key="$(run_cache_key "$abs")" || { echo "[px --deps] 取不到缓存 key: $abs" >&2; return 1; }
+    [ "${#key}" -eq 16 ] || { echo "[px --deps] key 形态异常（${#key} 字符）: $key" >&2; return 1; }
+    local -a deps=()
+    local d
+    while IFS= read -r d; do [ -n "$d" ] && deps+=("$d"); done < <(px_dep_closure "$abs")
+    [ "${#deps[@]}" -ge 1 ] || { echo "[px --deps] 依赖闭包为空（import 解析失败？）: $abs" >&2; return 1; }
+    if [ "$json" = 1 ]; then
+        # ⚠️ 这里**不能**用 heredoc 给 python（heredoc 会顶掉 stdin，实测 deps 恒为空）——
+        #   依赖列表一律走 argv。教训同「判据读文本时注释里的代码也算代码」：入口也是契约。
+        python3 -c '
+import hashlib, json, sys
+main, key = sys.argv[1], sys.argv[2]
+deps = []
+for p in sys.argv[3:]:
+    try:
+        h = hashlib.sha256(open(p, "rb").read()).hexdigest()[:16]
+    except OSError as e:
+        sys.stderr.write("[px --deps] 读取失败: %s (%s)\n" % (p, e))
+        sys.exit(1)
+    deps.append({"path": p, "sha256_16": h})
+print(json.dumps({"file": main, "key": key, "deps": deps}, ensure_ascii=False))
+' "$abs" "$key" "${deps[@]}"
+    else
+        printf 'file %s\n' "$abs"
+        printf 'key  %s\n' "$key"
+        printf 'deps %d\n' "${#deps[@]}"
+        local p
+        for p in "${deps[@]}"; do
+            printf '%s  %s\n' "$(sha256sum "$p" 2>/dev/null | cut -c1-16)" "$p"
+        done
+    fi
+}
+
 cmd_run() {
     # M268：显式开关。默认**完全不变**（见文件上方 M268 段的理由）。
     local fast=0
@@ -1594,7 +1664,17 @@ cmd_run() {
     trap '_px_fwd INT'  INT
     trap '_px_fwd HUP'  HUP
     trap '_px_fwd QUIT' QUIT
-    "$PXI_BIN" "$@" "$file" &
+    # M436（缺陷 905）：**异步子进程的 stdin 必须继承调用方的 stdin**。
+    #   病灶（晨曦 2026-11-23 01:35 报 · 本地复现）：`printf 'hello=world' | px run t.px`
+    #   解释轨读到 len=0，而 `px run --fast` 与 `bootstrap/pxi` 直跑都是 11。
+    #   原因：M429 为了能转发信号，把直调改成 `"$PXI_BIN" … &`；而 bash 在**非交互**
+    #   模式下对异步命令默认把 fd0 接到 /dev/null（无 job control）⇒ pxi 拿到空 stdin，
+    #   管道内容被静默丢弃（不报错、不阻塞 —— 最难查的一类）。**与 M429 无关的回归**：
+    #   M429 之前是前台直调，stdin 天然继承，所以这条直到 M429 之后才出现。
+    #   修法：`0<&0` 显式把当前 stdin 复制给子进程。不改任何开关，也不影响 M429 的
+    #   「kill px ⇒ pxi 一起消失」（那条由 trap + wait 循环负责，已复验）。
+    #   门：`m436_pxrun_stdin`（三轨对拍 + /dev/null 不阻塞 + 负控撤 0<&0 必红）。
+    "$PXI_BIN" "$@" "$file" 0<&0 &
     _child=$!
     while :; do
         wait "$_child"; _rc=$?
@@ -1711,6 +1791,8 @@ cmd="${1:-help}"
 case "$cmd" in
     build) shift; cmd_build "$@" ;;
     run)   shift; [ $# -ge 1 ] || { echo "用法: px run <file.px>" >&2; exit 1; }; cmd_run "$@" ;;
+    # M436-2（缺陷 906）：依赖闭包 + 缓存 key 的只读出口（与 px run --fast 同一真源）
+    --deps|deps) shift; cmd_deps "$@" ;;
     lex)   shift; [ $# -ge 1 ] || { echo "用法: px lex <file.px>" >&2; exit 1; }; cmd_lex "$1" ;;
     parse) shift; [ $# -ge 1 ] || { echo "用法: px parse <file.px>" >&2; exit 1; }; cmd_parse "$1" ;;
     fmt)   shift; [ $# -ge 1 ] || { echo "用法: px fmt <file.px> [-w] [--check] [--diff]" >&2; exit 1; }; cmd_fmt "$@" ;;

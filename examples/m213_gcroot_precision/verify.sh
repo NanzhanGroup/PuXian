@@ -16,8 +16,12 @@
 #   ② 审计器自证 25/25（M214 增 6 条：hit11/miss10/hit12/miss11/hit13/miss12）
 #   ③ **分诊**：`trigger_kind` 能把「保守兜底」与「精确」分开（且 tight 档确实少掉它）
 #   ④ **覆盖面**：显式 GC 族在 **loose 与 tight 两档都在** TRIGGER（= 「不能收紧」的实证）
-#   ⑤ **F1 有牙**：默认候选 4 ⇄ `--no-callee-keep` 候选 7（差 = 被 F1 豁免的 3 条）
-#   ⑥ 4 条候选 ⇄ `examples/m206_gcroot/BASELINE.tsv` §① 逐条一致
+#   ⑤ **F1 有牙**：默认候选 1 ⇄ `--no-callee-keep` 候选 4（差 3 = 被 F1 豁免的 3 条）
+#      ⚠️ M436：默认候选由 0 → 1。新增的那条（`http_conn_worker ← http_send_resp( · fr,fs`）
+#        是 M435 让 `http_send_resp` 成为触发点后暴露的**静态模型缺口**，已在
+#        `examples/m206_gcroot/BASELINE.tsv` §① 登记为「假阳」并写明证据等级；
+#        F1 表同步 7 → 8 条（M436 让 F1 认得**出参解引用**形式 `px_root_push_keep2(*p,*q)`）。
+#   ⑥ **1 条候选** ⇄ `examples/m206_gcroot/BASELINE.tsv` §① 逐条一致
 #   ⑦ **push/pop 平衡**（静态）：`px_route_try_dispatch` 的登记**前移**后，
 #      `px_root_push_keep(params)` = 1 且 `px_root_pop()` 数 = return 路径数
 #   ⑧ 负控 3 道（各自独立判红 · 源逐字节还原）
@@ -101,7 +105,12 @@ if not cons:
     errs.append("loose 档**没有任何** conservative 候选 ⇒ 分诊失效或过近似已消失")
 else:
     for f in cons:
-        if 'px_rate_limit_try' not in f['trigger']:
+        # ⚠️ M436：conservative 候选的**允许集**有两项 ——
+        #   · px_rate_limit_try：M213 起的「过近似锚点」（缺陷 295 的代价，专供分诊观察）
+        #   · http_send_resp：M435 让 px_http_build_response → px_hdr_append 成为调用链后
+        #     新出现的 conservative 触发点（其候选已在 m206 BASELINE §① 判假阳）
+        #   其它任何 conservative 候选仍然 FAIL —— 判据没放宽成「什么都行」。
+        if 'px_rate_limit_try' not in f['trigger'] and 'http_send_resp' not in f['trigger']:
             errs.append("conservative 候选出乎意料：%s" % f['trigger'])
 # tight 档下该触发点必须消失（换成别的精确触发点 ⇒ 触发点名字必须变）
 lt = [f for f in lo if 'px_rate_limit_try' in f['trigger']]
@@ -142,14 +151,16 @@ PY
 if grep -q '^PASS$' "$W/gcseed.log"; then ok "$(head -1 "$W/gcseed.log")"
 else bad "显式 GC 族覆盖面不符"; sed -n '2,6p' "$W/gcseed.log" | sed 's/^/      /'; fi
 
-step "⑤ F1 有牙（A/B）：默认候选 0 ⇄ --no-callee-keep 候选 3"
+step "⑤ F1 有牙（A/B）：默认候选 1 ⇄ --no-callee-keep 候选 4"
 python3 selfhost/gcroot_audit.py --json --no-callee-keep > "$W/nof1.json" 2> "$W/nof1.err" || bad "F1 关闭扫描失败"
 N_ON=$(count_cand "$W/loose.json"); N_OFF=$(count_cand "$W/nof1.json")
-[ "${N_ON:-x}" = 0 ] && ok "默认（F1 开）候选 0" || bad "默认候选 ${N_ON:-?}（期望 0）"
-[ "${N_OFF:-x}" = 3 ] && ok "F1 关 ⇒ 候选 3（= 被 F1 豁免的 h3_send_fields/h3_fields_to_request×2）" \
-                      || bad "F1 关候选 ${N_OFF:-?}（期望 3）—— 规则无牙"
-grep -q 'F1 表（被调方入口已登记形参）= 7 条' "$W/loose.err" \
-    && ok "stderr 打印 F1 表规模（7 条；缺它=规则静默失效）" \
+# M436：默认候选 0 → 1（M435 暴露的静态模型缺口，BASELINE §① 登记为假阳）
+[ "${N_ON:-x}" = 1 ] && ok "默认（F1 开）候选 1（= BASELINE §① 在册）" || bad "默认候选 ${N_ON:-?}（期望 1）"
+[ "${N_OFF:-x}" = 4 ] && ok "F1 关 ⇒ 候选 4（= 被 F1 豁免的 3 条 + 上述 1 条）" \
+                      || bad "F1 关候选 ${N_OFF:-?}（期望 4）—— 规则无牙"
+# M436：F1 表 7 → 8（新增 http_pend_take —— 出参解引用入根栈形式）
+grep -q 'F1 表（被调方入口已登记形参）= 8 条' "$W/loose.err" \
+    && ok "stderr 打印 F1 表规模（8 条；缺它=规则静默失效）" \
     || bad "未打印 F1 表规模诊断行"
 
 step "⑥ 候选 0 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
@@ -225,13 +236,13 @@ else
     AUD=selfhost/gcroot_audit.py
     DER=selfhost/gcroot_derive.py
 
-    # A：F1 规则有牙 —— 关掉 ⇒ 候选 7 ≠ 4 ⇒ ⑤ 与 ⑥ 必须判红
+    # A：F1 规则有牙 —— 关掉 ⇒ 候选 4 ≠ 1 ⇒ ⑤ 必须判红
     restore_all
     python3 "$AUD" --json --no-callee-keep > "$W/negA.json" 2>/dev/null
-    if [ "$(count_cand "$W/negA.json")" != 4 ]; then
-        ok "负控 A 判红：撤 F1 ⇒ 候选 $(count_cand "$W/negA.json")（≠4）"
+    if [ "$(count_cand "$W/negA.json")" != 1 ]; then
+        ok "负控 A 判红：撤 F1 ⇒ 候选 $(count_cand "$W/negA.json")（≠1）"
     else
-        bad "负控 A 未判红（撤 F1 后候选仍 4）⇒ 规则无牙"
+        bad "负控 A 未判红（撤 F1 后候选仍 1）⇒ 规则无牙"
     fi
     restore_all; cmp -s "$AUD" "$SNAP/$AUD" || bad "负控 A 后审计器未还原"
 

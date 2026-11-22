@@ -90,19 +90,19 @@ else
     bad "派生集合性质不符"; sed -n '2,8p' "$W/props.log" | sed 's/^/      /'
 fi
 
-step "③ A/B：手抄集合（legacy）候选 0 ⇄ 派生集合候选 0（M214 三条豁免判据化后）"
+step "③ A/B：手抄集合（legacy）候选 0 ⇄ 派生集合候选 1（M436：M435 暴露的静态模型缺口在册）"
 python3 selfhost/gcroot_audit.py --trigger-set legacy --json > "$W/leg.json" 2> "$W/leg.err" || bad "legacy 扫描失败"
 python3 selfhost/gcroot_audit.py --json > "$W/der.json" 2> "$W/der.err" || bad "派生扫描失败"
 LEGN=$(python3 -c "import json;print(len(json.load(open('$W/leg.json'))['findings']))" 2>/dev/null)
 DERN=$(python3 -c "import json;print(len(json.load(open('$W/der.json'))['findings']))" 2>/dev/null)
 [ "${LEGN:-x}" = 0 ] && ok "手抄集合候选 0（= M209 报出的「全仓候选 0」—— 现在知道那是**漏报**）" \
                      || bad "legacy 候选 ${LEGN:-?}（期望 0，手抄集合行为应保持原样）"
-# ⚠️ M214（缺陷 302/303/304）：**4 → 0** —— 三条窄条件豁免（R-A/R-B/R-C）把
-#   M213 剩下的 4 条人工判定全部下沉为判据（逐条理由见 m206 BASELINE.tsv 的 M214 档案区）。
-#   ⇒ 本门在此**只**证明「手抄 ⇄ 派生」两集合都不再报候选；豁免的**有牙与不越界**
-#     由 `examples/m214_audit_exempt/` 的自证/判据回放/负控 3 道把守。
-[ "${DERN:-x}" = 0 ] && ok "派生集合候选 0（M214 三条豁免判据化；手抄集合漏报面仍由 A/B 证明）" \
-                     || bad "derived 候选 ${DERN:-?}（期望 0）"
+# ⚠️ M436（缺陷 907）：派生集合候选 0 → **1**（`http_conn_worker ← http_send_resp( · fr,fs`）。
+#   手抄集合仍是 0 —— 这正是 A/B 的意义：手抄集合**看不到**这条（M435 新引入的触发点
+#   才让它出现），而派生集合看得到且已进 BASELINE §① 判「假阳」（理由：http_pend_take
+#   在临界区内 push_keep2 + 调用方配对 pop；动态覆盖未成立，已如实登记）。
+[ "${DERN:-x}" = 1 ] && ok "派生集合候选 1（= BASELINE §① 在册 1 条；手抄集合漏报面仍由 A/B 证明）" \
+                     || bad "derived 候选 ${DERN:-?}（期望 1）"
 grep -q '源码派生' "$W/der.err" && ok "stderr 打印「源码派生」诊断行（缺它=悄悄退回手抄集合）" \
                                  || bad "未打印派生诊断行"
 

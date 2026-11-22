@@ -332,6 +332,22 @@ def derive_all(root_dir, indirect_mode='loose'):
 _KEEP_CALL_RX = re.compile(r'\b(?:PX_KEEP|px_root_push_keep)\s*\(\s*'
                            r'([A-Za-z_][A-Za-z0-9_]*)\s*\)')
 
+# M436（第 226 轮 · 缺陷 905 同源面）：F1 的**出参（解引用）**写法。
+#   形状：被调方签名 `static int f(int fd, LXValue* req, LXValue* resp)`，
+#     函数体在临界区内写 `px_root_push_keep2(*req, *resp);`（或单参
+#     `px_root_push_keep(*p);`）—— 这些**不是**形参名本身，而是对形参的
+#     解引用取值 ⇒ 旧正则（只认标识符）看不到 ⇒ F1 整族漏。
+#   现场：`http_pend_take`（M310 缺陷 197 残余窗口）在持 g_hpend_mu 的
+#     临界区内 `px_root_push_keep2(*req, *resp)`，调用方 `http_conn_worker`
+#     用配对 `px_root_pop()`（M435 让 `http_send_resp` 经
+#     `px_http_build_response → px_hdr_append` 变为触发点后，这条必然报出
+#     `http_conn_worker ← http_send_resp( · fr,fs`）。
+#   ⚠️ 这是「让判据看见」（同 M270b 的修法），**不是**把候选人工判成假阳：
+#     判据仍要求登记**先于被调方第一个触发点**，撤掉这行 push ⇒ 候选必复活。
+_KEEP_CALL_DEREF_RX = re.compile(
+    r'\bpx_root_push_keep2?\s*\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)'
+    r'(?:\s*,\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))?\s*\)')
+
 
 def derive_callee_keeps(root_dir, triggers=None):
     """返回 `{函数名: {'params': [形参名…], 'kept': [入口已登记的形参名…]}}`。
@@ -358,14 +374,21 @@ def derive_callee_keeps(root_dir, triggers=None):
         brace = body.find('{')
         if brace < 0:
             brace = 0
-        for m in _KEEP_CALL_RX.finditer(body):
-            p = m.group(1)
+        # M436：登记点集合 = ① 形参名直写（PX_KEEP(p) / px_root_push_keep(p)）
+        #                    ② 形参解引用（px_root_push_keep(*p) / push_keep2(*p, *q)）
+        # 按**位置**排序后逐条判「先于第一个触发点」—— 顺序即语义（迟到不算）。
+        _hits = [(m.start(), m.group(1)) for m in _KEEP_CALL_RX.finditer(body)]
+        for _m in _KEEP_CALL_DEREF_RX.finditer(body):
+            _hits.append((_m.start(), _m.group(1)))
+            if _m.group(2):
+                _hits.append((_m.start(), _m.group(2)))
+        for pos, p in sorted(_hits):
             if p not in pset or p in kept:
                 continue
-            if m.start() < brace:
+            if pos < brace:
                 continue
             # ② 登记必须**先于**被调方第一个触发点；否则是「登记迟到」⇒ 不豁免
-            if trig_rx.search(body[brace:m.start()]):
+            if trig_rx.search(body[brace:pos]):
                 continue
             kept.append(p)
         if kept:

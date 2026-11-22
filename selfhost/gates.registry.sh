@@ -2525,3 +2525,24 @@ run m434_header_syntax bash selfhost/check_header_syntax.sh
 #     含负控服务存活 + 基线 200 前提自证，缺陷 898 的教训）+ G1/G2/G3。
 gate_timeout m435_resp_header_guard 480
 run m435_resp_header_guard bash selfhost/check_resp_header_guard.sh
+
+# ── m436_pxrun_stdin（M436-1 · 缺陷 905）────────────────────────
+#   病史（晨曦 CX 2026-11-23 01:35 报 · 本地复现）：printf 'hello=world' | px run t.px ⇒ len=0，
+#   而 px run --fast 与 bootstrap/pxi 直跑都是 11。病因：M429 为转发信号把前台直调改成
+#   `"$PXI_BIN" … &`，bash 非交互对异步命令默认 fd0←/dev/null ⇒ stdin 被静默丢弃。
+#   修法：`0<&0`（不动 trap/wait，M429 语义不变）。
+#   判据：S1 三轨小输入 · S2 1 MiB 分块 · S3 /dev/null 不阻塞 · S4 空管道 · S5 文件重定向 ·
+#     S6 stdout 无污染 · N1 负控（撤 0<&0 ⇒ interp 回 0、fast 仍 11；含前提自证）·
+#     G1 tools/px 零污染 · G2 M429 形状仍在（4 trap + wait + KILL 兜底）。
+gate_timeout m436_pxrun_stdin 300
+run m436_pxrun_stdin bash selfhost/check_pxrun_stdin.sh
+
+# ── m436_px_deps（M436-2 · 缺陷 906）────────────────────────────
+#   来历（晨曦 CX 2026-11-23 03:22）：Ma 按「脚本所在目录全部 .px」算缓存 key ⇒ 改一个
+#   重编同目录 17 个；一站 200 脚本时改一处 = 200 次重建 + 640MB 产物轮转。她要与
+#   px run --fast **同一真源**的只读出口（不另写 import 解析器）。
+#   判据：D1 单文件 · D2 递归闭包(3) · D3 **同一真源**（deps key == --fast 缓存目录名）·
+#     D4 无关文件不改 key · D5 依赖变更必改 key · D6 --json 形态 · D7 只读无副作用 ·
+#     D8 错误码（1/2）· N1 负控（闭包退化 ⇒ D2 红）· N2 负控（key 去依赖 ⇒ D5 红）· G1。
+gate_timeout m436_px_deps 300
+run m436_px_deps bash selfhost/check_px_deps.sh

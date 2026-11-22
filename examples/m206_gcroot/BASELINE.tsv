@@ -61,6 +61,11 @@
 #
 # 列（在册区 · 非注释行）：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
 #
+# ── §① 在册候选（M436 起**首次非空**：M209/M214 收敛到 0 条后，M435 让 http_send_resp 经
+#    px_http_build_response → px_hdr_append 成为触发点 ⇒ 报出 1 条。逐条对齐，不许留「真」） ──
+runtime/runtime.c	http_conn_worker	http_send_resp(	fr,fs	假阳	**静态模型缺口，不是运行期风险**：fr/fs 由 `http_pend_take` 在持 `g_hpend_mu` + `gc_block_stop` 的**同一临界区**内 `px_root_push_keep2(*req, *resp)` 原子入根栈（runtime.c:23154），调用方在本块末尾配对一次 `px_root_pop()`（runtime.c:22389，在 `http_send_resp` **之后**）⇒ 触发点全程落在根栈作用域内；与 M310 判据「从根面消失到重新入栈之间不得有安全点」同源。审计器报出的原因：它只认「**本调用点实参**被被调方登记」（F1）与「形参名直写登记」两种可见形态，**看不见上一次调用建立的根栈作用域**。证据等级（如实）：**静态**可信；**动态未覆盖** —— M436 实测撤掉 `push_keep2` 后 `probe_pend` 基线/压力两档仍 40/40 绿（未观测到该窗口红）⇒ 本行的辩护全部是静态的。判据化待办：F2「出参根栈托管」+ 动态覆盖，见 NEXT-QUEUE M437。另：M436 曾造 probe_pend.px（handler 内 sleep 以走 pending 路径）实测 —— 撤 push_keep2 后两档仍 40/40 绿，**没观测到该窗口红**；探针未入库（避免无门引用的僵尸夹具），结论与探针形状都记在这里。
+
+#
 # ── §② 档案区：M206 的 8 条人工判定 → M209 已下沉为**判据**（仅存档，扫描器不再报） ──
 #  为什么留档：① 它们是「判据成形」的史料（哪条形状曾被人工判过）；② 后人若怀疑
 #  M209 的排除规则在放水，可拿这 8 条去 `examples/m209_gcroot_rules/` 对拍。
