@@ -91,6 +91,27 @@ std.*            import std.* 由 PX_STDLIB 解析，**不进** deps 闭包（�
                  编译器/stdlib 内容由 comp_fp 覆盖，不在依赖闭包里）。
 M435 的发布      本轮一并把 M435 带出（用户选 B：不单独发 435，假阳登记并进 M436 跑一轮链）。
 ```
+### 六 首轮链 RED 的收口（2026-11-23 06:2x · 发布链 042410 轮）
+
+首轮全量门 RED（306 绿 / 5 红），5 门全是**本轮自己的收口漏项**，不是产品缺陷：
+
+```
+version_drift   0.2.436 只改了 tools/px 一处（手改）⇒ compiler.px/interp.px/pxlsp/pxmcp/pxfmt
+                仍是 0.2.435。修：先把 tools/px 还原 0.2.435，再用 packaging/bump_version.sh 0.2.436
+                走官方入口（9 文件含 2 份自举基准）⇒ rebake_bin.sh --rebake-all ⇒ 14/14 指纹一致。
+                另：源码 0.2.436 ⇄ tag v0.2.434 差 2 ⇒ 按 CHANGELOG §五「M435 并入」登记
+                selfhost/golden/version_skips.txt（435 行），不是放宽判据。
+gate_registry   新门 check_px_deps.sh / check_pxrun_stdin.sh 进了 gates.registry.sh 但没进 ci.yml
+                （M235 缺陷 355 同形）⇒ ci.yml 补两 step（rc=3 环境不成立放行，其余非 0 判红）。
+gate_timeouts   基线 309 行 vs 门清单 311 ⇒ P6 覆盖缺 2 门（新门首次入册）静默绿。
+                修：selfhost/refresh_gate_baseline.sh（回灌 1 个已完成 stamp）⇒ 311/311。
+m400_baseline_feedback  同一缺失（T3b 311/309）⇒ 同上，17/17 通过。
+m410_criteria_scan      宿主脚本 ci_parity_gap.sh 命中 R1（判绿未证扫描面）。修脚本本身：
+                打 nrows= 并加「扫描面 0 ⇒ fail」零值守卫（不往 allow.tsv 塞豁免）。
+```
+
+复跑证据（本机）：version_drift OK · gate_registry 13/0 · gate_timeouts 28/0 · m400 17/0 · m410 R1=11 allow=11 OK。
+
 ## M435：响应头方向的防护是「两份实现」—— 注入、重复 CL、TE+CL 并存、状态码越界（缺陷 902 / 903）
 
 > **一句话**：M434 把「请求头」这一行校验了，但**响应头**这边只有 px_serve 主路有防护；

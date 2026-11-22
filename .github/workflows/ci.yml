@@ -439,6 +439,29 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_pxrun_signal 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_pxrun_signal rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_pxrun_signal PASS"
+      - name: px run 吞 stdin · 静态判据（M436-1 · 缺陷 905）
+        #   病史：px 包装器在 run 模式把子进程 stdin 接到 /dev/null / 或干脆不传，
+        #   导致 `echo data | px run x.px` 读到空 ⇒ 用户脚本静默走错分支（无报错）。
+        #   本脚本自带负控（坏件必红 / 好件必绿）与 rc=3 环境守卫，CI 只负责跑。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_pxrun_stdin.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_pxrun_stdin 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_pxrun_stdin rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_pxrun_stdin PASS"
+      - name: px --deps 只读出口（M436-2 · 缺陷 906）
+        #   病史：--deps 除打印依赖外还顺手做了写操作（生成 .deps 缓存）⇒ 「只读出口」名不副实，
+        #   在只读工作区 / 无写权限环境下失败。判据：调用前后工作树逐字节不变 + 依赖输出仍正确。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_px_deps.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_px_deps 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_px_deps rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_px_deps PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；
