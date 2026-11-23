@@ -15,7 +15,7 @@
         代码注释没跟着改）；但根因与 M435/M437 三次同族：
         改了源码，没跑指向源码自身的门 —— 而且它只要 1 秒
 修法    ① 注释 913 → 915（无行为变化）
-        ② release_preflight.sh --gates 补 6 门（28 → 34）：
+        ② release_preflight.sh --gates 补 6 门（37 → 43）：
            check_defect_refs(1s) · gate_registry(1s) · eco_index(2s) ·
            check_gate_paths(21s) · orphan_gates · m421_examples_coverage
         ③ 本档实测：-只 6 门全绿（gate_registry/check_defect_refs/eco_index 逐门看到 ✅）

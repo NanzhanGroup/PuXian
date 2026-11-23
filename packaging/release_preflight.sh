@@ -173,7 +173,7 @@ PRECHECK_GATES=(
     #   病史（2026-11-22 22:0x）：px_serve 有 px_hdr_append 防护，但 px_http_build_response
     #   自己手揂 "K: V\r\n" ⇒ 响应头注入（CRLF 响应拆分）+ 重复 CL + TE+CL 并存 + 状态码越界。
     m435_resp_header_guard                               # 响应头行级防护（实测 ~300s）
-    # ── M438 S1：把「指向源码自身的门」也前置（28 → 34 门，实测 +82s：m421 57 · paths 22 · 余 3）──
+    # ── M438 S1：把「指向源码自身的门」也前置（37 → 43 门，实测 +82s：m421 57 · paths 22 · 余 3）──
     #   病史（同族第 5 次，全都是「改了源码/语料/门，却没跑指向它们自身的门」）：
     #     M435 5 红 · M437 r2 9 红 · M437 r3 1 红（m421 语料没登记）·
     #     M437 r4 2 红（新 verify.sh 漏 source gate_lock.sh）·
