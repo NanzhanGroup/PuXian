@@ -1,0 +1,69 @@
+# M438-1 对拍语料：posix_spawn 快路径必须与 fork 路径**可观察行为完全一致**
+#   覆盖：纯 stdout / stdin_data 双工 / env 覆盖 / cwd / stderr 分离 / 合并捕获 /
+#         PATH 查找 / 不存在命令 rc=127 / os_spawn+os_wait / setsid 回落 fork
+
+ok = 0
+bad = 0
+def chk(tag, cond):
+    if cond:
+        print("OK   " + tag)
+        return 1
+    print("FAIL " + tag)
+    return 0
+
+# 1 纯 stdout
+r = os_capture("/bin/echo", ["hello-px"])
+ok = ok + chk("1 echo rc", r["rc"] == 0)
+ok = ok + chk("1 echo out", r["stdout"] == "hello-px\n")
+ok = ok + chk("1 echo err", r["stderr"] == "")
+
+# 2 stdin_data 双工（写尽后读，验证 poll 双工没被破坏）
+r2 = os_capture("/bin/cat", [], {"stdin_data": "line1\nline2\n"})
+ok = ok + chk("2 cat rc", r2["rc"] == 0)
+ok = ok + chk("2 cat out", r2["stdout"] == "line1\nline2\n")
+
+# 3 env 覆盖
+r3 = os_capture("/bin/sh", ["-c", "echo $PX_M438"], {"env": {"PX_M438": "env-ok"}})
+ok = ok + chk("3 env", r3["stdout"] == "env-ok\n")
+
+# 4 cwd
+r4 = os_capture("/bin/pwd", [], {"cwd": "/tmp"})
+ok = ok + chk("4 cwd rc", r4["rc"] == 0)
+ok = ok + chk("4 cwd out", r4["stdout"] == "/tmp\n")
+
+# 5 stderr 分离
+r5 = os_capture("/bin/sh", ["-c", "echo O; echo E 1>&2"])
+ok = ok + chk("5 sep out", r5["stdout"] == "O\n")
+ok = ok + chk("5 sep err", r5["stderr"] == "E\n")
+
+# 6 合并捕获
+r6 = os_spawn_capture("/bin/sh", ["-c", "echo O; echo E 1>&2"])
+ok = ok + chk("6 merged rc", r6[0] == 0)
+ok = ok + chk("6 merged out", r6[1] == "O\nE\n")
+
+# 7 不存在的命令 ⇒ rc=127（快路径 spawn 失败必须回落 fork，保住旧语义）
+r7 = os_capture("/definitely/not/a/cmd_438", [])
+ok = ok + chk("7 noent rc127", r7["rc"] == 127)
+ok = ok + chk("7 noent out empty", r7["stdout"] == "")
+
+# 8 PATH 查找（不带 / 的命令名）
+r8 = os_capture("sh", ["-c", "echo path-ok"])
+ok = ok + chk("8 path", r8["stdout"] == "path-ok\n")
+
+# 9 os_spawn + os_wait（fire-and-forget 形状仍要能回收）
+pid = os_spawn("/bin/sh", ["-c", "exit 7"])
+ok = ok + chk("9 spawn pid", pid != null and pid > 0)
+ok = ok + chk("9 wait rc7", os_wait(pid) == 7)
+
+# 10 setsid 回落 fork 路径
+pid2 = os_spawn("/bin/sh", ["-c", "sleep 0.05; exit 3"], {"setsid": true})
+ok = ok + chk("10 setsid pid", pid2 != null and pid2 > 0)
+ok = ok + chk("10 setsid wait", os_wait(pid2) == 3)
+
+# 11 group 自成组 + 组杀（超时路径）
+r11 = os_capture("/bin/sh", ["-c", "sleep 5"], {"group": true, "timeout_ms": 300})
+ok = ok + chk("11 timeout rc<0 or killed", r11["rc"] != 0)
+
+print("PASS=" + str(ok) + " FAIL=" + str(bad))
+if ok < 18:
+    exit(1)

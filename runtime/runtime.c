@@ -33,6 +33,7 @@
 #include <sys/wait.h>
 #include <sys/resource.h>  // M31 沙箱：setrlimit RLIMIT_AS
 #include <poll.h>
+#include <spawn.h>   // M438-1（缺陷 916）：posix_spawnp 快路径（替代热点 fork(2)）
 #include <stdatomic.h>
 #if defined(__GLIBC__)
 #include <execinfo.h>   // M57-S4：glibc 特有头，musl 交叉（边缘设备）无此头 → 条件包含
@@ -5232,6 +5233,18 @@ static int* px_str_offs_get(LXObject* o) {
     return offs;
 }
 
+// M438-2（缺陷 915）：逃生口 —— PX_NO_STR_OFFS_SLICE=1 ⇒ px_slice **不用**缓存偏移表，
+//   回落原「每次重建全表」的线性路径（行为逐字节一致，只是慢）。门 m438_pxslice_offs
+//   用它做负控：同一二进制只切一条路径，「摊还性判据有没有牙」才可验证。
+static int px_slice_no_offs(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("PX_NO_STR_OFFS_SLICE");
+        cached = (v && *v && strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached;
+}
+
 // 简单数字转字符串（int/float）
 static char num_buf[64];
 static const char* fmt_num(LXValue v) {
@@ -6398,27 +6411,57 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     //   （覆盖全部字节，无字节被"吞掉"），合法 UTF-8 下结果不变。
     const char* data = obj.as.obj->as.str.data;
     int blen = obj.as.obj->as.str.len;
-    int* offs = xmalloc(sizeof(int) * (size_t)(len + 1));
-    int boff = 0;
-    offs[0] = 0;
-    for (int c = 0; c < len; c++) {
-        boff += px_utf8_step((const unsigned char*)data + boff, blen - boff);
-        offs[c + 1] = boff;
+    // M438（缺陷 913 · 晨曦报告）：**优先复用 str 上的惰性 rune→byte 偏移表**
+    //   （px_str_offs_get，与 px_index / len() 同一份表），不再每次切片都 xmalloc 全表 +
+    //   逐 rune 走查。原实现单次切片 O(串长)、与切片长度无关（实测 90KB 串取 s[i:i+10]
+    //   ≈170–330µs；逐位置扫描 90K 次 15–30s），而 px_index 早已摊还 O(1)
+    //   —— 同一文件两种生命周期（缺陷 913）。
+    //   等价性：缓存表与本地建表同为 px_utf8_step 建（缺陷 111 口径）⇒ 逐项相同。
+    //   下列三种情形**回落原线性路径**（结果与修前逐字节一致）：
+    //     ① 未建表（len < PX_STR_OFFS_MIN 小串 / > PX_STR_OFFS_MAX 内存护栏）
+    //     ② 选中下标的最大值 ≥ offs_cnt（仅畸形 UTF-8 可达：表覆盖不到）
+    //     ③ n == 0（空选择，不建表也不用表）
+    int* offs = NULL;
+    int offs_owned = 0;
+    int ocnt = 0;
+    if (n > 0) {
+        // 选中下标的**最大**值：k_in>0 时 = s+(n-1)*k_in（不能写 s+n-1：step>1 时低估，
+        //   会误用覆盖不足的表）；k_in<0 时起点 s 即最大。
+        int64_t maxi64 = (k_in > 0) ? (s + (int64_t)(n - 1) * k_in) : s;
+        int* cached = px_slice_no_offs() ? NULL : px_str_offs_get(obj.as.obj);
+        if (cached) ocnt = __atomic_load_n(&obj.as.obj->as.str.offs_cnt, __ATOMIC_RELAXED);
+        if (cached && maxi64 < (int64_t)ocnt) {
+            offs = cached;                      // 摊还 O(1)：建表只发生一次
+        } else {
+            offs = xmalloc(sizeof(int) * (size_t)(len + 1));
+            offs_owned = 1;
+            ocnt = len + 1;
+            int boff = 0;
+            offs[0] = 0;
+            for (int c = 0; c < len; c++) {
+                boff += px_utf8_step((const unsigned char*)data + boff, blen - boff);
+                offs[c + 1] = boff;
+            }
+        }
     }
+    // 第 i 个 rune 的字节区间 = [offs[i], (i+1 < ocnt ? offs[i+1] : blen))
+    //   （末项兜底同 px_index：建表只写到 offs[cnt-1]，末尾字符的结束边界用 blen）
     int total = 0;
-    if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) total += offs[(int)i + 1] - offs[(int)i]; }
-    else { for (int64_t i = s; i > e; i += k_in) total += offs[(int)i + 1] - offs[(int)i]; }
+    if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) total += ((int)i + 1 < ocnt ? offs[(int)i + 1] : blen) - offs[(int)i]; }
+    else { for (int64_t i = s; i > e; i += k_in) total += ((int)i + 1 < ocnt ? offs[(int)i + 1] : blen) - offs[(int)i]; }
     char* out = xmalloc((size_t)(total + 1));
     int oi = 0;
     if (k_in > 0) {
         for (int64_t i = s; i < e; i += k_in) {
-            int cl = offs[(int)i + 1] - offs[(int)i];
+            int bend = ((int)i + 1 < ocnt ? offs[(int)i + 1] : blen);
+            int cl = bend - offs[(int)i];
             memcpy(out + oi, data + offs[(int)i], (size_t)cl);
             oi += cl;
         }
     } else {
         for (int64_t i = s; i > e; i += k_in) {
-            int cl = offs[(int)i + 1] - offs[(int)i];
+            int bend = ((int)i + 1 < ocnt ? offs[(int)i + 1] : blen);
+            int cl = bend - offs[(int)i];
             memcpy(out + oi, data + offs[(int)i], (size_t)cl);
             oi += cl;
         }
@@ -6426,7 +6469,7 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     out[oi] = 0;
     LXValue r = px_str_len(out, oi);
     xfree(out);
-    xfree(offs);
+    if (offs_owned) xfree(offs);
     return r;
 }
 
@@ -15187,6 +15230,120 @@ static void px_free_envp(char** envp) {
     free(envp);
 }
 
+// ── M438-1（缺陷 916 · 晨曦报告）· posix_spawn 快路径 ─────────────────────────
+// ⚠️ 逃生口：环境变量 PX_SPAWN_FORK=1 ⇒ **强制走 fork 路径**（posix_spawn 在某个平台上
+//   行为异常时可现场关掉，不必重编；m438_spawn_posix 门用它做负控 —— 同一二进制、
+//   只切一条路径，判据「有没有真的走 posix_spawn」才有牙）。
+static int px_spawn_force_fork(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("PX_SPAWN_FORK");
+        cached = (v && *v && strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached;
+}
+// 病根：os_spawn / os_spawn_capture / os_capture 的子进程一律 fork(2) 起。多线程宿主里
+//   fork 要复制整个地址空间（页表 / malloc arena），实测（独立 C 对照，见
+//   data/autodrive/M438.md）：
+//     线程数      裸 fork+exec        posix_spawn      捕获形状 fork+dup2   posix_spawnp
+//       0          1.60 ms             1.78 ms            4.79 ms            3.99 ms
+//      64          4.14 ms             1.43 ms            7.97 ms            4.28 ms
+//     264         15.18 ms             2.15 ms           20.50 ms            4.38 ms
+// 做法：posix_spawnp + spawnattr + file_actions 表达「子进程段」——
+//   · 进程组  POSIX_SPAWN_SETPGROUP（pgroup=0 ⇒ 自成组，等价 setpgid(0,0)）
+//   · 重定向  file_actions 的 adddup2 / addopen / addclose
+//   · cwd     addchdir_np（glibc ≥ 2.29；CI 基线 2.34）
+//   · env     envp 参数（px_build_envp 在父侧已备好；NULL ⇒ 继承 environ）
+// ⚠️ setsid：glibc 2.34 的 <spawn.h> **没有** POSIX_SPAWN_SETSID ⇒ 需要 setsid 的调用
+//   一律回落原 fork 路径（逐字节保持旧行为）。
+// ⚠️ 失败语义：posix_spawnp 找不到命令会**直接返回 errno**，而 fork 路径是子进程
+//   _exit(127) ⇒ 可观察行为不同。为不改变既有语义，**posix_spawnp 返回非 0 时一律
+//   回落 fork 路径**：快路径只接管「spawn 成功」的情形，失败面仍走老代码。
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 29))
+#define PX_SPAWN_HAVE_CHDIR 1
+#endif
+
+// 返回 0=已用 posix_spawnp 起好（*out_pid 有效）；-1=不适用/失败 ⇒ 调用方回落 fork。
+//   in_fd/out_fd/err_fd：管道端点（-1=无）；in_path/out_path/err_path：文件（可用 -1 端点的替代）
+//   closefds：子进程里要关掉的父侧 fd（非 0/1/2 才关，防误关标准流）
+static int px_spawn_posix(const char* cmd, char** argv, char** envp,
+                          const char* in_path, int in_fd,
+                          int out_fd, const char* out_path,
+                          int err_fd, const char* err_path, int merge_stderr,
+                          const char* cwd, int group, int setsid_req,
+                          const int* closefds, int nclose,
+                          pid_t* out_pid) {
+    if (setsid_req) return -1;
+    if (px_spawn_force_fork()) return -1;   // PX_SPAWN_FORK=1：逃生口 / 门负控
+#ifndef PX_SPAWN_HAVE_CHDIR
+    if (cwd) return -1;   // 无 addchdir_np 的平台：cwd 走 fork（否则会静默丢失 cwd）
+#endif
+    posix_spawn_file_actions_t fa;
+    if (posix_spawn_file_actions_init(&fa) != 0) return -1;
+    int bad = 0;
+    // stdin
+    if (in_fd >= 0) {
+        if (posix_spawn_file_actions_adddup2(&fa, in_fd, 0) != 0) bad = 1;
+        if (!bad && in_fd > 2) posix_spawn_file_actions_addclose(&fa, in_fd);
+    } else if (in_path) {
+        if (posix_spawn_file_actions_addopen(&fa, 0, in_path, O_RDONLY, 0) != 0) bad = 1;
+    }
+    // stdout
+    if (!bad) {
+        if (out_fd >= 0) {
+            if (posix_spawn_file_actions_adddup2(&fa, out_fd, 1) != 0) bad = 1;
+            if (!bad && out_fd > 2) posix_spawn_file_actions_addclose(&fa, out_fd);
+        } else if (out_path) {
+            if (posix_spawn_file_actions_addopen(&fa, 1, out_path, O_CREAT | O_WRONLY | O_APPEND, 0644) != 0) bad = 1;
+        }
+    }
+    // stderr
+    if (!bad) {
+        if (merge_stderr && out_fd >= 0) {
+            if (posix_spawn_file_actions_adddup2(&fa, out_fd, 2) != 0) bad = 1;
+        } else if (err_fd >= 0) {
+            if (posix_spawn_file_actions_adddup2(&fa, err_fd, 2) != 0) bad = 1;
+            if (!bad && err_fd > 2) posix_spawn_file_actions_addclose(&fa, err_fd);
+        } else if (err_path) {
+            if (posix_spawn_file_actions_addopen(&fa, 2, err_path, O_CREAT | O_WRONLY | O_APPEND, 0644) != 0) bad = 1;
+        }
+    }
+    // 关掉其余父侧端点（防子进程/孙进程攥着管道端 ⇒ 父侧等不到 EOF）
+    for (int i = 0; !bad && i < nclose; i++) {
+        int fd = closefds[i];
+        if (fd > 2 && fd != in_fd && fd != out_fd && fd != err_fd) {
+            if (posix_spawn_file_actions_addclose(&fa, fd) != 0) bad = 1;
+        }
+    }
+#ifdef PX_SPAWN_HAVE_CHDIR
+    if (!bad && cwd) {
+        if (posix_spawn_file_actions_addchdir_np(&fa, cwd) != 0) bad = 1;
+    }
+#endif
+    posix_spawnattr_t at;
+    int at_init = 0;
+    if (!bad) {
+        if (posix_spawnattr_init(&at) != 0) bad = 1;
+        else {
+            at_init = 1;
+            if (group) {
+                if (posix_spawnattr_setpgroup(&at, 0) != 0) bad = 1;
+                else if (posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP) != 0) bad = 1;
+            }
+        }
+    }
+    int r = -1;
+    if (!bad) {
+        pid_t pid = -1;
+        r = posix_spawnp(&pid, cmd, &fa, at_init ? &at : NULL, argv, envp ? envp : environ);
+        if (r == 0) *out_pid = pid;
+    }
+    if (at_init) posix_spawnattr_destroy(&at);
+    posix_spawn_file_actions_destroy(&fa);
+    if (bad || r != 0) return -1;
+    return 0;
+}
+
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     // M83-S2（Issue 20 GAP-PGID-1）：第 3 参可选 group:bool（默认 false 保持现状）→
@@ -15242,7 +15399,19 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     argv[argc + 1] = NULL;
     // M115：环境覆盖在 fork **之前**备好（子进程只能 exec AS-safe 调用）
     char** envp = px_build_envp(env_dict);
-    pid_t pid = fork();
+    // M438-1（缺陷 916）：先试 posix_spawnp 快路径；失败 / 需 setsid / 找不到命令
+    //   ⇒ 回落下面的 fork 路径（语义与修前逐字节一致，rc=127 由子进程 _exit 给出）
+    pid_t pid = -1;
+    if (px_spawn_posix(cmd, argv, envp, in_path, -1, -1, out_path, -1, err_path, 0,
+                       cwd, group, do_setsid, NULL, 0, &pid) == 0) {
+        if (group) setpgid(pid, pid);   // 与 fork 路径同：父侧再确认（幂等）
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        px_free_envp(envp);
+        px_child_reap_register(pid);    // M112-S3（Issue 54）：登记兜底回收
+        return px_int((int64_t)pid);
+    }
+    pid = fork();
     if (pid < 0) {
         for (int i = 0; i <= argc; i++) free(argv[i]);
         free(argv);
@@ -15377,8 +15546,25 @@ static int px_spawn_run_capture(const char* cmd, char** argv, const PxSpawnOpts*
     if (pipe(outp) != 0) { px_free_envp(envp); return -1; }
     if (o->in_data && pipe(inp) != 0) goto fail;
     if (!merge_stderr && pipe(errp) != 0) goto fail;
-    pid_t pid = fork();
-    if (pid < 0) goto fail;
+    // M438-1（缺陷 916）：先试 posix_spawnp 快路径（见 px_spawn_posix 头注）。
+    //   失败 ⇒ 回落原 fork 路径：下面的子进程段与父侧收尾是**两路共用**的同一份代码
+    //   （快路径成功时 pid>0，`if (pid == 0)` 段自然跳过）。
+    pid_t pid = -1;
+    {
+        int closefds[3];
+        int ncf = 0;
+        closefds[ncf++] = outp[0];
+        if (inp[1] >= 0) closefds[ncf++] = inp[1];
+        if (errp[0] >= 0) closefds[ncf++] = errp[0];
+        if (px_spawn_posix(cmd, argv, envp, o->in_path,
+                           (o->in_data ? inp[0] : -1),
+                           outp[1], NULL,
+                           (merge_stderr ? -1 : errp[1]), NULL, merge_stderr,
+                           o->cwd, o->group, 0, closefds, ncf, &pid) != 0) {
+            pid = fork();
+            if (pid < 0) goto fail;
+        }
+    }
     if (pid == 0) {
         // 子进程：全为 async-signal-safe 调用（无 malloc / 无 px_error）
         if (o->group) setpgid(0, 0);

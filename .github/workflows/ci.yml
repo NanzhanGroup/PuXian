@@ -488,6 +488,30 @@ jobs:
           if [ $rc -eq 2 ]; then echo "⚠ m437_dup2_corpus ENV（环境不成立 rc=2）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m437_dup2_corpus 门失败"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m437_dup2_corpus PASS"
+      - name: m438_pxslice_offs（px_slice 惰性偏移表 · M438 · 缺陷 915）
+        #   px_slice 对 str 每次都重建全串 rune→byte 表（O(串长)，与切片长度无关）。
+        #   判据：三轨等价（17 例）· 摊还性（90K 串 2000 次 ≤200ms）· 负控（逃生口
+        #   PX_NO_STR_OFFS_SLICE=1 ⇒ 839ms，209×）· 前提自证。缺 VM/C 轨则环境不成立。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m438_pxslice_offs.sh
+          rc=$?
+          if [ $rc -eq 2 ]; then echo "⚠ m438_pxslice_offs ENV（环境不成立 rc=2）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m438_pxslice_offs rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m438_pxslice_offs PASS"
+      - name: m438_spawn_posix（posix_spawn 快路径 · M438 · 缺陷 916）
+        #   子进程起法从 fork(2) 改为 posix_spawnp（多线程宿主 264 线程实测 20.50→4.38ms）。
+        #   判据：三轨等价（20 例）· 前提自证（strace 见 CLONE_VFORK ≥10，真走 spawnp）·
+        #   负控（PX_SPAWN_FORK=1 ⇒ CLONE_VFORK 归零）· 负控扰动自证（13 次 fork 型 clone）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m438_spawn_posix.sh
+          rc=$?
+          if [ $rc -eq 2 ]; then echo "⚠ m438_spawn_posix ENV（缺 strace 等 rc=2）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m438_spawn_posix rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m438_spawn_posix PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

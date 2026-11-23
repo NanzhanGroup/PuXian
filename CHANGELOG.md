@@ -1,3 +1,84 @@
+## M438：晨曦两条 px 侧 P0 落地 —— 切片摊还 O(1) · 子进程起法转 posix_spawn（缺陷 915 / 916）
+
+> **一句话**：晨曦转来四条 px 侧请求，第 3、4 条已在 v0.2.436 交付（缺陷 905 / 906），
+> 第 1、2 条本轮落地：`px_slice` 不再每次调用重建全串偏移表（90KB 串取 10B：**170.8µs → 2µs**，179× 于 2000 次批量实测 839ms→4ms），
+> 子进程起法从 `fork(2)` 改为 `posix_spawnp`（264 线程宿主捕获形状 **20.50ms → 4.38ms**）。
+> 两条都带逃生口 + 双负控门，门数 313 → **315**。
+
+### 缺陷 915：px_slice 对 str 每次重建全串 rune→byte 偏移表
+
+```
+现象   固定切片长 10B，串长变化（编译轨实测）：1KB=2µs · 4KB=28µs · 16KB=77µs · 64KB=329µs
+       固定 64KB，切片长变化：1B=260µs · 10B=324µs · 1KB=297µs · 10KB=317µs
+       ⇒ 单次 O(串长)、与切片长度无关；90K 次逐位置扫描 15–30s
+       bytes 同尺寸对照：64KB/10B=0µs · 64KB/10KB=18µs ⇒ str/bytes 两套口径
+代码位 runtime.c px_slice：xmalloc(sizeof(int)*(len+1)) + 逐 rune px_utf8_step，
+       每次调用重建；而同文件 px_str_offs_get（M106-S2）早有惰性缓存
+       （MIN=1024 / MAX=16MiB）—— px_index 用、px_slice 不用。
+修     优先复用 px_str_offs_get 的表（摊还 O(1)）；三种情形回落原线性路径、结果逐字节一致：
+       ① 未建表（< PX_STR_OFFS_MIN 小串 / > PX_STR_OFFS_MAX 巨串护栏）
+       ② 选中下标的**最大**值 ≥ offs_cnt（仅畸形 UTF-8 可达：表覆盖不到）
+       ③ n == 0（空选择）
+       ⚠️ maxi 必须按 s+(n-1)*k_in 算：用 s+n-1 在 step>1 时**低估** ⇒ 会误用覆盖不足的表
+          （fuzz 第一版就是这么漏过去的，已改对并写进本段）。
+证据   等价性：独立 C 模型（两份实现逐行照抄）16 万例（小串 / 建表区间 / 全随机畸形 UTF-8 /
+       负步长 / 越界端 / step=±1..3）mismatch=0；负控（末字节翻位）59315/160000 红。
+       实测（C 轨 · 90K 串）：2000 次切片 **4ms**（修前 839ms 同口径负控）；20000 次 27ms。
+逃生口 PX_NO_STR_OFFS_SLICE=1 ⇒ 强制不用缓存表（慢但语义一致；供门负控与现场排障）
+门     m438_pxslice_offs（600s）：形状 4 · 三轨等价 17 例 · 摊还性 ≤200ms/2000 次 ·
+       负控（839ms）· 前提自证（负控/正面 209×）
+```
+
+### 缺陷 916：os_spawn / os_capture 子进程走 fork(2)
+
+```
+病根   三个入口（os_spawn / os_spawn_capture / os_capture）都 fork(2)。多线程宿主里 fork
+       要复制整个地址空间（页表 / malloc arena）。独立 C 对照（非晨曦二进制，自写原型）：
+         线程数   裸 fork+exec   posix_spawn   捕获形状 fork+dup2   posix_spawnp
+           0       1.60 ms       1.78 ms          4.79 ms            3.99 ms
+          64       4.14 ms       1.43 ms          7.97 ms            4.28 ms
+         264      15.18 ms       2.15 ms         20.50 ms            4.38 ms
+修     posix_spawnp + spawnattr + file_actions 表达「子进程段」：
+         · 进程组  POSIX_SPAWN_SETPGROUP（pgroup=0 ⇒ 自成组，等价 setpgid(0,0)）
+         · 重定向  adddup2 / addopen / addclose（含子进程里关掉父侧端点，防攥着管道端不 EOF）
+         · cwd     addchdir_np（glibc ≥ 2.29；CI 基线 2.34）
+         · env     envp 参数（px_build_envp 父侧已备好）
+       ⚠️ setsid：glibc 2.34 的 <spawn.h> **没有** POSIX_SPAWN_SETSID ⇒ 需 setsid 的调用
+          一律回落 fork（语义逐字节不变）。
+       ⚠️ 失败语义：posix_spawnp 找不到命令**直接返回 errno**（fork 路径是子进程 _exit(127)）
+          ⇒ 为不改变可观察行为，**posix_spawnp 返回非 0 一律回落 fork**：快路径只接管成功面。
+证据   功能等价 20 例（纯 stdout / stdin_data 双工 / env / cwd / stderr 分离 / 合并捕获 /
+       PATH 查找 / 不存在命令 rc=127 / os_spawn+os_wait / setsid 回落 / group+timeout 组杀）：
+       解释 · VM · C 三轨逐字节一致。
+       前提自证：strace 捕获 C 轨 ⇒ clone3(CLONE_VM|CLONE_VFORK) **10 次**（真走 spawnp）。
+逃生口 PX_SPAWN_FORK=1 ⇒ 强制 fork 路径（同一二进制只切一条路径；现场排障 + 门负控）
+门     m438_spawn_posix（600s）：形状 6 · 三轨等价 20 例 · 前提自证（CLONE_VFORK=10）·
+       负控（PX_SPAWN_FORK=1 ⇒ CLONE_VFORK 归零）· 扰动自证（13 次 fork 型 clone）+ 逃生口下功能仍全绿
+```
+
+### 门与名册
+
+```
+新增    selfhost/check_m438_pxslice_offs.sh · selfhost/check_m438_spawn_posix.sh
+语料    selfhost/probes/m438_slice_equiv.px（17 例）· m438_slice_perf.px（90K 串计时）·
+        m438_spawn_equiv.px（20 例）—— 放 probes/ 而非 examples/：examples 面由 m421 覆盖账管，
+        语料是**门的内部夹具**（等价性 + 摊还性），不对外承诺 API
+注册    gates.registry.sh 两条 run + 两条 gate_timeout(600) · ci.yml 同两步 ⇒ check_gate_registry 双向一致
+版本    0.2.437 → 0.2.438（9 处版本串，packaging/bump_version.sh 一把改完）
+重烘    runtime/*.c 与 selfhost/*.px 均变 ⇒ rebake_bin.sh --rebake-all，14/14 指纹一致
+```
+
+### 边界（没做的）
+
+```
+· 解释轨的 i_slice 走「逐字符索引 + join」，是**另一条路径**（实测 90K 串 2000 次 791ms），
+  本轮不动：它的形状与编译轨不同，改它要另行给等价性证明
+· os_popen（双向管道）仍走 fork：它的形状是「父侧持有双端 fd 交给脚本」，posix_spawn 的
+  file_actions 表达不了「把管道端返回给调用方」，留待单独设计
+· px_pool_spawn（M437 worker 池）内部本来就自己 pipe+fork，独立于上面三个入口，本轮不动
+· 池默认仍关（g_px_pool_size=0，需 PX_POOL_WORKERS=N 显式开启）—— 与 M437 的口径一致
+```
+
 ## M437 收口四：回灌基线后超时口径双红，带崩 m400（缺陷 918）
 
 > **一句话**：发布后把 chain-20261123-172827 的实测回灌进基线（8249d8c），`m422_examples_compile`

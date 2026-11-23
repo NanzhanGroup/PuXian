@@ -1,0 +1,28 @@
+# M438-2 摊还性语料：大串连续切片，第二次起应 ≤ 数微秒（首次建表允许慢）
+def mk_ascii(n):
+    s = ""
+    while len(s) < n:
+        s = s + "0123456789abcdefghij"
+    return s
+
+big = mk_ascii(90000)
+print("big_chars=" + str(len(big)))
+
+t0 = now_ms()
+i = 0
+n = 0
+while i < 2000:
+    n = n + len(big[i:i + 10:1])
+    i = i + 1
+t1 = now_ms()
+print("slices=2000 total_ms=" + str(t1 - t0) + " bytes=" + str(n))
+
+# 逐位置扫描（修前 O(串长²)，90K 次 ≈ 15–30s；修后应 ≪1s）
+t2 = now_ms()
+k = 0
+acc = 0
+while k < 20000:
+    acc = acc + len(big[k:k + 3:1])
+    k = k + 1
+t3 = now_ms()
+print("slices=20000 total_ms=" + str(t3 - t2) + " bytes=" + str(acc))

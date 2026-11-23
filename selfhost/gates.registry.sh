@@ -2565,3 +2565,18 @@ run m437_worker bash selfhost/check_m437_worker.sh
 #     ⇒ 本门 [7/8] 直接调用 ⇒ m421 覆盖账判 COVERED（不靠豁免表洗白）。
 gate_timeout m437_dup2_corpus 300
 run m437_dup2_corpus bash examples/m437_worker/verify.sh
+# M438 · px_slice 惰性偏移表（缺陷 915 · 晨曦报告）：px_slice 对 str 每次调用都重建全串
+#   rune→byte 表（O(串长)，与切片长度无关：90KB 取 s[i:i+10] ≈170–330µs），而同文件
+#   px_index 早已惰性缓存（px_str_offs_get）⇒ 改为复用；小串/巨串/表覆盖不到回落原线性路径。
+#   判据：形状 4 条 · 三轨等价（17 例）· 摊还性（2000 次 ≤200ms）· 负控（逃生口
+#   PX_NO_STR_OFFS_SLICE=1 ⇒ 839ms）· 前提自证（209×）。
+gate_timeout m438_pxslice_offs 600
+run m438_pxslice_offs bash selfhost/check_m438_pxslice_offs.sh
+# M438 · posix_spawn 快路径（缺陷 916 · 晨曦报告）：os_spawn / os_spawn_capture /
+#   os_capture 的子进程一律 fork(2)；多线程宿主实测 264 线程时捕获形状 20.50ms vs
+#   posix_spawnp 4.38ms。改为 posix_spawnp + spawnattr(SETPGROUP) + file_actions；
+#   需 setsid（glibc 2.34 无 POSIX_SPAWN_SETSID）或 spawn 失败 ⇒ 回落 fork（语义不变）。
+#   判据：形状 6 条 · 三轨等价（20 例）· 前提自证（strace CLONE_VFORK=10）· 负控
+#   （PX_SPAWN_FORK=1 ⇒ 归零）· 负控扰动自证（13 次 fork 型 clone）。
+gate_timeout m438_spawn_posix 600
+run m438_spawn_posix bash selfhost/check_m438_spawn_posix.sh

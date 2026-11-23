@@ -1,0 +1,98 @@
+# M438-2 对拍语料：str 切片走「惰性偏移表」后，三轨（解释/编译/VM）必须逐字节一致
+#   覆盖：大 ASCII（≥1KB 建表路径）· 大中文（多字节，建表路径）· 小串（<1KB 回落路径）
+#         正负步长 / step>1（maxi 低估坑）/ 空选 / 反序 / 越界端
+
+def mk_ascii(n):
+    s = ""
+    while len(s) < n:
+        s = s + "0123456789abcdefghij"
+    return s
+
+def mk_cn(n):
+    s = ""
+    while len(s) < n:
+        s = s + "中文测试串"
+    return s
+
+def manual(s, start, end, step):
+    # 与运行时切片同语义的独立参考实现（只用索引 + 拼接，不碰切片）
+    ln = len(s)
+    if start < 0:
+        start = start + ln
+    if end < 0:
+        end = end + ln
+    out = ""
+    if step > 0:
+        i = start
+        if i < 0:
+            i = 0
+        if i > ln:
+            i = ln
+        e = end
+        if e < 0:
+            e = 0
+        if e > ln:
+            e = ln
+        while i < e:
+            out = out + s[i]
+            i = i + step
+    else:
+        i = start
+        if i > ln - 1:
+            i = ln - 1
+        e = end
+        if e < -1:
+            e = -1
+        while i > e:
+            out = out + s[i]
+            i = i + step
+    return out
+
+def rev_all(s, step):
+    # s[::-k] 语义（省略端点）：从末字符起，走到「0 之前」为止（不含 -1 这个越界哨兵）
+    ln = len(s)
+    out = ""
+    i = ln - 1
+    while i >= 0:
+        out = out + s[i]
+        i = i + step
+    return out
+
+def check(tag, got, want):
+    if got == want:
+        print("OK   " + tag)
+        return 1
+    print("FAIL " + tag + " got=" + str(len(got)) + "B want=" + str(len(want)) + "B")
+    return 0
+
+ok = 0
+bad = 0
+
+a = mk_ascii(3000)
+print("ascii len_chars=" + str(len(a)))
+ok = ok + check("A1 whole", a[0:len(a):1], a)
+ok = ok + check("A2 rev", a[::-1], rev_all(a, -1))
+ok = ok + check("A3 rev-rev", a[::-1][::-1], a)
+ok = ok + check("A4 step2", a[0:len(a):2], manual(a, 0, len(a), 2))
+ok = ok + check("A5 step3 off1", a[1:len(a):3], manual(a, 1, len(a), 3))
+ok = ok + check("A6 neg step2", a[len(a) - 1:-1:-2], manual(a, len(a) - 1, -1, -2))
+ok = ok + check("A7 empty", a[10:10:1], "")
+ok = ok + check("A8 tail", a[2990:len(a):1], manual(a, 2990, len(a), 1))
+ok = ok + check("A9 cross rev", a[2000:1000:-3], manual(a, 2000, 1000, -3))
+
+u = mk_cn(2000)
+print("cn len_chars=" + str(len(u)) + " bytes≈" + str(len(u) * 3))
+ok = ok + check("U1 whole", u[0:len(u):1], u)
+ok = ok + check("U2 rev", u[::-1], rev_all(u, -1))
+ok = ok + check("U3 step2", u[0:len(u):2], manual(u, 0, len(u), 2))
+ok = ok + check("U4 step4 off3", u[3:len(u):4], manual(u, 3, len(u), 4))
+ok = ok + check("U5 neg", u[len(u) - 1:-1:-2], manual(u, len(u) - 1, -1, -2))
+
+small = "中a文b"
+ok = ok + check("S1 small whole", small[0:len(small):1], small)
+ok = ok + check("S2 small rev", small[::-1], rev_all(small, -1))
+ok = ok + check("S3 small step2", small[0:len(small):2], manual(small, 0, len(small), 2))
+
+print("PASS=" + str(ok) + " FAIL=" + str(bad))
+if ok < 17:
+    exit(1)
