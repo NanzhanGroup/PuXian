@@ -2612,3 +2612,16 @@ run m439_norm bash selfhost/check_m439_norm.sh
 #         三路等价 1 · 相对性能 1（中位 ≤ 全量 60%，绝对值不作判据）。
 gate_timeout m440_fastmemo 600
 run m440_fastmemo bash selfhost/check_m440_fastmemo.sh
+# M441 · 产物裁剪开关（缺陷 923/924）：--no-onnx · --gc-sections。
+#   病象一（923）：onnx 的 runtime 侧裁剪（-DPX_NO_ONNX + 源移出 + native_mod_map 条目）
+#     自 M156 起全就绪，**只差 tools/px 接线** ⇒ 文档写着能用、实际不能。
+#   病象二（924）：改了 tools/px 的裁剪/链接逻辑，产物缓存**不失效** —— key 只覆盖
+#     源码 + toolchain + comp_fp，没有构建器自身 ⇒ 升级 px 后可能拿到旧产物（本轮实测
+#     改了自动裁剪，默认构建 secs=1 直接命中改动前的二进制）。与缺陷 922 同族。
+#   判据 16 条：形状 6（含「gcs=0 的 rt_key 与旧口径逐字节一致」⇒ 默认不冷缓存）·
+#     负控 1（删掉接线 ⇒ 形状判据必红）· 默认不变 1（默认产物仍含 onnx 符号）·
+#     --no-onnx 生效 3（符号 0 / 严格更小 / 能跑）· 运行期契约 2（默认能解析是前提自证，
+#     --no-onnx 必须 R1001）· --gc-sections 2 · 组合 1。
+#   全部构建走 PX_BUILD_NOCACHE=1 —— 缓存命中会让判据失真（本项正因缓存踩的坑）。
+gate_timeout m441_prune 900
+run m441_prune bash selfhost/check_m441_prune.sh

@@ -555,6 +555,21 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m440_fastmemo ENV（缺 pxi / 建不出产物 rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m440_fastmemo rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m440_fastmemo PASS"
+      - name: m441_prune（产物裁剪开关 · --no-onnx / --gc-sections · M441 · 缺陷 923/924）
+        #   923：onnx 的 runtime 侧裁剪自 M156 起全就绪，只差 tools/px 接线 ⇒ 文档能用、实际不能。
+        #   924：改了 tools/px 的裁剪逻辑产物缓存不失效（键里没有构建器）⇒ 升级 px 可能拿旧产物。
+        #   判据 16 条：形状 6（含 gcs=0 的 rt_key 与旧口径逐字节一致）· 负控 1 ·
+        #   默认不变 1（默认产物仍含 onnx 符号）· --no-onnx 3 · 运行期契约 2（R1001）·
+        #   --gc-sections 2 · 组合 1。全部构建 PX_BUILD_NOCACHE=1（缓存会让判据失真）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m441_prune.sh
+          rc=$?
+          if [ $rc -eq 2 ]; then echo "⚠ m441_prune SELFTEST-SKIP rc=2"; exit 0; fi
+          if [ $rc -eq 3 ]; then echo "⚠ m441_prune ENV（缺 cc / 构建不出产物 rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m441_prune rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m441_prune PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；
