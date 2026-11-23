@@ -6411,11 +6411,11 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     //   （覆盖全部字节，无字节被"吞掉"），合法 UTF-8 下结果不变。
     const char* data = obj.as.obj->as.str.data;
     int blen = obj.as.obj->as.str.len;
-    // M438（缺陷 913 · 晨曦报告）：**优先复用 str 上的惰性 rune→byte 偏移表**
+    // M438（缺陷 915 · 晨曦报告）：**优先复用 str 上的惰性 rune→byte 偏移表**
     //   （px_str_offs_get，与 px_index / len() 同一份表），不再每次切片都 xmalloc 全表 +
     //   逐 rune 走查。原实现单次切片 O(串长)、与切片长度无关（实测 90KB 串取 s[i:i+10]
     //   ≈170–330µs；逐位置扫描 90K 次 15–30s），而 px_index 早已摊还 O(1)
-    //   —— 同一文件两种生命周期（缺陷 913）。
+    //   —— 同一文件两种生命周期（缺陷 915）。
     //   等价性：缓存表与本地建表同为 px_utf8_step 建（缺陷 111 口径）⇒ 逐项相同。
     //   下列三种情形**回落原线性路径**（结果与修前逐字节一致）：
     //     ① 未建表（len < PX_STR_OFFS_MIN 小串 / > PX_STR_OFFS_MAX 内存护栏）
