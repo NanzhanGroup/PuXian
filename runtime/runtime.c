@@ -9912,6 +9912,30 @@ static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)rc);
 }
 
+// ==================== M437（缺陷 860 · worker 协议）====================
+// dup2(oldfd, newfd) → int：把 oldfd 复制到 newfd（newfd 已打开则先关），成功返回 newfd，
+//   失败返回 -1（os_errno() 取原因）。
+// 为什么必须有这门内置（M25 起 18 个里程碑的池一直是死码，本轮终于找到结构性原因）：
+//   `px --worker` 协议要求 worker 在**执行脚本期间**把 stdout 重定向到捕获通道，执行完再恢复。
+//   POSIX 里做这件事只有 dup/dup2 —— 而本仓 IO 面此前有 open/close/read/write/fcntl/ioctl/
+//   mmap/flock，**没有 dup/dup2** ⇒ 在 .px 语言层**表达不出来**。这才是「协议从来不存在」
+//   的原因（不是忘了写，是缺原语）。同理它也是通用能力（重定向、fd 保存恢复），故补在 runtime。
+// 语义对齐：失败不 kill 进程（与 flock/chmod/read/write 同一口径：-1 + os_errno()）。
+static LXValue bi_dup2(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: dup2 需要 (oldfd, newfd) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: dup2 的 oldfd 需要 int，实际是 %s", px_type_name(args[0]));
+    if (args[1].type != PX_INT) px_error("R1002: dup2 的 newfd 需要 int，实际是 %s", px_type_name(args[1]));
+    int ofd = (int)args[0].as.i;
+    int nfd = (int)args[1].as.i;
+    if (ofd < 0 || nfd < 0) return px_int(-1);
+    if (ofd == nfd) return px_int(nfd);
+    int rc;
+    do { rc = dup2(ofd, nfd); } while (rc < 0 && errno == EINTR);
+    if (rc < 0) return px_int(-1);
+    return px_int((int64_t)rc);
+}
+
 // ==================== M130：文件锁 / 权限（flock/chmod，qg-issue 87 缺陷 56/57） ====================
 // 背景（token-cache PuXian 化）：Go 侧防多实例用 `syscall.Flock(fd, LOCK_EX|LOCK_NB)`
 //   （lock/lock.go），本移植发现 native 表**没有任何锁原语**：
@@ -14142,6 +14166,8 @@ void px_register_builtins(void) {
     px_set_global("sleep_us", px_native("sleep_us", bi_sleep_us));
     px_set_global("now_us", px_native("now_us", bi_now_us));
     px_set_global("fcntl", px_native("fcntl", bi_fcntl));
+    // M437（缺陷 860）：dup2 —— fd 重定向/保存恢复（worker 协议的结构性前提，见 bi_dup2 注释）
+    px_set_global("dup2", px_native("dup2", bi_dup2));
     // M130：文件锁 / 权限（flock/chmod）
     px_set_global("flock", px_native("flock", bi_flock));
     px_set_global("chmod", px_native("chmod", bi_chmod));
@@ -26186,13 +26212,12 @@ static char g_last_script_path[1024] = "";
 // 派生一个 `px --worker` 进程（返回值 0 成功）
 static int px_pool_spawn(PXWorker* w) {
     // M423（缺陷 859）：解释器路径在**父进程**解析（子进程里 close_range 后再解析更脆弱）
-    // M424（缺陷 864）：worker 协议要求「px --worker」这一 CLI 形态；直连解释器（pxi）
-    //   没有 worker 模式 ⇒ 明确不可用（返回 -1 让池初始化失败并退化到 fork+exec，
-    //   不冒充「池在跑」）。真正的 worker 协议列 M425。
+    // M437（缺陷 860）：直连解释器（pxi）**也支持** worker 模式了 —— `pxi --worker` 由
+    //   selfhost/interp.px 的 _wt_worker_loop 实现。修前这里对 direct 直接 return -1
+    //   （「pxi 没有 worker 模式」），那条判断的前提在本轮已不成立。
     int direct = 0;
-    const char* pxbin_d = px_interp_bin(&direct);
-    if (direct) return -1;
-    const char* pxbin = pxbin_d;
+    const char* pxbin = px_interp_bin(&direct);
+    (void)direct;
     if (!pxbin) return -1;
     int in_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1};
     if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
@@ -26207,17 +26232,18 @@ static int px_pool_spawn(PXWorker* w) {
         return -1;
     }
     if (pid == 0) {
+        // stdin ← 任务帧；**结果帧走 fd 3**（M437：不再占用 stdout —— worker 需要在执行
+        //   脚本期间把 stdout 重定向到捕获文件，结果通道若也在 stdout 就必然打架）。
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        dup2(out_pipe[1], 3);
         // 关闭继承的其他 fd（监听 socket、连接 fd、其他 worker 管道）：
         // 防止 worker 持有监听端口 / 管道写端导致 EOF 误判（M25 进程池）
+        //   注意从 4 起关：fd 3 是结果通道，必须保留。
 #if defined(__GLIBC__)
-        close_range(3, ~0U, 0);
+        close_range(4, ~0U, 0);
 #else
         // musl（M57-S4 交叉编译）无 close_range：循环关闭继承 fd（4096 覆盖常规上限）
-        for (int fd = 3; fd < 4096; fd++) close(fd);
+        for (int fd = 4; fd < 4096; fd++) close(fd);
 #endif
         execlp(pxbin, "px", "--worker", (char*)NULL);
         dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）: %s\n", pxbin);

@@ -1,3 +1,93 @@
+## M437：`px --worker` 常驻协议落地（缺陷 860）—— M25 起 18 个里程碑的进程池一直是死码
+
+> **一句话**：`px --worker` 这个子命令**从来不存在**（M423 已量化：每次 px_exec 先派生 4 个必然失败的
+> worker、每个打 2 行「未知子命令」，再退化 fork+exec）。本轮定位到**结构性原因**并修掉 ——
+> worker 协议要求「执行脚本期间把 stdout 重定向到捕获通道、执行完恢复」，而语言层 IO 面
+> **没有 dup/dup2**，在 .px 里根本表达不出来。补 dup2 内置后协议才写得出来，进程池自此可选开启。
+
+### 一 结构性原因（这才是「协议从来不存在」的理由）
+
+```
+M25 设计   父进程写任务帧（4B 大端长度 + path\0env\0dump\0timeout）→ worker 执行 → 写结果帧
+runtime 侧 PXWorker / px_pool_spawn / px_pool_send_task / px_pool_recv_result / 空闲回收 / 滚动重启 全在
+worker 侧  `px --worker` 只报「未知子命令」；tools/px 只认 build/run/…，pxi 只认脚本路径
+为什么写不出来
+          worker 执行脚本时 stdout 必须被捕获（结果帧的 output 就是脚本 stdout），执行完再恢复 ——
+          POSIX 只有 dup/dup2 能做这件事；而本仓 IO 面有 open/close/read/write/fcntl/ioctl/
+          mmap/flock，**独缺 dup/dup2** ⇒ 不是忘了写，是缺原语。
+```
+
+### 二 四件改动
+
+```
+runtime/runtime.c
+  + bi_dup2(oldfd, newfd) → int（失败 -1 + os_errno()，与 flock/chmod/read/write 同口径）
+  + px_pool_spawn：允许直连解释器（去掉 `if (direct) return -1` —— 那条判断的前提已不成立）；
+    结果帧通道从 stdout 改为 **fd 3**（stdout 留给脚本捕获）；close_range 起点 3 → 4
+selfhost/interp.px
+  + 内置名册加 "dup2"
+  + _wt_read_exact / _wt_split_nul / _wt_run / _wt_worker_loop（常驻循环）
+  + main 加 `--worker` 分支（只认「唯一参数就是 --worker」⇒ 用户脚本实参形式不变）
+tools/px
+  + `--worker) shift; exec "$PXI_BIN" --worker`（省掉一层 bash 包装）
+tools/lint_core.px
+  名册由 tools/gen_builtin_list.sh 重新派生（429 → 430 名）
+```
+
+### 三 协议与边界（如实）
+
+```
+任务帧   4B 大端长度 + path "\0" env_json "\0" dump("0"/"1") "\0" timeout_ms
+结果帧   4B 大端长度 + exit_code "\0" output            （经 fd 3 回写）
+执行期   stdout → 捕获文件；stdin → /dev/null（协议通道不能被脚本读走）
+fd 保存  用 fcntl(F_DUPFD, ≥10) 而不是 dup2 到固定编号 —— 后者在 serve 里可能误关别人的 fd
+每任务   重置 g_globals/g_structs/g_enums/… + i_register_builtins；env 显式 set/unset
+         PX_INIT_GLOBALS / PX_DUMP_RESPONSE
+已知边界 ① 脚本调用 **exit(N) 会终止 worker 进程**（exit 是进程级原语）。父进程侧表现为
+           「worker 崩溃」⇒ respawn + 退化 fork+exec，**最终结果仍正确**（只是慢一次）。
+           要支持 exit 语义需在解释器里做「仅中止当前脚本」的控制流 —— 列后续项。
+         ② output 经 bytes_to_str 转回 ⇒ **含 NUL 的输出会被截断**（文本响应不受影响；
+           dump_response 的 JSON 不含 NUL）。二进制面完整对齐列后续项。
+         ③ native 层状态（脚本自己打开的 fd / mmap）不重置 —— 与 PHP-FPM 同性质。
+默认值   g_px_pool_size 仍为 0（**不改变默认行为**）：池需显式 PX_POOL_WORKERS=N 开启。
+         是否默认开启留给「门证据 + 观测」再定，不在一夜里改默认。
+```
+
+### 四 门 m437_worker（311 → 312）
+
+```
+静态形状 8 条（dup2 实现/注册 · 结果 fd 3 · close_range 从 4 · direct 不再拒绝 · worker 循环 ·
+          main 分支 · tools/px 转发）
+P1       单帧 → (0, "hello-42\n")
+P2       同一 worker 连 3 帧，逐字节相同（脚本级状态重置成立）
+P4       运行时错误传播（read_file 失败 ⇒ exit_code 1 且 stdout 保留错误前输出）
+P5       错误之后 worker 仍能服务下一帧（进程存活 + 状态恢复）
+N1       缺失路径 ⇒ exit_code≠0（不静默成功）
+N2       帧长越界（65537）⇒ rc=2 + stderr 指名（不 hang / 不静默）
+P3       池开（PX_POOL_WORKERS=2）↔ 关（=0）双态，px_exec 输出逐字节一致
+P7       前提自证：ps 真看到 `pxi --worker` 常驻进程（不是退化路径冒充）
+G1       默认值口径：g_px_pool_size 仍为 0
+```
+测试装置独立成文件 `selfhost/check_m437_worker_probe.py`：门里用 heredoc 时
+「heredoc 占 stdin」与「给 worker 写帧的 PIPE」混在一起，排查成本高（本轮实测踩过两次：
+一次是 subprocess 的 close_fds 把 preexec_fn 里新 dup 的 fd 关掉、一次是 os.dup2(w,3) 在 w==3
+时把唯一副本关掉）。装置里两处都留了注释与修法。
+
+### 五 顺带清的两笔小账
+
+```
+缺陷 730（门夹具不隔离 · M390 登记）
+  engine_parity.sh：WORK 固定路径 → mktemp -d（每实例唯一）+ 同门互斥锁
+  实测：并发两份，修前随机假红（A: lex_b12_interp_unclosed/parse_b07_anon_fn · B: lex_b13_illegal_escape，
+        且两份红的案例**互不相同** ⇒ 读到半成品编译缓存）；修后先到者绿、后到者 rc=2 响亮拒绝，
+        锁文件与 mktemp 目录均无残留。
+  为什么不直接用 selfhost/gate_lock.sh：它的存活判据只认 verify.sh|run_gates.sh|m116_gates.sh
+        的 cmdline，本脚本不匹配 ⇒ 会被当「陈旧锁」删掉重抢（实测加了也无效）。
+        这条**判据缺口**记在本段，本轮未改全局锁（要改它需同步 m276 门负控，另立）。
+ci_known_red 第 5 行（M432 补2 / 缺陷 895 的登记）
+  M436 的两次 CI（e185fbe / 1db51f0）均 success ⇒ 登记到期，摘除（packaging/ci_known_red.tsv）。
+```
+
 ## M436：`px run` 吞 stdin（缺陷 905）· `px --deps` 只读出口（缺陷 906）· GC 根面审计器的静态模型缺口（缺陷 907）
 
 > **一句话**：三件事同一晚落地 —— ① `px run` 解释轨在**管道/重定向**下读到空 stdin（M429 的 `&` 撞上 bash 非交互默认 `fd0←/dev/null`）；

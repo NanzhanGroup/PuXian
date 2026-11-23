@@ -2546,3 +2546,10 @@ run m436_pxrun_stdin bash selfhost/check_pxrun_stdin.sh
 #     D8 错误码（1/2）· N1 负控（闭包退化 ⇒ D2 红）· N2 负控（key 去依赖 ⇒ D5 红）· G1。
 gate_timeout m436_px_deps 300
 run m436_px_deps bash selfhost/check_px_deps.sh
+# M437 · px --worker 常驻协议（缺陷 860：M25 起池是死路径 —— worker 那端从来不存在，
+#   结构性原因是语言层缺 dup2，无法在执行期重定向 stdout）
+#   判据：形状 8 条 · P1 单帧协议 · P2 同 worker 连 3 帧状态重置 · P4 exit_code 传播 ·
+#         N1 缺失路径不静默成功 · N2 越界帧响亮退出 · P3 池开/关双态对拍 ·
+#         P7 前提自证（ps 真看到 pxi --worker）· G1 默认值口径。
+gate_timeout m437_worker 600
+run m437_worker bash selfhost/check_m437_worker.sh

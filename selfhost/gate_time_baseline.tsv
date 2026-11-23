@@ -345,3 +345,4 @@ upstream_tests	1331	OK	chain-20261123-063633
 version_drift	0	OK	chain-20261123-063633
 version_golden	1	OK	chain-20261123-042412
 zombie_reap	26	OK	chain-20261123-063633
+m437_worker	4	OK	chain-20261123-063633

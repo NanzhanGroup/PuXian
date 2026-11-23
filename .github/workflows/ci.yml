@@ -462,6 +462,20 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_px_deps 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_px_deps rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_px_deps PASS"
+      - name: px --worker 常驻协议（M437 · 缺陷 860）
+        #   病史：M25 起 runtime 侧就有进程池，但 worker 那端**从来不存在** —— `px --worker`
+        #   报「未知子命令」，每次 px_exec 先派生 4 个必然失败的进程再退化 fork+exec。
+        #   结构性原因：协议要在执行期把 stdout 重定向到捕获通道，而语言层此前没有 dup/dup2。
+        #   判据：协议正控 / 同 worker 多帧状态重置 / exit_code 传播 / 两个负控 /
+        #   池开↔关双态逐字节对拍 / 前提自证（ps 真看到 pxi --worker）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m437_worker.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ check_m437_worker 环境不成立 rc=3"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ check_m437_worker rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ check_m437_worker PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

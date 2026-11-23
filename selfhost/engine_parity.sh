@@ -40,8 +40,57 @@ ROOT=$(pwd)
 PXC="$ROOT/bootstrap/pxc"
 PXDEF="$ROOT/tools/px"
 GOLD="$ROOT/selfhost/golden/errors"
-WORK=/tmp/px_engine_parity
+# 缺陷 730（M436-3 清账）：夹具与调用链都必须由本实例**独占**，分两层：
+#   ① 现场目录：旧写法 WORK=/tmp/px_engine_parity 是固定路径且无锁 ⇒ 两个实例并发时互相覆盖
+#      c.out/c.err/d.out/d.err，判据读到别人的现场（08:24–08:30 实测：负例 通过 12 / 失败 18，
+#      而同一条 case 手动跑 grep_rc=0、首行完全等于 golden）。判据没坏，是它读的文件被换掉了。
+#      ⇒ 默认 mktemp -d 每实例唯一；需要固定路径复现时显式传 ENGINE_PARITY_WORK=<dir>。
+#   ② 编译缓存：本门调 tools/px build，而 .buildcache/.runcache 是**全仓共用**的。
+#      只隔离 WORK 后并发实测仍随机 1–2 例「默认轨 stderr 未含 golden 正文」，两份红的案例
+#      **互不相同**（A: lex_b12/parse_b07 · B: lex_b13）⇒ 读到了半成品缓存。
+#      ⇒ 同门互斥（本门只读源码、不改仓库，只需防**同门**并发；全局门锁由 run_gates.sh 持）。
+#         人工并发时后到者 rc=2 响亮退出，不产出假红假绿。
+#      ⚠️ 不用 selfhost/gate_lock.sh：它的存活判据只认 verify.sh|run_gates.sh|m116_gates.sh
+#         的 cmdline，本脚本不匹配 ⇒ 会被当成「陈旧锁」删掉重抢（实测加了也无效）。
+WORK=${ENGINE_PARITY_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/px_engine_parity.XXXXXX")}
 mkdir -p "$WORK"
+_EP_LOCK="${ENGINE_PARITY_LOCK:-/tmp/.px_engine_parity.lock}"
+_EP_LOCKED=0
+_ep_cleanup() {
+    [ -n "${ENGINE_PARITY_KEEP:-}" ] || rm -rf "$WORK" 2>/dev/null
+    if [ "$_EP_LOCKED" = 1 ] && [ "$(cat "$_EP_LOCK" 2>/dev/null)" = "$$" ]; then
+        rm -f "$_EP_LOCK" 2>/dev/null
+    fi
+}
+trap _ep_cleanup EXIT
+if [ -z "${ENGINE_PARITY_NO_LOCK:-}" ]; then
+    _ep_claim=0
+    for _i in 1 2 3 4 5 6 7 8; do
+        if ( set -o noclobber; printf '%s\n' "$$" > "$_EP_LOCK" ) 2>/dev/null; then
+            _ep_claim=1; break
+        fi
+        _ep_own="$(cat "$_EP_LOCK" 2>/dev/null || true)"
+        if [ -n "$_ep_own" ] && [ "$_ep_own" != "$$" ] && kill -0 "$_ep_own" 2>/dev/null; then
+            _ep_same=0
+            if [ -r "/proc/$_ep_own/cmdline" ]; then
+                tr '\0' ' ' < "/proc/$_ep_own/cmdline" 2>/dev/null \
+                    | grep -q 'engine_parity\.sh' && _ep_same=1
+            else
+                _ep_same=1   # 读不到 /proc ⇒ 退回只看存活（宁可过度拒绝）
+            fi
+            if [ "$_ep_same" = 1 ]; then
+                echo "❌ 另一份 engine_parity.sh 正在跑（PID $_ep_own）—— 拒绝并发。" >&2
+                echo "   ⇒ 共享编译缓存会互踩（缺陷 730：假红案例随机分布）；等它结束再跑。" >&2
+                echo "   ⇒ 要复现并发场景请用 ENGINE_PARITY_LOCK=<独立锁文件> 或 ENGINE_PARITY_NO_LOCK=1。" >&2
+                exit 2
+            fi
+        fi
+        rm -f "$_EP_LOCK" 2>/dev/null || true
+        sleep 0.05
+    done
+    [ "$_ep_claim" = 1 ] || { echo "❌ 抢同门互斥锁失败（$_EP_LOCK）—— 疑似并发启动或 /tmp 异常" >&2; exit 2; }
+    _EP_LOCKED=1
+fi
 
 xfail_reason() {
     # 登记格式（新增缺口时照写；返回 0 表示已登记）：

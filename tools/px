@@ -89,7 +89,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.2.436"
+SELFHOST_VER="0.2.437"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
@@ -1811,6 +1811,10 @@ case "$cmd" in
     #   就会在**runtime 链错**的情况下报绿（第 35 轮实测踩中：门打印"⚠️ 取不到
     #   当前 rt_key ⇒ 跳过 runtime 核对"，随后仍输出"✅ 全件源码链一致"）。
     rtkey)   shift; rt_key "${1:-}" "${2:-gcc}" "${3:-0}" ;;
+    # M437（缺陷 860）：常驻 worker 协议 —— 直接 exec 解释器（省掉一层 bash 包装）。
+    #   任务帧走 stdin，结果帧走 fd 3（见 runtime.c px_pool_spawn / selfhost/interp.px
+    #   _wt_worker_loop）。stdout 留给被解释脚本，由 worker 在执行期重定向到捕获文件。
+    --worker) shift; exec "$PXI_BIN" --worker ;;
     --version|-v) echo "px $RELEASE_VER";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;

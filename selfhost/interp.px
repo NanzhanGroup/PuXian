@@ -67,7 +67,7 @@ var g_const_enums = it_new_dict()  # M44：type X const 简化枚举（name → 
 var g_script_args = []
 # ---------- 内置函数注册（Mini 子集 §2.5 白名单） ----------
 def i_register_builtins():
-    let names = ["print", "flush", "print_err", "str", "type", "object_id", "bool", "len", "int", "float", "range", "sorted", "reversed", "sum", "abs", "min", "max", "pow", "sqrt", "sin", "cos", "tan", "atan2", "floor", "ceil", "round", "log", "log10", "exp", "random", "random_int", "random_seed", "assert", "join", "contains", "split", "trim", "to_upper", "to_lower", "replace", "starts_with", "ends_with", "list", "tuple", "dict", "deep_copy", "map", "filter", "reduce", "read_file", "write_file", "append_file", "exists", "is_dir", "remove", "mkdir", "list_dir", "file_size", "read_bytes", "write_bytes", "regex_match", "regex_valid", "regex_find", "regex_search", "regex_find_all", "regex_replace", "regex_split", "json_parse", "json_parse_opt", "json_stringify", "json_stringify_go", "json_path", "json_path_set", "os_spawn", "os_spawn_capture", "os_wait", "os_kill", "os_exec", "os_rename", "os_remove_all", "os_random_hex", "os_file_sha256", "os_capture", "os_popen", "unix_connect", "env", "env_set", "env_unset", "os_self_path", "hostname", "read_file_opt", "write_file_opt", "append_file_opt", "float32", "float32_bits", "bits_to_float32", "float64_bits", "bits_to_float64", "json_num_str", "fmt_float_dec", "go_float_text", "isatty", "now_sec", "tz_local", "args", "now", "sleep", "exit", "hex_to_int", "int_to_hex", "int_to_bytes", "bytes_to_int", "bytes", "bytes_len", "bytes_get", "bytes_set", "bytes_slice", "bytes_concat", "bytes_to_str", "bytes_to_hex", "hex_to_bytes", "bytes_find", "bytes_base64", "base64_to_bytes", "base64_encode", "base64_decode", "gen_next", "unique", "flatten", "Ok", "Err", "Some", "ffi_call", "sha256", "http_get", "open", "close", "ioctl", "os_errno", "read", "write", "mmap", "munmap", "mem_write", "http_unix", "sleep_us", "now_us", "now_ns", "fcntl", "flock", "chmod", "file_stat", "go_errno_string", "ord", "chr", "tty_config", "fd_wait", "http_post", "http_request", "s3_get", "s3_put", "s3_list", "s3_delete", "tcp_connect_ex", "tcp_opt", "tcp_recv_ex", "tcp_send_ex", "md5", "md5_bytes", "pbkdf2_sha256", "sha1", "sha1_bytes", "sha256_bytes", "bytes_zeros", "byte", "str_index_of", "tls_connect", "tls_send", "tls_recv", "tls_close", "tls_upgrade", "onnx_model_open", "onnx_info", "onnx_initializer", "onnx_initializer_names", "onnx_model_close", "onnx_run", "onnx_op_names", "f32_bytes", "f32_at", "f32_count", "i64_bytes", "i64_at", "i64_count"]
+    let names = ["print", "flush", "print_err", "str", "type", "object_id", "bool", "len", "int", "float", "range", "sorted", "reversed", "sum", "abs", "min", "max", "pow", "sqrt", "sin", "cos", "tan", "atan2", "floor", "ceil", "round", "log", "log10", "exp", "random", "random_int", "random_seed", "assert", "join", "contains", "split", "trim", "to_upper", "to_lower", "replace", "starts_with", "ends_with", "list", "tuple", "dict", "deep_copy", "map", "filter", "reduce", "read_file", "write_file", "append_file", "exists", "is_dir", "remove", "mkdir", "list_dir", "file_size", "read_bytes", "write_bytes", "regex_match", "regex_valid", "regex_find", "regex_search", "regex_find_all", "regex_replace", "regex_split", "json_parse", "json_parse_opt", "json_stringify", "json_stringify_go", "json_path", "json_path_set", "os_spawn", "os_spawn_capture", "os_wait", "os_kill", "os_exec", "os_rename", "os_remove_all", "os_random_hex", "os_file_sha256", "os_capture", "os_popen", "unix_connect", "env", "env_set", "env_unset", "os_self_path", "hostname", "read_file_opt", "write_file_opt", "append_file_opt", "float32", "float32_bits", "bits_to_float32", "float64_bits", "bits_to_float64", "json_num_str", "fmt_float_dec", "go_float_text", "isatty", "now_sec", "tz_local", "args", "now", "sleep", "exit", "hex_to_int", "int_to_hex", "int_to_bytes", "bytes_to_int", "bytes", "bytes_len", "bytes_get", "bytes_set", "bytes_slice", "bytes_concat", "bytes_to_str", "bytes_to_hex", "hex_to_bytes", "bytes_find", "bytes_base64", "base64_to_bytes", "base64_encode", "base64_decode", "gen_next", "unique", "flatten", "Ok", "Err", "Some", "ffi_call", "sha256", "http_get", "open", "close", "ioctl", "os_errno", "read", "write", "mmap", "munmap", "mem_write", "http_unix", "sleep_us", "now_us", "now_ns", "fcntl", "dup2", "flock", "chmod", "file_stat", "go_errno_string", "ord", "chr", "tty_config", "fd_wait", "http_post", "http_request", "s3_get", "s3_put", "s3_list", "s3_delete", "tcp_connect_ex", "tcp_opt", "tcp_recv_ex", "tcp_send_ex", "md5", "md5_bytes", "pbkdf2_sha256", "sha1", "sha1_bytes", "sha256_bytes", "bytes_zeros", "byte", "str_index_of", "tls_connect", "tls_send", "tls_recv", "tls_close", "tls_upgrade", "onnx_model_open", "onnx_info", "onnx_initializer", "onnx_initializer_names", "onnx_model_close", "onnx_run", "onnx_op_names", "f32_bytes", "f32_at", "f32_count", "i64_bytes", "i64_at", "i64_count"]
     var i = 0
     while i < len(names):
         env_define(g_globals, names[i], it_builtin(names[i]))
@@ -90,6 +90,158 @@ def i_bridge_dispatch(fnvalue, args):
         print_err(i_err_rt(r.err()))
         return null
     return r.unwrap()
+# ---------- M437（缺陷 860）：`pxi --worker` 常驻协议 ----------
+# 背景：M25 起 runtime 侧就有 `px --worker` 进程池（PXWorker / 任务帧 / 结果帧 / 空闲回收 /
+#   滚动重启，见 runtime.c「M25 .px 进程池」段），但 **worker 那一端从来不存在** ——
+#   `px --worker` 实测只报「未知子命令」，于是池每次启动 4 个必然失败的进程再退化 fork+exec。
+#   结构性原因（本轮实测确认）：协议要求 worker「执行脚本期间把 stdout 重定向到捕获通道、
+#   执行完恢复」，而语言层 IO 面此前 **没有 dup/dup2** ⇒ 在 .px 里表达不出来。M437 先补 dup2
+#   内置（runtime.c bi_dup2），本段才写得出来。
+# 帧格式（与 runtime.c px_pool_send_task / px_pool_recv_result 逐字节对应）：
+#   任务帧 = 4 字节大端长度 + payload；payload = path "\0" env_json "\0" dump("0"/"1") "\0" timeout_ms
+#   结果帧 = 4 字节大端长度 + exit_code "\0" output        （经 fd 3 回写，见 px_pool_spawn）
+# 边界（如实登记）：
+#   · output 经 bytes_to_str 转回字符串 ⇒ **含 NUL 的输出会被截断**（文本响应场景不受影响；
+#     dump_response 的 JSON 也不含 NUL）。要在二进制面完全对齐需改成 bytes 拼接，列为后续项。
+#   · 每任务重置 g_globals/g_structs/… 与 i_register_builtins（脚本级状态干净），但 **native 层
+#     状态不重置**（环境变量会显式 set/unset；打开的 fd / mmap 属脚本泄漏，与 PHP-FPM 同性质）。
+#   · 脚本 stdin 在执行期指向 /dev/null（协议通道不能被脚本读走，M436-1 的 stdin 语义不变）。
+def _wt_read_exact(fd, n):
+    var acc = bytes_zeros(0)
+    while bytes_len(acc) < n:
+        let c = read(fd, n - bytes_len(acc))
+        if type(c) == "int":
+            return null
+        if bytes_len(c) == 0:
+            return null
+        acc = bytes_concat(acc, c)
+    return acc
+
+def _wt_split_nul(buf):
+    var parts = []
+    var start = 0
+    var i = 0
+    let n = bytes_len(buf)
+    while i < n:
+        if bytes_get(buf, i) == 0:
+            parts.append(bytes_slice(buf, start, i))
+            start = i + 1
+        i += 1
+    parts.append(bytes_slice(buf, start, n))
+    return parts
+
+# 执行一份脚本文件（与 main() 的解释路径逐段一致；只多了 g_script_args 的规范化）
+def _wt_run(path, argv0):
+    g_script_args = [argv0]
+    if not exists(path):
+        print_err("px worker: 脚本不存在: " + path)
+        return 1
+    let base_dir = it_dirname(path)
+    p_toks = lex_tokens(read_file(path))
+    p_pos = 0
+    p_brack = 0
+    let ast = parse_program()
+    let prog = cg_resolve_modules(ast, base_dir)
+    g_globals = env_new(null)
+    g_structs = it_new_dict()
+    g_enums = it_new_dict()
+    g_enum_fields = it_new_dict()
+    g_traits = it_new_dict()
+    g_impls = it_new_dict()
+    g_loop_depth = 0
+    g_exit_code = 0
+    i_register_builtins()
+    interp_bridge_install(i_bridge_dispatch)
+    let gr = __guard_call(i_run_program, [prog])
+    if not gr["ok"]:
+        print_err(i_err_rt(i_rt_raw(gr["err"], i_cur_fn(), g_i_cur_line)))
+        return 1
+    let r = gr["val"]
+    if r.is_err():
+        let e = r.err()
+        print_err(i_err_rt(e))
+        return 1
+    return g_exit_code
+
+def _wt_worker_loop():
+    let cap = "/tmp/.pxw_" + str(now_ns()) + "_" + str(random_int(1000000)) + ".out"
+    while true:
+        let hdr = _wt_read_exact(0, 4)
+        if hdr == null:
+            return 0
+        let plen = bytes_to_int(hdr)
+        if plen <= 0 or plen > 65536:
+            print_err("px worker: 非法任务帧长度 " + str(plen))
+            return 2
+        let pl = _wt_read_exact(0, plen)
+        if pl == null:
+            return 2
+        let parts = _wt_split_nul(pl)
+        let path = bytes_to_str(parts[0])
+        var env_json = ""
+        if len(parts) >= 2:
+            env_json = bytes_to_str(parts[1])
+        var dump = false
+        if len(parts) >= 3 and bytes_to_str(parts[2]) == "1":
+            dump = true
+        # ⚠️ env_set 必须走 ffi_call 按名调用宿主 native：本编译单元里 env.px 有一个
+        #   同名 PuXian 辅助函数 `def env_set(env, name, value)`（3 参）⇒ 直接写
+        #   `env_set(a, b)` 会静默绑到它上面，报「参数不足: 需 3 给 2」（实测踩中）。
+        #   这正是 selfhost/ibuiltin.px 里那段注释说的情形（内置分支自己也是走 ffi_call）。
+        if len(env_json) > 0:
+            ffi_call("env_set", ["PX_INIT_GLOBALS", env_json])
+        else:
+            env_unset("PX_INIT_GLOBALS")
+        if dump:
+            ffi_call("env_set", ["PX_DUMP_RESPONSE", "1"])
+        else:
+            env_unset("PX_DUMP_RESPONSE")
+        # 执行期重定向：stdout → 捕获文件；stdin → /dev/null（协议通道不能被脚本读走）
+        # 保存用 fcntl(F_DUPFD=0, minfd) —— **不覆盖任何已存在的 fd**。
+        #   （早先版本用 dup2(1, 99) 固定编号：serve 进程 fd 表里若已占用 99 就会误关别人的 fd；
+        #    F_DUPFD 让内核分配 >= minfd 的空闲编号，零风险。）
+        let saved_out = fcntl(1, 0, 10)
+        let saved_in = fcntl(0, 0, 20)
+        if saved_out < 0 or saved_in < 0:
+            print_err("px worker: 无法保存 stdio（fcntl F_DUPFD 失败）")
+            return 2
+        let capfd = open(cap, "w")
+        if capfd < 0:
+            print_err("px worker: 无法创建捕获文件 " + cap)
+            return 2
+        dup2(capfd, 1)
+        close(capfd)
+        let nul = open("/dev/null", "r")
+        if nul >= 0:
+            dup2(nul, 0)
+            close(nul)
+        let code = _wt_run(path, path)
+        flush()
+        dup2(saved_out, 1)
+        close(saved_out)
+        dup2(saved_in, 0)
+        close(saved_in)
+        var out = ""
+        let rfd = open(cap, "r")
+        if rfd >= 0:
+            while true:
+                let b = read(rfd, 65536)
+                if type(b) == "int":
+                    break
+                if bytes_len(b) == 0:
+                    break
+                let s = bytes_to_str(b)
+                out = out + s
+            close(rfd)
+        remove(cap)
+        let code_s = str(code)
+        let total = bytes_len(bytes(code_s)) + 1 + bytes_len(bytes(out))
+        write(3, int_to_bytes(total, 4))
+        write(3, code_s)
+        write(3, bytes_zeros(1))
+        write(3, out)
+    return 0
+
 # ---------- 程序入口（对齐 run_program） ----------
 def i_run_program(prog):
     let items = prog[1]
@@ -148,7 +300,7 @@ def i_run_program(prog):
 # ---------- 入口 ----------
 # 版本：与 tools/pxc（SELFHOST_VER/SELFHOST_MILESTONE）保持一致。
 # 发布包版本号由 tools/make_release.sh 按 tag 派生（见其"版本来源"段）。
-let PXI_VER = "0.2.436"
+let PXI_VER = "0.2.437"
 let PXI_MS = "M-B9a"
 def main():
     let a = args()
@@ -157,6 +309,10 @@ def main():
     if len(a) == 2 and (a[1] == "--version" or a[1] == "-v"):
         print("pxi " + PXI_VER + " (普贤 PuXian · selfhosted " + PXI_MS + ")")
         return 0
+    # M437（缺陷 860）：--worker 常驻模式（协议见 _wt_worker_loop 上方注释）。
+    #   只认「唯一参数就是 --worker」⇒ 用户脚本的实参形式完全不受影响。
+    if len(a) == 2 and a[1] == "--worker":
+        return _wt_worker_loop()
     let f = a[len(a) - 1]
     # M115：解释轨程序实参规范化 —— 与**编译产物**对齐：argv[0] = 程序自身，其后为用户实参。
     #   修复前：`args()` 直接把 pxi 的**宿主** argv 暴露给被解释程序，实测
