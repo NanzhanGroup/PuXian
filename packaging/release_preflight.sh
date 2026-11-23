@@ -173,6 +173,20 @@ PRECHECK_GATES=(
     #   病史（2026-11-22 22:0x）：px_serve 有 px_hdr_append 防护，但 px_http_build_response
     #   自己手揂 "K: V\r\n" ⇒ 响应头注入（CRLF 响应拆分）+ 重复 CL + TE+CL 并存 + 状态码越界。
     m435_resp_header_guard                               # 响应头行级防护（实测 ~300s）
+    # ── M438 S1：把「指向源码自身的门」也前置（28 → 34 门，实测 +82s：m421 57 · paths 22 · 余 3）──
+    #   病史（同族第 5 次，全都是「改了源码/语料/门，却没跑指向它们自身的门」）：
+    #     M435 5 红 · M437 r2 9 红 · M437 r3 1 红（m421 语料没登记）·
+    #     M437 r4 2 红（新 verify.sh 漏 source gate_lock.sh）·
+    #     M438 r1 1 红（runtime.c 注释写「M438（缺陷 913）」，而 913 属 M437，M438 声明集合是 [915,916]）。
+    #   这几门本身都只要 1~21s，却一直靠 2 小时的全量链才发现 —— 与 M411/M412/M414/M415/M422/M426
+    #   完全同一个错误。全树扫描面：门注册双向账 / 缺陷号引用 / 索引残留 / 门内绝对路径 /
+    #   孤儿门 / 示例语料登记。
+    check_defect_refs                                    # 里程碑↔缺陷编号必须落在声明集合内（M241 · 实测 1s）
+    gate_registry                                        # 本地清单 ⇄ ci.yml 双向一致（M243 · 实测 1s）
+    eco_index                                            # 索引重生成物不许留在工作树（实测 2s）
+    check_gate_paths                                     # 门里不许写死开发机绝对路径（M213 · 实测 21s）
+    orphan_gates                                         # 有 verify.sh 就必须有运行器跑它（M249/M401）
+    m421_examples_coverage                               # 示例语料必须登记 + 不许只有黑盒（M421）
 )
 
 gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错
