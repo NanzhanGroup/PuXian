@@ -1,0 +1,17 @@
+920_pair     f09f9a80
+920_pairs    f09f9880f09f8c80
+920_hi       efbfbd
+920_lo       efbfbd
+920_bmp      3eefbc8878efbc893d20e4b8ad
+920_hi_then_a efbfbd41
+920_hi_lo_lo f09f9880efbfbd
+920_len      1
+919_ddl_ret  0
+919_ins_ret  0
+919_ins_chg  1
+919_upd_ret  0
+919_upd_chg  1
+919_miss_ret 0
+919_miss_chg 0
+919_3arg_ret 1,1
+919_bad_ret  null

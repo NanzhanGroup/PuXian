@@ -2580,3 +2580,12 @@ run m438_pxslice_offs bash selfhost/check_m438_pxslice_offs.sh
 #   （PX_SPAWN_FORK=1 ⇒ 归零）· 负控扰动自证（13 次 fork 型 clone）。
 gate_timeout m438_spawn_posix 600
 run m438_spawn_posix bash selfhost/check_m438_spawn_posix.sh
+# M439 · 运行时两条缺陷（晨曦报告）：919 sqlite_exec 两参成功恒 0（文件头注释写「受影响
+#   行数」⇒ 用返回值判成败的代码恒判失败；Ma v0.20.14 删掉刚 rename 的 .body，ma-cache
+#   失效 22 天/约 1.57 万请求）→ 注释改实话 + 新增 sqlite_changes(db)，**不改返回值**；
+#   920 json_parse 不合并 UTF-16 代理对（"\ud83d\ude80" 落盘 ED A0 BD ED BA 80 = CESU-8
+#   非法 UTF-8，静默；Go 得 F0 9F 9A 80）→ 高+低代理合并 4 字节，孤立代理 U+FFFD。
+#   判据：静态形状 11 条 · 三轨等价（17 例逐字节对 expected）· 负控 3 条（旧 CESU-8 值 /
+#   miss_chg 假修 / 两参契约翻转 ⇒ 判据必须识破，每次都自证扰动已发生）· 名册零漂移。
+gate_timeout m439_runtime 600
+run m439_runtime bash selfhost/check_m439_runtime.sh

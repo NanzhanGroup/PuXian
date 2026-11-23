@@ -1,7 +1,11 @@
 // 普贤 (PuXian) C 运行时 — SQLite 绑定（M28）
 // 语言层 API（与解释器 sqlite.rs 双模式一致）：
 //   sqlite_open(path) -> int|null       打开/创建数据库（":memory:" 内存库）
-//   sqlite_exec(db, sql) -> int|null    执行无结果 SQL（DDL/DML），返回受影响行数
+//   sqlite_exec(db, sql) -> int|null    执行无结果 SQL（DDL/DML）
+//       ⚠️ M439（缺陷 919）：**成功恒返回 0**，不返回受影响行数；**出错返回 null**。
+//          ⇒ 判失败只能判 `== null`；判 `== 0` 一律是 bug（22 天 ma-cache 失效的成因）。
+//          要行数请用 `sqlite_changes(db)`（或 `SELECT changes()`）。
+//   sqlite_changes(db) -> int           最近一条 INSERT/UPDATE/DELETE 的受影响行数（sqlite3_changes）
 //   sqlite_query(db, sql[, params]) -> list[dict]|null  查询（params: list→? / dict→:name）
 //   sqlite_close(db) -> bool            关闭连接
 //   sqlite_escape(s) -> str             SQL 字符串字面量转义（' → ''）
@@ -64,7 +68,7 @@ LXValue bi_sqlite_open(LXValue* args, int nargs, void* ctx) {
 // 前向声明（定义在下方）
 static int sqlite_bind_params(sqlite3_stmt* stmt, LXValue params);
 
-// sqlite_exec(db, sql[, params]) → int 受影响行数 | null
+// sqlite_exec(db, sql) → 0（成功） | null（失败）  ·  sqlite_exec(db, sql, params) → 受影响行数 | null
 LXValue bi_sqlite_exec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 3) px_error("R1002: sqlite_exec 需要 (db, sql[, params]) 参数");
@@ -78,6 +82,11 @@ LXValue bi_sqlite_exec(LXValue* args, int nargs, void* ctx) {
             if (err) sqlite3_free(err);
             return px_null();
         }
+        // M439（缺陷 919）：**不要**把这里改成 sqlite3_changes(db)。
+        //   历史契约（M28 起，已在 0.2.438 及更早的所有版本里生效）：两参成功 → 0。
+        //   存量代码用 `if sqlite_exec(...) == 0` 或 `if not sqlite_exec(...)` 判失败 ——
+        //   改成真实行数会让「UPDATE 未命中行」从「成功」变成「失败」（Ma v0.20.14
+        //   就是这样把刚 rename 的 .body 删掉的）。行数请用 sqlite_changes(db)。
         return px_int(0);
     }
     // 带参数：prepare + 绑定 + step
@@ -267,3 +276,15 @@ LXValue bi_sqlite_last_insert_rowid(LXValue* args, int nargs, void* ctx) {
     sqlite3* db = sqlite_get_db(args[0].as.i);
     return px_int(db ? (int64_t)sqlite3_last_insert_rowid(db) : -1);
 }
+
+// sqlite_changes(db) → int  ·  M439（缺陷 919）
+//   取 sqlite3_changes(db)：最近一条 INSERT/UPDATE/DELETE / REPLACE 实际影响的行数
+//   （未命中 0、新行 1、多行 N）。等价于 `sqlite_query(db, "SELECT changes()")`，但不建表/不解析。
+//   无效句柄 → -1（与 sqlite_last_insert_rowid 同口径）；参数类型错 → R1002。
+LXValue bi_sqlite_changes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: sqlite_changes 需要 (db) 参数");
+    sqlite3* db = sqlite_get_db(args[0].as.i);
+    return px_int(db ? (int64_t)sqlite3_changes(db) : -1);
+}
+

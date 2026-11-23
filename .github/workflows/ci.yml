@@ -512,6 +512,20 @@ jobs:
           if [ $rc -eq 2 ]; then echo "⚠ m438_spawn_posix ENV（缺 strace 等 rc=2）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m438_spawn_posix rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m438_spawn_posix PASS"
+      - name: m439_runtime（缺陷 919 sqlite_exec 契约 / 920 json_parse 代理对 · M439）
+        #   919：两参 sqlite_exec 成功恒 0（历史契约，不改）+ 新增 sqlite_changes(db) 取行数；
+        #        文件头注释由「返回受影响行数」改为实话（判失败只判 null）。
+        #   920：\uXXXX 按 UTF-16 合并代理对（"\ud83d\ude80" → F0 9F 9A 80，修前是 CESU-8）。
+        #   判据：静态形状 11 条 · 三轨等价（17 例逐字节对 expected）· 负控 3 条（旧 CESU-8 值 /
+        #        miss_chg 假修 / 两参契约翻转 ⇒ 判据必须识破，且每次自证扰动已发生）· 名册零漂移。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m439_runtime.sh
+          rc=$?
+          if [ $rc -eq 2 ]; then echo "⚠ m439_runtime ENV（缺 cc / 引导件 rc=2）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m439_runtime rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m439_runtime PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

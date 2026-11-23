@@ -44,7 +44,8 @@
 #   - chain-20261123-215720 = /data/gatevm/shard-20261123-215720/shard8.times.tsv（315 行）
 #   - preflight-20261123-205629 = /data/gatevm/preflight-20261123-205629.times.tsv（315 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-23 23:51:19 +0800
+#   - chain-20261124-m439 = /tmp/m439/gt.tsv（316 行 · 仅 m439_runtime 非 SKIP）
+# 生成时间：2026-11-24 00:43:26 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	11	OK	chain-20261123-172827
@@ -317,6 +318,7 @@ m437_dup2_corpus	3	OK	chain-20261123-153007
 m437_worker	6	OK	chain-20261123-153007
 m438_pxslice_offs	18	OK	chain-20261123-215720
 m438_spawn_posix	5	OK	chain-20261123-215720
+m439_runtime	1	OK	chain-20261124-m439
 m63_langfix	6	OK	chain-20261123-215720
 m64_fmt	0	OK	chain-20261123-153007
 m64_lint	1	OK	chain-20261123-172827

@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 414,
+ "count": 415,
  "names": [
   "Err",
   "Ok",
@@ -334,6 +334,7 @@
   "sleep_us",
   "sorted",
   "split",
+  "sqlite_changes",
   "sqlite_close",
   "sqlite_escape",
   "sqlite_exec",

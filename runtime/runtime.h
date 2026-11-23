@@ -785,6 +785,7 @@ LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx);
 LXValue bi_sqlite_close(LXValue* args, int nargs, void* ctx);
 LXValue bi_sqlite_escape(LXValue* args, int nargs, void* ctx);
 LXValue bi_sqlite_last_insert_rowid(LXValue* args, int nargs, void* ctx);
+LXValue bi_sqlite_changes(LXValue* args, int nargs, void* ctx);   // M439（缺陷 919）
 // M28 P1：时间时区 + cron（runtime.c 内实现）
 LXValue bi_time_format(LXValue* args, int nargs, void* ctx);
 LXValue bi_time_parse(LXValue* args, int nargs, void* ctx);

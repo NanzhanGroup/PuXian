@@ -1,0 +1,29 @@
+# M439 探针 · 缺陷 920（json_parse 代理对）+ 缺陷 919（sqlite_exec 两参契约 / sqlite_changes）
+# 期望输出见同目录 m439_runtime.expected（逐字节比对；三轨：解释 · VM · C 必须一致）
+def hx(s):
+    return bytes_to_hex(bytes(s))
+
+def main():
+    # ---- 缺陷 920：UTF-16 代理对必须合并成 4 字节（与 Go encoding/json 一致）----
+    print("920_pair     " + hx(json_parse("\"\\ud83d\\ude80\"")))
+    print("920_pairs    " + hx(json_parse("\"\\ud83d\\ude00\\ud83c\\udf00\"")))
+    print("920_hi       " + hx(json_parse("\"\\ud83d\"")))
+    print("920_lo       " + hx(json_parse("\"\\ude80\"")))
+    print("920_bmp      " + hx(json_parse("\"\\u003e\\uff08x\\uff09= \\u4e2d\"")))
+    print("920_hi_then_a " + hx(json_parse("\"\\ud83d\\u0041\"")))
+    print("920_hi_lo_lo " + hx(json_parse("\"\\ud83d\\ude00\\udf00\"")))
+    print("920_len      " + str(len(json_parse("\"\\ud83d\\ude80\""))))
+    # ---- 缺陷 919：两参 sqlite_exec 成功恒 0（历史契约）· 出错 null · 行数走 sqlite_changes ----
+    let db = sqlite_open(":memory:")
+    print("919_ddl_ret  " + str(sqlite_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT)")))
+    print("919_ins_ret  " + str(sqlite_exec(db, "INSERT INTO t(name) VALUES('a')")))
+    print("919_ins_chg  " + str(sqlite_changes(db)))
+    print("919_upd_ret  " + str(sqlite_exec(db, "UPDATE t SET name='b' WHERE name='a'")))
+    print("919_upd_chg  " + str(sqlite_changes(db)))
+    print("919_miss_ret " + str(sqlite_exec(db, "UPDATE t SET name='c' WHERE name='zzz'")))
+    print("919_miss_chg " + str(sqlite_changes(db)))
+    let r1 = sqlite_exec(db, "INSERT INTO t(name) VALUES(?)", ["p"])
+    let r2 = sqlite_exec(db, "INSERT INTO t(name) VALUES(?)", ["q"])
+    print("919_3arg_ret " + str(r1) + "," + str(r2))
+    print("919_bad_ret  " + str(sqlite_exec(db, "THIS IS NOT SQL")))
+    sqlite_close(db)

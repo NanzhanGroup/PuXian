@@ -553,7 +553,12 @@ timeout_ms **含连接阶段**，默认 30000；`http_get`/`http_post` 无 opts 
 `dns_txt(domain)` → list[str]（**M103-S2a**，手写 DNS TXT 查询，**M116 起 UDP 截断自动回退 TCP**）——多记录/长 TXT 域名（`google.com` 17 条、`cloudflare.com` 28 条）此前因 TC 截断直接 Err，现按 RFC 1035 §4.2.2 自动 TCP 重发。**语义注意**：无 TXT 记录 **与 NXDOMAIN 都返回空 list（非报错）** —— 与 Go `net.LookupTXT`（NXDOMAIN 报错）**不同**，移植 Go 代码时按"空 = 无记录"处理。
 
 ### SQLite
-`sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid`
+`sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid` · `sqlite_changes(conn)`（M439）
+> **M439（缺陷 919）：`sqlite_exec` 的返回值契约 —— 千万别拿它判 DML 成败。**
+> 两参调用（`sqlite_exec(db, sql)`）**成功恒返回 `0`**、**失败返回 `null`**、**不给受影响行数**；
+> 三参调用（带 `params`）才返回受影响行数。⇒ 判失败**只能判 `== null`**（或 `!= null` 判成功），
+> 判 `== 0` 一律是 bug —— Ma v0.20.14 就是这样把刚 rename 的 `.body` 删掉、ma-cache 失效 22 天的。
+> 要行数用 **`sqlite_changes(db)`**（= `SELECT changes()`：新行 1 / 未命中 0 / 多行 N）。
 
 ### 加密 / 哈希 / 压缩 / XML / ZIP
 AES：`aes_encrypt(data, key, iv)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· **bytes 版参数序同为 `(data, key, iv)`**（M253 更正：此处此前写作 `(key, iv, data)`，与实现和错误消息**都不符** —— 实测 `aes_encrypt("A","0123456789abcdef","abcdefghijklmnop")` = `3d2563c01803626cc2da598bb7a558f9`，与 Go crypto/aes-cbc-pkcs7 逐字节一致），返回 `密文||tag`（nonce 要调用方自己拼，才能与 Go `aead.Seal(nonce, nonce, pt, nil)` 互通）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · **M83-S4 标准签名（PKCS1v15-SHA256 + DigestInfo，与 Go `rsa.SignPKCS1v15`/openssl 互通；PEM 入参 `pk_parse` 自动 PKCS8/PKCS1/SPKI；msg str\|bytes 二进制安全、超长自动 sha256 无长度限制；不支持加密 PEM）**：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)`→sig_hex `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`→bool · **M83-S3 ed25519（RFC8032，与 Go crypto/ed25519 互通，确定性签名同 seed 同 msg 逐字节一致；PEM 收 Go x509 PKCS8/SPKI）**：`ed25519_sign(priv, msg)`→sig_hex（priv 收 hex seed32/sk64 或 PKCS8 PEM；msg 收 str|bytes）`ed25519_verify(pub, msg, sig)`→bool（pub 收 hex 或 SPKI PEM）· **M84-S2 HMAC-SHA256（RFC4231 官方向量 / 腾讯云 TC3 / SigV4 / webhook / JWT HS256；key/msg 均 str\|bytes 二进制安全可含 NUL，key>64B 自动先哈希）**：`hmac_sha256(key, msg)`→hex · `sha256(s)`（M84-S2 增强：收 str\|bytes 含 NUL 全哈希，不再 strlen 截断）`xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
@@ -3286,6 +3291,19 @@ set_timeout(fn (): print("once after 2s"), 2000)
        （空 needle 恒命中，与 `str` 的 `"" in s` 同口径）。
      · **`bytes_get`/下标仍是 int**：`c[0]` = 97（不改）；切片 `c[0:2]` 得到 bytes。
      · 判据见 `examples/m397_bytes_ops/`（三轨逐字节 + 两条负控 + 前提自证）。
+
+268. **`json_parse` 的 `\uXXXX` 必须按 UTF-16 合并代理对（第 218 轮 · M439 · 缺陷 920）**：
+     **一句话**：修前 `json_parse("\"\\ud83d\\ude80\"")` 得到 **CESU-8 的 6 字节**
+     `ED A0 BD ED BA 80`（**非法 UTF-8**，静默落盘），而 Go `encoding/json` 得 `F0 9F 9A 80`。
+     ⇒ 所有用 `json_parse`/`json_parse_opt` 的 px 程序，**含 emoji / U+10000 以上字符**就写坏数据且不报错
+       （wst-edit 已实测中招：清歌线上支付页 `node --check` 失败）。
+     · 修后口径（与 Go 一致）：
+       - `"\ud83d\ude80"` → `F0 9F 9A 80`（高代理 + 紧跟低代理 ⇒ 合并 4 字节）
+       - `"\ud83d\ude00\ud83c\udf00"` → `F0 9F 98 80 F0 9F 8C 80`
+       - 孤立高/低代理（`"\ud83d"` / `"\ude80"`）→ `EF BF BD`（U+FFFD），**绝不产出 CESU-8**
+       - `"\ud83d\u0041"`（高代理后不是低代理）→ `EF BF BD` + `41`（**第二个 `\uXXXX` 不吞掉**）
+       - BMP 字符（`\u003e` / `\uff08` / 直接 UTF-8 的中文）**原样不变**（防「一刀切全转 FFFD」的假修）
+     · 判据：门 `m439_runtime`（17 例逐字节对 expected · 三轨一致 · 3 条负控含旧 CESU-8 值）。
 
 ---
 

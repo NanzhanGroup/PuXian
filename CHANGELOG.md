@@ -1,4 +1,75 @@
-## M438：晨曦两条 px 侧 P0 落地 —— 切片摊还 O(1) · 子进程起法转 posix_spawn（缺陷 915 / 916 / 917）
+## M439：运行时两条缺陷落地 —— sqlite_exec 契约说清 + sqlite_changes · json_parse 合并 UTF-16 代理对（缺陷 919 / 920）
+
+> **一句话**：晨曦转来两条运行时缺陷，都是**静默**级的：`sqlite_exec` 的注释在撒谎
+> （写「返回受影响行数」，实现是「成功恒 0」）⇒ 用它判 DML 成败的代码恒判失败，Ma 的
+> ma-cache 因此失效 22 天（约 1.57 万请求白做，还把刚 rename 的 `.body` 删掉）；
+> `json_parse` 不合并 UTF-16 代理对 ⇒ 含 emoji 的 JSON 落盘是 **CESU-8 非法字节**，
+> 写坏数据且不报错。本轮：注释改成实话 + 新增 `sqlite_changes(db)`（**不改返回值**，
+> 存量语义零破坏）；解码按 UTF-16 合并（`\ud83d\ude80` → `F0 9F 9A 80`，与 Go 逐字节一致）。
+> 门数 315 → **316**。⚠ 本节属合并发布 `v0.2.443` 的一节，**中间不打 tag**。
+
+### 缺陷 919：`sqlite_exec` 两参用法成功恒返回 0（严重度：高 · 静默）
+
+```
+现象     runtime/runtime_sqlite.c 两参分支成功后硬 return px_int(0)，
+         而文件头注释写「sqlite_exec(db, sql) -> int  执行无结果 SQL（DDL/DML），返回受影响行数」
+         ⇒ 「返回 0」被读成「没影响任何行」= 失败
+三参分支 不同：prepare/step 后取 sqlite3_changes(db) 返回真实行数 ⇒ 只有两参用法坏
+出错口径 返回 null（stderr 打「[sqlite] exec 出错: …」）⇒ 判失败**只能判 null**
+         （晨曦原报「与成败无关」不准确，本轮已回执更正，她认账）
+损失     Ma v0.20.14（11-01 commit 1040064）用返回值判 DML 成败 ⇒ 恒判失败
+         ⇒ 刚 rename 的 .body 被删；ma-cache 自 11-01 起完全失效 22 天 / 约 1.57 万请求白做
+定夺     A（零破坏）：① 注释改成实话 ② 新增 sqlite_changes(db) ③ 不改返回值
+         否掉 B（改返回真实行数）：存量「==0 判失败」行为全变，Ma 就是先例
+         否掉 C（成功 1 / 失败 0）：n += ret 类统计仍不可用，且引入新语义面
+落地     runtime_sqlite.c 头注 + 两参分支注释（写明「不要改成 sqlite3_changes」）
+         + bi_sqlite_changes（= sqlite3_changes，无效句柄 -1，与 last_insert_rowid 同口径）
+         + runtime.h 声明 + runtime.c 两处注册（px_set_global / px_ffi_register）
+         + tools/gen_builtin_list.sh 重派生名册（430 → 431 名）
+实测     ddl=0 · ins_ret=0 · ins_chg=1 · upd_ret=0 · upd_chg=1 · miss_ret=0 · miss_chg=0
+         三参 1,1 · 坏 SQL → null · SELECT changes() 与 sqlite_changes 同值（人验）
+```
+
+### 缺陷 920：`json_parse` 不合并 UTF-16 代理对（静默产出非法 UTF-8）
+
+```
+现象     json_parse("\"\ud83d\ude80\"") → len=2，字节 ED A0 BD ED BA 80（CESU-8，非法 UTF-8）
+         Go encoding/json 同输入 → U+1F680 = F0 9F 9A 80
+         孤立代理（只有 \ud83d）→ 3 字节非法序列；Go → U+FFFD（EF BF BD）
+影响面   所有用 json_parse / json_parse_opt 的 px 程序；含 emoji 的请求体写库/写文件即损坏
+         wst-edit 已实测中招（清歌线上支付页 node --check 失败），px_routes 一类服务同构
+修法     \uXXXX 分支：高代理 D800–DBFF + 紧跟 `\u`+低代理 DC00–DFFF
+         ⇒ cp = 0x10000 + (hi-D800)*0x400 + (lo-DC00)，输出 4 字节 UTF-8
+         其余代理（孤立高/低）⇒ U+FFFD；**低代理不合法时不消费第二个 `\uXXXX`**
+         BMP 字符原样不变（\u003e 大写十六进制照常）；\uZZZZ 仍是 invalid escape
+实测     pair f09f9a80 · pairs f09f9880f09f8c80 · hi efbfbd · lo efbfbd
+         bmp 3eefbc8878efbc893d20e4b8ad · hi_then_a efbfbd41 · hi_lo_lo f09f9880efbfbd · len=1
+         逐项与 Go encoding/json 一致（6 例对拍）
+负控     **未修的引导解释器实测**：pair → eda0bdedba80 · hi → eda0bd · len=2
+         ⇒ 门里的「旧值期望」负控能真的变红，判据不是空转
+```
+
+### 新门 · m439_runtime（316 门）
+
+```
+判据 [1] 静态形状 13 条：头注口径（成功恒 0 / 判失败只判 null）· 两参分支不取 changes
+        · sqlite_changes 实现/声明/两处注册 · 合并公式 · 四字节分支 · U+FFFD 回落
+判据 [2..4] 三轨等价：解释（bootstrap/pxi）/ VM / C 三份输出与 expected 逐字节一致
+        （探针 selfhost/probes/m439_runtime.px，17 行；expected 同名 .expected）
+判据 [5] 负控 3 条：① 920 旧 CESU-8 值 ② miss_chg 0→2（changes 假修）③ ins_ret 0→1（契约翻转）
+        每条都先自证「期望副本确实改了」，再断言「判据一定报不一致」—— 判据没牙就红
+判据 [6] 名册零漂移（gen_builtin_list.sh --check）+ 名册含 sqlite_changes
+代价     本文件改动落 runtime/ ⇒ 14 件入库指纹全失真，按纪律整批重烘
+```
+
+### 顺带记录：为什么本轮不打 tag
+
+```
+用户令（2026-11-24 00:21 / 00:33）：M438 → M443 串成一个发布版本，只发 v0.2.443，
+中间不推 tag（推了镜像 latest 就会前移，其它节点自动 uppx 会拿到中间版）。
+⇒ 本节的 commit 只 push main（触发 CI），不 tag、不触发 Release。
+```
+
 
 > **一句话**：晨曦转来四条 px 侧请求，第 3、4 条已在 v0.2.436 交付（缺陷 905 / 906），
 > 第 1、2 条本轮落地：`px_slice` 不再每次调用重建全串偏移表（90KB 串取 10B：**170.8µs → 2µs**，179× 于 2000 次批量实测 839ms→4ms），

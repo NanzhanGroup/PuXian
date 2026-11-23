@@ -105,6 +105,7 @@ rsa_sign=rsa
 rsa_sign_pkcs1v15_sha256=rsa
 rsa_verify=rsa
 rsa_verify_pkcs1v15_sha256=rsa
+sqlite_changes=sqlite
 sqlite_close=sqlite
 sqlite_escape=sqlite
 sqlite_exec=sqlite

@@ -12988,14 +12988,39 @@ static char* json_str_raw(JsonCtx* j, int* out_len) {
                 case 'u': {
                     char hex[5] = {0};
                     for (int i = 0; i < 4 && j->p[1+i]; i++) hex[i] = j->p[1+i];
-                    j->p += 5;
                     unsigned code = (unsigned)strtoul(hex, NULL, 16);
+                    j->p += 5;   // 跨过 `uXXXX`
+                    // M439（缺陷 920）：**UTF-16 代理对必须合并**，与 Go encoding/json 一致。
+                    //   修前：`"\ud83d\ude80"` 逐码点各编码 3 字节 ⇒ ED A0 BD ED BA 80（CESU-8，
+                    //   非法 UTF-8，静默落盘），而 Go 得 F0 9F 9A 80。影响所有用 json_parse
+                    //   的 px 程序（emoji / U+10000 以上字符）。
+                    //   修法：高代理 D800–DBFF 紧跟 `\u`+低代理 DC00–DFFF ⇒ 合并成 4 字节；
+                    //   其余代理（孤立高/低）⇒ U+FFFD（EF BF BD），**绝不产出 CESU-8**。
+                    //   注意：低代理不合法时**不消费**第二个 `\uXXXX`（它按普通转义继续处理）。
+                    if (code >= 0xD800 && code <= 0xDFFF) {
+                        unsigned merged = 0;
+                        if (code <= 0xDBFF && j->p[0] == '\\' && j->p[1] == 'u') {
+                            char hex2[5] = {0};
+                            for (int i = 0; i < 4 && j->p[2+i]; i++) hex2[i] = j->p[2+i];
+                            unsigned lo = (unsigned)strtoul(hex2, NULL, 16);
+                            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                                merged = 0x10000u + ((code - 0xD800u) << 10) + (lo - 0xDC00u);
+                                j->p += 6;
+                            }
+                        }
+                        code = merged ? merged : 0xFFFDu;
+                    }
                     if (code < 0x80) out[k++] = (char)code;
                     else if (code < 0x800) {
                         out[k++] = (char)(0xC0 | (code >> 6));
                         out[k++] = (char)(0x80 | (code & 0x3F));
-                    } else {
+                    } else if (code < 0x10000) {
                         out[k++] = (char)(0xE0 | (code >> 12));
+                        out[k++] = (char)(0x80 | ((code >> 6) & 0x3F));
+                        out[k++] = (char)(0x80 | (code & 0x3F));
+                    } else {
+                        out[k++] = (char)(0xF0 | (code >> 18));
+                        out[k++] = (char)(0x80 | ((code >> 12) & 0x3F));
                         out[k++] = (char)(0x80 | ((code >> 6) & 0x3F));
                         out[k++] = (char)(0x80 | (code & 0x3F));
                     }
@@ -14473,6 +14498,7 @@ void px_register_builtins(void) {
     px_set_global("sqlite_close", px_native("sqlite_close", bi_sqlite_close));
     px_set_global("sqlite_escape", px_native("sqlite_escape", bi_sqlite_escape));
     px_set_global("sqlite_last_insert_rowid", px_native("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid));
+    px_set_global("sqlite_changes", px_native("sqlite_changes", bi_sqlite_changes));   // M439（缺陷 919）
 #endif // PX_NO_SQLITE
     // M42：FFI C 桥（runtime_ffi.c）—— ffi_call(name, args_list)
     px_set_global("ffi_call", px_native("ffi_call", bi_ffi_call));
@@ -14488,6 +14514,7 @@ void px_register_builtins(void) {
     px_ffi_register("sqlite_close", bi_sqlite_close);
     px_ffi_register("sqlite_escape", bi_sqlite_escape);
     px_ffi_register("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid);
+    px_ffi_register("sqlite_changes", bi_sqlite_changes);   // M439（缺陷 919）
 #endif // PX_NO_SQLITE
     // M48：hex 纯函数进 FFI 表（capability 字节精确断言/双模式一致用）
     px_ffi_register("bytes_to_hex", bi_bytes_to_hex);
