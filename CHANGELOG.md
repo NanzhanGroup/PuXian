@@ -19,6 +19,12 @@
            check_defect_refs(1s) · gate_registry(1s) · eco_index(2s) ·
            check_gate_paths(21s) · orphan_gates · m421_examples_coverage
         ③ 本档实测：-只 6 门全绿（gate_registry/check_defect_refs/eco_index 逐门看到 ✅）
+        ④ preflight 全档 r1（43 门 · 2770s）判红 2 门，同一个根因：
+           gate_timeouts P6「基线缺 2 / 315 门的实测行」 + m400 pass=16 fail=1（门清单 315 / 基线 313）
+           —— M438 新增两门后 selfhost/gate_time_baseline.tsv 还停 313 行，又是「改了门，
+           指向门的账没跟着改」。这次被已有的前置门当场抓住（M411 S1 把这两门放进 preflight 的意义）。
+           修法：两门各跑一次取实测（18s / 5s），基线 313 → 315 行，其余 313 行逐行不变
+           复验：M311-TIMEOUTS-OK（P6 315/315）· m400 pass=17 fail=0
 代价    本文件改动落 runtime/ ⇒ 源码链指纹全 14 件失真（实测 --check-all 14/14 → 0/14）
         ⇒ 一行注释也要重烘，故与本轮其余改动同批重烘
 ```
