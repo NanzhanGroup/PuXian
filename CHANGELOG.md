@@ -1,3 +1,31 @@
+## M437 收口四：回灌基线后超时口径双红，带崩 m400（缺陷 918）
+
+> **一句话**：发布后把 chain-20261123-172827 的实测回灌进基线（8249d8c），`m422_examples_compile`
+> 实测涨到 **1138s**，而声明仍是 1500s（1.32× < 1.5×）⇒ 本地 gate_timeouts P3 红；远端 CI 同一个 step 红，
+> 而 `m400_baseline_feedback` 拿真基线跑正负控，被**同一条红**连带崩掉（pass=13 fail=4）⇒ CI 记两门红、根因一个。
+
+### 缺陷 918：声明上限没跟住实测（回灌后暴露，与 914 同族）
+
+```
+现象   本地 bash selfhost/check_gate_timeouts.sh ⇒ 30 通过 / 1 失败
+         ❌ m422_examples_compile 声明 1500s / 实测 1138s = 1.3×（< 1.5×）
+       远端 CI run 45164342360（sha 8249d8c · job 137657313952）：
+         step 10「门超时口径守卫」failure（同一条）
+         step 147 m400_baseline_feedback failure：N1b 正控 / N2b / N2d 三条都打同一条 P3 红
+         ⇒ 两门红，根因只有一个
+       ci_parity_check：nred=2 gap=2（两条都未登记 ⇒ GAP）
+病根   5b36ab8 按 994s 定 1500s；本轮链实测 1138s（比上一轮 +145s），声明没跟着走。
+       回灌只改基线、**不复跑超时守卫**，所以红在回灌之后才现形：
+       P7「回灌新鲜度」只拦「该回灌未回灌」，拦不住「回灌了但没复判」。
+修     按既有口径 ceil(1.5×1138/60)×60 = **1740**（不另立阈值；P2 1138/1740 = 65%，仍在 80% 线下）。
+证据   改后 selfhost/check_gate_timeouts.sh：31 通过 / 0 失败 · M311-TIMEOUTS-OK
+         ✅ m422_examples_compile：1138s / 1740s = 1.5×（≥1.5×）
+       examples/m400_baseline_feedback/verify.sh：pass=17 fail=0（门清单 313 / 基线 313）
+欠账   「回灌即复判」还靠人记得跑一次超时守卫；refresh_gate_baseline.sh 回灌后未自跑 P1–P3。
+       下一轮候选：回灌成功即调用 check_gate_timeouts 并把 rc 带出来（改动落在发布链路径，需单独授权）。
+```
+
+
 ## M437 收口二：重跑链 1 红 —— dup2 语料没进覆盖账（缺陷 913）
 
 > **一句话**：8d3db8f 收口 9 红后重跑链（13:07:44 → 15:08:49）给出 **311 绿 / 1 红**，

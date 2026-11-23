@@ -1258,7 +1258,11 @@ run ex_struct ./tools/pxc build examples/struct.px
 # M437 收口三（2026-11-23 · 缺陷 914）：回灌基线后实测 949s（chain-20261123-130746）/ 994s
 #   （chain-20261123-101154）⇒ 对 1200 分别是 79% / 82%，P1（≥80%）与 P2（<1.5×）双红。
 #   1.5×994 = 1491 ⇒ ceil(1491/60)×60 = **1500**（同一口径，不另立阈值）。
-gate_timeout m422_examples_compile 1500
+# M437 收口四（2026-11-23 · 缺陷 918）：回灌 chain-20261123-172827 基线后实测 **1138s**
+#   ⇒ 1500/1138 = 1.32× < 1.5×，P3 红；远端 CI 同一条红（step「门超时口径守卫」），本地可复现 ⇒ 真红。
+#   且 m400_baseline_feedback 的 N1b/N2b/N2d 正负控跑真基线 ⇒ 被同一条红带崩（pass=13 fail=4）。
+#   1.5×1138 = 1707 ⇒ ceil(1707/60)×60 = **1740**（同一口径；P2 1138/1740 = 65%，仍在 80% 线下）。
+gate_timeout m422_examples_compile 1740
 run m422_examples_compile bash selfhost/check_examples_compile.sh
 # M426（缺陷 871）：**顶层示例「跑」面 —— 编译过 ≠ 跑得动**。
 #   病史：M422 只保证 120 个顶层示例**编译**过；本轮实测 build 后真跑：82 通过 / 36 红 / 2 超时，
