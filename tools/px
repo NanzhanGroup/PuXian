@@ -102,6 +102,155 @@ if [ -f "$PXC_HOME/VERSION" ]; then
     unset _RV
 fi
 
+# ══════════════════════════════════════════════════════════════
+# M440：热路径前移 —— **`px run --fast` 命中时在文件最前面 exec**
+# ------------------------------------------------------------
+# 为什么必须放在这里（实测依据，2026-11-24）：bash 是「逐条解析→执行」，
+#   `exec` 之后**后面的函数定义不会再被解析**。把备忘命中放在文件开头，
+#   就顺手省掉了「解析 124 KB 入口」的 35 ms —— 而这是纯结构收益，不复制任何实现。
+#   （放在 usage() 之后、或放在 cmd_run_fast 里，都要先付这 35 ms。）
+# 触发条件严格限定在 `px run --fast|--cache <file> [args...]` 这一种形式；
+#   其它一切形式（包括 --verbose / 标志异位 / 其它子命令）**原样落到**下面的完整实现，
+#   行为与加这段之前逐字节相同。
+# ══════════════════════════════════════════════════════════════
+RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
+
+# ══════════════════════════════════════════════════════════════
+# M440：`px run --fast` **命中决策备忘**（热态 192 ms → 实测 40 ms）
+# ------------------------------------------------------------
+# 口径（不变式）：**缓存只许影响快慢，不许影响语义**。
+#   失效判据 = 所有会影响产物的输入的 stat 签名（size:inode:mtime:ctime，**纳秒级**）
+#   逐项相等；任一不等 ⇒ 落回原全量路径（并重写备忘）。
+#   ctime 是权威：Linux 上用户改不了 ctime（utimensat 只改 atime/mtime，改它们本身
+#   会把 ctime 顶到当前）⇒ 「改内容后把 size/mtime 复原」照样被抓到。
+#   设计说明 / 覆盖输入清单 / 已知边界：见下方 px_memo_write 上方的长注释与 CHANGELOG M440。
+#   逃生口：PX_RUN_NOCACHE=1 · PX_RUN_VERBOSE=1（这两者都不走备忘）。
+# ══════════════════════════════════════════════════════════════
+# 签名口径（**唯一真源**）：size:inode:mtime(纳秒):ctime(纳秒)
+#   ⚠️ 必须用 %y/%z（带纳秒的人类可读格式），**不能用 %Y/%Z**（只到秒）——
+#   2026-11-24 本机实测踩到：同一秒内覆写产物并复原 mtime ⇒ %Z 完全相同 ⇒ 备忘命中
+#   被篡改的产物（exec 报 Exec format error）。换成纳秒级后 ctime 差异可见。
+PX_STATFMT='%s:%i:%y:%z'
+px_stat_sig() { stat -c "$PX_STATFMT" -- "$@"; }
+
+px_memo_env() {
+    printf 'engine=%s|stdlib=%s|strict=%s|pi=%s|pxc=%s|vmb=%s|par=%s|norm=%s|ms=%s|ttl=%s' \
+        "${PX_BUILD_ENGINE:-vm}" "${PX_STDLIB:-}" "${PX_STRICT_MODULE:-}" \
+        "${PX_PXI_BIN:-}" "${PX_PXC_BIN:-}" "${PXC_VM_BIN:-}" "${PXPAR_BIN_RUN:-${PXPAR_BIN:-}}" \
+        "${PX_NORM:-}" "${PX_MOD_STRICT:-}" "${PX_TOOLCHAIN_FP_TTL:-}"
+}
+
+# 排障：PX_MEMO_DEBUG=1 时打印「为什么没命中」（门用它做负控断言）
+px_memo_why() { [ "${PX_MEMO_DEBUG:-0}" = "1" ] && echo "[px run --fast] memo 未命中：$1" >&2; return 1; }
+
+# 试命中：$1=abs 其余=脚本参数。命中 ⇒ exec（**不返回**）；未命中 ⇒ return 1
+px_memo_try() {
+    local abs="$1"; shift
+    local memo="$RUN_CACHE/idx/${abs#/}/memo"
+    [ -f "$memo" ] || { px_memo_why "无备忘文件（$memo）"; return 1; }
+    local TAB=$'\t' l ver="" envl="" key="" prog="" r
+    local -a L=() paths=() psig=()
+    mapfile -t L < "$memo" 2>/dev/null || return 1
+    [ "${L[0]:-}" = "#PX-MEMO 1" ] || { px_memo_why "备忘首行不是 #PX-MEMO 1"; return 1; }
+    for l in "${L[@]:1}"; do
+        case "$l" in
+            v"$TAB"*) ver="${l#*"$TAB"}" ;;
+            e"$TAB"*) envl="${l#*"$TAB"}" ;;
+            k"$TAB"*) key="${l#*"$TAB"}" ;;
+            g"$TAB"*) prog="${l#*"$TAB"}" ;;
+            p"$TAB"*) r="${l#*"$TAB"}"; psig+=("${r%%"$TAB"*}"); paths+=("${r#*"$TAB"}") ;;
+            *) px_memo_why "备忘行无法解析：${l:0:30}"; return 1 ;;
+        esac
+    done
+    [ -n "$key" ] && [ -n "$prog" ] && [ "${#paths[@]}" -gt 0 ] \
+        || { px_memo_why "备忘缺 key/prog/输入项"; return 1; }
+    [ "$ver" = "$RELEASE_VER" ] || { px_memo_why "版本变了（$ver → $RELEASE_VER）"; return 1; }
+    [ "$envl" = "$(px_memo_env)" ] || { px_memo_why "覆盖口环境变了"; return 1; }
+    [ -x "$prog" ] || { px_memo_why "产物不存在或不可执行（$prog）"; return 1; }
+    local cur
+    cur="$(px_stat_sig "${paths[@]}" 2>/dev/null)"
+    local -a cl=(); mapfile -t cl <<< "$cur"
+    [ "${#cl[@]}" -eq "${#psig[@]}" ] \
+        || { px_memo_why "输入项数量变了（${#psig[@]} → ${#cl[@]}：有文件被删/改名）"; return 1; }
+    local j
+    for j in "${!psig[@]}"; do
+        [ "${cl[j]:-}" = "${psig[j]}" ] \
+            || { px_memo_why "输入变了：${paths[j]}（签名 ${psig[j]} → ${cl[j]:-空}）"; return 1; }
+    done
+    if [ "${PX_MEMO_DEBUG:-0}" = "1" ]; then
+        echo "[px run --fast] memo 命中 key=$key（${#paths[@]} 项输入签名全等：跳过 AST/子集/key/完整性）" >&2
+    fi
+    exec "$prog" "$@"
+}
+
+
+case "${1:-}:${2:-}" in
+    run:--fast|run:--cache)
+        if [ "${PX_RUN_VERBOSE:-0}" != "1" ] && [ -z "${PX_RUN_NOCACHE:-}" ] && [ -n "${3:-}" ]; then
+            _px_abs="$(readlink -f "$3" 2>/dev/null || echo "$3")"
+            _PX_MEMO_TRIED=1
+            px_memo_try "$_px_abs" "${@:4}"
+        fi
+        ;;
+esac
+
+# 产物完整性：stat 签名优先（1 fork ≈1 ms），签名不符才付 sha256(3.1 MB) 的 27 ms
+px_prog_intact() { # $1=prog $2=progsum（sha16 记录）⇒ 0=完好；1=不可信（按未命中处理）
+    local p="$1" sum="$2" st cur
+    [ -f "$sum" ] || { px_memo_why "产物缺 sha 记录（$sum）"; return 1; }
+    cur="$(px_stat_sig "$p" 2>/dev/null)"
+    [ -n "$cur" ] || { px_memo_why "产物 stat 取不到（$p）"; return 1; }
+    st="$p.stat"
+    if [ -f "$st" ] && [ "$cur" = "$(cat "$st" 2>/dev/null)" ]; then return 0; fi
+    local a b
+    a="$(sha256sum "$p" 2>/dev/null | cut -c1-16)"
+    b="$(cat "$sum" 2>/dev/null)"
+    [ -n "$a" ] && [ "$a" = "$b" ] || { px_memo_why "产物 sha 不符（stat 签名也不符）⇒ 按篡改处理"; return 1; }
+    printf '%s\n' "$cur" > "$st.tmp.$$" 2>/dev/null && mv "$st.tmp.$$" "$st" 2>/dev/null
+    return 0
+}
+
+# 写备忘：$1=abs 主脚本  $2=key  $3=prog  其余=依赖闭包
+px_memo_write() {
+    local abs="$1" key="$2" prog="$3"; shift 3
+    local memo="$RUN_CACHE/idx/${abs#/}/memo" i d
+    local -a all=() dirs=()
+    all+=("$abs")
+    for d in "$@"; do [ "$d" = "$abs" ] || all+=("$d"); done
+    all+=("$prog" "$PXC_SELF" "$PXC_HOME/tools/pxnorm.c")
+    while IFS= read -r d; do [ -n "$d" ] && all+=("$d"); done < <(px_toolchain_files)
+    dirs+=("$RT_DIR" "$RT_DIR/third_party/miniz" "$RT_DIR/third_party/sqlite3" \
+           "$PXC_HOME/bootstrap" "$PXC_HOME/tools" "$PXC_HOME")
+    for d in "$abs" "$@"; do
+        local dd; dd="$(dirname "$d")"
+        dirs+=("$dd")
+        [ -d "$dd/.px_modules" ] && dirs+=("$dd/.px_modules")
+    done
+    all+=("${dirs[@]}")
+    # ⚠️ 只登记**当场存在**的项：stat 对缺失路径不输出行 ⇒ 若登记了不存在的项，
+    #   比对时行数错位（首版实测：VERSION 不存在 ⇒ 63 行 vs 62 行 ⇒ 永远不命中）。
+    #   一个「当时不存在、后来出现」的文件由**所在目录的 mtime**兜住（建/删都会改）。
+    local -a ex=()
+    for d in "${all[@]}"; do [ -e "$d" ] && ex+=("$d"); done
+    all=("${ex[@]}")
+    local sig
+    sig="$(px_stat_sig "${all[@]}" 2>/dev/null)"
+    [ -n "$sig" ] || return 0
+    local -a sg=(); mapfile -t sg <<< "$sig"
+    mkdir -p "${memo%/*}" 2>/dev/null || return 0
+    {
+        printf '#PX-MEMO 1\nv\t%s\ne\t%s\nk\t%s\ng\t%s\n' \
+            "$RELEASE_VER" "$(px_memo_env)" "$key" "$prog"
+        for i in "${!sg[@]}"; do
+            [ -n "${all[i]:-}" ] || continue
+            printf 'p\t%s\t%s\n' "${sg[i]}" "${all[i]}"
+        done
+    } > "$memo.tmp.$$" 2>/dev/null && mv "$memo.tmp.$$" "$memo" 2>/dev/null
+    rm -f "$memo.tmp.$$" 2>/dev/null
+    return 0
+}
+
+
 usage() {
     cat <<EOF
 px $RELEASE_VER
@@ -178,10 +327,14 @@ px $RELEASE_VER
                                                                   （缺省按 cc 自动探测：gcc→lib，aarch64/armv7/riscv64→lib-<arch>）
   px run <file.px> [args...]                 解释执行（tree-walking，秒起 ≈5 ms）
   px run --fast <file.px> [args...]          构建缓存：首次编译（≈1 s）→ 此后直接 exec
-                                             产物（≈30 ms，**378x**，M268）。含 Mini 子集
+                                             产物（命中 ≈30–50 ms，**378x**，M268；M440
+                                             命中决策备忘后实测 ~40 ms）。含 Mini 子集
                                              守卫：脚本含并发构造 ⇒ 打印提示 + **回落解释轨**
                                              （缓存只许影响快慢，不许影响语义）
                                              PX_RUNCACHE_DIR 覆盖缓存根 · PX_RUN_NOCACHE=1 关
+                                             PX_MEMO_DEBUG=1 打印命中/未命中原因（排障）
+                                             ⚠️ 常跑脚本更快的做法：`px build x.px` 后**直跑
+                                             产物**（**8 ms/次**，比 --fast 还快 4–5x，M440 实测）
   px run --interp <file.px> [args...]        显式强制解释轨（同默认；与 --fast 成对，供脚本自述）
   px --deps <file.px> [--json]               依赖闭包 + 缓存 key 的**只读**出口（M436-2）
                                              key 与 px run --fast 的命中判据同一真源；
@@ -1074,7 +1227,6 @@ cmd_build() {
 # 环境变量：PX_RUNCACHE_DIR（缓存根，默认 $PXC_HOME/.runcache）· PX_RUN_NOCACHE=1（禁用）
 # ══════════════════════════════════════════════════════════════
 PXPAR_BIN_RUN="$PXPAR_BIN"
-RUN_CACHE="${PX_RUNCACHE_DIR:-$PXC_HOME/.runcache}"
 
 # ══════════════════════════════════════════════════════════════
 # M425（缺陷 866）：`px build` 产物缓存
@@ -1386,6 +1538,18 @@ px_common_root() { # $@=文件/目录 ⇒ 公共祖先目录（沙箱内保持�
 #   ⚠️ 已知边界（诚实写在这里）：若有人**原地改写文件同时刻意保留 mtime 与 size**，
 #      快路径不会失效 ⇒ 由 TTL（PX_TOOLCHAIN_FP_TTL，默认 1800 s）兜住，最坏滞后一个 TTL。
 #      不读内容就检测不到这种改动；要彻底消除只能每次全算（= 现状 670 ms）。这是一笔明账。
+# ── M440：工具链输入清单（**唯一真源**）────────────────────────────────────
+# 为什么抽出来：`--fast` 的命中决策备忘（px_memo_*）与 toolchain_fp 的 stat 签名
+#   必须盯**同一批文件** —— 两份手写清单必然漂移（M435 缺陷 902 的同族）。
+#   输出顺序即 stat 顺序（逐字节可比）。
+px_toolchain_files() {
+    printf '%s\n' \
+        "$PXC_HOME/bootstrap/pxc_vm" "$PXC_HOME/bootstrap/pxi" "$PXC_HOME/VERSION" \
+        "$RT_DIR"/*.c "$RT_DIR"/*.h \
+        "$RT_DIR"/third_party/miniz/*.c "$RT_DIR"/third_party/miniz/*.h \
+        "$RT_DIR"/third_party/sqlite3/sqlite3.h
+}
+
 toolchain_fp() { # stdout=5 行指纹（与旧实现逐字节同流）
     local fp="$RUN_CACHE/.toolchain.fp"
     local stamp="$RUN_CACHE/.toolchain.stamp"
@@ -1405,11 +1569,7 @@ toolchain_fp() { # stdout=5 行指纹（与旧实现逐字节同流）
     # ⚠️ engine 也是 memo 的输入（指纹最后一行 `engine=…` 在 body 里）—— 必须一起进签名，
     #    否则「vm 档算出的 memo」会被 c 档复用（实测：同源同内容两次构建拿到两把不同的 key，
     #    缓存命中率与判据稳定性一起坏）。`cuts`/`lto`/`--cc` 不进这里：它们各自进 build_cache_key。
-    sig="$( { stat -c '%n:%s:%Y:%i' -- \
-             "$PXC_HOME/bootstrap/pxc_vm" "$PXC_HOME/bootstrap/pxi" "$PXC_HOME/VERSION" \
-             "$RT_DIR"/*.c "$RT_DIR"/*.h \
-             "$RT_DIR"/third_party/miniz/*.c "$RT_DIR"/third_party/miniz/*.h \
-             "$RT_DIR"/third_party/sqlite3/sqlite3.h 2>/dev/null
+    sig="$( { stat -c '%n:%s:%Y:%i' -- $(px_toolchain_files) 2>/dev/null
             echo "engine=${PX_BUILD_ENGINE:-vm}" 2>/dev/null; } | md5sum | cut -c1-16)"
     if [ -f "$fp" ] && [ -f "$stamp" ] && [ -n "${sig:-}" ]; then
         local now age
@@ -1490,6 +1650,16 @@ cmd_run_fast() {
     if [ -n "${PX_RUN_NOCACHE:-}" ]; then "$PXI_BIN" "$@" "$file"; return $?; fi
 
     local abs; abs="$(readlink -f "$file" 2>/dev/null || echo "$file")"
+    # ── M440：**命中决策备忘**（热态 190–215 ms → ~40 ms）───────────────────
+    #   命中 ⇒ exec，不返回；未命中 ⇒ 落到下面原全量路径（并在结束时重写备忘）。
+    #   为什么在子集守卫**之前**：备忘本身就把「子集判定结果」记在签名里 ——
+    #   源码/运行器契约一变（ctime 变）就必然重判，语义与「先判源码」等价（M271 口径）。
+    #   verbose 模式一律不走备忘：它要打印 key 与依赖清单（那是全量路径的产物）。
+    #   （文件最前面已试过一次；那里只覆盖 `run --fast <file>` 这一种形式 —— 标志异位
+    #     等其它形式到这里才试，用 _PX_MEMO_TRIED 避免同一份备忘被白试两遍）
+    if [ "${PX_RUN_VERBOSE:-0}" != "1" ] && [ -z "${_PX_MEMO_TRIED:-}" ]; then
+        px_memo_try "$abs" "$@" || true
+    fi
     # M383-速度：主脚本 AST 在这里解析一次，下面 run_subset_ok（子 shell）与
     #   px_dep_closure → px_import_keys（子 shell）都通过环境变量复用，不再重解析。
     #   解析失败不在这里报错 —— 让 run_subset_ok 按原逻辑报「解析失败」并回落解释轨。
@@ -1524,9 +1694,15 @@ cmd_run_fast() {
     #   命中前校验产物哈希。没有这一步时，「手工写坏/替换缓存条目」会**静默产出
     #   不同的结果** —— 而缓存只许影响快慢。
     #   不符 ⇒ 当作**未命中** ⇒ 重建（重建同样满足契约，且比「响亮失败」体验好）。
-    if [ -x "$prog" ] && [ -f "$progsum" ] \
-       && [ "$(sha256sum "$prog" 2>/dev/null | cut -c1-16)" = "$(cat "$progsum" 2>/dev/null)" ]; then
+    #   M440：判据从「每次全量 sha256(3.1 MB) 27 ms」改成「stat 签名 1 次 ≈1 ms，
+    #   签名不符才回落 sha256」。判定强度不降：任何写入都会顶 ctime（用户无法伪造），
+    #   sha 仍是权威，只是不再每次都付它的钱。
+    if [ -x "$prog" ] && px_prog_intact "$prog" "$progsum"; then
         [ "${PX_RUN_VERBOSE:-0}" = "1" ] && echo "[px run --fast] 缓存命中 key=$key" >&2
+        # 备忘写回（此处 deps 还没算 —— 闭包只在**未命中备忘**这条慢路上取一次）
+        local -a _mdeps=(); local _md
+        while IFS= read -r _md; do [ -n "$_md" ] && _mdeps+=("$_md"); done < <(px_dep_closure "$abs")
+        px_memo_write "$abs" "$key" "$prog" "${_mdeps[@]}"
         exec "$prog" "$@"
     fi
 
@@ -1595,6 +1771,10 @@ cmd_run_fast() {
         exec "$out" "$@"
     fi
     sha256sum "$prog" 2>/dev/null | cut -c1-16 > "$progsum.tmp" && mv "$progsum.tmp" "$progsum"
+    # M440：记下产物的 stat 签名（下次完整性校验走 1 ms 快路）+ 写命中决策备忘
+    px_stat_sig "$prog" 2>/dev/null > "$prog.stat.tmp" \
+        && mv "$prog.stat.tmp" "$prog.stat" 2>/dev/null
+    px_memo_write "$abs" "$key" "$prog" "${deps[@]}"
     rm -rf "$work"
     exec "$prog" "$@"
 }

@@ -6,9 +6,9 @@
 # 刷新：不用手跑 —— packaging/chain/release_postupgrade.sh 判绿后自动调 selfhost/refresh_gate_baseline.sh。
 #
 # 本次输入：
-#   - m439-norm = /tmp/m116_gates.times.tsv（317 行）
-#   - retain（只补缺）= /data/gatevm/base-20261124-0123.tsv
-# 生成时间：2026-11-24 01:23:31 +0800
+#   - m440-dev = /tmp/m440/m440.times.tsv（1 行）
+#   - retain（只补缺）= /tmp/m440/gate_time_baseline.tsv.bak
+# 生成时间：2026-11-24 01:57:35 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	11	OK	chain-20261123-172827
@@ -283,6 +283,7 @@ m438_pxslice_offs	18	OK	chain-20261123-215720
 m438_spawn_posix	5	OK	chain-20261123-215720
 m439_norm	2	OK	m439-norm
 m439_runtime	1	OK	chain-20261124-m439
+m440_fastmemo	9	OK	m440-dev
 m63_langfix	6	OK	chain-20261123-215720
 m64_fmt	0	OK	chain-20261123-153007
 m64_lint	1	OK	chain-20261123-172827

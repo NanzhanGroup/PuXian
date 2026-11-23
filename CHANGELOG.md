@@ -1,3 +1,72 @@
+## M440：`px run --fast` 命中决策备忘 —— 热态 192 ms → 40–60 ms（缺陷 922）
+
+> **一句话**：`--fast` 慢的根因不是「加速逻辑坏了」，而是**每次命中都在重做与上次完全
+> 相同的判断** —— AST 解析 19 ms + 子集判定 17 ms + 缓存 key 67 ms + 产物完整性
+> sha256(3.1 MB) 27 ms，而真正必须做的只有 exec 8 ms。本轮把这四段折叠成
+> 「1 次 stat + 1 次字符串比对」，并把热路径前移到 `usage()` 之前（bash 逐条解析 ⇒
+> `exec` 之后不再解析 124 KB 入口，省掉 35 ms）。口径没变：**缓存只许影响快慢，不许影响语义**。
+
+### 缺陷 922：`px run --fast` 对短脚本比 `px run` 还慢 3–4 倍
+
+```
+现象    本机实测（0.2.437 · load 1.5 · 2026-11-23 17:22 用户提出）
+            场景                px run（解释）   px run --fast（热）   产物直跑
+            空脚本只 print       41–54 ms        163–186 ms            8 ms
+            20000 次循环计算     3586–3820 ms    150–195 ms            8 ms
+        ⇒ 计算型快约 20×（加速逻辑有效），短脚本反而慢 3–4×
+        ⇒ 分界点：解释耗时 ≈170 ms（约 950 次简单循环）以上才净赚
+拆解    热态 192 ms（6 次中位）逐段实测：
+            bash 加载 tools/px（124 KB）       28–35 ms
+            px_ast_prime（pxpar 解析 AST）     19 ms
+            run_subset_ok（在 AST 上 grep/sed） 14–19 ms
+            run_cache_key（sha + 闭包 + 指纹）  67 ms
+                └ 主脚本 sha 10 · 依赖闭包 15 · toolchain_fp 23 · comp_fp 19
+            产物完整性 sha256(3.1 MB)           26–38 ms
+            exec 产物本身                       8 ms
+        ⇒ 除 exec 全是重复劳动
+实现    ① 命中决策备忘（tools/px：px_memo_env / px_memo_try / px_memo_write）
+           备忘文件 $PXC_HOME/.runcache/idx/<脚本绝对路径>/memo，记录：
+             v 版本 · e 覆盖口环境串 · k 缓存 key · g 产物路径 · p <签名>\t<路径> × N
+           命中判据 = **所有会影响产物的输入的 stat 签名逐项相等**
+             （size:inode:mtime:ctime，**纳秒级**；理由见下方「负控实证」①）
+           覆盖输入：主脚本 · 依赖闭包每一件 · 产物本身 · tools/px · tools/pxnorm.c ·
+             px_toolchain_files()（runtime 源 + pxc_vm + pxi + VERSION，与 toolchain_fp
+             共用同一个函数 —— 唯一真源，防 M435 缺陷 902 那类「两份清单漂移」）·
+             上述文件所在目录（目录 mtime 覆盖「新建文件改变 import 解析顺序/glob」）
+           覆盖口必须进退避名单（PX_PXI_BIN/PX_PXC_BIN/PXC_VM_BIN/PXPAR_BIN/PX_STDLIB/
+             PX_BUILD_ENGINE/PX_NORM/PX_MOD_STRICT/PX_TOOLCHAIN_FP_TTL）——
+             M425 补1（缺陷 867）的同族：打桩解释器不进名单 ⇒ 门的负控会被缓存拔牙
+         ② 产物完整性改判据：stat 签名优先（1 次 fork ≈1 ms），签名不符才回落
+            sha256(3.1 MB)（27 ms）。sha 仍是权威，只是不再每次都付它的钱；
+            核对通过后把签名写进 prog.stat
+         ③ 热路径前移：`px run --fast|--cache <file> [args...]` 这一种形式在
+            `usage()` 之前就试备忘命中（命中即 exec，后面的函数定义不再被解析）
+            其它一切形式（verbose / 标志异位 / 其它子命令）原样落到完整实现
+         ④ 排障与逃生口：PX_MEMO_DEBUG=1 打印「命中/未命中的具体原因」·
+            PX_RUN_NOCACHE=1 完全绕过 · PX_RUN_VERBOSE=1 不走备忘（它要打印 key/依赖）
+实测    短脚本热态：192 ms → **40–60 ms**（本机多次中位；机况噪声大，门里用相对判据）
+        计算型（20000 次循环）：3752 ms（解释）vs 44–48 ms（--fast 命中）⇒ 约 80×
+        全量判定中位 217 ms（删掉备忘后跑同一条命令）⇒ 命中约为其 1/4
+        三路输出一致：备忘命中 / 全量路径 / 解释轨
+新门     m440_fastmemo（318 门 · 实测 9s）：28 条判据
+            形状 10（含「热路径必须在 usage() 之前」「签名必须纳秒，禁 %Y/%Z」·
+                    「覆盖口必须全在环境串里」「工具链输入走唯一真源」）
+            命中/等价 3 · 负控 11（改代码 / 改代码复原 mtime / 篡改产物复原 mtime /
+                    改依赖 / 覆盖口 / 目录新增文件 / 逃生口 / verbose）
+            前提自证 2（同秒内 ctime 纳秒必变、产物同长覆写 mtime 复原 ctime 必变）
+            相对性能 1（命中中位 ≤ 全量判定中位 60%；**绝对耗时只报告，不作判据**）
+负控实证 门自己先抓到两个真问题（不是空跑）：
+          ① 首版签名用 %Y/%Z（只到秒）⇒ 同秒内覆写产物并复原 mtime，%Z 完全相同
+             ⇒ 备忘命中被篡改的二进制（exec 报 Exec format error）⇒ 改纳秒口径
+          ② F4 的前提自证第一版按 ":" 切签名字段，而人类可读时间戳自带冒号 ⇒ 字段错位
+             ⇒ 自己把自己判红；改三份独立读数后成立
+代价    本轮不改 runtime/ ⇒ 不需要重烘；不改版本号（合并发布 v0.2.443 的中间节，**不打 tag**）
+        已知边界（明账）：同一 inode 的字节被改而 size/mtime/ctime 全保持 ⇒ 需文件系统级
+        回档（root 也无法用 utimes 伪造 ctime）；遇到用 PX_RUN_NOCACHE=1
+        未做：把 tools/px 拆成「小入口 + 核心」可再省 ~20 ms（当前 40–60 ms 里约 20 ms 是
+        解析入口前半段），但那要动一批 grep tools/px 内容的自指门与打包清单，风险面远大于
+        20 ms 收益 ⇒ 记为候选 M44x，需用户点头
+
 ## M439：运行时两条缺陷落地 —— sqlite_exec 契约说清 + sqlite_changes · json_parse 合并 UTF-16 代理对（缺陷 919 / 920）
 
 > **一句话**：晨曦转来两条运行时缺陷，都是**静默**级的：`sqlite_exec` 的注释在撒谎

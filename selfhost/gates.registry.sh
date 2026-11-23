@@ -2599,3 +2599,16 @@ run m439_runtime bash selfhost/check_m439_runtime.sh
 #         P3 复原逐字节 · P4 映射缓存（移走二进制仍同键）· P5 逃生口 PX_NORM=raw 口径不同。
 gate_timeout m439_norm 600
 run m439_norm bash selfhost/check_m439_norm.sh
+# M440 · `px run --fast` 命中决策备忘：热态 192 ms → 实测 ~40–60 ms。
+#   病象：命中路径每次重做「与上次完全相同的判断」——AST 解析 19 + 子集 17 + key 67
+#         + 产物完整性 sha256(3.1 MB) 27 ms，真正必须做的只有 exec 8 ms。
+#   做法：① 备忘（输入 stat 签名 size:inode:mtime:ctime **纳秒级** 全等 ⇒ 直接 exec）
+#         ② 完整性校正为 stat 签名优先、sha 兜底 ③ 热路径前移到 usage() 之前
+#         （bash 逐条解析 ⇒ exec 后不再解析 124 KB，省 35 ms）。
+#   口径：缓存只许影响快慢，不许影响语义。判据 28 条：形状 10（含「热路径必须在
+#         usage() 之前」「签名必须纳秒，禁 %Y/%Z」）· 命中/等价 3 · 负控 11
+#         （改代码 / 改代码复原 mtime / 篡改产物复原 mtime / 改依赖 / 覆盖口 /
+#          目录新增文件 / 逃生口 / verbose）· 前提自证 2（同秒内 ctime 纳秒必变）·
+#         三路等价 1 · 相对性能 1（中位 ≤ 全量 60%，绝对值不作判据）。
+gate_timeout m440_fastmemo 600
+run m440_fastmemo bash selfhost/check_m440_fastmemo.sh

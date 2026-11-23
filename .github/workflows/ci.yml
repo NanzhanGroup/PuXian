@@ -540,6 +540,21 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m439_norm ENV（缺 cc / 取不到 rt_key rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m439_norm rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m439_norm PASS"
+      - name: m440_fastmemo（`px run --fast` 命中决策备忘 · M440）
+        #   热态 192 ms → 40–60 ms：备忘把「AST 解析 + 子集判定 + key + 产物完整性」
+        #   折叠成 1 次 stat + 1 次字符串比对；热路径前移到 usage() 之前（早退不解析 124 KB）。
+        #   判据 28 条：形状 10（含「签名必须纳秒 %y/%z，禁 %Y/%Z」）· 命中/等价 3 ·
+        #   负控 11（改代码 / 复原 mtime / 篡改产物 / 改依赖 / 覆盖口 / 新增文件 / 逃生口）·
+        #   前提自证 2（同秒内 ctime 纳秒必变）· 相对性能 1（绝对值不作判据）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m440_fastmemo.sh
+          rc=$?
+          if [ $rc -eq 2 ]; then echo "⚠ m440_fastmemo SELFTEST-SKIP rc=2"; exit 0; fi
+          if [ $rc -eq 3 ]; then echo "⚠ m440_fastmemo ENV（缺 pxi / 建不出产物 rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m440_fastmemo rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m440_fastmemo PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；
