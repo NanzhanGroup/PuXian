@@ -1,3 +1,96 @@
+## M441：产物裁剪开关 —— `--no-onnx` 接线 + `--gc-sections`（缺陷 923/924）
+
+> **一句话**：onnx 的裁剪能力在 runtime 里躺了 8 个月（M156 起 `#ifndef PX_NO_ONNX` 就绪、
+> 源文件移出编译集就绪、`native_mod_map` 条目就绪），**只差 `tools/px` 那一行 flag 解析**
+> —— 文档写着能用，用户实际用不了。补上这一行时又撞出第二个问题：**改了 `tools/px` 的
+> 裁剪逻辑，产物缓存不失效**（键里没有构建器自身）⇒ 升级 px 后可能拿到改动前的旧二进制。
+> 两条都是「静态就绪、动态不通」同一类病。
+
+### 缺陷 923：`--no-onnx` 在 runtime 侧全就绪，`tools/px` 未接线
+
+```
+实测基线（hello.px · gcc · -O2 · 静态）
+    默认产物        3,152,464 B    onnx 符号 121 个 / 56,090 B
+    --full          9,602,024 B    （证明模块自动裁剪确实在工作，不是没裁）
+    默认 vs --full  差 6.4 MB ⇒ 自动裁剪（M86-S2）裁掉了 sqlite/ws/zip/xml/aes/
+                    rsa/ed25519/img/route/zlib/h2/quic，**唯独漏了 onnx**
+根因    三处 mod 循环里 onnx 缺席（tools/px）：
+          ① -c 预编译的 mod_macro 循环     for m in quic sqlite … zlib h2        ← 缺 onnx
+          ② 单文件编译的 mod_macro 循环    for m2 in quic sqlite … zlib h2       ← 缺 onnx
+          ③ flag 解析                     没有 --no-onnx 分支
+        （自动裁剪循环 for am in … 也缺，但**故意不加**：自动裁剪的默认行为按硬约束不动）
+修法    ① 两处 mod_macro 循环补 onnx  ⇒ 产生 -DPX_NO_ONNX
+        ② 新增 --no-onnx（mods="$mods onnx"）⇒ rt_src_files 剔除 onnx 5 个源
+        ③ --min 加入 onnx（--min 语义就是「最小化 profile」）
+        ④ 自动裁剪循环**保持不含 onnx** ⇒ 默认产物逐字节不变（判据见下）
+实测    --no-onnx            3,045,976 B   onnx=0   −106,488 B（−3.4%）
+        --min               3,045,976 B   onnx=0   （与 --no-onnx 同集合）
+负控    examples/m156_onnx/onnx_dump.px + t01_basic.onnx
+          默认构建     nodes=1 inits=1 in=1 out=1      ← 前提自证：真能解析
+          --no-onnx    R1001: 未定义变量: 'onnx_model_open'   ← 契约如实
+默认不变 拿改动前的 tools/px 编一次（git stash）+ 改动后编一次，cmp 逐字节相同
+        （3,152,464 B · md5 b985ed33…）⇒ 默认路径零变化
+```
+
+### 缺陷 924：产物缓存的键不含构建器自身 ⇒ 改了 tools/px 仍命中旧产物
+
+```
+发现过程 本轮实测「改了自动裁剪含 onnx」后，默认构建 **secs=1** 直接返回旧二进制，
+        而 `bash -x` dump 里 cuts='' + 完全没有 auto_refs 的痕迹 ⇒ 走了产物缓存命中。
+根因    build_cache_key 覆盖了：base/engine/lto/cc/noquic/full/mods/cuts/gcs ·
+        rtkey（runtime 源 sem + cuts + cc + lto）· gcc --version ·
+        主脚本与依赖闭包 sha · toolchain_fp · comp_fp（pxc 二进制身份）
+        **唯独没有构建器 tools/px 自己** ⇒ 改裁剪/链接逻辑，键一字不变。
+        ⇒ 与缺陷 922（M440 备忘漏登记 stdlib）**同族**：键必须覆盖所有会影响产物的输入。
+修法    build_cache_key 加 `sha256sum "$PXC_SELF" | cut -c1-16`（16 位，进键）
+代价    构建器每次改动 ⇒ 产物缓存集体失效一次（正确行为；runtime 预编译 .rtcache 不受影响）
+```
+
+### `--gc-sections`（opt-in，默认不开）
+
+```
+做法    编译 -ffunction-sections -fdata-sections，链接 -Wl,--gc-sections
+        （gcs 只在 =1 时进 rt_key 哈希串 ⇒ gcs=0 的键与旧口径**逐字节一致**，
+          默认路径既不冷缓存、产物也不变）
+实测    3,152,464 → 3,101,376 B（−51,088 B · −1.6%）
+功能    gc-sections 下三条都正常：examples/hello.px（stdlib + 字符串「HELLO, 普贤」）·
+        examples/fib.px（递归/GC）· m156 onnx 解析（DOM 结构 nodes=1 inits=1）
+组合    --no-onnx --gc-sections ⇒ 2,994,992 B（−157,472 B · −5.0%）
+口径    不默认、不动默认产物 —— 与 --prune 同（硬约束）
+```
+
+### 未做（说清楚，不是漏了）
+
+```
+--no-tls（晨曦原提议 a 段）**本轮不做**，理由是实测出来的代价差：
+  · 收益上限 10.9%：mbedtls 符号 342,513 B / 3,152,464 B（nm --size-sort 汇总，实测）
+  · 代价：runtime.c 里 263 处 mbedtls 引用、分 10 个区段散布，且被 http_serve /
+    tls_connect / tls_upgrade / ws(wss) 的调用点耦合；aes/rsa/zip(加密)/ws(sha1)
+    也各自依赖 mbedtls ⇒「只裁 TLS」不是条件链一句 `if` 能了事，要么把 TLS 移独立 TU
+    （runtime_tls.c），要么给 runtime.c 加宏段 —— 属结构性改造，动 runtime 就要重烘 +
+    全轮冷缓存，风险面远大于 M441 其余部分。
+  ⇒ 单独立项 M441-2，等 M441 落地后按独立轮次做（那时可一并处理「模块→mbedtls 依赖图」）。
+--prune（引用集驱动注册表）**已经存在**（M86-S2 自动按引用集裁剪），本轮只让它把 onnx 纳入
+  显式开关，不改自动裁剪的默认行为。
+晨曦报告的「按引用集裁剪 −52%（1.51 MB）」在本轮代码结构下**未能复现**：实测全裁集合
+  （--min + 关 quic）也只到 3.05 MB。差的 1.5 MB 不在符号表里（mbedtls 342 KB + onnx
+  56 KB 都裁掉也只 −12.7%）⇒ 她的实现路径可能不同（例如把 runtime.c 的 native 注册表整体
+  按引用集生成，而非按模块裁源文件）。这一点已记入 M441-2 的输入。
+```
+
+### 环境与验证
+
+```
+门      m441_prune 16 条判据全绿（形状 6 · 负控 1 · 默认不变 1 · --no-onnx 3 ·
+        运行期契约 2 · --gc-sections 2 · 组合 1）· 门清单 318 → 319
+        registry 与 ci.yml 双向登记 · 耗时基线补 1 行（其余行逐字节不变）
+其他门  gate_registry 13/0 · check_gate_paths（677 门无开发机路径）· orphan_gates 13/0 ·
+        gate_timeouts 37/0（M311-TIMEOUTS-OK）· m400 见链
+重烘    不需要：tools/px 不在 SRC_PATTERNS（selfhost/*.px runtime/*.c|h tools/*.px
+        stdlib/*.px）里 ⇒ bootstrap 14 件不受影响（--check-all 待链上复核）
+打 tag  不打（按用户 2026-11-24 00:21 令：438→…→443 合并为一个发布版本）
+```
+
 ## M440：`px run --fast` 命中决策备忘 —— 热态 192 ms → 40–60 ms（缺陷 922）
 
 > **一句话**：`--fast` 慢的根因不是「加速逻辑坏了」，而是**每次命中都在重做与上次完全
