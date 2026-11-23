@@ -219,6 +219,17 @@ px_memo_write() {
     for d in "$@"; do [ "$d" = "$abs" ] || all+=("$d"); done
     all+=("$prog" "$PXC_SELF" "$PXC_HOME/tools/pxnorm.c")
     while IFS= read -r d; do [ -n "$d" ] && all+=("$d"); done < <(px_toolchain_files)
+    # ⚠️ bootstrap/ 全部自举件：pxpar（子集判定的载体）、pxc/pxc_vm（编译）都在这里。
+    #   少登记一件 = 「换了解析器/编译器仍命中旧结论」—— 与 M271 的「运行器契约」同族。
+    for d in "$PXC_HOME"/bootstrap/*; do [ -f "$d" ] && all+=("$d"); done
+    # ⚠️ stdlib/*.px 必须逐件登记：px_resolve_import 对 std.* 直接返回空（沙箱复制不漂移），
+    #   ⇒ **stdlib 不在依赖闭包里** ⇒ 不登记就会「改了 stdlib 仍命中旧产物」
+    #   （M425 补1 缺陷 867 的原形：m302 3B 因此三轨分叉）。口径与 comp_fp 的 glob 一致。
+    local sdir="${PX_STDLIB:-$PXC_HOME/stdlib}"
+    if [ -d "$sdir" ]; then
+        for d in "$sdir"/*.px; do [ -f "$d" ] && all+=("$d"); done
+        dirs+=("$sdir")
+    fi
     dirs+=("$RT_DIR" "$RT_DIR/third_party/miniz" "$RT_DIR/third_party/sqlite3" \
            "$PXC_HOME/bootstrap" "$PXC_HOME/tools" "$PXC_HOME")
     for d in "$abs" "$@"; do

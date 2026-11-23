@@ -86,6 +86,12 @@ done
 awk '/^px_memo_write\(\)/,/^}/' "$PX" | grep -q 'px_toolchain_files' \
   && ok "S3b 备忘覆盖工具链输入（px_toolchain_files 唯一真源）" \
   || bad "S3b 备忘没覆盖工具链输入"
+awk '/^px_memo_write\(\)/,/^}/' "$PX" | grep -q 'bootstrap/\*' \
+  && ok "S4a 备忘登记 bootstrap/*（pxpar 子集判定载体 / pxc 编译器等）" \
+  || bad "S4a 备忘没登记 bootstrap/*（换解析器仍命中旧结论 = M271 契约破）"
+awk '/^px_memo_write\(\)/,/^}/' "$PX" | grep -q 'sdir' \
+  && ok "S4b 备忘登记 stdlib/*.px（stdlib 不在依赖闭包里 —— M425 补1 缺陷 867 同族）" \
+  || bad "S4b 备忘没登记 stdlib/*.px（改 stdlib 仍命中旧产物）"
 
 # ---------------- 夹具环境 ----------------
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/m440fast.XXXXXX")" || env_bad "mktemp 失败"
@@ -282,6 +288,34 @@ if ! hit; then
   ok "F11 脚本目录新增 .px ⇒ 未命中（覆盖 import 解析顺序/glob 变化）"
 else
   bad "F11 目录新增文件后仍命中"
+fi
+
+# ---------------- F12 stdlib 变化（临时 stdlib 副本，不碰仓库） ----------------
+STD="$WORK/stdlib_copy"; mkdir -p "$STD"
+if cp "$ROOT"/stdlib/*.px "$STD"/ 2>/dev/null; then
+  CASE2="$WORK/case2"; mkdir -p "$CASE2"
+  printf 'def main():\n    print("stdlib-case")\n' > "$CASE2/s2.px"
+  h2() { # 带临时 stdlib 的命中检查
+    local e2
+    e2="$( cd "$CASE2" && PX_STDLIB="$STD" PX_MEMO_DEBUG=1 "$PX" run --fast s2.px 2>&1 >/dev/null )"
+    case "$e2" in *"memo 命中"*) return 0 ;; *) return 1 ;; esac
+  }
+  ( cd "$CASE2" && PX_STDLIB="$STD" "$PX" run --fast s2.px >/dev/null 2>&1 )
+  ( cd "$CASE2" && PX_STDLIB="$STD" "$PX" run --fast s2.px >/dev/null 2>&1 )
+  h2 && ok "F12a 带临时 PX_STDLIB 的脚本能命中" || bad "F12a 带临时 PX_STDLIB 未命中"
+  S1STD="$(find "$STD" -maxdepth 1 -name '*.px' | head -1)"
+  if [ -n "${S1STD:-}" ]; then
+    printf '\n# m440 gate probe\n' >> "$S1STD"
+    if ! h2; then
+      ok "F12b 改 stdlib（$(basename "$S1STD")）⇒ 未命中（stdlib 不在依赖闭包，必须单独登记）"
+    else
+      bad "F12b 改 stdlib 仍命中 ⇒ 缓存会跑旧 stdlib 语义分叉（M425 补1 缺陷 867 同族）"
+    fi
+  else
+    bad "F12b 临时 stdlib 里没有 .px 文件"
+  fi
+else
+  bad "F12 拷 stdlib 失败（无法验证 stdlib 覆盖）"
 fi
 
 echo
