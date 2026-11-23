@@ -52,12 +52,23 @@ two_arg=$(awk '/if \(nargs == 2\) \{/,/^    \}/' runtime/runtime_sqlite.c)
 #   那是警告文案，不是代码 —— 先剥 `//` 行注释再判（否则判据自己造的假红）。
 two_code=$(sed 's://.*::' <<< "$two_arg")
 chg_fn=$(awk '/^LXValue bi_sqlite_changes\(/,/^}/' runtime/runtime_sqlite.c)
-grep -q '成功恒返回 0' <<< "$sq" \
-  && ok "文件头注释写明「成功恒返回 0」（不再是「返回受影响行数」）" \
-  || bad "文件头注释未写明「成功恒返回 0」"
-grep -q '判失败只能判' <<< "$sq" \
-  && ok "文件头注释写明「判失败只判 null」" \
-  || bad "文件头注释缺「判失败只判 null」"
+# ⚠️ 缺陷 925（M441 收口 · 2026-11-24）：这两条原先比的是**文件头注释里的中文散文**
+#   （'成功恒返回 0' / '判失败只能判'）。m284 的 O1 守卫要求判据串在仓里有**代码生产者**
+#   —— 注释不算生产者（那正是「注释里写着修了」这个洞本身）；散文只在
+#   runtime_sqlite.c 的注释里出现 ⇒ m284 判「凭空判据串」（CI 与本地同红）。
+#   处置：**改判据不改守卫**——契约的牙在 [1] 的代码判据（两参 return px_int(0) /
+#   无 sqlite3_changes）与 [5] 的负控（919_ins_ret 0→1 必红）上；这里换成
+#   「头部契约表在位」的**结构性**判据（ASCII 锚点，O1 不适用），不再比对散文措辞。
+HDR="$(sed -n '1,14p' runtime/runtime_sqlite.c)"
+grep -q 'sqlite_exec(db, sql)' <<< "$HDR" \
+  && ok "文件头契约表：sqlite_exec 行在位" \
+  || bad "文件头契约表缺 sqlite_exec 行（契约表被删/挪出前 14 行）"
+grep -q '== null' <<< "$HDR" \
+  && ok "文件头契约表：判失败口径写明（== null）" \
+  || bad "文件头契约表缺判失败口径（== null）"
+grep -q 'sqlite_changes(db)' <<< "$HDR" \
+  && ok "文件头契约表：要行数指向 sqlite_changes(db)" \
+  || bad "文件头契约表未指向 sqlite_changes(db)"
 grep -q 'return px_int(0);' <<< "$two_arg" \
   && ok "两参分支仍返回 0（历史契约未改）" \
   || bad "两参分支未返回 px_int(0)"

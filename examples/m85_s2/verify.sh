@@ -1,6 +1,9 @@
 #!/bin/bash
 # M85-S2 (qg-issue 24) --min profile + 裁剪组合 + target 折叠路径验证
-#   --min = 聚合 --no-quic + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁（~2.7M）
+#   --min = 聚合 --no-quic + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2/onnx 全裁（~2.9M）
+#     ⚠️ 缺陷 925（M441）：M441 把 onnx 加进了 --min profile，本门的「手写全裁」清单
+#        没同步 ⇒ [2/5] 拿 --min(2973816) 去比全裁(3087272) 必红（差 113456 B = onnx 面）。
+#        口径：--min 的定义变了，「手写全裁」必须与它逐项对齐，否则判据比的是两件不同的事。
 #   验证：--min 体积断言 / 与手写全裁组合等价 / --target x86_64 + 裁剪叠加 /
 #         --min 态缺 native R1001 / 核心 HTTP native 保留
 #   aarch64/armv7/riscv64 真机交叉组合由 CI 覆盖（本机无 musl 交叉工具链）
@@ -13,7 +16,7 @@ rm -rf build; mkdir -p build
 PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
-ALL="--no-quic --no-sqlite --no-ws --no-zip --no-xml --no-aes --no-rsa --no-ed25519 --no-route --no-zlib --no-h2"
+ALL="--no-quic --no-sqlite --no-ws --no-zip --no-xml --no-aes --no-rsa --no-ed25519 --no-route --no-zlib --no-h2 --no-onnx"
 
 echo "== [1/5] --min profile 体积断言（基线 2713472）=="
 $PX build --min hello.px >/dev/null 2>&1 && SZ=$(stat -c %s build/hello) || SZ=0

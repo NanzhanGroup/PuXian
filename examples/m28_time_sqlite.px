@@ -62,6 +62,12 @@ assert(bytes_to_hex(rows[0]["v"]) == "610062")
 
 # 更新 + 事务
 sqlite_exec(db, "UPDATE t SET score = 100 WHERE name = 'alice'")
+# M439（缺陷 919）：受影响行数走 sqlite_changes(db) —— sqlite_exec 的返回值恒为 0（历史契约，
+#   0 = 成功；判失败一律用 `== null`），拿 `== 0` 判失败会把「未命中行的 UPDATE」当失败。
+assert(sqlite_changes(db) == 1)
+sqlite_exec(db, "UPDATE t SET score = 1 WHERE name = 'nobody'")
+assert(sqlite_changes(db) == 0)# 未命中 ⇒ 0 行，但 exec 仍是成功（返回 0）
+assert(sqlite_changes(999) == -1)# 无效句柄 → -1（与 sqlite_last_insert_rowid 同口径）
 rows = sqlite_query(db, "SELECT score FROM t WHERE name = 'alice'")
 assert(rows[0]["score"] == 100)
 sqlite_exec(db, "BEGIN")
