@@ -1,0 +1,402 @@
+# ============================================================
+# M442-S1: bc_pxe.px —— BCModule → PXE1 二进制序列化器（PuXian 侧）
+# ------------------------------------------------------------
+# 定位：与 bc_emit.px 同族（importable，无 main / 无模块级状态 —— 状态全走
+#   参数与局部变量；bc_emit 的 g_bcm 等模块 var 由主文件 bc_cli.px 声明）。
+#   输入是 bc_emit_program(prog) 返回的 BCModule dict（编译器终态），
+#   输出是 PXE1 段式二进制（见 docs/archive 与 /data/autodrive/M442.md）。
+#
+# 格式（PXE1，小端，与 runtime 侧 loader 一一对应）：
+#   HEADER 64B : 0..3 magic "PXE1" · 4..5 ver(u16)=1 · 6..7 flags(u16)
+#                8 nK u32 · 12 nN u32 · 16 nG u32 · 20 nfuncs u32
+#                24 top_idx u32(0xFFFFFFFF=-1) · 28 nstructs u32 · 32 ninst u32
+#                36 modname_off u32 · 40 slen u32 · 44 total u32
+#                48 reserved u32 · 52 crc32 u32 · 56..63 reserved
+#   K 段 nK*24  : [0]kind u8 · [4..8)str_off u32 · [8..16)i64 · [16..24)float 位模式
+#   N 段 nN*4   : str_off u32 ×nN
+#   G 段 nG*4   : str_off u32 ×nG
+#   F 段 nfuncs*32 : name_off · arity · ndefault · nslots · bcoff · nbc · nup · 0
+#   C 段 ninst*8 : op u8 · fl u8 · a u16 · b u16 · c u16
+#   S 段 slen   : 字符串池（逐个 NUL 结尾，线性去重）
+#
+# ★ 写盘通道（M442 实测选型，见 /data/autodrive/M442.md §4）：
+#   bytes_set 是 COW（2 万次 10.9s，O(n^2)）· bytes(list) 不是元素通道（转 repr）
+#   · i64_bytes 挂在 onnx 模块（--no-onnx 下消失，不可依赖）
+#   ⇒ 采用「write_bytes 预分配 + open/mmap + mem_write 就地写」：
+#     编译执行下 0.95us/字段（20 万次 190ms），线性。
+#   ⚠️ 本文件只能在**编译执行**下用（pxi 解释轨 220us/迭代，慢 750 倍）。
+# ============================================================
+# ---------- 掩码：任意 int → bits 位无符号值 ----------
+def pxe_mask(v, bits):
+    # bits>=64 ⇒ 2^64 在 int64 下溢出成 0（v % 0 = 除零），且 64 位已满位宽、
+    #   无需掩码：原值即补码，交由 int_to_bytes(..., 8, "le", true) 写。
+    if bits >= 64:
+        return v
+    var m = 1
+    var i = 0
+    while i < bits:
+        m = m * 2
+        i += 1
+    var x = v % m
+    if x < 0:
+        x = x + m
+    return x
+# ---------- 常量/名字到段内编码 ----------
+# K 的 kind：对齐 runtime/vm.h PXK_*
+def pxe_kind_num(kind):
+    if kind == "int":
+        return 0
+    if kind == "float":
+        return 1
+    if kind == "str":
+        return 2
+    if kind == "bool":
+        return 3
+    if kind == "func":
+        return 5
+    return 4
+# 指令名 → PXOP_* 数值（**必须是 runtime/vm.h 的镜像**；m442_pxe 门做双向对拍）
+def pxe_op_num(op):
+    if op == "LOADK":
+        return 1
+    if op == "IMM":
+        return 2
+    if op == "MOV":
+        return 3
+    if op == "GETG":
+        return 4
+    if op == "SETG":
+        return 5
+    if op == "NEG":
+        return 6
+    if op == "NOT":
+        return 7
+    if op == "BITNOT":
+        return 8
+    if op == "ADD":
+        return 9
+    if op == "SUB":
+        return 10
+    if op == "MUL":
+        return 11
+    if op == "DIV":
+        return 12
+    if op == "IDIV":
+        return 13
+    if op == "MOD":
+        return 14
+    if op == "POW":
+        return 15
+    if op == "EQ":
+        return 16
+    if op == "NE":
+        return 17
+    if op == "LT":
+        return 18
+    if op == "LE":
+        return 19
+    if op == "GT":
+        return 20
+    if op == "GE":
+        return 21
+    if op == "BITAND":
+        return 22
+    if op == "BITOR":
+        return 23
+    if op == "BITXOR":
+        return 24
+    if op == "SHL":
+        return 25
+    if op == "SHR":
+        return 26
+    if op == "SHRU":
+        return 27
+    if op == "INDEX":
+        return 28
+    if op == "SETIDX":
+        return 29
+    if op == "SLICE":
+        return 30
+    if op == "GETF":
+        return 31
+    if op == "SETF":
+        return 32
+    if op == "GETF_OPT":
+        return 33
+    if op == "NEWLIST":
+        return 34
+    if op == "NEWTUPLE":
+        return 35
+    if op == "NEWDICT":
+        return 36
+    if op == "NEWSTRUCT":
+        return 37
+    if op == "NEWENUM":
+        return 38
+    if op == "LISTPUSH":
+        return 39
+    if op == "CALL":
+        return 40
+    if op == "CALLM":
+        return 41
+    if op == "CALLSELF":
+        return 42
+    if op == "TAILCALL":
+        return 43
+    if op == "RET":
+        return 44
+    if op == "RET0":
+        return 45
+    if op == "JMP":
+        return 46
+    if op == "JMPT":
+        return 47
+    if op == "JMPF":
+        return 48
+    if op == "TRY":
+        return 49
+    if op == "FORCE":
+        return 50
+    if op == "SRCLINE":
+        return 51
+    if op == "HALT":
+        return 52
+    if op == "NEWGEN":
+        return 53
+    if op == "SPAWN":
+        return 54
+    if op == "ENUMVAR":
+        return 55
+    if op == "GENFROMLIST":
+        return 56
+    if op == "NARGS":
+        return 57
+    if op == "CELLGET":
+        return 58
+    if op == "CELLSET":
+        return 59
+    if op == "CELLNEW":
+        return 60
+    if op == "MKCLO":
+        return 61
+    if op == "DICTSET":
+        return 62
+    if op == "ITERAT":
+        return 63
+    if op == "ITERLEN":
+        return 64
+    if op == "UNPACKCK":
+        return 65
+    if op == "UNINIT":
+        return 66
+    if op == "CHKINIT":
+        return 67
+    if op == "IN":
+        return 68
+    if op == "NOTIN":
+        return 69
+    if op == "RAISE":
+        return 70
+    if op == "MATCHFAIL":
+        return 71
+    if op == "MATCHTUP":
+        return 72
+    if op == "ENUMPAY":
+        return 73
+    if op == "ENUMP":
+        return 74
+    if op == "MATCHENUMP":
+        return 75
+    if op == "ENUMIS":
+        return 76
+    if op == "TRYENTER":
+        return 77
+    if op == "TRYEXIT":
+        return 78
+    return 0
+# ---------- 字符串池（S 结构：{"map": str→off, "buf": 累积字节}） ----------
+def pxe_sp_new():
+    var sparx = {"_": 0}
+    sparx.remove("_")
+    return {"map": sparx, "buf": ""}
+# 登记一个字符串，返回其在池中的偏移（null → 0xFFFFFFFF 表示「无」）
+def pxe_sp_add(S, s):
+    if s == null:
+        return 4294967295
+    if S["map"].has(s):
+        return S["map"][s]
+    let off = len(S["buf"])
+    S["map"][s] = off
+    S["buf"] = S["buf"] + s + "\u{0}"
+    return off
+# ---------- CRC32（IEEE，逐字节；仅原型/阶段1 用，阶段2 换 sha256） ----------
+def pxe_crc32_of(view, start, end, crc_in):
+    var crc = pxe_mask(crc_in, 32)
+    var i = start
+    while i < end:
+        # crc = tab[(crc ^ byte) & 0xff] ^ (crc >> 8)，表以按位方式现算
+        var c = pxe_mask(crc // 256, 32)
+        var b = bytes_get(view, i)
+        var x = pxe_mask(crc, 32) ^ b
+        var v = pxe_mask(x, 8)
+        var k = 0
+        while k < 8:
+            if pxe_mask(v, 1) != 0:
+                v = pxe_mask((v // 2) ^ 3988292384, 32)
+            else:
+                v = pxe_mask(v // 2, 32)
+            k += 1
+        crc = pxe_mask(v ^ c, 32)
+        i += 1
+    return crc
+# ---------- 主入口：BCModule → PXE1 落盘，返回写入字节数（失败 -1） ----------
+def bc_pxe_emit(m, path):
+    let K = m["k_pool"]
+    let G = m["globals"]
+    let FS = m["funcs"]
+    let nK = len(K)
+    let nN = len(m["n_pool"])
+    let nG = len(G)
+    let nfuncs = len(FS)
+    # ---- pass A：字符串池 + 指令总数 ----
+    var S = pxe_sp_new()
+    let modname = pxe_sp_add(S, m["name"])
+    var noff = []
+    var i = 0
+    while i < nN:
+        noff.append(pxe_sp_add(S, m["n_pool"][i]))
+        i = i + 1
+    var goff = []
+    i = 0
+    while i < nG:
+        goff.append(pxe_sp_add(S, G[i]))
+        i = i + 1
+    var fname = []
+    var foff = []
+    var fnbc = []
+    var ninst = 0
+    i = 0
+    while i < nfuncs:
+        let f = FS[i]
+        fname.append(pxe_sp_add(S, f["name"]))
+        foff.append(ninst)
+        fnbc.append(len(f["bc"]))
+        ninst = ninst + len(f["bc"])
+        var u = 0
+        while u < len(f["upnames"]):
+            pxe_sp_add(S, f["upnames"][u])
+            u = u + 1
+        i = i + 1
+    var ksoff = []
+    i = 0
+    while i < nK:
+        let k = K[i]
+        if k["kind"] == "str":
+            ksoff.append(pxe_sp_add(S, k["s"]))
+        else:
+            ksoff.append(4294967295)
+        i = i + 1
+    # ---- pass B：段偏移 ----
+    let slen = len(S["buf"])
+    let o_K = 64
+    let o_N = o_K + nK * 24
+    let o_G = o_N + nN * 4
+    let o_F = o_G + nG * 4
+    let o_C = o_F + nfuncs * 32
+    let o_S = o_C + ninst * 8
+    let total = o_S + slen
+    if total > 67108864:
+        print_err("bc_pxe: .pxe 超过 64MiB 上限（" + str(total) + "）")
+        return -1
+    # ---- pass C：预分配 + mmap 就地写 ----
+    if write_bytes(path, bytes_zeros(total)) != true:
+        print_err("bc_pxe: 预分配失败 " + path)
+        return -1
+    var fd = open(path, 2, 420)
+    if fd < 0:
+        print_err("bc_pxe: open 失败 " + path)
+        return -1
+    var view = mmap(fd, total)
+    # ---- HEADER ----
+    mem_write(view, 0, "PXE1")
+    mem_write(view, 4, int_to_bytes(1, 2, "le"))
+    mem_write(view, 6, int_to_bytes(0, 2, "le"))
+    mem_write(view, 8, int_to_bytes(nK, 4, "le"))
+    mem_write(view, 12, int_to_bytes(nN, 4, "le"))
+    mem_write(view, 16, int_to_bytes(nG, 4, "le"))
+    mem_write(view, 20, int_to_bytes(nfuncs, 4, "le"))
+    if m["top"] == null:
+        mem_write(view, 24, int_to_bytes(4294967295, 4, "le"))
+    else:
+        mem_write(view, 24, int_to_bytes(m["top"], 4, "le"))
+    mem_write(view, 28, int_to_bytes(0, 4, "le"))
+    mem_write(view, 32, int_to_bytes(ninst, 4, "le"))
+    mem_write(view, 36, int_to_bytes(modname, 4, "le"))
+    mem_write(view, 40, int_to_bytes(slen, 4, "le"))
+    mem_write(view, 44, int_to_bytes(total, 4, "le"))
+    mem_write(view, 48, int_to_bytes(0, 4, "le"))
+    # ---- K 段 ----
+    i = 0
+    while i < nK:
+        let k = K[i]
+        let p = o_K + i * 24
+        mem_write(view, p, int_to_bytes(pxe_kind_num(k["kind"]), 1, "le"))
+        mem_write(view, p + 4, int_to_bytes(ksoff[i], 4, "le"))
+        var iv = 0
+        if k["kind"] == "int" or k["kind"] == "bool" or k["kind"] == "func":
+            iv = k["i"]
+        mem_write(view, p + 8, int_to_bytes(iv, 8, "le", true))
+        var fb = 0
+        if k["kind"] == "float":
+            fb = float64_bits(k["f"])
+        mem_write(view, p + 16, int_to_bytes(fb, 8, "le", true))
+        i = i + 1
+    # ---- N / G 段 ----
+    i = 0
+    while i < nN:
+        mem_write(view, o_N + i * 4, int_to_bytes(noff[i], 4, "le"))
+        i = i + 1
+    i = 0
+    while i < nG:
+        mem_write(view, o_G + i * 4, int_to_bytes(goff[i], 4, "le"))
+        i = i + 1
+    # ---- F 段 ----
+    i = 0
+    while i < nfuncs:
+        let f = FS[i]
+        let p = o_F + i * 32
+        mem_write(view, p, int_to_bytes(fname[i], 4, "le"))
+        mem_write(view, p + 4, int_to_bytes(f["arity"], 4, "le"))
+        mem_write(view, p + 8, int_to_bytes(f["ndefault"], 4, "le"))
+        mem_write(view, p + 12, int_to_bytes(f["nslots"], 4, "le"))
+        mem_write(view, p + 16, int_to_bytes(foff[i], 4, "le"))
+        mem_write(view, p + 20, int_to_bytes(fnbc[i], 4, "le"))
+        mem_write(view, p + 24, int_to_bytes(len(f["upnames"]), 4, "le"))
+        mem_write(view, p + 28, int_to_bytes(0, 4, "le"))
+        i = i + 1
+    # ---- C 段 ----
+    i = 0
+    while i < nfuncs:
+        let bc = FS[i]["bc"]
+        var j = 0
+        while j < len(bc):
+            let ins = bc[j]
+            let p = o_C + (foff[i] + j) * 8
+            mem_write(view, p, int_to_bytes(pxe_op_num(ins[0]), 1, "le"))
+            mem_write(view, p + 1, int_to_bytes(pxe_mask(ins[1], 8), 1, "le"))
+            mem_write(view, p + 2, int_to_bytes(pxe_mask(ins[2], 16), 2, "le"))
+            mem_write(view, p + 4, int_to_bytes(pxe_mask(ins[3], 16), 2, "le"))
+            mem_write(view, p + 6, int_to_bytes(pxe_mask(ins[4], 16), 2, "le"))
+            j = j + 1
+        i = i + 1
+    # ---- S 段 ----
+    if slen > 0:
+        mem_write(view, o_S, S["buf"])
+    # ---- CRC32（覆盖 [0,52) + [56,total)）；init 0xFFFFFFFF、末位取反 ----
+    var crc = pxe_crc32_of(view, 0, 52, 4294967295)
+    crc = pxe_crc32_of(view, 56, total, crc)
+    crc = pxe_mask(crc ^ 4294967295, 32)
+    mem_write(view, 52, int_to_bytes(crc, 4, "le"))
+    munmap(view)
+    close(fd)
+    return total

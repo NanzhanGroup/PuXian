@@ -14,6 +14,7 @@
 # ============================================================
 import "codegen.px"
 import "bc_emit.px"
+import "bc_pxe.px"
 # ---------- 全局状态（主文件声明；import 不注册模块顶层 let）----------
 var g_src = ""
 var g_len = 0
@@ -65,15 +66,23 @@ def bc_basename(path):
     if len(path) > 3 and path[len(path) - 3:len(path)] == ".px":
         return path[0:len(path) - 3]
     return path
+# M442-S1：输入 .px → 同名 .pxe 输出路径（--emit-pxe 用）
+def bc_pxe_outpath(path):
+    if len(path) > 3 and path[len(path) - 3:len(path)] == ".px":
+        return path[0:len(path) - 3] + ".pxe"
+    return path + ".pxe"
 # ---------- 入口 ----------
 def main():
     let a = args()
     # 编译版：args 含 argv[0]（程序路径）；file = 最后参数（对齐 compiler.px）
     var emit_c = false
+    var emit_pxe = false
     var ai = 1
     while ai < len(a) - 1:
         if a[ai] == "--emit-c":
             emit_c = true
+        if a[ai] == "--emit-pxe":
+            emit_pxe = true
         ai += 1
     let f = a[len(a) - 1]
     let base_dir = cg_dirname(f)
@@ -85,6 +94,17 @@ def main():
     if emit_c:
         # A2：输出可链接 C（静态 BCModule + main 跑 VM）→ 与旧轨 stdout 对拍
         print(bc_emit_c_program(prog))
+        return
+    if emit_pxe:
+        # M442-S1：输出 PXE1 二进制（同目录同名 .pxe）→ runtime 侧 loader 加载
+        let mp = bc_emit_program(prog)
+        mp["name"] = bc_basename(f)
+        let outp = bc_pxe_outpath(f)
+        let wrote = bc_pxe_emit(mp, outp)
+        if wrote < 0:
+            print_err("PXE-FAIL " + outp)
+            exit(3)
+        print("PXE " + outp + " " + str(wrote))
         return
     let m = bc_emit_program(prog)
     m["name"] = bc_basename(f)

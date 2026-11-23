@@ -1,3 +1,50 @@
+## M442（阶段 1）：`.pxe` 序列化模块格式 —— .px 侧序列化器跑通，396 B 级产物加载即执行
+
+> **一句话**：把「每个程序各背一份 3.15 MB runtime」换成「一份宿主 runtime + 每个程序
+> 几百字节字节码」。阶段 1 交付了 PuXian 侧的 PXE1 序列化器：hello 类 265 B、
+> 带控制流 1,127 B、真实工具 pxslice 5,345 B，C loader 加载 rc=0 且**输出与静态产物逐字节一致**。
+> 设计/实测/阶段计划见 /data/autodrive/M442.md。
+
+### 新增 selfhost/bc_pxe.px（402 行）+ bc_cli --emit-pxe
+
+```
+格式 PXE1（小端，header 64B + 6 段，段偏移由 5 个计数推导，无段表）
+  K 段 nK*24 · N/G 段 str_off*4 · F 段 nfuncs*32 · C 段 ninst*8(op/fl/a/b/c) · S 段字符串池
+  crc32 @52（阶段2 换 sha256）· top_idx 0xFFFFFFFF = 无顶层
+判据（实跑，逐字段不看总数）
+  parity 对拍 h3(37 指令) / t2(92) / pxslice(529) 全 OK：模块名·K 每项(kind+值，float 按位)
+    ·G 每项·funcs 每项(name arity ndefault nslots nup + 每条 op/a/b/c)·top
+  执行等价：C loader 加载 .pxe 的 stdout == 静态产物（h3 "pos,neg" · t2 "14 1.5 null 2.25"）
+负控（都变红）
+  篡改一条指令 a 字段 ⇒ parity FAIL 且指出 F[0].bc[0]
+  破坏内容 ⇒ loader rc=7 拒收 · 版本号改 2 ⇒ loader rc=2 拒收
+```
+
+### ★ 写盘通道选型（实测，不是推演）
+
+```
+bytes_set 逐条        20,000 次 10.9 s（544 us/次，COW 复制）      ⇒ O(n²)，禁
+bytes(list)           40 万 int → 1,828,070 B（≠400,000）          ⇒ 转 repr，不是元素通道，禁
+i64_bytes([...])      挂在 runtime_onnx.c（native_mod_map=onnx）    ⇒ --no-onnx 下消失，禁
+write_bytes+mmap+mem_write  20 万次 190 ms（0.95 us/次，线性）      ⇒ 采用
+★ 前提：必须编译执行 —— px run 解释轨 220 us/迭代 vs 编译 0.29 us（750×）
+```
+
+### 判据自身的缺陷（先怀疑判据）
+
+```
+cg_escape_str 把 TAB 写成字面 \t 两字符 ⇒ parity 第一版只去引号不反转义
+  ⇒ 在 pxslice 上误报 2 处「差异」。修的是 parity.py 的 unesc，不是序列化器。
+```
+
+### 与正式版的差距（阶段 2–4，见 M442.md §7/§8）
+
+```
+CRC32→sha256 · 结构体元数据(nstructs=0) · 闭包 upvals 偏移表 ·
+loader 落 runtime/pxe.c + 宿主 pxvm · px build --pxe + .pxecache · m442_pxe 门
+风险：v0.2.443 等它；静态/pxvm 双入口分叉 ⇒ 门须三轨等价且共用同一份 runtime.o
+```
+
 ## M441：产物裁剪开关 —— `--no-onnx` 接线 + `--gc-sections`（缺陷 923/924）
 
 > **一句话**：onnx 的裁剪能力在 runtime 里躺了 8 个月（M156 起 `#ifndef PX_NO_ONNX` 就绪、
