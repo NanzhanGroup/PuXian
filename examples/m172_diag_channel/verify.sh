@@ -95,9 +95,15 @@ s = open(p, encoding='utf-8').read()
 # M407（缺陷 802）：诊断出口改为单一渲染器 i_err_rt（旧锚点
 #   `print_err("运行时错误: " + i_err_display(e))` 已不存在 ⇒ 打桩 count=0，NC-A 静默失效）。
 #   按**内容**锚定，不依赖行号或旧前缀。
-old = 'print_err(i_err_rt(e))'
+# M437（缺陷 860）：interp.px 出现了**第二处** `print_err(i_err_rt(e))`
+#   （worker 常驻循环 `_wt_run` 与 main 的顶层执行是两条平行路径）⇒ 旧内容锚点 count=2
+#   ⇒ NC-A 静默失效（10-26 起同类问题：门锚点必须跟着源码形态走）。
+#   现锚定 main 路径独有的 M407 注释行 + 诊断出口，仍保持 count==1 的严格性
+#   （负控只改 main 路径即可：NC-A 用的就是顶层 run）。
+old = '''        #   （旧形 `运行时错误: 错误 [CODE] L:C: msg` 三轨各一套，缺陷 186 族的主要成员）。
+        print_err(i_err_rt(e))'''
 assert s.count(old) == 1, s.count(old)
-open(p, 'w', encoding='utf-8').write(s.replace(old, 'print(i_err_rt(e))'))
+open(p, 'w', encoding='utf-8').write(s.replace(old, old.replace('print_err(', 'print(')))
 PYEOF
 if build_dev_pxi; then
     "$DEV_PXI" "$D/undef.px" > "$W/negA.out" 2> "$W/negA.err"; rca=$?

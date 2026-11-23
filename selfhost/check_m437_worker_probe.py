@@ -48,11 +48,16 @@ def worker_pipe():
     会把唯一副本关掉（实测症状：worker 写 EBADF 后退出、父端 read 永久阻塞）。
     """
     r, w = os.pipe()
+    # ⚠️ 读端也必须先挪到高位：pipe() 若恰好返回 r=3，下面的 os.dup2(hi, 3) 会把**读端**
+    #   覆盖成写端 ⇒ 父端拿到的 fd 3 成了只写端，`rf.read(4)` 报 EBADF
+    #   （11-23 M437 全量门实测：probe P1/P2/P4/P5/N1/N2 全红，根因就在这里）。
+    r_hi = fcntl.fcntl(r, fcntl.F_DUPFD, 20)
+    os.close(r)
     hi = fcntl.fcntl(w, fcntl.F_DUPFD, 10)
     os.close(w)
     os.dup2(hi, 3)
     os.close(hi)
-    return r
+    return r_hi
 
 
 def main():

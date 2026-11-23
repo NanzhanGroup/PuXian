@@ -1,0 +1,15 @@
+# M437（缺陷 860）· dup2 内置「合法侧最小冒烟」（提交入库）
+# ------------------------------------------------------------
+# ① 可手工跑：`./bootstrap/pxi examples/m437_worker/dup2_smoke.px`
+#    （或 `./tools/px build` 后跑产出 —— 三轨应逐字节一致）
+# ② ⭐ 让 `selfhost/check_native_coverage.py` 的语料面看得见 dup2。
+#    本轮的协议对拍语料是**运行期生成**的（check_m437_worker_probe.py），仓库里没有痕迹；
+#    台账消费面**只扫 `.px`** ⇒ 不提交本文件，dup2 会被记成「新增未覆盖」而判红（M250 门）。
+#    这是「生成式语料」的通用约定：生成器有，仓库里也要有一份可见的 .px 冒烟。
+#
+# 语义（与 runtime bi_dup2 / ibuiltin.px 的 dup2 分支对齐）：
+#   dup2(fd, fd) 是 POSIX 规定的空操作（同号直接返回 newfd），无副作用、不依赖外部文件；
+#   负 fd 按同族口径返回 -1（不杀进程，原因经 os_errno() 取）。
+r = dup2(1, 1)
+print("dup2(1,1)=" + str(r))
+print("dup2(-1,1)=" + str(dup2(-1, 1)))

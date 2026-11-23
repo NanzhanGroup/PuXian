@@ -1013,6 +1013,17 @@ def i_call_builtin(name, args, pos):
         if len(args) == 3:
             return Ok(fcntl(args[0], args[1], args[2]))
         return Ok(fcntl(args[0], args[1]))
+    if name == "dup2":
+        # dup2(oldfd, newfd) → int（M437 缺陷 860）：fd 重定向 / 保存恢复。
+        #   失败 -1 + os_errno()，与 fcntl/flock 同口径；文案与 runtime bi_dup2 逐字对齐
+        #   （M197 [S8] arity + M199 [S10] 逐位置错类型都要三轨同文）。
+        if len(args) != 2:
+            return Err(i_r1002("dup2 需要 (oldfd, newfd) 参数", pos))
+        if type(args[0]) != "int":
+            return Err(i_r1002("dup2 的 oldfd 需要 int，实际是 " + type(args[0]), pos))
+        if type(args[1]) != "int":
+            return Err(i_r1002("dup2 的 newfd 需要 int，实际是 " + type(args[1]), pos))
+        return Ok(dup2(args[0], args[1]))
     if name == "flock":
         # flock(fd, op) → int（BSD 文件锁；成功 0，失败 -1 + os_errno）
         if len(args) != 2:

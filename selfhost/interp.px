@@ -116,7 +116,6 @@ def _wt_read_exact(fd, n):
             return null
         acc = bytes_concat(acc, c)
     return acc
-
 def _wt_split_nul(buf):
     var parts = []
     var start = 0
@@ -129,7 +128,6 @@ def _wt_split_nul(buf):
         i += 1
     parts.append(bytes_slice(buf, start, n))
     return parts
-
 # 执行一份脚本文件（与 main() 的解释路径逐段一致；只多了 g_script_args 的规范化）
 def _wt_run(path, argv0):
     g_script_args = [argv0]
@@ -162,7 +160,6 @@ def _wt_run(path, argv0):
         print_err(i_err_rt(e))
         return 1
     return g_exit_code
-
 def _wt_worker_loop():
     let cap = "/tmp/.pxw_" + str(now_ns()) + "_" + str(random_int(1000000)) + ".out"
     while true:
@@ -241,7 +238,6 @@ def _wt_worker_loop():
         write(3, bytes_zeros(1))
         write(3, out)
     return 0
-
 # ---------- 程序入口（对齐 run_program） ----------
 def i_run_program(prog):
     let items = prog[1]

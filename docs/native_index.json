@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 413,
+ "count": 414,
  "names": [
   "Err",
   "Ok",
@@ -72,6 +72,7 @@
   "dict",
   "dns_lookup",
   "dns_txt",
+  "dup2",
   "ed25519_keygen",
   "ed25519_sign",
   "ed25519_verify",

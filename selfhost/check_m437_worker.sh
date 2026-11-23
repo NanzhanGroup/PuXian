@@ -75,7 +75,7 @@ else
   PROBE_OUT=$(timeout 240 python3 -u "$PROBE" "$PXI" "$W" 2>&1); PRC=$?
   echo "$PROBE_OUT" | sed 's/^/    /'
   for k in P1 P2 P4 P5 N1 N2; do
-    if echo "$PROBE_OUT" | grep -q "^OK $k"; then ok "$k"; else bad "$k"; fi
+    if grep -q "^OK $k" <<< "$PROBE_OUT"; then ok "$k"; else bad "$k"; fi
   done
   [ "$PRC" = 0 ] || bad "装置整体 rc=$PRC"
 fi
@@ -137,7 +137,10 @@ if "$PX" build "$W/driver_slow.px" >"$W/build2.log" 2>&1; then
     sleep 0.2
     # 进程名口径：runtime 的 execlp 用 argv[0]="px"（历史口径，见 px_pool_spawn），
     # 所以 ps 里显示 `px --worker` 或 `pxi --worker`（tools/px 转发时 exec 后可能保留 pxi 名）。
-    if ps -ef | grep -qE '[p]xi? --worker'; then FOUND=1; break; fi
+    # 管道形态（check_pipe_grep）：ps 输出先进变量，再 here-string 喂 grep —— 避免
+    #   grep -q 提前退出把 ps 写端打成 EPIPE（pipefail 下会把「命中」读成「不含」）。
+    PS_OUT=$(ps -ef 2>/dev/null || true)
+    if grep -qE '[p]xi? --worker' <<< "$PS_OUT"; then FOUND=1; break; fi
   done
   wait $BG 2>/dev/null
   if [ "$FOUND" = 1 ]; then

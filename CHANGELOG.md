@@ -1,3 +1,83 @@
+## M437 收口：入库前 9 门红（缺陷 908–912）
+
+> **一句话**：主提交 20fca58 只跑了针对性门就入库，全量门给出 **303 绿 / 9 红（312 门）**。
+> 本提交把 9 门逐条收口 —— 只有 4 条是「代码没做对」，另外 5 条是**新门/新语料的装置与台账问题**。
+> 教训不变：**入库判据是全量门，不是「我改的那几门绿了」**（M436 才刚因为同一类问题返工过）。
+
+### 一 缺陷 908：dup2 只补在 runtime，解释轨没有入口（m197 + m199 红）
+
+```
+现象   m197 [S8]：`dup2()` 0 参文案「未知内置函数: dup2」不在原生 arity 文案里
+       m199 [2]：三轨对拍分叉（解释轨 R1002 未知内置函数 vs 编译轨 类型错误）
+病根   runtime.c 注册了 dup2 native，interp.px 的名册也加了 "dup2"，但
+       selfhost/ibuiltin.px（解释轨的内置分发链）没有对应分支 ⇒ 落到兜底
+       「未知内置函数」。名册/分发/编译三处不同步，正是本仓反复踩的形状。
+修     ibuiltin.px 增加 dup2 分支：arity 文案与类型文案**逐字对齐** runtime bi_dup2
+       （M197 [S8] 与 M199 [S10] 都要三轨同文；先例：sqrt/sin/log 的缺陷 233）。
+证据   重烘后 bootstrap/pxi：
+         dup2()        → R1002: dup2 需要 (oldfd, newfd) 参数
+         dup2({}, 1)   → R1002: dup2 的 oldfd 需要 int，实际是 dict
+       与新跑 m197 / m199 两门全绿一致。
+```
+
+### 二 缺陷 909：新门自己的装置把读端覆盖了（m437_worker 红）
+
+```
+现象   probe 六条判据全红，异常 OSError: [Errno 9] Bad file descriptor（read_frame 的 f.read(4)）
+病根   worker_pipe() 里 `r, w = os.pipe()` 若把**读端**分到 fd 3（pipe 返回 3/4 的常见情形），
+       随后的 `os.dup2(hi, 3)` 就把读端覆盖成写端，父端拿到的是只写 fd ⇒ EBADF 永久。
+       门装置自己的 bug，被测协议其实没问题（P3/P7/G1 那几条当时是绿的）。
+修     读端先 F_DUPFD 挪到高位（≥20）再关原 fd，写端仍放 3 交给 pass_fds。
+证据   重跑门：P1/P2/P4/P5/N1/N2 + P3 双态对拍 + P7 前提自证 + G1 默认值全绿。
+```
+
+### 三 缺陷 910：新门脚本两处 `producer | grep -q`（pkg_pipe_grep 红）
+
+```
+现象   PIPE-GREP-VERDICT=REGRESS：selfhost/check_m437_worker.sh 2 条 > 基线 0
+病根   口径 19（缺陷 621/622/624）：pipefail 下 grep -q 提前退出 ⇒ 生产者 EPIPE ⇒ rc=141
+       ⇒ 「命中」被读成「不含」。本轮两处：`echo "$PROBE_OUT" | grep -q`、`ps -ef | grep -qE`。
+修     两处改 here-string（先取变量再 `grep -q ... <<< "$VAR"`），与门脚本其余部分同口径。
+证据   bash selfhost/check_pipe_grep.sh --gate → PIPE-GREP-VERDICT=OK remaining=8（基线内，无新增）。
+```
+
+### 四 缺陷 911：门锚点随 interp.px 结构漂移（m158 + m172 红）
+
+```
+现象   m158 负控 B「锚点不唯一（2）」· m172 负控 A AssertionError: 2
+病根   M437 在 interp.px 里新增了 worker 常驻循环 `_wt_run`，它与 main 的顶层执行是**两条
+       平行路径** ⇒ `interp_bridge_install(i_bridge_dispatch)` 与 `print_err(i_err_rt(e))`
+       各出现两次，两门的「恰好一处」锚点同时失效（负控静默失效 = 门失去判别力）。
+修     锚点改为**路径独有上下文**（m158 连带 main 路径的 M158 注释行；m172 连带 M407 的注释行），
+       仍保持 count==1 的严格性，不放松成 >=1。
+证据   两门重跑全绿；python 复核两处锚点 count 均为 1。
+```
+
+### 五 缺陷 912：提交前没跑 fmt / 索引 / 覆盖三件（fmt_check + eco_index + m250 红）
+
+```
+fmt    selfhost/interp.px 有 4 处多余空行（pxfmt 会删）⇒ `pxfmt -w` 后 --check 通过。
+       ⚠️ 格式是「发射可见/指纹可见」的：改完必须重烘（本轮 --rebake-all 14 件，check-all 14/14 一致）。
+索引   dup2 新增 native ⇒ docs/native_index.json 需重生成（tools/gen_native_table.sh）。
+       ⚠️ eco_index 门在**失败时会把重生成物留在工作树**，同分片的 m250 因此看到 414 个 native
+       ⇒ 这是 m250「10 个未覆盖」的假象来源（真因是 dup2 没有任何 .px 语料）。
+覆盖   补 examples/m437_worker/dup2_smoke.px（合法侧最小冒烟：dup2(1,1)=1 / dup2(-1,1)=-1），
+       让台账消费面（只扫 .px）看得见 dup2 —— 与 M250 surface.px 同一约定。
+       新入口同步在 golden/emitc_freeze.sha 冻结（单条 --freeze，其余 527 条逐字节未动）。
+```
+
+### 六 本轮副作用面（可核对）
+
+```
+改源码  selfhost/ibuiltin.px（+dup2 分支）· selfhost/interp.px（仅 4 处空行）
+改门    examples/m158_interp_fn/verify.sh · examples/m172_diag_channel/verify.sh（锚点）
+        selfhost/check_m437_worker.sh（2 处管道）· check_m437_worker_probe.py（fd 3）
+新语料  examples/m437_worker/dup2_smoke.px
+重生成  docs/native_index.json · selfhost/golden/emitc_freeze.sha（+1 条）
+重烘    bootstrap/ 14 件（check-all 14/14 一致；bootstrap_prove / _bc 自举仍逐字节成立）
+未动    runtime/*.c · compiler.px · golden/compiler.{c,bc.dump}（自举证明未变）
+```
+
 ## M437：`px --worker` 常驻协议落地（缺陷 860）—— M25 起 18 个里程碑的进程池一直是死码
 
 > **一句话**：`px --worker` 这个子命令**从来不存在**（M423 已量化：每次 px_exec 先派生 4 个必然失败的

@@ -172,8 +172,12 @@ if [ $NEG_SKIP -eq 0 ]; then
         '    for (i = 0; i < n; i++) { if (px_interp_is_fnwrap(items[i])) { need = 1; break; } }' \
         '    for (i = 0; i < n; i++) { if (0 && px_interp_is_fnwrap(items[i])) { need = 1; break; } }' \
         "关闭 bi_ffi_call 自动桥接（runtime）"
+    # M437（缺陷 860）：interp.px 新增 worker 常驻循环（_wt_run）也调用
+    #   interp_bridge_install ⇒ 裸锚点 count=2（门会报「锚点不唯一」）。用 main 路径
+    #   独有的上行注释一起锚定，保持「恰好一处」的严格性（NC 走的是顶层 run 路径）。
     run_neg B selfhost/interp.px \
-        '    interp_bridge_install(i_bridge_dispatch)' \
+        '    #   回调进 i_bridge_dispatch 执行。未安装时桥被调用会明确报错（不静默）。
+    interp_bridge_install(i_bridge_dispatch)' \
         '    let _m158_unused = 1' \
         "解释器不安装桥调度器（interp.px）"
     run_neg C selfhost/interp.px \
