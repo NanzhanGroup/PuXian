@@ -1,3 +1,30 @@
+## M437 收口二：重跑链 1 红 —— dup2 语料没进覆盖账（缺陷 913）
+
+> **一句话**：8d3db8f 收口 9 红后重跑链（13:07:44 → 15:08:49）给出 **311 绿 / 1 红**，
+> 唯一红是 `m421_examples_coverage`：新语料 `examples/m437_worker/dup2_smoke.px` 只有 `.px`、
+> 没有 `verify.sh` ⇒ 覆盖账判 BLACKBOX + UNLISTED，真仓 rc=1（镜像基线随之不成立，门整体 rc=1）。
+> 修法**不是**往豁免表塞一条 blackbox，而是给语料写真冒烟、让 `m437_worker` 门直接调用它。
+
+### 缺陷 913：新语料进仓，覆盖账没跟上
+
+```
+现象   m421 真仓：EXAMPLES-COVERAGE=FAIL rc=1 unlisted=1 expired=0 kind=0 stale=0
+       UNLISTED m437_worker (BLACKBOX)
+       镜像扰动段随之退出：❌ 镜像基线与真仓不一致（base=0 ≠ 1）
+病根   8d3db8f 为缺陷 912 提交 dup2_smoke.px（让 check_native_coverage 的 .px 语料面看得见 dup2），
+       但 examples 单元「有 verify.sh 才算 COVERED」——只有 .px 的目录一律 BLACKBOX，
+       未登记即判红。门自己的判据是对的（845 同族形态就该红），欠的是语料侧的断言。
+修     ① examples/m437_worker/verify.sh：三轨（解释 / VM / C）跑 dup2_smoke.px，
+         stdout 与 POSIX 口径逐字节一致（dup2(1,1)=1 · dup2(-1,1)=-1）+ 负控（错误期望必判不同）
+         + 前提自证（2 行非空）。实测 8/8 绿 · 3s。
+       ② selfhost/check_m437_worker.sh 新增 [7/8] 段直接调用该 verify.sh（原 [7] 收尾顺延 [8/8]）。
+       ③ selfhost/gates.registry.sh m437_worker 段注明语料与冒烟口 ⇒ 覆盖账判 COVERED（token 命中）。
+证据   重跑 examples_coverage.sh：EXAMPLES-COVERAGE=OK units=353 covered=165 orphan=46 blackbox=142
+       （blackbox 143→142，covered 164→165）
+       m421 门：pass=20 fail=0（含镜像 4 扰动 N1/N1b/N2/N3/N4）
+       m437_worker 门：24/24 绿（[7/8] 语料冒烟绿）
+```
+
 ## M437 收口：入库前 9 门红（缺陷 908–912）
 
 > **一句话**：主提交 20fca58 只跑了针对性门就入库，全量门给出 **303 绿 / 9 红（312 门）**。

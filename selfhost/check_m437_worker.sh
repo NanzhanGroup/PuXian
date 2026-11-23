@@ -11,7 +11,7 @@
 # M437 交付：runtime 补 dup2 内置；interp.px 实现 _wt_worker_loop；runtime px_pool_spawn
 #   结果通道改 fd 3（stdout 留给脚本捕获）；tools/px 转发 --worker。
 #
-# 判据（7 组）：
+# 判据（8 组）：
 #   [1] 静态形状：四件改动在位
 #   [2] 协议判据（selfhost/check_m437_worker_probe.py）：
 #        P1 单帧 · P2 同 worker 连 3 帧状态重置 · P4 运行时错误传播 · P5 错误后 worker 仍服务 ·
@@ -20,7 +20,8 @@
 #   [4] 前提自证 P7：PX_POOL_WORKERS=2 时子进程里真有 pxi --worker（不是退化路径冒充）
 #   [5] 默认值口径 G1：g_px_pool_size 仍为 0（不改变默认行为）
 #   [6] 名册：dup2 已进 lint_core.px 内置名册（否则 lint 误报 L002）
-#   [7] 收尾：捕获文件无残留
+#   [7] dup2 语料冒烟：examples/m437_worker/verify.sh 三轨一致（缺陷 912 语料面落地）
+#   [8] 收尾：捕获文件无残留
 # 用法：bash selfhost/check_m437_worker.sh [--neg-skip]
 # ============================================================
 . "$(dirname "$0")/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -46,7 +47,7 @@ bad() { echo "  ❌ $1"; fail=$((fail+1)); }
 echo "== M437 门：px --worker 常驻协议（缺陷 860） =="
 echo
 
-echo "[1/7] 静态形状：四件改动在位"
+echo "[1/8] 静态形状：四件改动在位"
 grep -q 'static LXValue bi_dup2' runtime/runtime.c \
   && ok "dup2 内置已实现（runtime.c bi_dup2）" || bad "缺 bi_dup2"
 grep -q 'px_set_global("dup2", px_native("dup2", bi_dup2))' runtime/runtime.c \
@@ -68,7 +69,7 @@ grep -q -- '--worker) shift; exec' tools/px \
   && ok "tools/px 转发 --worker（exec 解释器）" || bad "tools/px 缺 --worker 转发"
 echo
 
-echo "[2/7] 协议判据（P1/P2/P4/P5/N1/N2 · 装置 selfhost/check_m437_worker_probe.py）"
+echo "[2/8] 协议判据（P1/P2/P4/P5/N1/N2 · 装置 selfhost/check_m437_worker_probe.py）"
 if [ ! -f "$PROBE" ]; then
   bad "缺测试装置 $PROBE"
 else
@@ -81,7 +82,7 @@ else
 fi
 echo
 
-echo "[3/7] 双态对拍 P3：PX_POOL_WORKERS=0 vs 2（px_exec 输出逐字节一致）"
+echo "[3/8] 双态对拍 P3：PX_POOL_WORKERS=0 vs 2（px_exec 输出逐字节一致）"
 cat > "$W/target.px" <<'EOF'
 var s = 0
 var i = 0
@@ -120,7 +121,7 @@ else
 fi
 echo
 
-echo "[4/7] 前提自证 P7：PX_POOL_WORKERS 开启时子进程里真有 pxi --worker"
+echo "[4/8] 前提自证 P7：PX_POOL_WORKERS 开启时子进程里真有 pxi --worker"
 cat > "$W/slow.px" <<'EOF'
 sleep(600)
 print("slow-done")
@@ -155,7 +156,7 @@ else
 fi
 echo
 
-echo "[5/7] 默认值口径 G1：池默认仍关闭（不改变默认行为）"
+echo "[5/8] 默认值口径 G1：池默认仍关闭（不改变默认行为）"
 if grep -q 'static int g_px_pool_size = 0;' runtime/runtime.c; then
   ok "g_px_pool_size 默认 0（池需显式 PX_POOL_WORKERS=N 开启）"
 else
@@ -163,13 +164,21 @@ else
 fi
 echo
 
-echo "[6/7] 名册：dup2 已进 lint_core.px 内置名册"
+echo "[6/8] 名册：dup2 已进 lint_core.px 内置名册"
 # 名册是**一行** split("…")，用词边界匹配（`grep '"dup2"'` 会假红 —— 实测踩过）
 grep -qw 'dup2' tools/lint_core.px \
   && ok "lint_core.px 名册含 dup2" || bad "名册缺 dup2（跑 tools/gen_builtin_list.sh）"
 echo
 
-echo "[7/7] 收尾：本次无新增捕获文件残留"
+echo "[7/8] dup2 语料冒烟：examples/m437_worker/verify.sh（三轨一致）"
+if bash examples/m437_worker/verify.sh > "$W/dup2_smoke.log" 2>&1; then
+  ok "dup2 语料三轨一致（dup2_smoke.px · 见 examples/m437_worker/verify.sh）"
+else
+  bad "dup2 语料冒烟失败"; tail -8 "$W/dup2_smoke.log" | sed 's/^/     /'
+fi
+echo
+
+echo "[8/8] 收尾：本次无新增捕获文件残留"
 if [ "$NEG_SKIP" = 1 ]; then
   ok "（--neg-skip：跳过残留检查）"
 else
