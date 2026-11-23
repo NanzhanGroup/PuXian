@@ -301,7 +301,7 @@ px $RELEASE_VER
                                                                   默认 vm）
                                                  --min           显式最小化 profile（M85-S2，优先级同显式 flag）：
                                                                   聚合 --no-quic + sqlite/ws/zip/xml/aes/rsa/
-                                                                  ed25519/route/zlib/h2 全裁 ≈ 2.7M
+                                                                  ed25519/route/zlib/h2/onnx 全裁 ≈ 2.7M
                                                  --no-quic       去掉 QUIC/H3（-DPX_NO_QUIC，
                                                                   不链 ngtcp2/openssl）
                                                  --no-sqlite     模块裁剪（M85-S1，各开关正交可组合）：去掉
@@ -314,6 +314,12 @@ px $RELEASE_VER
                                                  --no-route      优先级 > 自动，自动只补未声明模块；全能力
                                                  --no-zlib       --full/--max；解析失败自动退全量保编译成功）
                                                  --no-h2
+                                                 --no-onnx      去掉 ONNX 解析面（M441 · -DPX_NO_ONNX，
+                                                                  源文件同移出编译集；native 缺 → R1001）。
+                                                                  实测 hello 基线：121 符号 / 56,090B（1.8%）
+                                                 --gc-sections  opt-in 链接期回收（M441）：编译 -ffunction-sections
+                                                                  -fdata-sections + 链接 -Wl,--gc-sections。
+                                                                  默认不启用，默认产物行为不变
                                                  --lto           LTO 构建档（M104-S5）：全链 -flto
                                                                   （runtime 预编译 .o + 产物 C + 链接）。
                                                                   收益负载相关（M104 实测 C 轨紧循环
@@ -499,7 +505,7 @@ rt_key() {
     #   fork（实测把 m425_build_cache 的 P2 命中耗时顶到 692ms，判据 ≤400ms/≤0.25×冷构建）。
     #   改成**一次** sha256sum 多文件（输出行序由参数序固定，与逐文件拼接等价）。
     # M439-1：键改成 **sem**（注释不计入）⇒ 只改注释不再冷缓存；pxnorm 不可用 ⇒ 回落老的 raw 拼接。
-    local cuts="$1" cc="$2" lto="${3:-0}" f files="" key_src=""
+    local cuts="$1" cc="$2" lto="${3:-0}" gcs="${4:-0}" f files="" key_src=""
     for f in $(rt_src_files "$cuts") \
              third_party/miniz/miniz.c third_party/miniz/miniz_tinfl.c \
              third_party/miniz/miniz_tdef.c third_party/miniz/miniz.h \
@@ -511,11 +517,13 @@ rt_key() {
     if ! key_src="$(sem_join $files)"; then
         key_src="$(sha256sum $files 2>/dev/null | cut -c1-16 | tr '\n' ' ')"
     fi
-    echo " $key_src cc=$(basename "$cc") cuts=$cuts lto=$lto" | sha256sum | cut -c1-16
+    # M441：gcs=0 时哈希串与改动前**逐字节一致**（不加空字段）—— 让默认路径命中旧
+    #   .rtcache 目录：既不冷缓存，产物也逐字节不变（判据实测可验证）。
+    echo " $key_src cc=$(basename "$cc") cuts=$cuts lto=$lto$([ "$gcs" = 1 ] && echo " gcs=1")" | sha256sum | cut -c1-16
 }
 rt_cache_compile() {
-    # 参数：dir（cache 目录）cuts cc [lto] —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
-    local dir="$1" cuts="$2" cc="$3" lto="${4:-0}"
+    # 参数：dir（cache 目录）cuts cc [lto] [gcs] —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
+    local dir="$1" cuts="$2" cc="$3" lto="${4:-0}" gcs="${5:-0}"
     local mbedtls_inc="$RT_DIR/mbedtls/include"
     local zlib_inc="$RT_DIR/third_party/zlib/include"
     local sqlite_dir="$RT_DIR/third_party/sqlite3"
@@ -566,9 +574,9 @@ rt_cache_compile() {
     fi
     local common="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
-        -I\"$sqlite_dir\" -I\"$zlib_inc\"$([ "$lto" = 1 ] && echo " -flto")"
+        -I\"$sqlite_dir\" -I\"$zlib_inc\"$([ "$lto" = 1 ] && echo " -flto")$([ "$gcs" = 1 ] && echo " -ffunction-sections -fdata-sections")"
     local m
-    for m in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
+    for m in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2 onnx; do
         if cut_has "$cuts" "$m"; then
             common="$common $(mod_macro "$m")"
         fi
@@ -624,8 +632,8 @@ EOF
 }
 rt_ensure() {
     # 参数：cuts cc [lto] → stdout 输出 cache_dir；缺失则现编
-    local cuts="$1" cc="$2" lto="${3:-0}" key dir
-    key="$(rt_key "$cuts" "$cc" "$lto")"
+    local cuts="$1" cc="$2" lto="${3:-0}" gcs="${4:-0}" key dir
+    key="$(rt_key "$cuts" "$cc" "$lto" "$gcs")"
     dir="$PXC_HOME/.rtcache/$key"
     if [ -d "$dir" ] && [ -f "$dir/.complete" ]; then
         # 旧缓存（M152 前）没有指纹 .o ⇒ 就地补上（不重编 runtime）
@@ -637,7 +645,7 @@ rt_ensure() {
         return 0
     fi
     mkdir -p "$dir"
-    if ! rt_cache_compile "$dir" "$cuts" "$cc" "$lto"; then
+    if ! rt_cache_compile "$dir" "$cuts" "$cc" "$lto" "$gcs"; then
         rm -rf "$dir"
         return 1
     fi
@@ -771,13 +779,13 @@ cmd_build() {
         *) echo "警告: 未知 PX_BUILD_ENGINE=$engine（取 c|vm，退默认 vm）" >&2; engine=vm ;;
     esac
     local mods="" cuts=""
-    local cc_set=0 no_quic_set=0 print_plan=0
+    local cc_set=0 no_quic_set=0 print_plan=0 gcs=0
     [ "${PX_BUILD_PRINT_PLAN:-0}" = "1" ] && print_plan=1
     while [ $# -gt 0 ]; do
         case "$1" in
             --print-plan) print_plan=1; shift ;;
             --no-quic) no_quic=1; no_quic_set=1; shift ;;
-            --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 img route zlib h2"; shift ;;
+            --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 img route zlib h2 onnx"; shift ;;
             --full|--max) full=1; shift ;;
             --c) engine=c; shift ;;              # M91：C 轨逃生舱（显式）
             --vm|--bc) engine=vm; shift ;;       # M91：VM 轨（显式 = 新默认；保留旧 flag 兼容）
@@ -793,6 +801,13 @@ cmd_build() {
             --no-route) mods="$mods route"; shift ;;
             --no-zlib) mods="$mods zlib"; shift ;;
             --no-h2) mods="$mods h2"; shift ;;
+            # M441（缺陷 923）：onnx 的 runtime 侧裁剪（-DPX_NO_ONNX + 源文件移出编译集 +
+            #   native_mod_map 条目）自 M156 起就全部就绪，**只差 tools/px 这一处未接线** ——
+            #   实测基线：hello.px 默认产物 nm | grep -c onnx = 121 个符号 / 56,090B（1.8%）。
+            --no-onnx) mods="$mods onnx"; shift ;;
+            # M441：--gc-sections（**opt-in，默认行为不变**）—— 编译期 -ffunction-sections
+            #   -fdata-sections，链接期 -Wl,--gc-sections。口径同 --prune：不默认、不动默认产物。
+            --gc-sections) gcs=1; shift ;;
             --cc) cc="$2"; cc_set=1; shift 2 ;;
             --target|-t) target="$2"; shift 2 ;;
             --mbedtls-lib) mbedtls_lib="$2"; shift 2 ;;
@@ -973,7 +988,7 @@ cmd_build() {
     local bkey="" bdir="" cache_hit=0
     if [ "$print_plan" = 0 ] && [ -z "${PX_BUILD_NOCACHE:-}" ] && [ -z "$target" ]; then
         bkey="$(build_cache_key "$(readlink -f "$file" 2>/dev/null || echo "$file")" \
-                               "$base" "$engine" "$lto" "$cc" "$no_quic" "$mods" "$cuts" "$full")"
+                               "$base" "$engine" "$lto" "$cc" "$no_quic" "$mods" "$cuts" "$full" "$gcs")"
         if [ -n "$bkey" ]; then
             bdir="$BUILD_CACHE/$bkey"
             if [ -f "$bdir/prog" ] && [ -f "$bdir/prog.sha16" ] \
@@ -1063,6 +1078,8 @@ cmd_build() {
         if [ -f "$MAP" ]; then
             # 被引用模块 = 引用集 ∩ map 的 mod 集合
             used="$(awk -F= 'NR==FNR{ref[$1]=1; next} ref[$1]{print $2}' "$refs_tmp" "$MAP" | LC_ALL=C sort -u | tr '\n' ' ')"
+            # M441：onnx 在此**故意不列** —— 自动裁剪（M86-S2）的默认行为一字不改
+            #   （硬约束：不改默认产物行为）。要最小化请显式 --no-onnx / --min。
             for am in sqlite ws zip xml aes rsa ed25519 img route zlib h2 quic; do
                 case " $mods " in *" $am "*) continue ;; esac   # 显式已裁
                 [ "$am" = quic ] && [ "$no_quic_set" = 1 ] && continue
@@ -1082,7 +1099,7 @@ cmd_build() {
     #   文件因页对齐差 4096）。集合语义不该带顺序 ⇒ 统一去重排序后再进键与编译。
     #   注意：源码挑选走 rt_src_files 的固定清单（cut_has 只看集合），与顺序无关，故安全。
     cuts="$(printf '%s\n' $cuts | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ *$//')"
-    cache_dir="$(rt_ensure "$cuts" "$cc" "$lto")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
+    cache_dir="$(rt_ensure "$cuts" "$cc" "$lto" "$gcs")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
     # 3) 编译生成的 C 单文件 + 链接预编译 .o（不再每次全量现编 runtime）
     local mbedtls_inc="$RT_DIR/mbedtls/include"
     local sqlite_dir="$RT_DIR/third_party/sqlite3"
@@ -1098,9 +1115,9 @@ cmd_build() {
     local cc_cmd
     local common_def="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$cache_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
-        -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\"$lto_flag"
+        -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\"$lto_flag$([ "$gcs" = 1 ] && echo " -ffunction-sections -fdata-sections")"
     local m2
-    for m2 in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
+    for m2 in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2 onnx; do
         if cut_has "$cuts" "$m2"; then
             common_def="$common_def $(mod_macro "$m2")"
         fi
@@ -1157,6 +1174,8 @@ cmd_build() {
         fi
     fi
     cc_cmd="$cc -static -O2 -pthread$pie_flag$lto_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs"
+    # M441：--gc-sections（opt-in）—— .o 已按 function/data 分节 ⇒ 此处按引用集回收未用节
+    [ "$gcs" = 1 ] && cc_cmd="$cc_cmd -Wl,--gc-sections"
     if ! cut_has "$cuts" sqlite; then
         cc_cmd="$cc_cmd \"$sqlite_src\""
     fi
@@ -1342,20 +1361,20 @@ comp_fp() { # stdout: "comp=<sha16>"（编译器）与 "std=<sha16>"（stdlib �
     return 0
 }
 
-build_cache_key() { # $1=主脚本绝对路径 $2=base $3=engine $4=lto $5=cc $6=no_quic $7=mods $8=cuts $9=full
-    local f="$1" base="$2" engine="$3" lto="$4" cc="$5" nq="$6" mods="$7" cuts="$8" full="$9"
+build_cache_key() { # $1=主脚本绝对路径 $2=base $3=engine $4=lto $5=cc $6=no_quic $7=mods $8=cuts $9=full ${10}=gcs
+    local f="$1" base="$2" engine="$3" lto="$4" cc="$5" nq="$6" mods="$7" cuts="$8" full="$9" gcs="${10:-0}"
     {
         printf 'base=%s\nengine=%s\nlto=%s\ncc=%s\nnoquic=%s\nfull=%s\n' \
                "$base" "$engine" "$lto" "$cc" "$nq" "$full"
-        printf 'mods=%s\ncuts=%s\n' "$mods" "$cuts"
-        # M430-补（缺陷 883）：**runtime 源指纹必须进产物缓存的键**。
-        #   实测（2026-11-21 23:5x · m85_s2）：默认缓存下 `--min` 命中一条旧条目返回
-        #   3138640，而同一源码现编（PX_BUILD_NOCACHE=1 / 空 BUILDCACHE）是 3142736 ——
-        #   同一份源码，缓存给出的是**当时源码**的产物。根因是 key 只靠 toolchain_fp
-        #   （stat 签名 + 30min memo）与 mods 书写形式，任何一处漏项就能让「改了 runtime」
-        #   或「等价但写法不同的裁剪集」复用旧产物。rt_key 是 .rtcache 的权威键
-        #   （runtime 源内容 + miniz/sqlite 头 + cc + cuts + lto，截 16 位），直接并进来。
-        printf 'rtkey=%s\n' "$(rt_key "$cuts" "$cc" "$lto")"
+        printf 'mods=%s\ncuts=%s\ngcs=%s\n' "$mods" "$cuts" "$gcs"
+        # M441（缺陷 924）：**构建器自身内容必须进产物缓存的键**。
+        #   实测（2026-11-24 02:1x）：改了 tools/px 的自动裁剪逻辑后，默认构建 secs=1
+        #   直接命中旧产物（返回的是改动前编译的二进制），而 dump 里 cuts='' ——
+        #   key 只覆盖「源码 + toolchain + comp_fp」，**没有覆盖构建器本身**。
+        #   ⇒ 升级 px 后可能拿到旧产物的行为；门里也不可能察觉（产物 sha 与缓存自洽）。
+        #   与缺陷 922（M440 备忘漏登记 stdlib）同族：**键必须覆盖所有会影响产物的输入**。
+        sha256sum "$PXC_SELF" 2>/dev/null | cut -c1-16
+        printf 'rtkey=%s\n' "$(rt_key "$cuts" "$cc" "$lto" "$gcs")"
         "$cc" --version 2>/dev/null | head -1
         sha256sum "$f" 2>/dev/null | cut -c1-16
         while IFS= read -r _df; do
