@@ -2553,6 +2553,8 @@ run m436_px_deps bash selfhost/check_px_deps.sh
 #         P7 前提自证（ps 真看到 pxi --worker）· G1 默认值口径。
 gate_timeout m437_worker 600
 run m437_worker bash selfhost/check_m437_worker.sh
-#   语料面（缺陷 912）：examples/m437_worker/dup2_smoke.px 是仓库可见的 dup2 语料，
+#   语料面（缺陷 912/913）：examples/m437_worker/dup2_smoke.px 是仓库可见的 dup2 语料，
 #     冒烟口 examples/m437_worker/verify.sh（三轨一致 + 负控 + 前提自证）
-#     ⇒ 由本门 [7/8] 直接调用，m421 覆盖账判 COVERED（不靠豁免表洗白）。
+#     ⇒ 本门 [7/8] 直接调用 ⇒ m421 覆盖账判 COVERED（不靠豁免表洗白）。
+gate_timeout m437_dup2_corpus 300
+run m437_dup2_corpus bash examples/m437_worker/verify.sh

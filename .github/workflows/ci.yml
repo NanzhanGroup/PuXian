@@ -476,6 +476,18 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ check_m437_worker 环境不成立 rc=3"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ check_m437_worker rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ check_m437_worker PASS"
+      - name: m437_dup2_corpus（dup2 语料三轨冒烟 · M437 · 缺陷 913）
+        #   语料 examples/m437_worker/dup2_smoke.px（缺陷 912 入库）必须三轨（解释 / VM / C）
+        #   逐字节一致；它同时是 m421 覆盖账里 m437_worker 单元的断言口
+        #   （无 verify.sh ⇒ BLACKBOX ⇒ UNLISTED ⇒ m421 真仓 rc=1，重跑链 1 红的那个）。
+        if: always()
+        run: |
+          set +e
+          bash examples/m437_worker/verify.sh
+          rc=$?
+          if [ $rc -eq 2 ]; then echo "⚠ m437_dup2_corpus ENV（环境不成立 rc=2）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m437_dup2_corpus 门失败"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m437_dup2_corpus PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

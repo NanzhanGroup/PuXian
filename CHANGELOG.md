@@ -18,7 +18,10 @@
          stdout 与 POSIX 口径逐字节一致（dup2(1,1)=1 · dup2(-1,1)=-1）+ 负控（错误期望必判不同）
          + 前提自证（2 行非空）。实测 8/8 绿 · 3s。
        ② selfhost/check_m437_worker.sh 新增 [7/8] 段直接调用该 verify.sh（原 [7] 收尾顺延 [8/8]）。
-       ③ selfhost/gates.registry.sh m437_worker 段注明语料与冒烟口 ⇒ 覆盖账判 COVERED（token 命中）。
+       ③ 独立门 m437_dup2_corpus：registry 加 `run … bash examples/m437_worker/verify.sh`，
+         ci.yml 同 step ⇒ check_gate_registry 双向一致 · orphan_gates 不再判孤儿
+         （M249/M401 口径：注释里提路径**不算**收录，必须真 run 行）。
+       ④ m421 覆盖账由此判 m437_worker = COVERED（证据 token 命中 registry 的 run 行）。
 证据   重跑 examples_coverage.sh：EXAMPLES-COVERAGE=OK units=353 covered=165 orphan=46 blackbox=142
        （blackbox 143→142，covered 164→165）
        m421 门：pass=20 fail=0（含镜像 4 扰动 N1/N1b/N2/N3/N4）
