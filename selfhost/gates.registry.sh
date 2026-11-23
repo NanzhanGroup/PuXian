@@ -2589,3 +2589,13 @@ run m438_spawn_posix bash selfhost/check_m438_spawn_posix.sh
 #   miss_chg 假修 / 两参契约翻转 ⇒ 判据必须识破，每次都自证扰动已发生）· 名册零漂移。
 gate_timeout m439_runtime 600
 run m439_runtime bash selfhost/check_m439_runtime.sh
+# M439-1 · 源码「语义指纹」（缺陷 921）：注释不再计入缓存键 / 源码链指纹。
+#   病象：改 2 行注释 ⇒ rt_key 变 ⇒ .rtcache 全冷 ⇒ 全量链 2h → 2.5–4h（超时红门 914/918 的成因）；
+#         rebake --check-all 由 14/14 掉到 0/14 ⇒ 白重烘一次。
+#   口径：C 档可丢行（行号不进产物：-O2 无 -g，改注释后 .o 逐字节相同）；.px 档必须保行
+#         （行号进模块）。真源 tools/pxnorm.c，由 tools/px 按内容哈希现编到 .rtcache/bin/。
+#   判据：形状 5 条 · 归一化器自测 19 条 · 前提自证（__LINE__/__FILE__=0）· 回退面有界
+#         （只许 selfhost/cases_bad/）· P1 只改注释 ⇒ rt_key 不变 · P2 负控加代码 ⇒ 必变 ·
+#         P3 复原逐字节 · P4 映射缓存（移走二进制仍同键）· P5 逃生口 PX_NORM=raw 口径不同。
+gate_timeout m439_norm 600
+run m439_norm bash selfhost/check_m439_norm.sh

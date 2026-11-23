@@ -308,13 +308,39 @@ closure() {
     done
 }
 # 件的源码链指纹 = 该件 import 闭包内容 + runtime vm/runtime 源
-entry_fp() {
+# M439-1（缺陷 921）：口径从 raw 换成 **sem**（语义指纹，注释不计入）——
+#   「只改注释」不再要求重烘（M438 实测：改 2 行注释 ⇒ --check-all 14/14→0/14 ⇒ 重烘 ⇒ 缓存全冷）。
+#   真源 = tools/px norm --join（→ tools/pxnorm.c，与 rt_key 同一份实现）。
+#   不可用（缺 cc / 缺 tools/pxnorm.c / PX_NORM=raw）⇒ 回落原 raw 拼接，等价 M438 之前的口径。
+entry_files() {                        # $1=件名 → 每行一个绝对路径（闭包 + runtime 四件）
     local src; src=$(entry_src "$1")
     [ -n "$src" ] || return 1
-    { closure "$ROOT/$src" | LC_ALL=C sort -u | while read -r p; do cat "$p"; done
-      cat "$ROOT/runtime/vm.c" "$ROOT/runtime/vm.h" \
-          "$ROOT/runtime/runtime.c" "$ROOT/runtime/runtime.h" 2>/dev/null; } \
-      | sha256sum | cut -c1-16
+    { closure "$ROOT/$src" | LC_ALL=C sort -u
+      printf '%s\n' "$ROOT/runtime/vm.c" "$ROOT/runtime/vm.h" \
+                    "$ROOT/runtime/runtime.c" "$ROOT/runtime/runtime.h"; } \
+      | while read -r p; do [ -f "$p" ] && printf '%s\n' "$p"; done
+}
+entry_fp() {
+    local files sem
+    files="$(entry_files "$1")" || return 1
+    [ -n "$files" ] || return 1
+    if sem=$("$ROOT/tools/px" norm --join $files 2>/dev/null) && [ -n "$sem" ]; then
+        printf '%s' "$sem"; return 0
+    fi
+    { while read -r p; do cat "$p"; done <<EOF
+$files
+EOF
+    } | sha256sum | cut -c1-16
+}
+# raw 指纹：只做审计/日志（「这份产物从哪份字节烘的」），**不参与任何判据**
+entry_rawfp() {
+    local files
+    files="$(entry_files "$1")" || return 1
+    [ -n "$files" ] || return 1
+    { while read -r p; do cat "$p"; done <<EOF
+$files
+EOF
+    } | sha256sum | cut -c1-16
 }
 
 # ---- 全 runtime 档缓存（重烘/现编 用；纯镜像对拍不需要）----

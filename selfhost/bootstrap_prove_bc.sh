@@ -38,7 +38,7 @@ mkdir -p "$WORK" "$BUILD"
 SRC_CHAIN="compiler.px codegen.px parser.px pxlexer.px cg_stmt.px cg_expr.px cg_module.px bc_emit.px ../runtime/vm.c ../runtime/vm.h ../runtime/runtime.c ../runtime/runtime.h"
 norm_bc() { grep -vE '^# BCModule ' ; }
 
-# 最新源码时间（compiler.px import 链）
+# 最新源码时间（compiler.px import 链）—— pxnorm 不可用时的回落判据
 newest_src() {
     local newest=0 m
     for f in $SRC_CHAIN; do
@@ -47,6 +47,16 @@ newest_src() {
         [ "$m" -gt "$newest" ] && newest=$m
     done
     echo "$newest"
+}
+# M439-1（缺陷 921）：步骤 1 的失效判据从「mtime 最新」换成 **语义指纹**（注释不计入）——
+#   改注释不再白白重跑 6.5–7 分钟的 pxc build。真源 = tools/px norm（→ tools/pxnorm.c）。
+#   pxnorm 不可用 ⇒ 返回空，调用方回落原来的 mtime 判据（等价旧口径）。
+src_sem() {
+    local files="" f sem
+    for f in $SRC_CHAIN; do [ -f "$f" ] && files="$files $f"; done
+    [ -n "$files" ] || return 0
+    sem="$(../tools/px norm --join $files 2>/dev/null)" || return 0
+    printf '%s' "$sem"
 }
 
 fresh_build() { [ "${1:-}" = "--fresh" ]; }
@@ -61,15 +71,25 @@ echo "══════════ M89-S3-C2 自举证明（BC 轨 · 字节�
 echo "── 基准：golden/compiler.bc.dump（$(wc -l < "$GOLDEN_BC") 行字节码镜像）"
 
 # ---- 步骤 1：B.c（pxc 编 compiler.px，C 引擎产物）----
-if fresh_build "$@" || [ ! -s "$BUILD/compiler_new.c" ] \
-   || [ "$(stat -c %Y "$BUILD/compiler_new.c" 2>/dev/null || echo 0)" -lt "$(newest_src)" ]; then
+# 失效判据（M439-1）：**sem 变了**（或产物缺失 / --fresh）。sem 取不到 ⇒ 回落 mtime。
+BPBC_SEM="$(src_sem)"
+BPBC_STALE=1
+if [ -s "$BUILD/compiler_new.c" ]; then
+    if [ -n "$BPBC_SEM" ]; then
+        [ "$BPBC_SEM" = "$(cat "$BUILD/.srcsem" 2>/dev/null)" ] && BPBC_STALE=0
+    elif [ "$(stat -c %Y "$BUILD/compiler_new.c" 2>/dev/null || echo 0)" -ge "$(newest_src)" ]; then
+        BPBC_STALE=0
+    fi
+fi
+if fresh_build "$@" || [ "$BPBC_STALE" = "1" ]; then
     echo "── 步骤 1：bootstrap/pxc 编译 compiler.px → compiler_new.c（实测约 6.5-7 分钟）"
     timeout 900 "$PXC" build compiler.px > "$BUILD/compiler_new.c" 2>/tmp/bpbc_build.log || {
         echo "❌ pxc build compiler.px 失败" >&2; tail -5 /tmp/bpbc_build.log >&2; exit 1; }
 else
-    echo "── 步骤 1：compiler_new.c 缓存有效，复用"
+    echo "── 步骤 1：compiler_new.c 缓存有效，复用（sem=${BPBC_SEM:-mtime}）"
 fi
 [ -s "$BUILD/compiler_new.c" ] || { echo "❌ compiler_new.c 为空" >&2; exit 1; }
+[ -n "$BPBC_SEM" ] && printf '%s' "$BPBC_SEM" > "$BUILD/.srcsem"
 
 # ---- 步骤 2：C 引擎版编译器二进制 compiler_new（若旧则重建）----
 # ── M237s3（缺陷 376）：选料必须「可判定」，不能靠「谁最新」 ──────────────────

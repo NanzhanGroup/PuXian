@@ -280,11 +280,61 @@ rt_src_files() {
     fi
     echo "$list"
 }
+# ---- M439-1（缺陷 921）：**语义指纹** —— 注释不计入缓存键/源码链指纹 ----
+# 病象：改 2 行注释 ⇒ rt_key 变 ⇒ .rtcache 全冷 ⇒ 全量链从 2h 变 2.5–4h
+#       （超时红门 914/918 的成因之一）；rebake --check-all 由 14/14 掉到 0/14 ⇒ 重烘。
+# 判据：注释不是语义 ⇒ 指纹只认「归一化后的源码」（tools/pxnorm.c）。
+#   两档规则：C 档可丢行（行号不进产物，实测 .o 逐字节相同）；
+#             .px 档必须保行（行号进模块，错误定位/栈回溯用）。
+# 安全阀：缺 cc / 编译失败 / 文件解析异常 ⇒ 全部回落 raw（**等价 M438 之前的口径**），
+#   宁可少省一次重烘，不改语义。PX_NORM=raw 可强制关掉（排障用）。
+PXNORM_BIN=""
+pxnorm_bin() {   # → stdout 打印可执行文件路径；不可用返回 1
+    [ "${PX_NORM:-}" = "raw" ] && return 1
+    [ -n "${PXNORM_BIN:-}" ] && { printf '%s' "$PXNORM_BIN"; return 0; }
+    local src="$PXC_HOME/tools/pxnorm.c" d="$PXC_HOME/.rtcache/bin" k out
+    [ -f "$src" ] || return 1
+    k="$(sha256sum "$src" 2>/dev/null | cut -c1-16)"; [ -n "$k" ] || return 1
+    out="$d/pxnorm-$k"
+    if [ ! -x "$out" ]; then
+        mkdir -p "$d" 2>/dev/null || return 1
+        ${CC:-cc} -O2 -o "$out.$$.tmp" "$src" 2>/dev/null || { rm -f "$out.$$.tmp"; return 1; }
+        chmod +x "$out.$$.tmp" 2>/dev/null
+        mv -f "$out.$$.tmp" "$out" 2>/dev/null || { rm -f "$out.$$.tmp"; return 1; }
+    fi
+    PXNORM_BIN="$out"; printf '%s' "$out"
+}
+# sem_join 文件… → 16hex 语义指纹。
+#   两级：先算 raw 键（一次 sha256sum，M430-补 的老口径），命中 .semmap 就零解析返回；
+#   未命中才调 pxnorm（约 60–90ms）并把 raw→sem 记进映射 ⇒ 稳态耗时与改口径前相同。
+sem_join() {
+    local bin raw sem map="$PXC_HOME/.rtcache/.semmap"
+    [ $# -gt 0 ] || return 1
+    # 逃生口必须在最前面：PX_NORM=raw ⇒ 连映射缓存也不许用（否则「关掉归一化」会被 map 静默绕过，
+    #   实测踩过：门 P5 负控在 map 命中时给出与 sem 相同的键）。
+    [ "${PX_NORM:-}" = "raw" ] && return 1
+    raw="$(sha256sum "$@" 2>/dev/null | cut -c1-16 | tr '\n' ' ' | sha256sum | cut -c1-16)"
+    [ -n "$raw" ] || return 1
+    if [ -f "$map" ]; then
+        sem="$(grep -m1 "^$raw " "$map" 2>/dev/null | cut -d' ' -f2)"
+        [ -n "$sem" ] && { printf '%s' "$sem"; return 0; }
+    fi
+    bin="$(pxnorm_bin)" || return 1
+    sem="$("$bin" --join "$@" 2>/dev/null)" || return 1
+    [ -n "$sem" ] || return 1
+    if mkdir -p "${map%/*}" 2>/dev/null && printf '%s %s\n' "$raw" "$sem" >> "$map" 2>/dev/null; then
+        if [ "$(wc -l < "$map" 2>/dev/null || echo 0)" -gt 4096 ]; then
+            tail -2048 "$map" > "$map.$$.tmp" 2>/dev/null && mv -f "$map.$$.tmp" "$map" 2>/dev/null
+        fi
+    fi
+    printf '%s' "$sem"
+}
 rt_key() {
-    # 参数：cuts cc [lto] → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希 + cuts + lto）
+    # 参数：cuts cc [lto] → 16 位缓存键（runtime 源 + miniz + sqlite 头**语义**哈希 + cuts + lto）
     # M430-补：产物缓存（缺陷 883）现在每次 build 都要 rt_key ⇒ 逐文件 `sha256sum` 是 30 次
     #   fork（实测把 m425_build_cache 的 P2 命中耗时顶到 692ms，判据 ≤400ms/≤0.25×冷构建）。
     #   改成**一次** sha256sum 多文件（输出行序由参数序固定，与逐文件拼接等价）。
+    # M439-1：键改成 **sem**（注释不计入）⇒ 只改注释不再冷缓存；pxnorm 不可用 ⇒ 回落老的 raw 拼接。
     local cuts="$1" cc="$2" lto="${3:-0}" f files="" key_src=""
     for f in $(rt_src_files "$cuts") \
              third_party/miniz/miniz.c third_party/miniz/miniz_tinfl.c \
@@ -294,7 +344,9 @@ rt_key() {
              third_party/sqlite3/sqlite3.h; do
         [ -f "$RT_DIR/$f" ] && files="$files $RT_DIR/$f"
     done
-    key_src="$(sha256sum $files 2>/dev/null | cut -c1-16 | tr '\n' ' ')"
+    if ! key_src="$(sem_join $files)"; then
+        key_src="$(sha256sum $files 2>/dev/null | cut -c1-16 | tr '\n' ' ')"
+    fi
     echo " $key_src cc=$(basename "$cc") cuts=$cuts lto=$lto" | sha256sum | cut -c1-16
 }
 rt_cache_compile() {
@@ -1806,6 +1858,14 @@ case "$cmd" in
     # M152（缺陷 144）：打印当前源码对应的 runtime 缓存目录（**按 rt_key**，不猜 mtime）
     #   用法：px rtcache [cuts...] —— 供 rebake_bin.sh 等"必须链对 runtime"的路径使用。
     rtcache) shift; rt_ensure "${1:-}" "${2:-gcc}" "${3:-0}" ;;
+    # M439-1（缺陷 921）：**语义指纹**出口（注释不计入）。rebake_bin.sh / bootstrap_prove_bc.sh 共用。
+    #   用法：px norm --join FILE…  → 16hex 语义指纹
+    #         px norm --fp FILE…    → 每文件 raw=/sem=/state=
+    #         px norm --selftest · --emit c|px FILE · --premise DIR
+    #   不可用（缺 cc / 缺 tools/pxnorm.c）⇒ rc=3，调用方必须回落 raw（不许静默当绿）。
+    norm)   shift
+            _pxnb="$(pxnorm_bin)" || { echo "❌ pxnorm 不可用（缺 cc 或 tools/pxnorm.c）" >&2; exit 3; }
+            "$_pxnb" "$@" ;;
     # M153（缺陷 147）：**只算 key 不编译** —— 门用。为什么需要：rtcache 会因为
     #   runtime 编译失败而报错退出，而调用方若把"取不到 key"当成"跳过核对"，
     #   就会在**runtime 链错**的情况下报绿（第 35 轮实测踩中：门打印"⚠️ 取不到
