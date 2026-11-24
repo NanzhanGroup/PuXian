@@ -479,4 +479,3 @@ def bc_pxe_emit(m, path):
     munmap(view2)
     close(fd2)
     return total
-
