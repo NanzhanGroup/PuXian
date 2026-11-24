@@ -52,8 +52,8 @@ EXEMPT_VARS_WHY=( 'rebake_bin.sh：static|dynamic 两档参数化（M114-S2 有�
 # ---- 豁免：行级（**必须窄**，逐条带理由；失效即判红）----
 EXEMPT_LINES=(
     'selfhost/check_bin_portability.sh:140|动态对照件——该门**故意**产一个动态件，用来证明可移植性判据有区分力'
-    'selfhost/native_bootstrap.sh:202|特性探测（只问 -ldl/-lpthread 在不在），源文件无三方非 PIC 资产 ⇒ 与 PIE 无关'
-    'selfhost/native_bootstrap.sh:215|静态 flag 由 `_link_pxc0` 的 `$1`（= $LINK_EXTRA）传入；动态回退档有**响亮警告 + 全静态硬门**兜底'
+    'selfhost/native_bootstrap.sh:215|特性探测（只问 -ldl/-lpthread 在不在），源文件无三方非 PIC 资产 ⇒ 与 PIE 无关'
+    'selfhost/native_bootstrap.sh:228|静态 flag 由 `_link_pxc0` 的 `$1`（= $LINK_EXTRA）传入；动态回退档有**响亮警告 + 全静态硬门**兜底'
 )
 
 # ---- 合规正则（**单点**定义 ⇒ 负控「判据自伤」只能改这一处）----

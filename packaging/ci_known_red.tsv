@@ -2,3 +2,11 @@
 # 规则：CI 红门必须逐条登记；未登记 ⇒ GAP(rc=1)；登记过期 ⇒ GAP(rc=1)。
 # 到期前必须：修好，或重新定性并延期（延期要在 CHANGELOG 写清为什么）。
 #
+# ── 2026-11-24（M442 补 2 · 缺陷 926/927）：已修，待 push 后 CI 复验 ──
+# 根因（本机已复现并修绿，见 CHANGELOG「M442 补 2」）：
+#   runtime/pxvm.c 是 .pxe 宿主（自带 main），被 native_bootstrap.sh 的 `ls runtime/*.c`
+#   收进自举 runtime 清单 ⇒ 与 golden/compiler.c 的 main 撞；原生档（aarch64 runner）与
+#   交叉档（x86_64→aarch64）两条自举步同时红。CI run 45311642994 @ b048dfd。
+原生自举	M442 补2：宿主 pxvm.c 混进自举 runtime 清单（dup main）· 已修（排除+自证 guard）· 待 push 复验	2026-11-26
+M159	M442 补2：交叉档同一根因（native_bootstrap 的 ls runtime/*.c）· 已修 · 待 push 复验	2026-11-26
+#

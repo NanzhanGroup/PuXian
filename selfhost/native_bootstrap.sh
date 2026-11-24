@@ -153,7 +153,20 @@ for f in $(ls "$RT"/*.c); do
     case "$(basename "$f")" in
         runtime_quic.c|runtime_h3.c|runtime_h3_qpack.c|runtime_h3_qpack_dyn.c)
             [ -n "$NQ" ] && continue ;;
+        # M442 · 2026-11-24 CI 实测（b048dfd）：pxvm.c 是 `.pxe` **宿主程序**（自带 main），
+        #   不属于 runtime 库。它被 `ls $RT/*.c` 顺带收进 SRCS 后，与 golden/compiler.c
+        #   的 main 撞成「multiple definition of `main`」⇒ 原生档（aarch64 runner）与
+        #   交叉档（x86_64→aarch64）两条自举步同时红，而本机全量门不含自举 ⇒ 本地绿。
+        pxvm.c)
+            continue ;;
     esac
+    # 前提自证（同名缺陷不许再复发）：runtime 库文件**不许**定义 main。
+    #   新增宿主程序必须在上面显式排除，否则这里就地响亮失败（rc=3），
+    #   而不是等到链接期报一个「离根因三步远」的 dup main。
+    if grep -qE '(^|[^A-Za-z0-9_])int[[:space:]]+main[[:space:]]*\(' "$f"; then
+        say "❌ $(basename "$f") 定义了 main，但没被列入宿主排除表（会与 golden 的 main 撞）"
+        exit 3
+    fi
     SRCS="$SRCS $f"
 done
 SRCS="$SRCS $RT/third_party/miniz/miniz.c $RT/third_party/miniz/miniz_tinfl.c $RT/third_party/miniz/miniz_tdef.c"

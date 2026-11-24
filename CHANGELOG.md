@@ -1,3 +1,73 @@
+## M442 补 2（2026-11-24）：自举清单混进宿主 `pxvm.c` + golden 未随「编译器正主」重定基（缺陷 926 / 927 / 928）
+
+> **一句话**：远端 CI 在 `b048dfd` 上红了两条自举步（原生档 / M159 交叉档），根因是
+> `runtime/pxvm.c`（`.pxe` **宿主程序**，自带 `main`）被 `native_bootstrap.sh` 的
+> `ls runtime/*.c` 顺带收进「自举 runtime 清单」⇒ 与 `golden/compiler.c` 的 `main` 撞；
+> 修好这条后**又露出第二条**：M442-S3 改了 `compiler.px`（import `bc_pxe.px`）却没重定基
+> `golden/compiler.c` / `compiler.bc.dump` ⇒ 自举自证必红。两条都在本机定量复现、修绿。
+
+### 证据（2026-11-24 · CI run 45311642994 @ b048dfd + 本机复现）
+
+```
+CI（Ubuntu aarch64 runner · 原生档）
+  job 138168547571 step 4 原生自举：❌ 链接 pxc0 失败（static / -static）
+    /usr/bin/ld: obj/pxvm.o: in function `main': multiple definition of `main';
+                  compiler_golden.o:compiler.c:(.text.startup+0x0): first defined here
+CI（x86_64 runner · M159 交叉档 x86_64→aarch64）
+  job 138168547910 step 12：ld.lld: error: duplicate symbol: main
+    >>> defined at compiler.c:21823 · >>> defined at pxvm.c:28 (runtime/pxvm.c:28)
+本机复现（x86_64 · Rocky 9.8）
+  bash selfhost/native_bootstrap.sh --portable --outdir /tmp/nb-repro   ⇒ rc=1，逐字同 CI
+  《修①后》同命令 ⇒ 推进到步骤 3 自证：21685a21686,22797（新产物多 1112 行，golden 落后）
+```
+
+### 修法（两条根因各一条，判据不降级）
+
+```
+selfhost/native_bootstrap.sh   runtime 清单显式排除宿主 pxvm.c（与 QUIC 四件同处一张表）
+                               + 前提自证：任何 runtime .c 定义 main 又没进排除表 ⇒ 就地 rc=3
+                               （不再让「dup main」等到链接期才报，且不许静默收编新宿主）
+selfhost/check_m442_pxe.sh     + B1/B2/B3 三条（runtime 带 main 的宿主唯一 = {pxvm.c} ·
+                               自举排除表在 · 负控：抠掉排除分支 ⇒ 自举就地 rc=3）⇒ 判据 41 → 44
+                               + Q5 缓存判据改「每次唯一内容 + 两段式」⇒ 本机重跑不再假红（缺陷 928）
+selfhost/golden/compiler.c     --update-golden 重定基：22422 → 23613 行（B.c 逐字节一致自证过）
+selfhost/golden/compiler.bc.dump  --update-golden 重定基：47852 → 50422 行（VM 重放逐字节一致）
+selfhost/check_link_flags.sh   豁免行号随插入漂移：202/215 → 215/228（豁免失效判红是它自己抓的）
+packaging/ci_known_red.tsv     两条红门按机制登记（到期 2026-11-26），push 复绿后删除
+```
+
+### 顺带修的一个假红（缺陷 928）：m442_pxe 的 Q5 第二次跑必红
+
+Q5 原本用**固定文本** `q5-new` 建一次 `--pxe`，断言「不命中缓存」。而缓存键含源码 sha
+⇒ 首次跑把该键写进 `BUILD_CACHE`，**本机第二次跑同一门就命中**，判红。CI 每次冷缓存，
+所以永远看不出来 —— 典型的「本地假红，会把后来人引去查一个不存在的键缺陷」。
+改为：每次唯一后缀 + 两段式（首版唯一内容建一次；同文件改内容再建必须不命中）+ 前提自证
+（两版 sha 必须不同）。修后**连跑两次**逐条 PASS（见验收）。
+
+### 为什么这条能「本地绿、CI 红」
+
+`bootstrap_prove` 只守 C 轨 fixpoint 的**基准一致性**，`native_bootstrap.sh` **不在本地全量门**
+（CI 独占，约 1–3 分钟 + 交叉工具链）。⇒ 新增一个自带 `main` 的 runtime `.c`，本地没有任何门会问
+「自举清单还成立吗」。本补把该问题的**廉价那一半**放进门（B1/B2/B3，零编译负控只跑 guard）。
+
+### 验收（本机实跑）
+
+```
+native_bootstrap.sh --portable  ⇒ rc=0 · STATIC=1 · NATIVE-BOOTSTRAP-OK host=x86_64 target=x86_64
+bootstrap_prove.sh              ⇒ B.c 与基准逐字节一致（23612 行）
+bootstrap_prove_bc.sh           ⇒ VM 重放 == golden/compiler.bc.dump（50422 行）
+check_version_golden.sh         ⇒ VERSION-GOLDEN-OK（0.2.438 三处一致）
+check_link_flags.sh             ⇒ 违例 0 条
+rebake_bin.sh --check-all       ⇒ 14/14 + pxvm 双指纹一致（golden 不进指纹）
+check_m442_pxe.sh               ⇒ PASS=44 FAIL=0（含 B3 负控：抠掉排除分支 ⇒ rc=3 guard 命中）
+```
+
+### 遗留（需 publish）
+
+交叉档（M159）本机无 aarch64 交叉工具链（`/opt/muslcc` 与 `aarch64-linux-gnu-gcc` 均无），
+只能由 CI 复验；但根因是**同一条 SRCS 选择路径**（CI 日志 ld.lld 指到 `runtime/pxvm.c:28`）。
+本补在 **local 档**完成（改码/编译/跑门/本地 commit），`push` 需 publish 授权。
+
 ## M442（阶段 3）：.pxe 发射并入编译器正主 + `px build --pxe` + 宿主入库
 
 > **一句话**：`.pxe` 从「姊妹壳 bc_cli 能发射」变成**用户一条命令就能用**——
@@ -16,7 +86,7 @@ selfhost/build_pxvm.sh      + 版本注入 -DPXVM_VER · 双指纹对象（PXRT 
 runtime/pxvm.c              + --version（发布自检 ⑥ 判「件是否可执行」）
 selfhost/rebake_bin.sh      + pxvm_fp/pxvm_gate · --check-pxvm 单件模式 · 步骤 5/5 构建 pxvm
 tools/make_release.sh       ⑥ 工具链件清单 + pxvm
-selfhost/check_m442_pxe.sh  + Q0–Q7 正向 · N10/N10b/N11 负控（判据 25 → 41 条）
+selfhost/check_m442_pxe.sh  + Q0–Q7 正向 · N10/N10b/N11 负控（判据 25 → 41 条；M442 补 2 加 B 自举边界 3 条 → 44 条）
 bootstrap/pxc · pxc_vm · pxvm  重烘（PYSRC-70789132aef6a112 / PXRT-945d49d1b0a388b3 /
                               PXVMFP-634b8f18b99a3e28）
 ```

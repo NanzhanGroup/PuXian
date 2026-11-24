@@ -2,7 +2,9 @@
 # ============================================================
 # selfhost/check_m442_pxe.sh —— .pxe 序列化模块（M442 阶段2）判据
 # ------------------------------------------------------------
-# 判据面：格式契约 / 三轨等价 / 序列化覆盖（闭包·结构体·内嵌 NUL）/ 安全边界负控。
+# 判据面：格式契约 / 三轨等价 / 序列化覆盖（闭包·结构体·内嵌 NUL）/ 安全边界负控。+ B 自举边界
+#   B 自举边界（M442-S3 · 2026-11-24 CI 红）：runtime 带 main 的宿主唯一（pxvm.c）·
+#     native_bootstrap.sh 排除表在 · 负控「抠掉排除分支」⇒ 自举就地 rc=3（证明判据有牙）
 # 纪律（每条都要能判红；负控必须有前提自证）：
 #   S 形状：pxe.c 有 V1..V6 · 头长 96 与 TRAILER 40 两侧一致 · op 码镜像双向无缺无多
 #   P 正向：parity 逐字段 · 三轨等价（解释 / 静态 VM-C / .pxe+pxvm）· 体积 < 静态 1%
@@ -258,12 +260,29 @@ else
 fi
 
 # Q5 改源码 ⇒ 缓存必须失效（与 M441 缺陷 924 同族：键要覆盖所有影响产物的输入）
-printf 'def main():\n    print("q5-new")\n    return 0\n' > "$TMP/s/q5.px"
-PX_BUILD_VERBOSE=1 "$PX" build --pxe q5.px > "$TMP/q5.log" 2>&1
-if grep -q '缓存命中' "$TMP/q5.log"; then
-    bad "Q5 改了源码仍命中缓存（键漏了源码）"
+#   ⚠️ 2026-11-24 实测（M442 补 2 · 缺陷 928）：本条原来用**固定文本** q5-new ⇒ 源码 sha 进了
+#     缓存键，本机**第二次**跑同一门就「缓存命中」判红 = 假红（CI 每次冷缓存所以看不出来）。
+#     改为：每次跑用唯一后缀，判据拆成两段 —— ①首版（唯一内容）建一次 ②同一文件改内容再建
+#     **必须不命中**。前提自证：两版内容 sha 必须不同，否则这条是空跑。
+S5="$(date +%s%N)-$$"
+printf 'def main():\n    print("q5-a-%s")\n    return 0\n' "$S5" > "$TMP/s/q5.px"
+S5A="$(sha256sum "$TMP/s/q5.px" | cut -c1-16)"
+if PX_BUILD_VERBOSE=1 "$PX" build --pxe q5.px > "$TMP/q5a.log" 2>&1; then
+    printf 'def main():\n    print("q5-b-%s")\n    return 0\n' "$S5" > "$TMP/s/q5.px"
+    S5B="$(sha256sum "$TMP/s/q5.px" | cut -c1-16)"
+    if [ "$S5A" = "$S5B" ]; then
+        bad "Q5 前提不成立：两版内容 sha 相同（$S5A）⇒ 判据空跑"
+    elif PX_BUILD_VERBOSE=1 "$PX" build --pxe q5.px > "$TMP/q5.log" 2>&1; then
+        if grep -q '缓存命中' "$TMP/q5.log"; then
+            bad "Q5 改了源码仍命中缓存（键漏了源码）：$S5A → $S5B"
+        else
+            ok "Q5 改源码 ⇒ 缓存失效（$S5A → $S5B）"
+        fi
+    else
+        bad "Q5 改源码后构建失败：$(tail -2 "$TMP/q5.log" | tr '\n' ' ')"
+    fi
 else
-    ok "Q5 改源码 ⇒ 缓存失效（正确）"
+    bad "Q5 首版构建失败：$(tail -2 "$TMP/q5a.log" | tr '\n' ' ')"
 fi
 
 # Q6 `px run *.pxe` 走 pxvm（用户面入口），输出/退出码与静态产物全等
@@ -281,6 +300,52 @@ if "$ROOT/selfhost/rebake_bin.sh" --check-pxvm > "$TMP/q7.log" 2>&1; then
 else
     bad "Q7 pxvm 来源门红：$(tail -2 "$TMP/q7.log" | tr '\n' ' ')"
 fi
+
+echo "── B 自举边界：runtime 库 ⇄ 宿主程序（M442-S3 · 2026-11-24 CI 红）"
+# 为什么有这一块（2026-11-24 实测 · CI run 45311642994 @ b048dfd）：
+#   pxvm.c 是 `.pxe` **宿主程序**（自带 main），不属于 runtime 库。native_bootstrap.sh 的
+#   `ls runtime/*.c` 把它顺带收进自举 runtime 清单 ⇒ 与 golden/compiler.c 的 main 撞
+#   「multiple definition of `main`」⇒ 原生档（aarch64 runner）与交叉档（x86_64→aarch64）
+#   两条自举步同时红；而本地全量门**不含自举**（CI 独占）⇒ 「本地绿、CI 红」。
+HOSTS="$(grep -lE '(^|[^A-Za-z0-9_])int[[:space:]]+main[[:space:]]*\(' "$RT"/*.c 2>/dev/null \
+         | xargs -r -n1 basename | sort | tr '\n' ' ')"
+if [ "$HOSTS" = "pxvm.c " ]; then
+    ok "B1 runtime 中带 main 的宿主程序集合 = {pxvm.c}"
+else
+    bad "B1 runtime 中带 main 的宿主程序集合 = [$HOSTS]（期望仅 pxvm.c；新增宿主须同批改自举排除表与本判据）"
+fi
+NB="$ROOT/selfhost/native_bootstrap.sh"
+if grep -qE '^[[:space:]]*pxvm\.c\)[[:space:]]*$' "$NB"; then
+    ok "B2 native_bootstrap.sh 的 runtime 清单显式排除 pxvm.c"
+else
+    bad "B2 native_bootstrap.sh 未排除 pxvm.c（自举链接期必 dup main）"
+fi
+# B3 判据有牙（负控）：把排除分支抠掉 ⇒ ①B2 的 grep 必失配 ②自举脚本必须**就地** rc=3
+#   前提自证：先证明拷贝件里真的没有那两行了，否则这条是空跑。
+B3D="$(mktemp -d "${TMPDIR:-/tmp}/m442b3.XXXXXX")"; mkdir -p "$B3D/selfhost"
+ln -s "$RT" "$B3D/runtime"
+ln -s "$ROOT/selfhost/golden" "$B3D/selfhost/golden"   # 脚本前置检查要求基准存在，否则到不了 guard
+ln -s "$ROOT/selfhost/compiler.px" "$B3D/selfhost/compiler.px"
+python3 - "$NB" "$B3D/selfhost/nb.sh" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding='utf-8').read()
+s2 = re.sub(r'\n[ \t]*pxvm\.c\)[ \t]*\n[ \t]*continue ;;', '', s, count=1)
+if s2 == s:
+    print("E: 没找到 pxvm.c 排除分支"); sys.exit(1)
+open(sys.argv[2], 'w', encoding='utf-8').write(s2)
+PY
+if [ $? -ne 0 ]; then
+    bad "B3 负控前提不成立（抠不掉排除分支）"
+elif grep -qE '^[[:space:]]*pxvm\.c\)[[:space:]]*$' "$B3D/selfhost/nb.sh"; then
+    bad "B3 负控前提不成立（排除分支仍在）"
+elif bash "$B3D/selfhost/nb.sh" --no-prove --jobs 8 --outdir "$B3D/out" > "$B3D/b3.log" 2>&1; then
+    bad "B3 抠掉排除分支后自举仍 rc=0（判据无牙）"
+elif grep -q "没被列入宿主排除表" "$B3D/b3.log"; then
+    ok "B3 判据有牙：抠掉排除分支 ⇒ 自举就地 rc=3（guard 命中）"
+else
+    bad "B3 失败原因不是 guard：$(tail -2 "$B3D/b3.log" | tr '\n' ' ')"
+fi
+rm -rf "$B3D"
 
 echo "── N 负控（loader 必须拒收 / 判据必须变红）"
 if python3 "$ROOT/selfhost/m442_negctl.py" "$TMP/pxvm" h3.pxe > "$TMP/neg.log" 2>&1; then
