@@ -23,7 +23,8 @@
 #   N4 无假红：真实程序 examples/fib.px ⇒ rc=0
 #   N5 import 解析不到不误杀：pxlint 报 L010 警告、0 错误；px build 仍能过（工作区路径不同）
 #   N6 `__` 内部名不计红（runtime 注入、不进名册）+ 前提自证「走了豁免且出声」
-#   N7 examples/ 夹具树豁免 + 负控「同一份源码移出夹具树仍被拦」
+#   S2 形状：run_gates.sh 统一导出门内默认 PX_DEFCHK=warn（否则 20+ 诊断夹具全被拦）
+#   N7 覆盖优先：门里 env 是 warn，但显式 PX_DEFCHK=error 仍拒构建（门可要求严格档）
 #   G1 环境守卫：tools/px / bootstrap/pxlint 不可用 ⇒ rc=3（绝不降级成 0）
 # 退出码：0 全过 / 1 有违例 / 3 环境不成立
 # ============================================================
@@ -88,7 +89,7 @@ def f():
 
 print(f())
 EOF
-out="$("$PX" build --pxe "$T/p1.px" 2>&1)"; rc=$?
+out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/p1.px" 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "P1 正控：直读未定义名 ⇒ build rc=$rc（拒构建）" || bad "P1 正控判绿：未定义名居然构建成功"
 printf '%s' "$out" | grep -q 'L002' && ok "P1 报出 L002 诊断码" || bad "P1 没报 L002"
 printf '%s' "$out" | grep -q "to_str" && ok "P1 点名了未定义的那个名字" || bad "P1 没点名"
@@ -101,11 +102,11 @@ def g(x):
 
 print(g(0))
 EOF
-"$PX" build --pxe "$T/p2.px" >"$T/p2.out" 2>&1
+env -u PX_DEFCHK "$PX" build --pxe "$T/p2.px" >"$T/p2.out" 2>&1
 [ $? != 0 ] && ok "P2 正控：未定义名藏在死分支（x==1 从不成立）⇒ 依然拒构建" || bad "P2 正控判绿：死分支里的未定义名漏掉了"
 grep -q 'L002' "$T/p2.out" && ok "P2 前提自证：红的是 L002（不是别的错）" || bad "P2 红因不明"
 
-"$PX" build "$T/p1.px" >"$T/p3.out" 2>&1
+env -u PX_DEFCHK "$PX" build "$T/p1.px" >"$T/p3.out" 2>&1
 [ $? != 0 ] && ok "P3 正控：静态轨（默认，非 --pxe）同样被拦" || bad "P3 判绿：只拦轻轨、静态轨漏"
 
 # ── N1 负控：补上定义必须绿，且产物真能跑 ──
@@ -118,7 +119,7 @@ def f():
 
 print("N1-OK " + f())
 EOF
-if "$PX" build --pxe "$T/n1.px" >"$T/n1.build" 2>&1; then
+if env -u PX_DEFCHK "$PX" build --pxe "$T/n1.px" >"$T/n1.build" 2>&1; then
     ok "N1 负控：补上定义 ⇒ 构建成功（检查不是恒红）"
     if "$PX" run "$T/n1.px" 2>/dev/null | grep -q '^N1-OK 1$'; then
         ok "N1 前提自证：产物/解释执行真跑到那条路径（不是空跑）"
@@ -130,7 +131,7 @@ else
 fi
 
 # ── N2 负控自证：关掉检查 ⇒ 同一份 P1 源码必须过 ──
-PX_SKIP_DEFCHK=1 "$PX" build --pxe "$T/p1.px" >"$T/n2.out" 2>&1
+PX_SKIP_DEFCHK=1 env -u PX_DEFCHK "$PX" build --pxe "$T/p1.px" >"$T/n2.out" 2>&1
 [ $? = 0 ] && ok "N2 负控自证：PX_SKIP_DEFCHK=1 时同一份源码构建成功 ⇒ P1 的红来自这条检查" \
            || bad "N2 前提不成立：关掉检查后仍失败（P1 的红另有来源）"
 
@@ -141,7 +142,7 @@ rc=$?
 grep -q '不阻断' "$T/n3.out" && ok "N3 前提自证：确实走了 warn 分支（输出含『不阻断』）" || bad "N3 没走 warn 分支"
 
 # ── N4 无假红：真实程序 ──
-"$PX" build examples/fib.px >"$T/n4.out" 2>&1
+env -u PX_DEFCHK "$PX" build examples/fib.px >"$T/n4.out" 2>&1
 [ $? = 0 ] && ok "N4 无假红：examples/fib.px 正常构建" || bad "N4 真实程序被误拦：$(tail -2 "$T/n4.out")"
 
 # ── N5 import 解析不到：不误杀，但必须出声 ──
@@ -163,28 +164,36 @@ def dead():
 
 print("N6-OK")
 EOF
-out="$("$PX" build --pxe "$T/n6.px" 2>&1)"; rc=$?
+out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n6.px" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "N6 无假红：\`__\` 内部名（runtime 注入、不进名册）不判红 ⇒ build rc=0" \
               || bad "N6 把 runtime 内部名当未定义拦了：$(printf '%s' "$out" | head -2)"
 printf '%s' "$out" | grep -q '内部名' && ok "N6 前提自证：确实走了「\`__\` 豁免」分支（输出含『内部名』）" \
                                       || bad "N6 没走豁免分支（豁免没生效，或没出声 —— 静默豁免不可接受）"
 
-# ── N7 examples/ 夹具树豁免（有牙：同一份源码移到 examples/ 之外必须被拦）──
-EXF="examples/.defchk_probe_$$.px"
-printf 'def f():\n    return to_str(1)\n\nprint(f())\n' > "$EXF"
-trap 'rm -rf "$T"; rm -f "$EXF"' EXIT
-if "$PX" build --pxe "$EXF" >"$T/n7.out" 2>&1; then
-    ok "N7 夹具树豁免：examples/ 下的入口不拦（20+ 门故意编译含未定义名的程序）"
+# ── S2 形状：门内默认 warn 的边界写在 run_gates.sh 一处 ──
+if grep -q 'export PX_DEFCHK="${PX_DEFCHK:-warn}"' selfhost/run_gates.sh; then
+    ok "S2 形状：run_gates.sh 统一导出门内默认 PX_DEFCHK=warn（诊断夹具不再被拦）"
 else
-    bad "N7 examples/ 下仍被拦（诊断类门会全红）：$(tail -2 "$T/n7.out")"
+    bad "S2 run_gates.sh 没有导出门内 warn —— 20+ 诊断夹具会全红（05:0x 实测 9 红）"
 fi
-cp -f "$EXF" "$T/n7_copy.px"
-if "$PX" build --pxe "$T/n7_copy.px" >"$T/n7b.out" 2>&1; then
-    bad "N7 负控判绿：同一份源码在 examples/ 之外也没被拦 ⇒ 豁免扩散，检查等于空"
+
+# ── N7 覆盖优先：门里是 warn，但显式 error 仍拒构建（门可以要求严格档）──
+cat > "$T/n7.px" <<'EOF'
+def f():
+    return to_str(1)
+
+print(f())
+EOF
+if PX_DEFCHK=error "$PX" build --pxe "$T/n7.px" >"$T/n7a.out" 2>&1; then
+    bad "N7 判绿：显式 PX_DEFCHK=error 居然没拦住（严格档形同虚设）"
 else
-    ok "N7 负控：同一份源码放到 examples/ 之外仍被拦（豁免只对夹具树生效）"
+    ok "N7 覆盖优先：显式 PX_DEFCHK=error 在门里仍拒构建"
 fi
-rm -f "$EXF"
+if PX_DEFCHK=warn "$PX" build --pxe "$T/n7.px" >"$T/n7b.out" 2>&1; then
+    ok "N7 前提自证：同一份源码 warn 档 rc=0 ⇒ 上一条的红确实来自 error 档"
+else
+    bad "N7 前提不成立：warn 档也被拦（上一条的红说明不了任何事）"
+fi
 
 # ── 规模锚点 ──
 nrun=$((PASS+FAIL))
