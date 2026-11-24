@@ -1,3 +1,36 @@
+## M443（2026-11-24）：版本位收口 —— M439–M442 并入 v0.2.443，只发一版
+
+> **一句话**：本轮不改功能代码，只把「四个里程碑攒成一个发布」真正收口：9 处版本字面量
+> 0.2.438 → 0.2.443、14 件入库件全量重烘，并按缺陷 694 的登记制把 M439–M442
+> 「有意不发版」写进 `selfhost/golden/version_skips.txt`。
+
+### 用户令
+
+2026-11-24 00:21 / 00:33：「M438 → M443 串成一个发布版本，只发 v0.2.443，中间不推 tag」
+（推了镜像 latest 就会前移）。
+
+### 改动
+
+- `packaging/bump_version.sh 0.2.443`：9 处字面量（`tools/px` · `tools/{pxfmt,pxlsp,pxmcp}.px` ·
+  `selfhost/{compiler,interp}.px` · `selfhost/golden/{compiler.c,compiler.bc.dump}`）→ 0.2.443
+- `selfhost/rebake_bin.sh --rebake-all`：14 件入库件 + `bootstrap/pxvm` 全量重烘（源码链指纹一致）
+- `selfhost/golden/version_skips.txt`：登记 M439 / M440 / M441 / M442 并入 v0.2.443，各带证据提交（缺陷 694 登记制）
+- 无功能代码变更；M439–M442 的功能修复见各自节。
+
+### 证据
+
+```
+prep:  /data/autodrive/m443-prep.log
+       bump rc=0 · rebake-all rc=0 · check-all 14/14 · commit d44ccfe（树净 0 脏）
+登记:  commit aa6f5e5（version_skips.txt 10 行新增）
+门档:  /data/autodrive/m443-preflight-20261124-220730.log ⇒ PREFLIGHT-GATES OK rc=0 · 43 门 · 1931s
+```
+
+### 回滚
+
+- `git revert` 本提交 → 版本位回到 0.2.438 之前的语义（需再 `rebake_bin.sh --rebake-all` 使产物同版）；
+- version_skips 登记可单独 revert，不影响构建。
+
 ## M442 补 5（2026-11-24）：CI 复绿后清零 known-red 台账（发布链卫生）
 
 > **一句话**：不是代码变更，是台账收尾 —— 补 2 / 补 3 的三条登记已在整轮 CI 实测复绿，
