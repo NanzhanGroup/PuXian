@@ -48,7 +48,10 @@ SEM="$(dirname "${SEM:-/nonexistent}")"
 # 3) 编译 pxvm 侧两件（pxe.c loader + pxvm.c 宿主）
 INC="-I$SEM -I$RT/mbedtls/include -I$RT/third_party/miniz -I$RT/third_party/sqlite3 \
      -I$RT/third_party/zlib -I$RT/third_party/ngtcp2/include -I$RT/third_party/openssl/include -I$RT"
-CF="-O2 -pthread -static -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1"
+# M442-S3：版本号由 tools/px 注入（发布自检 ⑥ 用 `pxvm --version` 判「件是否可执行」）
+PXVM_VER="$("$PX" --version 2>/dev/null | awk '{print $2}')"
+[ -n "$PXVM_VER" ] || PXVM_VER="0.0.0-dev"
+CF="-O2 -pthread -static -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 -DPXVM_VER=\"$PXVM_VER\""
 for src in pxe pxvm; do
     if ! $CC -c $CF $INC -o "$WORK/$src.o" "$RT/$src.c" 2>"$WORK/$src.log"; then
         echo "build_pxvm: 编译 $src.c 失败 —— $(tail -5 "$WORK/$src.log" | tr '\n' ' ')" >&2
@@ -56,9 +59,30 @@ for src in pxe pxvm; do
     fi
 done
 
-# 4) 链接：sem 目录里全部 .o（与静态产物同一份）+ sqlite/mbedtls/zlib/ngtcp2/openssl
+# 4) 指纹对象（M442-S3）：入库件必须能回答「我是哪份源码/哪份 runtime 烘的」
+#   PXRT-<rtkey>  = 链进产物的 runtime 源语义指纹（与 bootstrap 14 件同一口径）
+#   PXVMFP-<sem>  = .pxe 宿主自身源码（pxe.c/pxe.h/pxvm.c）的语义指纹（注释不计入）
+RTKEY="$("$PX" rtkey 2>/dev/null | tail -1)"
+[ -n "$RTKEY" ] || { echo "build_pxvm: 取不到 rt_key（tools/px rtkey 返回空）" >&2; exit 3; }
+VFP=""
+if VFP="$("$PX" norm --join "$RT/pxe.c" "$RT/pxe.h" "$RT/pxvm.c" 2>/dev/null)" && [ -n "$VFP" ]; then
+    :
+else
+    VFP="$(cat "$RT/pxe.c" "$RT/pxe.h" "$RT/pxvm.c" | sha256sum | cut -c1-16)"
+fi
+cat > "$WORK/fp.c" <<EOF
+/* M442-S3：入库 pxvm 的来源指纹（host-only 常量，不进任何语义） */
+const char px_pxvm_rtfp[]  = "PXRT-${RTKEY}";
+const char px_pxvm_srcfp[] = "PXVMFP-${VFP}";
+EOF
+$CC -c -O2 -o "$WORK/fp.o" "$WORK/fp.c" 2>"$WORK/fp.log" || {
+    echo "build_pxvm: 指纹对象编译失败 —— $(tail -3 "$WORK/fp.log" | tr '\n' ' ')" >&2
+    exit 3
+}
+
+# 5) 链接：sem 目录里全部 .o（与静态产物同一份）+ sqlite/mbedtls/zlib/ngtcp2/openssl
 OBJS="$(ls "$SEM"/*.o 2>/dev/null | grep -v '/prog\.o$')"
-$CC -static -pthread -o "$OUT" "$WORK/pxvm.o" "$WORK/pxe.o" $OBJS "$SQLITE_O" \
+$CC -static -pthread -o "$OUT" "$WORK/pxvm.o" "$WORK/pxe.o" "$WORK/fp.o" $OBJS "$SQLITE_O" \
     "$MB/libmbedtls.a" "$MB/libmbedx509.a" "$MB/libmbedcrypto.a" \
     "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
     "$RT/third_party/openssl/lib/libssl.a" "$RT/third_party/openssl/lib/libcrypto.a" \
@@ -67,4 +91,7 @@ $CC -static -pthread -o "$OUT" "$WORK/pxvm.o" "$WORK/pxe.o" $OBJS "$SQLITE_O" \
     exit 3
 }
 [ -x "$OUT" ] || { echo "build_pxvm: 产物不可执行 $OUT" >&2; exit 3; }
-echo "pxvm OK: $OUT （$(stat -c %s "$OUT") B）"
+# 自证：指纹真的链进去了（否则 --check 会判「无内嵌指纹」）
+grep -aq "PXRT-${RTKEY}" "$OUT" 2>/dev/null || { echo "build_pxvm: 产物内缺 PXRT 指纹（链接被丢？）" >&2; exit 3; }
+grep -aq "PXVMFP-${VFP}" "$OUT" 2>/dev/null || { echo "build_pxvm: 产物内缺 PXVMFP 指纹" >&2; exit 3; }
+echo "pxvm OK: $OUT （$(stat -c %s "$OUT") B · PXRT-${RTKEY} · PXVMFP-${VFP}）"

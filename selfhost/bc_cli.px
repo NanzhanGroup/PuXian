@@ -77,12 +77,18 @@ def main():
     # 编译版：args 含 argv[0]（程序路径）；file = 最后参数（对齐 compiler.px）
     var emit_c = false
     var emit_pxe = false
+    var pxe_out = ""
     var ai = 1
     while ai < len(a) - 1:
         if a[ai] == "--emit-c":
             emit_c = true
         if a[ai] == "--emit-pxe":
             emit_pxe = true
+        # M442-S3：--out 指定 .pxe 输出路径（与 compiler.px 同口径，便于两入口对拍）
+        if a[ai] == "--out":
+            if ai + 1 < len(a) - 1:
+                pxe_out = a[ai + 1]
+                ai += 1
         ai += 1
     let f = a[len(a) - 1]
     let base_dir = cg_dirname(f)
@@ -99,7 +105,9 @@ def main():
         # M442-S1：输出 PXE1 二进制（同目录同名 .pxe）→ runtime 侧 loader 加载
         let mp = bc_emit_program(prog)
         mp["name"] = bc_basename(f)
-        let outp = bc_pxe_outpath(f)
+        var outp = pxe_out
+        if outp == "":
+            outp = bc_pxe_outpath(f)
         let wrote = bc_pxe_emit(mp, outp)
         if wrote < 0:
             print_err("PXE-FAIL " + outp)

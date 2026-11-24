@@ -206,6 +206,82 @@ else
     bad "P5 体积未收敛：pxslice.pxe=${pxe_size}B / 静态 ${st_size}B"
 fi
 
+echo "── Q 阶段3：编译器正主发射 + px build --pxe + .pxecache"
+# Q0 形状：compiler.px（自举正主）含两条接线（少一条整条用户路径就断）
+qmiss=""
+grep -q -- '--emit-pxe' "$ROOT/selfhost/compiler.px" || qmiss="$qmiss emit-pxe"
+grep -q -- '--out' "$ROOT/selfhost/compiler.px" || qmiss="$qmiss out"
+[ -z "$qmiss" ] && ok "Q0 compiler.px 含 --emit-pxe / --out 接线" || bad "Q0 compiler.px 缺：$qmiss"
+
+# Q1 入库编译器（bootstrap/pxc_vm）真的支持 --emit-pxe —— 不支持 = 没重烘
+if "$ROOT/bootstrap/pxc_vm" --emit-pxe --out "$TMP/probe.pxe" "$TMP/s/h3.px" >/dev/null 2>&1 \
+   && [ -s "$TMP/probe.pxe" ]; then
+    ok "Q1 bootstrap/pxc_vm 支持 --emit-pxe（$(stat -c %s "$TMP/probe.pxe")B）"
+else
+    bad "Q1 bootstrap/pxc_vm 不支持 --emit-pxe（⇒ ./selfhost/rebake_bin.sh --entries=pxc,pxc_vm 或 --rebake-all）"
+fi
+
+# Q2 两入口产物逐字节一致（bc_cli 与编译器正主走同一 bc_pxe_emit）
+cd "$TMP/s"
+for s in $SAMPLES; do
+    if ! "$ROOT/bootstrap/pxc_vm" --emit-pxe --out "$TMP/c_$s.pxe" "$s.px" >/dev/null 2>&1; then
+        bad "Q2 compiler 发射失败 $s"; continue
+    fi
+    if ! "$BC" --emit-pxe --out "$TMP/b_$s.pxe" "$s.px" >/dev/null 2>&1; then
+        bad "Q2 bc_cli 发射失败 $s"; continue
+    fi
+    if cmp -s "$TMP/c_$s.pxe" "$TMP/b_$s.pxe"; then
+        ok "Q2 两入口产物一致 $s（$(stat -c %s "$TMP/c_$s.pxe")B）"
+    else
+        bad "Q2 两入口产物不一致 $s"
+    fi
+done
+
+# Q3 `px build --pxe` 端到端：产物落 <src>/build/<base>.pxe，pxvm 执行输出 = 静态产物
+if "$PX" build --pxe h3.px > "$TMP/q3.log" 2>&1 && [ -f "$TMP/s/build/h3.pxe" ]; then
+    "$TMP/pxvm" "$TMP/s/build/h3.pxe" > "$TMP/q3.out" 2>&1
+    if cmp -s "$TMP/q3.out" "$TMP/h3.out.static"; then
+        ok "Q3 px build --pxe 端到端（$(stat -c %s "$TMP/s/build/h3.pxe")B · 输出=静态）"
+    else
+        bad "Q3 px build --pxe 产物输出 ≠ 静态产物"
+    fi
+else
+    bad "Q3 px build --pxe 失败：$(tail -2 "$TMP/q3.log" 2>/dev/null | tr '\n' ' ')"
+fi
+
+# Q4 .pxecache 二次命中（判据：verbose 里出现「缓存命中」）
+PX_BUILD_VERBOSE=1 "$PX" build --pxe h3.px > "$TMP/q4.log" 2>&1
+if grep -q '缓存命中' "$TMP/q4.log"; then
+    ok "Q4 .pxecache 二次命中"
+else
+    bad "Q4 .pxecache 未命中：$(tail -2 "$TMP/q4.log" | tr '\n' ' ')"
+fi
+
+# Q5 改源码 ⇒ 缓存必须失效（与 M441 缺陷 924 同族：键要覆盖所有影响产物的输入）
+printf 'def main():\n    print("q5-new")\n    return 0\n' > "$TMP/s/q5.px"
+PX_BUILD_VERBOSE=1 "$PX" build --pxe q5.px > "$TMP/q5.log" 2>&1
+if grep -q '缓存命中' "$TMP/q5.log"; then
+    bad "Q5 改了源码仍命中缓存（键漏了源码）"
+else
+    ok "Q5 改源码 ⇒ 缓存失效（正确）"
+fi
+
+# Q6 `px run *.pxe` 走 pxvm（用户面入口），输出/退出码与静态产物全等
+"$PX" run "$TMP/s/build/h3.pxe" > "$TMP/q6.out" 2>&1; r_q6=$?
+r_static_h3="$(cat "$TMP/h3.rc.static" 2>/dev/null || echo x)"
+if cmp -s "$TMP/q6.out" "$TMP/h3.out.static" && [ "$r_q6" = "$r_static_h3" ]; then
+    ok "Q6 px run *.pxe 走 pxvm（rc=$r_q6）"
+else
+    bad "Q6 px run *.pxe 不等价：[$(head -c 60 "$TMP/q6.out")] rc=$r_q6 vs static rc=$r_static_h3"
+fi
+
+# Q7 pxvm 入库且双指纹与当前源码一致（.pxe 的唯一执行者，不能是旧件）
+if "$ROOT/selfhost/rebake_bin.sh" --check-pxvm > "$TMP/q7.log" 2>&1; then
+    ok "Q7 pxvm 入库 · 双指纹与当前源码一致"
+else
+    bad "Q7 pxvm 来源门红：$(tail -2 "$TMP/q7.log" | tr '\n' ' ')"
+fi
+
 echo "── N 负控（loader 必须拒收 / 判据必须变红）"
 if python3 "$ROOT/selfhost/m442_negctl.py" "$TMP/pxvm" h3.pxe > "$TMP/neg.log" 2>&1; then
     ok "N1 九条定点畸变全被拒收（h3）"
@@ -267,6 +343,58 @@ print("parity(bad)=%d" % rc)
 sys.exit(0 if rc == 1 else 1)
 PY
 if [ $? -eq 0 ]; then ok "N3 parity 有牙（篡改指令后校验和合法仍判红）"; else bad "N3 parity 未判红（判据无效）"; fi
+
+# N10 判据有牙（pxvm 来源门）：篡改 PXVMFP ⇒ --check-pxvm 必红；复原 ⇒ 复绿
+#   前提自证：先证明「文件里真有 PXVMFP 标记且替换真的发生」，否则这条是空跑。
+QV="$ROOT/bootstrap/pxvm"
+if [ -x "$QV" ]; then
+    cp -p "$QV" "$TMP/pxvm.orig"
+    python3 - "$QV" > "$TMP/n10.mut" 2>&1 <<'PY'
+import re, sys
+p = sys.argv[1]
+d = open(p, "rb").read()
+m = re.search(rb"PXVMFP-[0-9a-f]{16}", d)
+if not m:
+    print("E: 无 PXVMFP 标记")
+    sys.exit(3)
+d = d[:m.start()] + b"PXVMFP-0000000000000000" + d[m.end():]
+open(p, "wb").write(d)
+print("mutated at %d" % m.start())
+sys.exit(0)
+PY
+    mutrc=$?
+    if [ "$mutrc" = 0 ]; then
+        if "$ROOT/selfhost/rebake_bin.sh" --check-pxvm > "$TMP/n10.log" 2>&1; then
+            bad "N10 篡改 PXVMFP 后 --check-pxvm 仍绿（判据无牙）"
+        else
+            ok "N10 篡改 PXVMFP ⇒ --check-pxvm 必红（判据有牙）"
+        fi
+    else
+        bad "N10 前提不成立：$(cat "$TMP/n10.mut" | tr '\n' ' ')"
+    fi
+    cp -p "$TMP/pxvm.orig" "$QV"
+    if "$ROOT/selfhost/rebake_bin.sh" --check-pxvm >/dev/null 2>&1; then
+        ok "N10b 复原后 --check-pxvm 复绿（负控未污染）"
+    else
+        bad "N10b 复原失败：bootstrap/pxvm 被污染"
+    fi
+else
+    bad "N10 环境：缺 bootstrap/pxvm，无法构成负控"
+fi
+
+# N11 .pxecache 与静态产物缓存**不串味**（同一源码两条轨）
+#   为什么：两轨共用 BUILD_CACHE，若 key 不分桶，`build --pxe` 可能拿到静态二进制
+if [ -f "$TMP/s/build/h3.pxe" ]; then
+    pxe_magic="$(head -c 4 "$TMP/s/build/h3.pxe")"
+    if [ "$pxe_magic" = "PXE1" ] && [ -f "$TMP/s/build/h3" ] \
+       && [ "$(stat -c %s "$TMP/s/build/h3")" -gt 1000000 ]; then
+        ok "N11 两轨产物不串味（.pxe=PXE1 $(stat -c %s "$TMP/s/build/h3.pxe")B vs 静态 $(stat -c %s "$TMP/s/build/h3")B）"
+    else
+        bad "N11 分桶异常（magic=[$pxe_magic] 或缺静态产物）"
+    fi
+else
+    bad "N11 缺 .pxe 产物，无法验证分桶"
+fi
 
 echo
 echo "== m442_pxe: PASS=$PASS FAIL=$FAIL =="

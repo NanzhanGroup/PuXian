@@ -1,4 +1,81 @@
-## M442（阶段 2）：PXE1 **ver2** 格式定稿 + 正式 loader（V1–V6）+ 宿主 pxvm
+## M442（阶段 3）：.pxe 发射并入编译器正主 + `px build --pxe` + 宿主入库
+
+> **一句话**：`.pxe` 从「姊妹壳 bc_cli 能发射」变成**用户一条命令就能用**——
+> `px build --pxe app.px` 产出 `<src>/build/app.pxe`（331B～5.4KB），`px run app.pxe` 直接跑；
+> 编译器正主 `compiler.px` 与 `bc_cli` 两入口产物**逐字节一致**，宿主 `bootstrap/pxvm`
+> 入库并带双指纹（PXRT/PXVMFP），来源可判定。
+
+### 交付物
+
+```
+selfhost/compiler.px        + import bc_pxe.px · --emit-pxe · --out <path>    （自举正主接管发射）
+selfhost/bc_cli.px          + --out（保持两入口同口径，便于逐字节对拍）
+tools/px                    + cmd_build_pxe（--pxe 轻轨）· cmd_run_pxe（px run *.pxe）·
+                              resolve_pxvm_bin · usage 两处
+selfhost/build_pxvm.sh      + 版本注入 -DPXVM_VER · 双指纹对象（PXRT + PXVMFP）· 链后自证
+runtime/pxvm.c              + --version（发布自检 ⑥ 判「件是否可执行」）
+selfhost/rebake_bin.sh      + pxvm_fp/pxvm_gate · --check-pxvm 单件模式 · 步骤 5/5 构建 pxvm
+tools/make_release.sh       ⑥ 工具链件清单 + pxvm
+selfhost/check_m442_pxe.sh  + Q0–Q7 正向 · N10/N10b/N11 负控（判据 25 → 41 条）
+bootstrap/pxc · pxc_vm · pxvm  重烘（PYSRC-70789132aef6a112 / PXRT-945d49d1b0a388b3 /
+                              PXVMFP-634b8f18b99a3e28）
+```
+
+### 为什么需要 `--out`（不是顺手加的）
+
+`.pxe` 的默认落点是「输入同目录同名 .pxe」（bc_cli 的既有口径）。但 `px build` 的产物
+一律在 `<src>/build/`，若让编译器直接写源码目录就**污染源码树**（且源码目录常常只读）。
+两条路：① 发射到临时目录再 mv —— import 解析按 `dirname(主脚本)`，复制会断依赖；
+② 编译器支持 `--out`。选 ②：改动 6 行、两入口同口径、不引入「先复制再编译」的隐式契约。
+
+### `.pxecache` 为什么必须与静态产物缓存**分桶**
+
+两轨共用 `.buildcache`，key 里若不带轨位，同一源码的 `build` 与 `build --pxe` 会互相命中
+⇒ 用户拿到「3.15MB 静态二进制」当 .pxe，或反之。实现：`build_cache_key` 的 engine 传
+`vm-pxe`；负控 N11 直接检查产物 magic 是 `PXE1` 且静态产物仍在（3,152,496B vs 607B）。
+
+### 实测（本机，逐个真跑）
+
+```
+样例                静态产物      .pxe        pxvm 输出 = 静态输出
+h3（if/else）       3,152,496B    607B        ✔ pos,neg
+t2（float/bool/while）            910B        ✔ 45 2.25 true null
+st（struct）                      516B        ✔ 3,4
+cl（闭包 nup=1）                  820B        ✔ 1 2 3
+nul（内嵌 NUL）                   457B        ✔ 3 / a␀b
+pxslice（真实工具 529 指令）      5,417B      ✔（P1 parity 逐字段一致）
+px build --pxe 冷   0.25s（hello）/ 0.89s（pxslice）· 二次命中 <0.1s
+```
+
+### 重烘范围（实测，不是估算）
+
+改动 `compiler.px` 只让 **2 件**变红（pxc / pxc_vm）——`entry_fp` 用 import 闭包，
+其余 12 件不含 compiler.px ⇒ 不需重烘；重烘后与主树**逐字节相同**（幂等，实测 12/12 SAME）。
+`rt_key` 不变 ⇒ `.rtcache` 不冷。第 15 件 `pxvm` 由 C 源构建，单独走 `--check-pxvm`。
+
+### 判据与负控（m442_pxe：41 条，47s）
+
+```
+Q0 compiler.px 含两条接线 · Q1 bootstrap/pxc_vm 真支持 --emit-pxe（不支持=没重烘）
+Q2 两入口产物逐字节一致（6 样例）· Q3 px build --pxe 端到端输出=静态
+Q4 .pxecache 二次命中 · Q5 改源码必失效 · Q6 px run *.pxe 走 pxvm 且 rc 一致
+Q7 pxvm 入库且双指纹与当前源码一致
+N10  篡改 PXVMFP ⇒ --check-pxvm 必红（前提自证：断言标记真存在且替换真发生）
+N10b 复原后必复绿（负控不许污染）
+N11  两轨产物不串味（.pxe magic=PXE1 vs 静态 3.15MB）
+```
+
+### 未做 / 边界
+
+```
+· --no-tls（M441-2）仍未做 —— 收益上限 10.9%，动 runtime 要重烘，单独立项
+· pxvm 暂只 x86_64（build_pxvm.sh 明确 exit 3）；交叉链接留到后续
+· .pxe 不含 import 的依赖模块（每个 .pxe 是自包含的单模块镜像）；
+  多模块共享仍在 M444 的范围内
+· px build --pxe 会忽略 --target/--full/--no-xxx（runtime 裁剪与 .pxe 无关），不报警告
+```
+
+
 
 > **一句话**：.pxe 从「原型能加载」变成「格式契约 + 全量校验 + 与静态产物逐字节等价」——
 > 6 个样例（含闭包、结构体、内嵌 NUL、真实工具 pxslice 529 条指令）在三轨（解释 / 静态 VM-C /

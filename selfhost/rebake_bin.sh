@@ -68,6 +68,9 @@ for a in "$@"; do
         --check-vm)   MODE=check-vm ;;
         --rebake-all) MODE=rebake-all ;;   # M114-S2（Issue 55）：重烘表内全部入库件
         --check-all)  MODE=check-all ;;    # M114-S2（Issue 55）：全件指纹门（O(1) 逐件断言来源）
+        --check-pxvm) MODE=check-pxvm ;;   # M442-S3：单件门（.pxe 宿主 bootstrap/pxvm）
+                                           #   为什么要单件：m442_pxe 门要拿它做正/负控，
+                                           #   跑 --check-all 要算 14 件闭包（~40s），太重。
         --entries=*)  MODE=entry; ENTRY_ONLY="${a#--entries=}" ;;
                                            # M114 尾：**只重烘指定件**（逗号分隔），
                                            # 不动其余件 —— 改单个工具（如 pxlint）时不必
@@ -248,6 +251,56 @@ rtfp_gate() {                         # $1=二进制 $2=标签 → 0 一致 / 1 
         return 1
     fi
     echo "    ✅ $2：内嵌 PXRT-${got} == 当前源码 rt_key（runtime 缓存对齐）"
+    return 0
+}
+
+# ---- M442-S3：.pxe 宿主 bootstrap/pxvm 的来源门 ----
+# 为什么需要：pxvm 是 .pxe 的唯一执行者（用户跑 `px run x.pxe` 走它）。
+#   它链的是 .rtcache/<rtkey> 里**全量档**的 runtime .o + runtime/pxe.c/pxvm.c，
+#   所以「用户拿到的是不是当前源码烘的」要两个指纹同时成立：
+#     PXRT-<rtkey>   = 链进去的 runtime 源语义指纹（与 14 件同一口径）
+#     PXVMFP-<sem>   = 宿主自身源码（pxe.c/pxe.h/pxvm.c）的语义指纹
+#   缺 PXRT/PXVMFP 一律判红（不设「取不到就跳过」的暗门）。
+pxvm_fp() {
+    local sem
+    if sem="$("$ROOT/tools/px" norm --join "$RT/pxe.c" "$RT/pxe.h" "$RT/pxvm.c" 2>/dev/null)" \
+       && [ -n "$sem" ]; then
+        printf '%s' "$sem"; return 0
+    fi
+    cat "$RT/pxe.c" "$RT/pxe.h" "$RT/pxvm.c" 2>/dev/null | sha256sum | cut -c1-16
+}
+pxvm_gate() {
+    local out="$ROOT/bootstrap/pxvm"
+    if [ ! -x "$out" ]; then
+        echo "    ❌ pxvm：缺件或不可执行（.pxe 宿主未入库 ⇒ px run *.pxe 不可用）"
+        return 1
+    fi
+    local want_rt want_fp got_rt got_fp
+    want_rt="$(rt_key_of_cache)"
+    want_fp="$(pxvm_fp)"
+    if [ -z "$want_rt" ]; then
+        echo "    ❌ pxvm：取不到当前 rt_key（tools/px rtkey 返回空）⇒ 判红"
+        return 1
+    fi
+    if [ -z "$want_fp" ]; then
+        echo "    ❌ pxvm：算不出宿主源码指纹（tools/px norm 与 sha256 都失败）⇒ 判红"
+        return 1
+    fi
+    got_rt="$(grep -ao "PXRT-[0-9a-f]\{16\}" "$out" 2>/dev/null | head -1 | cut -d- -f2)"
+    got_fp="$(grep -ao "PXVMFP-[0-9a-f]\{16\}" "$out" 2>/dev/null | head -1 | cut -d- -f2)"
+    if [ -z "$got_rt" ] || [ -z "$got_fp" ]; then
+        echo "    ❌ pxvm：缺内嵌指纹（PXRT=${got_rt:-无} PXVMFP=${got_fp:-无}）⇒ 无法判定来源"
+        return 1
+    fi
+    if [ "$got_rt" != "$want_rt" ]; then
+        echo "    ❌ pxvm：内嵌 PXRT-$got_rt ≠ 当前 rt_key $want_rt（链错 runtime 缓存）"
+        return 1
+    fi
+    if [ "$got_fp" != "$want_fp" ]; then
+        echo "    ❌ pxvm：内嵌 PXVMFP-$got_fp ≠ 当前宿主源码 $want_fp（pxe.c/pxvm.c 改了未重烘）"
+        return 1
+    fi
+    echo "    ✅ pxvm：PXRT-$got_rt · PXVMFP-$got_fp"
     return 0
 }
 
@@ -624,6 +677,10 @@ if [ "$MODE" = "check-all" ]; then
         fi
     done
     echo "── 小计：$((n-bad))/$n 件与当前源码一致（其中无指纹 $miss 件 · runtime 链错 $rtbad 件）"
+    # M442-S3：第 15 件 —— .pxe 宿主（C 源构建，不入 ENTRIES 的 .px 表）
+    echo "── [--check-all] .pxe 宿主（bootstrap/pxvm）"
+    n=$((n+1))
+    if pxvm_gate; then :; else bad=$((bad+1)); fi
     if [ "$bad" -gt 0 ]; then
         echo "❌ 有 $bad 件不是当前源码烘出的（用户拿到的是旧引擎）"
         echo "   ⇒ 全件重烘：./selfhost/rebake_bin.sh --rebake-all"
@@ -631,6 +688,14 @@ if [ "$MODE" = "check-all" ]; then
     fi
     echo "✅ 全件源码链一致"
     exit 0
+fi
+
+if [ "$MODE" = "check-pxvm" ]; then
+    echo "── [--check-pxvm] .pxe 宿主来源门（bootstrap/pxvm）"
+    check_neg_residue || exit 3
+    if pxvm_gate; then echo "✅ .pxe 宿主与当前源码一致"; exit 0; fi
+    echo "❌ .pxe 宿主不是当前源码烘出的（⇒ ./selfhost/rebake_bin.sh --rebake-all）"
+    exit 1
 fi
 
 # ============================================================
@@ -720,6 +785,11 @@ done
 file "$PXC" "$PXVM" | sed 's/^/    /'
 echo "    pxc    sha256 $(sha256sum "$PXC" | cut -c1-16)"
 echo "    pxc_vm sha256 $(sha256sum "$PXVM" | cut -c1-16)"
+echo "── 步骤 5/5：构建 .pxe 宿主 bootstrap/pxvm（链同一份 runtime .o + 双指纹）"
+"$ROOT/selfhost/build_pxvm.sh" "$ROOT/bootstrap/pxvm" > /tmp/rebake_pxvm.log 2>&1 || {
+    echo "❌ pxvm 构建失败" >&2; tail -5 /tmp/rebake_pxvm.log >&2; exit 1; }
+tail -1 /tmp/rebake_pxvm.log | sed 's/^/    /'
+
 echo "✅ 重烘完成 —— 接下来必须跑：./selfhost/rebake_bin.sh --check && ./selfhost/rebake_bin.sh --check-vm"
 echo "   以及：./selfhost/engine_parity.sh && ./selfhost/diffcheck.sh --errors"
 

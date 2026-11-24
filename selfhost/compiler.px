@@ -21,6 +21,10 @@
 # ============================================================
 import "codegen.px"
 import "bc_emit.px"
+# M442-S3：.pxe 发射并入编译器正主（用户面 `px build --pxe` 只依赖 bootstrap/pxc_vm）
+#   注意：bc_pxe.px 只在**编译执行**下可用（write_bytes/预分配 + mmap 就地写），
+#   解释轨慢 750 倍 —— 但 compiler 本身永远以编译产物形态运行，故无影响。
+import "bc_pxe.px"
 # ---------- 全局状态（主文件声明；import 不注册模块顶层 let）----------
 var g_src = ""
 var g_len = 0
@@ -86,6 +90,11 @@ def bc_basename(path):
     if len(path) > 3 and path[len(path) - 3:len(path)] == ".px":
         return path[0:len(path) - 3]
     return path
+# M442-S3：输入 .px → 同名 .pxe 输出路径（与 bc_cli.px 同口径）
+def bc_pxe_outpath(path):
+    if len(path) > 3 and path[len(path) - 3:len(path)] == ".px":
+        return path[0:len(path) - 3] + ".pxe"
+    return path + ".pxe"
 # ---------- 入口 ----------
 def main():
     let a = args()
@@ -95,14 +104,25 @@ def main():
         return 0
     # M89-S3-C2：bc 子命令识别 —— 参数（非末位文件）含 "bc"/"--emit-c" → BCModule 轨
     #   （--emit-c 单独出现也进 BC 轨 emit-c，对齐 bc_cli 用法）。默认 = C 文本（旧轨）。
+    # M442-S3：`--emit-pxe` 同样进 BC 轨，输出 PXE1 二进制（同目录同名 .pxe）。
     var bc_mode = false
     var emit_c = false
+    var emit_pxe = false
+    var pxe_out = ""
     var ai = 1
     while ai < len(a) - 1:
-        if a[ai] == "bc" or a[ai] == "--emit-c":
+        if a[ai] == "bc" or a[ai] == "--emit-c" or a[ai] == "--emit-pxe":
             bc_mode = true
         if a[ai] == "--emit-c":
             emit_c = true
+        if a[ai] == "--emit-pxe":
+            emit_pxe = true
+        # M442-S3：--out 指定 .pxe 输出路径（默认 = 输入同目录同名 .pxe）。
+        #   px build --pxe 用它把产物落到 <src>/build/，不污染源码目录。
+        if a[ai] == "--out":
+            if ai + 1 < len(a) - 1:
+                pxe_out = a[ai + 1]
+                ai += 1
         ai += 1
     # 支持：compiler.px <file>  /  compiler.px build <file>  /  compiler.px bc <file>
     let f = a[len(a) - 1]
@@ -115,6 +135,20 @@ def main():
     if bc_mode:
         if emit_c:
             print(bc_emit_c_program(prog))
+            return 0
+        if emit_pxe:
+            # M442-S3：PXE1 二进制（同目录同名 .pxe）—— 与 bc_cli 同口径，
+            #   判据 m442_pxe 门做「bc_cli 与 compiler 两入口产物逐字节一致」对拍。
+            let mp = bc_emit_program(prog)
+            mp["name"] = bc_basename(f)
+            var outp = pxe_out
+            if outp == "":
+                outp = bc_pxe_outpath(f)
+            let wrote = bc_pxe_emit(mp, outp)
+            if wrote < 0:
+                print_err("PXE-FAIL " + outp)
+                return 3
+            print("PXE " + outp + " " + str(wrote))
             return 0
         let m = bc_emit_program(prog)
         m["name"] = bc_basename(f)

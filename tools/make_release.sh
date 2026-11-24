@@ -338,7 +338,7 @@ fi
 TLS=""
 # 注意：⑤ 之后 cwd 已切到 /tmp/pxuser，此处必须用绝对路径（$CHK/$NAME）
 BCHK="$CHK/$NAME/bootstrap"
-for t in pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck; do
+for t in pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck pxvm; do
     if [ -x "$BCHK/$t" ] && "$BCHK/$t" --version >/dev/null 2>&1; then
         TLS="$TLS $t"
     else

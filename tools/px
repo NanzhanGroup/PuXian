@@ -320,6 +320,13 @@ px $RELEASE_VER
                                                  --gc-sections  opt-in 链接期回收（M441）：编译 -ffunction-sections
                                                                   -fdata-sections + 链接 -Wl,--gc-sections。
                                                                   默认不启用，默认产物行为不变
+                                                 --pxe          M442-S3 · 轻轨：只发射 PXE1 字节码
+                                                                  （产物 <src>/build/<base>.pxe，实测
+                                                                  hello 331B / 真实工具 pxslice 5.4KB，
+                                                                  静态产物同程序 3.15MB），由宿主 pxvm
+                                                                  执行 —— `px run x.pxe` 直接跑。
+                                                                  与静态轨共用同一编译前端；缓存
+                                                                  engine=vm-pxe 分桶。PX_BUILD_NOCACHE=1 绕过
                                                  --lto           LTO 构建档（M104-S5）：全链 -flto
                                                                   （runtime 预编译 .o + 产物 C + 链接）。
                                                                   收益负载相关（M104 实测 C 轨紧循环
@@ -353,6 +360,9 @@ px $RELEASE_VER
                                              ⚠️ 常跑脚本更快的做法：`px build x.px` 后**直跑
                                              产物**（**8 ms/次**，比 --fast 还快 4–5x，M440 实测）
   px run --interp <file.px> [args...]        显式强制解释轨（同默认；与 --fast 成对，供脚本自述）
+  px run <file.pxe> [args...]                M442-S3：跑编译后的 .pxe（交给宿主 pxvm 执行，
+                                             不走解释器/编译）。pxvm 解析顺序：PXVM_BIN 环境变量 >
+                                             <pxhome>/bootstrap/pxvm > /usr/share/puxian/bin/pxvm
   px --deps <file.px> [--json]               依赖闭包 + 缓存 key 的**只读**出口（M436-2）
                                              key 与 px run --fast 的命中判据同一真源；
                                              给构建调度算精确缓存 key（改一个脚本不必
@@ -764,8 +774,109 @@ target_defaults() {
 }
 
 # build：AST → C → gcc 静态二进制（对齐 Rust run_build）
-cmd_build() {
-    # M91：默认引擎 = vm（VM 字节码轨）。优先级：显式 flag(--c/--vm/--bc，后写胜)
+# ── M442-S3：`px build --pxe` —— 轻轨（只发射 PXE1 字节码，不链 runtime）────────
+# 为什么单开一条轨：静态产物 3.15MB 里 ~3MB 是 runtime；.pxe 只带程序自己的字节码
+#   （实测 hello 331B / 带 if 486B / 结构体 515B / 闭包 743B / pxslice 5.4KB），
+#   runtime 由宿主 pxvm 提供 ⇒ 「一份 runtime 加载任意多个模块」（M444 的方向）。
+# 口径：
+#   · 编译前端与静态轨**同一件**（pxc_vm），只把 --emit-c 换成 --emit-pxe；
+#   · 产物落 <src>/build/<base>.pxe，不污染源码目录（编译器 --out 直接写目标路径）；
+#   · 缓存 key 与静态产物缓存同源但 **engine=vm-pxe 分桶**（否则两种产物串味）；
+#   · 命中前校验 sha16；写盘先 tmp 再 mv。
+cmd_build_pxe() { # $1=file.px $2=cc
+    local file="$1" cc="${2:-gcc}"
+    local parent base build_dir out
+    parent="$(cd "$(dirname "$file")" 2>/dev/null && pwd)" \
+        || { echo "错误: 无法进入目录 $(dirname "$file")" >&2; return 1; }
+    base="$(basename "$file")"
+    case "$base" in *.px) base="${base%.px}" ;; esac
+    build_dir="$parent/build"
+    mkdir -p "$build_dir" 2>/dev/null
+    out="$build_dir/$base.pxe"
+
+    local cmp_bin cmp_sub
+    IFS='|' read -r cmp_bin cmp_sub <<< "$(resolve_cmp_bin vm)"
+    require_runnable "$cmp_bin" "编译轨（--pxe）" || return 1
+
+    # ---- .pxecache：与静态产物缓存同源分桶 ----
+    local bkey="" cdir="" hit=0
+    if [ -z "${PX_BUILD_NOCACHE:-}" ]; then
+        bkey="$(build_cache_key "$(readlink -f "$file" 2>/dev/null || echo "$file")" \
+                               "$base" "vm-pxe" 0 "$cc" 0 "" "" 0 0)"
+        if [ -n "$bkey" ]; then
+            cdir="$BUILD_CACHE/$bkey"
+            if [ -f "$cdir/prog.pxe" ] && [ -f "$cdir/prog.pxe.sha16" ] \
+               && [ "$(sha256sum "$cdir/prog.pxe" 2>/dev/null | cut -c1-16)" = "$(cat "$cdir/prog.pxe.sha16" 2>/dev/null)" ]; then
+                if cp -f "$cdir/prog.pxe" "$out.$$" 2>/dev/null \
+                   && chmod 644 "$out.$$" 2>/dev/null \
+                   && mv -f "$out.$$" "$out" 2>/dev/null; then
+                    hit=1
+                else
+                    rm -f "$out.$$" 2>/dev/null
+                fi
+            fi
+        fi
+    fi
+    if [ "$hit" = 1 ]; then
+        if [ "${PX_BUILD_VERBOSE:-0}" = "1" ]; then
+            echo "[px build --pxe] 缓存命中 key=$bkey（跳过 emit-pxe）" >&2
+        fi
+        echo "编译成功(PXE): $out （$(stat -c %s "$out" 2>/dev/null || echo 0) 字节）"
+        return 0
+    fi
+
+    # ---- 发射（tmp → mv，读者不会看到半个文件）----
+    local tmp="$out.tmp.$$" terr="$out.tmp.$$.err"
+    if ! "$cmp_bin" --emit-pxe --out "$tmp" "$file" >/dev/null 2>"$terr"; then
+        echo "错误: .pxe 发射失败（$file）" >&2
+        [ -s "$terr" ] && head -10 "$terr" >&2
+        echo "  若提示未知子命令 --emit-pxe：当前编译器不带 .pxe 发射能力" >&2
+        echo "  ⇒ 仓库内：./selfhost/rebake_bin.sh --entries=pxc,pxc_vm  重新烘出" >&2
+        rm -f "$tmp" "$terr"
+        return 1
+    fi
+    if [ -s "$terr" ]; then
+        echo "警告: 编译期诊断（$file）:" >&2
+        head -10 "$terr" >&2
+    fi
+    rm -f "$terr"
+    [ -s "$tmp" ] || { echo "错误: 编译器产出了空文件（$file）" >&2; rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$out" || { rm -f "$tmp"; return 1; }
+
+    # ---- 写缓存 ----
+    if [ -n "$cdir" ]; then
+        mkdir -p "$cdir" 2>/dev/null
+        if cp -f "$out" "$cdir/prog.pxe.$$" 2>/dev/null \
+           && mv -f "$cdir/prog.pxe.$$" "$cdir/prog.pxe" 2>/dev/null; then
+            sha256sum "$cdir/prog.pxe" 2>/dev/null | cut -c1-16 > "$cdir/prog.pxe.sha16"
+        else
+            rm -f "$cdir/prog.pxe.$$" 2>/dev/null
+        fi
+    fi
+    echo "编译成功(PXE): $out （$(stat -c %s "$out" 2>/dev/null || echo 0) 字节）"
+    return 0
+}
+
+# M442-S3：.pxe 宿主解析（运行 .pxe 必需）。顺序：环境变量 > 仓库 bootstrap > 安装目录
+resolve_pxvm_bin() {
+    local c
+    for c in "${PXVM_BIN:-}" "$PXC_HOME/bootstrap/pxvm" "$PXC_HOME/bin/pxvm" \
+             "/usr/share/puxian/bin/pxvm" "/usr/share/puxian/bootstrap/pxvm"; do
+        [ -n "$c" ] && [ -x "$c" ] && { echo "$c"; return 0; }
+    done
+    echo "错误: 找不到 pxvm（运行 .pxe 的宿主程序）" >&2
+    echo "  仓库内构建：./selfhost/build_pxvm.sh \$PXC_HOME/bootstrap/pxvm" >&2
+    echo "  rpm 安装包：/usr/share/puxian/bin/pxvm（v0.2.443 起随包分发）" >&2
+    return 1
+}
+cmd_run_pxe() { # $1=.pxe [程序参数…]
+    local pf="$1"; shift 2>/dev/null || true
+    local vm
+    vm="$(resolve_pxvm_bin)" || return 2
+    exec "$vm" "$pf" "$@"
+}
+
+cmd_build() {    # M91：默认引擎 = vm（VM 字节码轨）。优先级：显式 flag(--c/--vm/--bc，后写胜)
     #   > PX_BUILD_ENGINE env(c|vm) > 默认 vm。--c = C 轨逃生舱（fn_* 文本轨）。
     # M168：宿主编译器可用 PX_CC 覆盖（el7 的 devtoolset 场景：PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc）
     local no_quic=0 cc="${PX_CC:-gcc}" mbedtls_lib="" sqlite_obj="" zlib_lib="" target="" full=0
@@ -779,7 +890,7 @@ cmd_build() {
         *) echo "警告: 未知 PX_BUILD_ENGINE=$engine（取 c|vm，退默认 vm）" >&2; engine=vm ;;
     esac
     local mods="" cuts=""
-    local cc_set=0 no_quic_set=0 print_plan=0 gcs=0
+    local cc_set=0 no_quic_set=0 print_plan=0 gcs=0 pxe=0
     [ "${PX_BUILD_PRINT_PLAN:-0}" = "1" ] && print_plan=1
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -808,6 +919,10 @@ cmd_build() {
             # M441：--gc-sections（**opt-in，默认行为不变**）—— 编译期 -ffunction-sections
             #   -fdata-sections，链接期 -Wl,--gc-sections。口径同 --prune：不默认、不动默认产物。
             --gc-sections) gcs=1; shift ;;
+            # M442-S3：`px build --pxe` —— 轻轨：只发射 PXE1 字节码，**不链 runtime**。
+            #   产物 <src>/build/<base>.pxe（几百字节～几 KB），由宿主 pxvm 执行。
+            #   与静态轨共用同一编译前端（pxc_vm），只把 --emit-c 换成 --emit-pxe。
+            --pxe) pxe=1; shift ;;
             --cc) cc="$2"; cc_set=1; shift 2 ;;
             --target|-t) target="$2"; shift 2 ;;
             --mbedtls-lib) mbedtls_lib="$2"; shift 2 ;;
@@ -822,6 +937,11 @@ cmd_build() {
     local file="${1:-}"
     [ -n "$file" ] || { echo "用法: px build [选项] <file.px>" >&2; exit 1; }
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
+    # M442-S3：--pxe 轻轨在此分叉 —— 后续 --target/静态库/引用集裁剪全都与它无关
+    if [ "$pxe" = 1 ]; then
+        cmd_build_pxe "$file" "$cc"
+        return $?
+    fi
     # M71-S2：--target 高层折叠（显式 flag 优先于 target 默认；缺省 x86_64 语义 = 现状）
     if [ -n "$target" ]; then
         local t_out t_cc="" t_mb="" t_so="" t_zl="" t_nq=""
@@ -1888,6 +2008,10 @@ cmd_run() {
         return 2
     fi
     [ "$fast" = 1 ] && { cmd_run_fast "$file" "$@"; return $?; }
+    # M442-S3：`.pxe` 不走解释器 —— 它是编译后的字节码，交给宿主 pxvm 直接执行。
+    case "$file" in
+        *.pxe) cmd_run_pxe "$file" "$@"; return $? ;;
+    esac
     # pxi 约定：**最后一个参数**才是脚本（selfhost/interp.px：`let f = a[len(a) - 1]`），
     # 前置参数按数据文件透传（当前 Mini 子集解释器仅支持单文件）。
     # M106-S4 修正：$file 必须放**末尾**。旧版放首位 → `px run prog.px data.txt`

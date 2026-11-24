@@ -7,6 +7,7 @@
 // 用法：
 //   pxvm <module.pxe> [程序参数...]     跑模块（退出码语义同静态产物）
 //   pxvm --info <module.pxe>            只打印模块摘要（不执行）
+//   pxvm --version                      版本（构建期由 build_pxvm.sh 注入 PXVM_VER）
 // 退出码：程序自身的退出码；加载失败返回 PXE_* （2..8），用法错误 64。
 // ============================================================
 #include <stdio.h>
@@ -17,16 +18,26 @@
 #include "runtime.h"
 #include "vm.h"
 
+#ifndef PXVM_VER
+#define PXVM_VER "0.0.0-dev"
+#endif
+
 static int usage(void) {
     fprintf(stderr,
             "用法: pxvm <module.pxe> [程序参数...]\n"
             "      pxvm --info <module.pxe>\n"
+            "      pxvm --version\n"
             "退出码: 程序退出码 | 加载失败 = 2 版本 / 3 布局 / 4 指令 / 5 字符串 / 6 校验和 / 7 IO / 8 内存\n");
     return 64;
 }
 
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
+    // 约定（M442-S3）：所有入库件都要能回答 --version，发布自检 ⑥ 靠它判断「件是否可执行」
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+        printf("pxvm %s (普贤 PuXian · .pxe 宿主)\n", PXVM_VER);
+        return 0;
+    }
 
     int ai = 1;
     int info = 0;
