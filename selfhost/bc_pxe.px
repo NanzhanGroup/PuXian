@@ -6,18 +6,23 @@
 #   输入是 bc_emit_program(prog) 返回的 BCModule dict（编译器终态），
 #   输出是 PXE1 段式二进制（见 docs/archive 与 /data/autodrive/M442.md）。
 #
-# 格式（PXE1，小端，与 runtime 侧 loader 一一对应）：
-#   HEADER 64B : 0..3 magic "PXE1" · 4..5 ver(u16)=1 · 6..7 flags(u16)
+# 格式（PXE1 **ver 2**，小端，与 runtime/pxe.c 一一对应）：
+#   HEADER 96B : 0..3 magic "PXE1" · 4..5 ver(u16)=2 · 6..7 flags(u16)
 #                8 nK u32 · 12 nN u32 · 16 nG u32 · 20 nfuncs u32
 #                24 top_idx u32(0xFFFFFFFF=-1) · 28 nstructs u32 · 32 ninst u32
-#                36 modname_off u32 · 40 slen u32 · 44 total u32
-#                48 reserved u32 · 52 crc32 u32 · 56..63 reserved
-#   K 段 nK*24  : [0]kind u8 · [4..8)str_off u32 · [8..16)i64 · [16..24)float 位模式
+#                36 modname_off u32 · 40 slen u32 · 44 total u32 · 48..95 reserved(0)
+#   K 段 nK*24  : [0]kind u8 · [4..8)str_off u32 · [8..16)i64（str 时=真字节长，
+#                 M155 口径：内嵌 NUL 的字符串常量靠它定长）· [16..24)float 位模式
 #   N 段 nN*4   : str_off u32 ×nN
 #   G 段 nG*4   : str_off u32 ×nG
 #   F 段 nfuncs*32 : name_off · arity · ndefault · nslots · bcoff · nbc · nup · 0
+#   FU 段 nup_total*4 : 闭包捕获名 str_off（函数主序展平）
+#   T  段 nstructs*12 : name_off · nfields · fbase（TF 段基址）
+#   TF 段 nf_total*4  : 字段名 str_off（struct 主序展平）
 #   C 段 ninst*8 : op u8 · fl u8 · a u16 · b u16 · c u16
 #   S 段 slen   : 字符串池（逐个 NUL 结尾，线性去重）
+#   TRAILER 40B : crc32(payload) u32 · sha256(payload) 32B · reserved 4B
+#                 payload = [0, total-40) ⇒ 两个校验和覆盖同一区间，互不包含（无循环定义）
 #
 # ★ 写盘通道（M442 实测选型，见 /data/autodrive/M442.md §4）：
 #   bytes_set 是 COW（2 万次 10.9s，O(n^2)）· bytes(list) 不是元素通道（转 repr）
@@ -249,16 +254,18 @@ def pxe_crc32_of(view, start, end, crc_in):
         crc = pxe_mask(v ^ c, 32)
         i += 1
     return crc
-# ---------- 主入口：BCModule → PXE1 落盘，返回写入字节数（失败 -1） ----------
+# ---------- 主入口：BCModule → PXE1 ver2 落盘，返回写入字节数（失败 -1） ----------
 def bc_pxe_emit(m, path):
     let K = m["k_pool"]
     let G = m["globals"]
     let FS = m["funcs"]
+    let SD = m["structs"]
     let nK = len(K)
     let nN = len(m["n_pool"])
     let nG = len(G)
     let nfuncs = len(FS)
-    # ---- pass A：字符串池 + 指令总数 ----
+    let nstructs = len(SD)
+    # ---- pass A：字符串池（段内所有名字入池）+ 指令总数 + 闭包/字段展平 ----
     var S = pxe_sp_new()
     let modname = pxe_sp_add(S, m["name"])
     var noff = []
@@ -274,7 +281,9 @@ def bc_pxe_emit(m, path):
     var fname = []
     var foff = []
     var fnbc = []
+    var fupbase = []
     var ninst = 0
+    var nup_total = 0
     i = 0
     while i < nfuncs:
         let f = FS[i]
@@ -282,29 +291,68 @@ def bc_pxe_emit(m, path):
         foff.append(ninst)
         fnbc.append(len(f["bc"]))
         ninst = ninst + len(f["bc"])
+        fupbase.append(nup_total)
+        nup_total = nup_total + len(f["upnames"])
+        i = i + 1
+    # 闭包捕获名：函数主序展平（与 FU 段顺序严格同源）
+    var fupoff = []
+    i = 0
+    while i < nfuncs:
+        let f = FS[i]
         var u = 0
         while u < len(f["upnames"]):
-            pxe_sp_add(S, f["upnames"][u])
+            fupoff.append(pxe_sp_add(S, f["upnames"][u]))
             u = u + 1
+        i = i + 1
+    # 结构体：类型名 + 字段名（fnames），展平基址 sfbase
+    var sname = []
+    var snf = []
+    var sfbase = []
+    var nf_total = 0
+    i = 0
+    while i < nstructs:
+        let sd = SD[i]
+        sname.append(pxe_sp_add(S, sd["name"]))
+        let nf = len(sd["fnames"])
+        snf.append(nf)
+        sfbase.append(nf_total)
+        var k2 = 0
+        while k2 < nf:
+            pxe_sp_add(S, sd["fnames"][k2])
+            nf_total = nf_total + 1
+            k2 = k2 + 1
+        i = i + 1
+    var sfoff = []
+    i = 0
+    while i < nstructs:
+        let sd = SD[i]
+        var k2 = 0
+        while k2 < len(sd["fnames"]):
+            sfoff.append(pxe_sp_add(S, sd["fnames"][k2]))
+            k2 = k2 + 1
         i = i + 1
     var ksoff = []
     i = 0
     while i < nK:
-        let k = K[i]
-        if k["kind"] == "str":
-            ksoff.append(pxe_sp_add(S, k["s"]))
+        let kk = K[i]
+        if kk["kind"] == "str":
+            ksoff.append(pxe_sp_add(S, kk["s"]))
         else:
             ksoff.append(4294967295)
         i = i + 1
-    # ---- pass B：段偏移 ----
+    # ---- pass B：段偏移（全部由计数推导；末尾 40B TRAILER）----
     let slen = len(S["buf"])
-    let o_K = 64
+    let o_K = 96
     let o_N = o_K + nK * 24
     let o_G = o_N + nN * 4
     let o_F = o_G + nG * 4
-    let o_C = o_F + nfuncs * 32
+    let o_FU = o_F + nfuncs * 32
+    let o_T = o_FU + nup_total * 4
+    let o_TF = o_T + nstructs * 12
+    let o_C = o_TF + nf_total * 4
     let o_S = o_C + ninst * 8
-    let total = o_S + slen
+    let payload = o_S + slen
+    let total = payload + 40
     if total > 67108864:
         print_err("bc_pxe: .pxe 超过 64MiB 上限（" + str(total) + "）")
         return -1
@@ -319,7 +367,7 @@ def bc_pxe_emit(m, path):
     var view = mmap(fd, total)
     # ---- HEADER ----
     mem_write(view, 0, "PXE1")
-    mem_write(view, 4, int_to_bytes(1, 2, "le"))
+    mem_write(view, 4, int_to_bytes(2, 2, "le"))
     mem_write(view, 6, int_to_bytes(0, 2, "le"))
     mem_write(view, 8, int_to_bytes(nK, 4, "le"))
     mem_write(view, 12, int_to_bytes(nN, 4, "le"))
@@ -329,27 +377,28 @@ def bc_pxe_emit(m, path):
         mem_write(view, 24, int_to_bytes(4294967295, 4, "le"))
     else:
         mem_write(view, 24, int_to_bytes(m["top"], 4, "le"))
-    mem_write(view, 28, int_to_bytes(0, 4, "le"))
+    mem_write(view, 28, int_to_bytes(nstructs, 4, "le"))
     mem_write(view, 32, int_to_bytes(ninst, 4, "le"))
     mem_write(view, 36, int_to_bytes(modname, 4, "le"))
     mem_write(view, 40, int_to_bytes(slen, 4, "le"))
     mem_write(view, 44, int_to_bytes(total, 4, "le"))
-    mem_write(view, 48, int_to_bytes(0, 4, "le"))
     # ---- K 段 ----
     i = 0
     while i < nK:
-        let k = K[i]
+        let kk = K[i]
         let p = o_K + i * 24
-        mem_write(view, p, int_to_bytes(pxe_kind_num(k["kind"]), 1, "le"))
+        mem_write(view, p, int_to_bytes(pxe_kind_num(kk["kind"]), 1, "le"))
         mem_write(view, p + 4, int_to_bytes(ksoff[i], 4, "le"))
         var iv = 0
-        if k["kind"] == "int" or k["kind"] == "bool" or k["kind"] == "func":
-            iv = k["i"]
+        if kk["kind"] == "int" or kk["kind"] == "bool" or kk["kind"] == "func":
+            iv = kk["i"]
+        if kk["kind"] == "str":
+            iv = len(kk["s"])
         mem_write(view, p + 8, int_to_bytes(iv, 8, "le", true))
-        var fb = 0
-        if k["kind"] == "float":
-            fb = float64_bits(k["f"])
-        mem_write(view, p + 16, int_to_bytes(fb, 8, "le", true))
+        var fbits = 0
+        if kk["kind"] == "float":
+            fbits = float64_bits(kk["f"])
+        mem_write(view, p + 16, int_to_bytes(fbits, 8, "le", true))
         i = i + 1
     # ---- N / G 段 ----
     i = 0
@@ -374,6 +423,23 @@ def bc_pxe_emit(m, path):
         mem_write(view, p + 24, int_to_bytes(len(f["upnames"]), 4, "le"))
         mem_write(view, p + 28, int_to_bytes(0, 4, "le"))
         i = i + 1
+    # ---- FU 段（闭包捕获名偏移，函数主序展平）----
+    i = 0
+    while i < len(fupoff):
+        mem_write(view, o_FU + i * 4, int_to_bytes(fupoff[i], 4, "le"))
+        i = i + 1
+    # ---- T / TF 段（结构体元数据）----
+    i = 0
+    while i < nstructs:
+        let p = o_T + i * 12
+        mem_write(view, p, int_to_bytes(sname[i], 4, "le"))
+        mem_write(view, p + 4, int_to_bytes(snf[i], 4, "le"))
+        mem_write(view, p + 8, int_to_bytes(sfbase[i], 4, "le"))
+        i = i + 1
+    i = 0
+    while i < len(sfoff):
+        mem_write(view, o_TF + i * 4, int_to_bytes(sfoff[i], 4, "le"))
+        i = i + 1
     # ---- C 段 ----
     i = 0
     while i < nfuncs:
@@ -392,11 +458,25 @@ def bc_pxe_emit(m, path):
     # ---- S 段 ----
     if slen > 0:
         mem_write(view, o_S, S["buf"])
-    # ---- CRC32（覆盖 [0,52) + [56,total)）；init 0xFFFFFFFF、末位取反 ----
-    var crc = pxe_crc32_of(view, 0, 52, 4294967295)
-    crc = pxe_crc32_of(view, 56, total, crc)
+    # ---- TRAILER[0..4) crc32（覆盖 payload = [0,payload)）----
+    var crc = pxe_crc32_of(view, 0, payload, 4294967295)
     crc = pxe_mask(crc ^ 4294967295, 32)
-    mem_write(view, 52, int_to_bytes(crc, 4, "le"))
+    mem_write(view, payload, int_to_bytes(crc, 4, "le"))
     munmap(view)
     close(fd)
+    # ---- TRAILER[4..36) sha256(payload) ----
+    # 为什么要读回文件：PuXian 侧没有增量 sha256；payload 在 mmap 里不连续可用，
+    #   而 read_bytes 给出整文件 ⇒ 切掉 40B TRAILER 即 payload，单次 sha256_bytes 完成。
+    let whole = read_bytes(path)
+    let pbytes = bytes_slice(whole, 0, payload)
+    let dg = sha256_bytes(pbytes)
+    var fd2 = open(path, 2, 420)
+    if fd2 < 0:
+        print_err("bc_pxe: 二次 open 失败 " + path)
+        return -1
+    var view2 = mmap(fd2, total)
+    mem_write(view2, payload + 4, dg)
+    munmap(view2)
+    close(fd2)
     return total
+

@@ -2625,3 +2625,12 @@ run m440_fastmemo bash selfhost/check_m440_fastmemo.sh
 #   全部构建走 PX_BUILD_NOCACHE=1 —— 缓存命中会让判据失真（本项正因缓存踩的坑）。
 gate_timeout m441_prune 900
 run m441_prune bash selfhost/check_m441_prune.sh
+# ── m442_pxe · .pxe 序列化模块（M442 阶段2：loader + 宿主 pxvm）───────────────
+#   判据 25 条：形状 3（V1..V6 齐全 · 头 96/尾 40 两侧一致 · op 码镜像双向）·
+#     正向 13（6 样例 parity 逐字段 · 静态⇄.pxe 等价 · 解释轨⇄静态轨 · 闭包 nup ·
+#     结构体字段名 · 体积 <1%）· 负控 9（九条定点畸变：改字节/版本/total/跳转越界/
+#     LOADK 越界/modname 越界/截尾/magic/复原，**改完重算校验和**）+ 校验和破坏 + parity 有牙。
+#   前提自证：跳转越界那条先证「样例确有跳转指令」，否则判据空跑（stage2 踩过）。
+#   实测 ~40s（含 bc_cli/pxvm 构建；两者命中缓存后更快）。
+gate_timeout m442_pxe 900
+run m442_pxe bash selfhost/check_m442_pxe.sh

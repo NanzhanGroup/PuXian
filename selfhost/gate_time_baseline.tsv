@@ -6,9 +6,9 @@
 # 刷新：不用手跑 —— packaging/chain/release_postupgrade.sh 判绿后自动调 selfhost/refresh_gate_baseline.sh。
 #
 # 本次输入：
-#   - m441_prune-r1 = /tmp/m441_tsv.txt（1 行）
+#   - m442_pxe-r1 = /tmp/m442_tsv.txt（1 行）
 #   - retain（只补缺）= selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-24 02:35:49 +0800
+# 生成时间：2026-11-24 08:56:07 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	11	OK	chain-20261123-172827
@@ -285,6 +285,7 @@ m439_norm	2	OK	m439-norm
 m439_runtime	1	OK	chain-20261124-m439
 m440_fastmemo	9	OK	m440-dev
 m441_prune	7	OK	m441_prune-r1
+m442_pxe	40	OK	m442_pxe-r1
 m63_langfix	6	OK	chain-20261123-215720
 m64_fmt	0	OK	chain-20261123-153007
 m64_lint	1	OK	chain-20261123-172827

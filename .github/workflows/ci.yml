@@ -570,6 +570,20 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m441_prune ENV（缺 cc / 构建不出产物 rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m441_prune rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m441_prune PASS"
+      - name: m442_pxe（.pxe 序列化模块 · loader + 宿主 pxvm · M442 阶段2）
+        #   病根：每个静态产物各背一份 3.15MB runtime（bootstrap 14 件 = 132MB）。
+        #   .pxe = 共享宿主 runtime + 每程序几百字节字节码（pxslice 529 条指令 = 5417B，0.17%）。
+        #   判据 25 条：形状 3（V1..V6 / 头 96 尾 40 两侧一致 / op 码镜像双向）·
+        #   正向 13（6 样例 parity 逐字段 · 静态⇄.pxe 等价 · 解释轨⇄静态 · 闭包 · 结构体 · 体积）·
+        #   负控 9（定点畸变，**改完重算校验和**才算测到 V3/V4/V5）+ 校验和破坏 + parity 有牙。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m442_pxe.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m442_pxe ENV（缺 cc / python3 / 构建不出 pxvm rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m442_pxe rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m442_pxe PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

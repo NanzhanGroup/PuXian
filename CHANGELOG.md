@@ -1,3 +1,77 @@
+## M442（阶段 2）：PXE1 **ver2** 格式定稿 + 正式 loader（V1–V6）+ 宿主 pxvm
+
+> **一句话**：.pxe 从「原型能加载」变成「格式契约 + 全量校验 + 与静态产物逐字节等价」——
+> 6 个样例（含闭包、结构体、内嵌 NUL、真实工具 pxslice 529 条指令）在三轨（解释 / 静态 VM-C /
+> .pxe+pxvm）上输出完全一致；pxslice 的 .pxe 是 5,417 B，静态产物 3,156,848 B（0.17%）。
+
+### 格式 ver2（与阶段 1 的 ver1 不兼容，故 bump 版本）
+
+```
+HEADER 96B（ver=2）· K/N/G/F/FU/T/TF/C/S 九段 · TRAILER 40B
+  FU 段  = 闭包捕获名偏移，函数主序展平（阶段 1 只把名字丢进池、没有偏移表 ⇒ 闭包不可用）
+  T/TF 段 = 结构体元数据（name/nfields/fbase + 字段名表；阶段 1 nstructs 恒 0）
+  TRAILER = crc32(payload) u32 · sha256(payload) 32B · reserved 4B
+            payload = [0, total-40) ⇒ 两个校验和覆盖同一区间、互不包含（无循环定义）
+  K.str 的 i 字段现在写**真字节长**（M155 口径）⇒ 含内嵌 NUL 的字符串常量不再被截断
+```
+
+### 为什么要 TRAILER 而不是「头里放校验和」
+
+头里放 sha256 会逼出「把 32 字节先清零再哈希」的口径，而 PuXian 侧没有增量 sha256
+（sha256_bytes 一次吃整块）⇒ 只能在文件尾放校验和：read_bytes 读整文件、切掉尾部 40B
+就是 payload，单次哈希即可。**这是写盘通道的约束反推出的格式，不是审美选择。**
+
+### 新增 runtime/pxe.{c,h}（loader）+ runtime/pxvm.c（宿主）
+
+```
+V1 magic · V2 版本 · V3 头/段/尺寸自洽（含「段推导总长 == total == 文件长」）
+V4 指令合法：op < PXM_MAX · 跳转目标 ∈ [0,nbc) · LOADK k<nK · GETG/SETG g<nG ·
+   MKCLO funcs<nfuncs · GETF/SETF/GETF_OPT/NEWSTRUCT/NEWENUM/CALLM/CHKINIT/ENUMIS 的 N 下标<nN
+V5 字符串：偏移 < slen 且池内确有 NUL（memchr 限界，不越池）
+V6 校验和：crc32 快筛 + sha256 权威
+★ 不做「尽力修复」：校验失败一律拒收并指名失败项（修 = 接受损坏数据）。
+   V4 是安全边界 —— 手写的 .pxe 若能把 pc 跳到任意地址就是任意读/执行。
+   ⇒ 负控里那条「跳转越界」**必须先把校验和重算**，否则只是被 V6 挡住，V4 等于没测。
+```
+
+### 判据（新门 m442_pxe · 25 条 · 实测 40s）
+
+```
+形状 3   V1..V6 齐全 · 头 96/尾 40 两侧一致（pxe.h ⇄ bc_pxe.px）· op 码镜像双向 78/78（vm.h ⇄ bc_pxe.px）
+正向 13  6 样例 parity 逐字段（K 值/G/funcs name arity ndefault nslots nup + 每条 op/a/b/c/top）
+         静态 ⇄ .pxe 等价（stdout **用文件 cmp 比，不用 $() —— bash 会丢 NUL 字节**）
+         解释轨 ⇄ 静态轨 · 闭包 nup=1 · 结构体 Point[x,y] · 体积 0.17%
+负控 9   改一字节(6) · ver=3(2) · total+1(3) · 跳转越界(4) · LOADK 越界(4) · modname 越界(5) ·
+         截尾(6) · magic 破坏(3) · 复原(0)，外加校验和破坏(6) 与「parity 有牙」
+前提自证 跳转越界那条先打印「样例确有跳转指令 F[0].bc[4] op=48」，否则判据是空跑
+```
+
+### 三轨等价实测
+
+```
+样例      静态产物(VM-C)            .pxe+pxvm      体积
+h3        pos,neg                 同             607 B
+t2        45 2.25 true null       同             910 B
+st        3,4（struct）            同             516 B
+cl        1 2 3（闭包 upvals=1）   同             820 B
+nul       3 / a\0b（内嵌 NUL）      同             457 B
+pxslice   529 条指令真实工具        同             5,417 B（静态 3,156,848 B）
+```
+
+### 新增 selfhost/build_pxvm.sh（为什么必须复用同一份 runtime.o）
+
+pxvm 若自己另编一份 runtime，「三轨等价」就变成「两个不同 runtime 碰巧输出一样」——
+判据会假绿。⇒ 先让 px build 把对象烘进 .rtcache/<semkey>/，再拿那些 .o 链接 pxvm。
+实测 1.5s（对象命中缓存），产物 4,201,904 B（含 loader + 全部模块）。
+
+### 与「装成产品」还差什么（阶段 3/4）
+
+```
+· px build --pxe 入口 + .pxecache（让用户一条命令拿到 .pxe 与 pxvm）
+· pxvm 分发形态（现在靠 build_pxvm.sh；进 .rtcache/bin 还是随包发，要与 M444 一起定）
+· 交叉架构（build_pxvm.sh 当前只认 x86_64，非 x86_64 直接 exit 3 —— 不静默降级）
+```
+
 ## M442（阶段 1）：`.pxe` 序列化模块格式 —— .px 侧序列化器跑通，396 B 级产物加载即执行
 
 > **一句话**：把「每个程序各背一份 3.15 MB runtime」换成「一份宿主 runtime + 每个程序
