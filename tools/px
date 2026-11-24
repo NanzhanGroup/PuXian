@@ -894,13 +894,24 @@ cmd_run_pxe() { # $1=.pxe [程序参数…]
 #   ⇒ 检查的边界 = 「用户交付的入口程序」，正是 ws-todo 那类程序的位置。
 #
 # 口径：只看 E L002（未定义标识符）；L001/L003 等风格项不管（那是 px lint 的事）。
+# 两条**口径豁免**（2026-11-25 05:0x 首轮全量门实测，都写死在代码里、注释里给了病历）：
+#   ① 入口文件在 examples/ 下 —— 那是门夹具树，20+ 门故意编译含未定义名的程序测诊断
+#   ② 未定义名以 `__` 开头 —— runtime 内部注入名（不进名册），pxlint 必然看不到
 # 逃生舱（两个，各有用处）：
 #   PX_SKIP_DEFCHK=1  完全关闭（旧布局/特殊夹具）
 #   PX_DEFCHK=warn    降级为告警（迁移期：先看看有多少存量，不阻断构建）
 # 零命中即放过；检查器不存在也放过（不因为「检查器没装」把构建打死）。
 defchk_entry() {   # defchk_entry <file.px> → 0 通过/跳过 · 1 发现未定义标识符
-    local f="$1" mode="${PX_DEFCHK:-error}" out n002
+    local f="$1" mode="${PX_DEFCHK:-error}" out n002 nint raw
     [ "${PX_SKIP_DEFCHK:-0}" = "1" ] && return 0
+    # 豁免①（M444 修 · 2026-11-25 05:0x 全量门实测）：examples/ 是**门夹具树**。
+    #   m139/m158/m160/m161/m162/m169/m172/m177/m181/m192/m200/m201/m271/m366/
+    #   m369/m387/m392/m395/m401 等 20 门**故意编译含未定义名的程序**（它们测的正是
+    #   运行期诊断 R1001/R1002），首轮全量门因此当场 6 红。⇒ 夹具树不参与本检查。
+    #   产品代码（ws 仓库 tools/*.px、用户入口程序）不在 examples/ 下，不受影响。
+    case "$f" in
+        examples/*|*/examples/*) return 0 ;;
+    esac
     [ -n "${PXLINT_BIN:-}" ] && [ -x "$PXLINT_BIN" ] || return 0
     [ -f "$f" ] || return 0
     out="$("$PXLINT_BIN" "$f" 2>&1)" || true
@@ -911,10 +922,18 @@ defchk_entry() {   # defchk_entry <file.px> → 0 通过/跳过 · 1 发现未�
         echo "提示: 该文件的 import 无法在静态期解析 ⇒ 跳过未定义标识符检查（构建期路径可能不同）" >&2
         return 0
     fi
-    n002="$(printf '%s\n' "$out" | grep -c 'E L002' || true)"
+    raw="$(printf '%s\n' "$out" | grep 'E L002' || true)"
+    # 豁免②（M444 修 · 实测 selfhost/interp.px 2 处）：`__` 前缀 = runtime **内部注入名**
+    #   （runtime.c 明文注释「`__` 前缀 = 内部名，不进公开名册/索引」，gen_builtin_list.sh
+    #   ① 也按 `__` 排除）⇒ 名册里永远没有 __guard_call / __iter_len，pxlint 必报 L002。
+    #   这不是「未定义」，是名册口径的已知边界 ⇒ 不计入判红，但要出声（可见、不静默）。
+    nint="$(printf '%s\n' "$raw" | grep -cE "未定义变量: *['\"]?__" || true)"
+    nint="${nint:-0}"
+    [ "$nint" -gt 0 ] && echo "提示: 另有 $nint 处 \`__\` 内部名（runtime 注入，不进名册）⇒ 不计" >&2
+    n002="$(printf '%s\n' "$raw" | grep -vE "未定义变量: *['\"]?__" | grep -c . || true)"
     n002="${n002:-0}"
     [ "$n002" -gt 0 ] || return 0
-    printf '%s\n' "$out" | grep 'E L002' | head -20 >&2
+    printf '%s\n' "$raw" | grep -vE "未定义变量: *['\"]?__" | head -20 >&2
     [ "$n002" -le 20 ] || echo "   ……（共 $n002 处，只列前 20）" >&2
     if [ "$mode" = "warn" ]; then
         echo "警告: 入口文件有 $n002 处未定义标识符（L002）· PX_DEFCHK=warn ⇒ 本次不阻断" >&2

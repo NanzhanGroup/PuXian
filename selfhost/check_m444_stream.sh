@@ -40,7 +40,7 @@ if [ "${1:-}" = "--negctl" ]; then
     grep -q 'PREFLIGHT_STREAM_OFF:-1' "$PF" && echo "  打桩已落地（前提自证：默认值已改成 1）" || { echo "❌ 打桩没生效"; exit 1; }
     out="$(timeout 300 bash "$PF" --self-test 2>&1)"
     if printf '%s\n' "$out" | grep -q '❌ G-P3 非流式'; then
-        echo "M444-STREAM NEGCTL OK（默认关掉流式后正控当即变红 ⇒ 判据有牙）"
+        echo "M444-STREAM NEG-CONTROL OK（默认关掉流式后正控当即变红 ⇒ 判据有牙）"
         exit 0
     fi
     echo "❌ 打桩后 G-P3 仍绿 ⇒ 正控没有牙（它测不到『有没有真的边跑边转』）"

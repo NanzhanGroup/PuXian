@@ -22,6 +22,8 @@
 #   N3 降级档：PX_DEFCHK=warn ⇒ rc=0 且 stderr 含「不阻断」
 #   N4 无假红：真实程序 examples/fib.px ⇒ rc=0
 #   N5 import 解析不到不误杀：pxlint 报 L010 警告、0 错误；px build 仍能过（工作区路径不同）
+#   N6 `__` 内部名不计红（runtime 注入、不进名册）+ 前提自证「走了豁免且出声」
+#   N7 examples/ 夹具树豁免 + 负控「同一份源码移出夹具树仍被拦」
 #   G1 环境守卫：tools/px / bootstrap/pxlint 不可用 ⇒ rc=3（绝不降级成 0）
 # 退出码：0 全过 / 1 有违例 / 3 环境不成立
 # ============================================================
@@ -57,7 +59,7 @@ NEGEOF
     [ "$r1" = 0 ] && NEGOK=1
     echo "  打桩后 build rc=$r1（0 = 不再拦 ⇒ 判据有牙）"
     rm -f /tmp/m444neg.px
-    [ "$NEGOK" = 1 ] && { echo "M444-DEFCHK NEGCTL OK（红来自调用点，不是别处）"; exit 0; }
+    [ "$NEGOK" = 1 ] && { echo "M444-DEFCHK NEG-CONTROL OK（红来自调用点，不是别处）"; exit 0; }
     echo "❌ 打桩后仍被拦 ⇒ P1/P2/P3 的红另有来源，判据无效"; exit 1
 fi
 
@@ -150,6 +152,39 @@ printf '%s' "$out" | grep -q 'E L002' && bad "N5 仍在级联假 L002（会把�
                                      || ok "N5 负控：L002 已被剔除（0 条假红）"
 "$PX" build --pxe examples/m282_registry_020/ftp020_probe.px >"$T/n5.out" 2>&1
 [ $? = 0 ] && ok "N5b 不误杀：该入口仍能构建（构建期路径可能不同）" || bad "N5b 误杀了工作区式 import 的入口"
+
+# ── N6 `__` 内部名不计红 ──
+#   名册口径（gen_builtin_list.sh ①：`__` 前缀的内部名不进名册；runtime.c 明文同口径）
+#   ⇒ pxlint 必然看不到 __guard_call / __iter_len。实测首轮全量门把 selfhost/interp.px
+#   的 2 处 __guard_call 当未定义 ⇒ dev 解释器构建全灭（m158/m161/m169/m172/m179 连坐）。
+cat > "$T/n6.px" <<'EOF'
+def dead():
+    return __iter_len([1, 2])
+
+print("N6-OK")
+EOF
+out="$("$PX" build --pxe "$T/n6.px" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "N6 无假红：\`__\` 内部名（runtime 注入、不进名册）不判红 ⇒ build rc=0" \
+              || bad "N6 把 runtime 内部名当未定义拦了：$(printf '%s' "$out" | head -2)"
+printf '%s' "$out" | grep -q '内部名' && ok "N6 前提自证：确实走了「\`__\` 豁免」分支（输出含『内部名』）" \
+                                      || bad "N6 没走豁免分支（豁免没生效，或没出声 —— 静默豁免不可接受）"
+
+# ── N7 examples/ 夹具树豁免（有牙：同一份源码移到 examples/ 之外必须被拦）──
+EXF="examples/.defchk_probe_$$.px"
+printf 'def f():\n    return to_str(1)\n\nprint(f())\n' > "$EXF"
+trap 'rm -rf "$T"; rm -f "$EXF"' EXIT
+if "$PX" build --pxe "$EXF" >"$T/n7.out" 2>&1; then
+    ok "N7 夹具树豁免：examples/ 下的入口不拦（20+ 门故意编译含未定义名的程序）"
+else
+    bad "N7 examples/ 下仍被拦（诊断类门会全红）：$(tail -2 "$T/n7.out")"
+fi
+cp -f "$EXF" "$T/n7_copy.px"
+if "$PX" build --pxe "$T/n7_copy.px" >"$T/n7b.out" 2>&1; then
+    bad "N7 负控判绿：同一份源码在 examples/ 之外也没被拦 ⇒ 豁免扩散，检查等于空"
+else
+    ok "N7 负控：同一份源码放到 examples/ 之外仍被拦（豁免只对夹具树生效）"
+fi
+rm -f "$EXF"
 
 # ── 规模锚点 ──
 nrun=$((PASS+FAIL))

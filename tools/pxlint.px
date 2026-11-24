@@ -159,7 +159,7 @@ def lx_scan_imports(path, known, visited):
 def lx_collect_import_names(items, known, file):
     let dir = lx_dirname(file)
     let visited = lc_dnew()
-    var miss = 0   # M444：解析不到的 import 个数（L002 判定的前提）
+    var miss = 0  # M444：解析不到的 import 个数（L002 判定的前提）
     var i = 0
     while i < len(items):
         let st = items[i]
