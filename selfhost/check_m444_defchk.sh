@@ -91,8 +91,8 @@ print(f())
 EOF
 out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/p1.px" 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "P1 正控：直读未定义名 ⇒ build rc=$rc（拒构建）" || bad "P1 正控判绿：未定义名居然构建成功"
-printf '%s' "$out" | grep -q 'L002' && ok "P1 报出 L002 诊断码" || bad "P1 没报 L002"
-printf '%s' "$out" | grep -q "to_str" && ok "P1 点名了未定义的那个名字" || bad "P1 没点名"
+grep -q 'L002' <<< "$out" && ok "P1 报出 L002 诊断码" || bad "P1 没报 L002"
+grep -q "to_str" <<< "$out" && ok "P1 点名了未定义的那个名字" || bad "P1 没点名"
 
 cat > "$T/p2.px" <<'EOF'
 def g(x):
@@ -121,7 +121,8 @@ print("N1-OK " + f())
 EOF
 if env -u PX_DEFCHK "$PX" build --pxe "$T/n1.px" >"$T/n1.build" 2>&1; then
     ok "N1 负控：补上定义 ⇒ 构建成功（检查不是恒红）"
-    if "$PX" run "$T/n1.px" 2>/dev/null | grep -q '^N1-OK 1$'; then
+    runout="$("$PX" run "$T/n1.px" 2>/dev/null)"
+    if grep -q '^N1-OK 1$' <<< "$runout"; then
         ok "N1 前提自证：产物/解释执行真跑到那条路径（不是空跑）"
     else
         bad "N1 产物没跑出期望输出"
@@ -147,9 +148,9 @@ env -u PX_DEFCHK "$PX" build examples/fib.px >"$T/n4.out" 2>&1
 
 # ── N5 import 解析不到：不误杀，但必须出声 ──
 out="$("$LINT" examples/m282_registry_020/ftp020_probe.px 2>&1)"
-printf '%s' "$out" | grep -q 'L010' && ok "N5 前提自证：pxlint 对解析不到的 import 报 L010（不再静默级联成 L002）" \
+grep -q 'L010' <<< "$out" && ok "N5 前提自证：pxlint 对解析不到的 import 报 L010（不再静默级联成 L002）" \
                                   || bad "N5 pxlint 没报 L010（静默级联仍在）"
-printf '%s' "$out" | grep -q 'E L002' && bad "N5 仍在级联假 L002（会把工作区式 import 的程序全判死）" \
+grep -q 'E L002' <<< "$out" && bad "N5 仍在级联假 L002（会把工作区式 import 的程序全判死）" \
                                      || ok "N5 负控：L002 已被剔除（0 条假红）"
 "$PX" build --pxe examples/m282_registry_020/ftp020_probe.px >"$T/n5.out" 2>&1
 [ $? = 0 ] && ok "N5b 不误杀：该入口仍能构建（构建期路径可能不同）" || bad "N5b 误杀了工作区式 import 的入口"
@@ -167,7 +168,7 @@ EOF
 out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n6.px" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "N6 无假红：\`__\` 内部名（runtime 注入、不进名册）不判红 ⇒ build rc=0" \
               || bad "N6 把 runtime 内部名当未定义拦了：$(printf '%s' "$out" | head -2)"
-printf '%s' "$out" | grep -q '内部名' && ok "N6 前提自证：确实走了「\`__\` 豁免」分支（输出含『内部名』）" \
+grep -q '内部名' <<< "$out" && ok "N6 前提自证：确实走了「\`__\` 豁免」分支（输出含『内部名』）" \
                                       || bad "N6 没走豁免分支（豁免没生效，或没出声 —— 静默豁免不可接受）"
 
 # ── S2 形状：门内默认 warn 的边界写在 run_gates.sh 一处 ──

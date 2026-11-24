@@ -39,7 +39,7 @@ if [ "${1:-}" = "--negctl" ]; then
     sed -i 's@PREFLIGHT_STREAM_OFF:-0@PREFLIGHT_STREAM_OFF:-1@' "$PF"
     grep -q 'PREFLIGHT_STREAM_OFF:-1' "$PF" && echo "  打桩已落地（前提自证：默认值已改成 1）" || { echo "❌ 打桩没生效"; exit 1; }
     out="$(timeout 300 bash "$PF" --self-test 2>&1)"
-    if printf '%s\n' "$out" | grep -q '❌ G-P3 非流式'; then
+    if grep -q '❌ G-P3 非流式' <<< "$out"; then
         echo "M444-STREAM NEG-CONTROL OK（默认关掉流式后正控当即变红 ⇒ 判据有牙）"
         exit 0
     fi
@@ -59,7 +59,7 @@ grep -q 'kill "\$_tp"' "$PF" && grep -q 'wait "\$_tp"' "$PF" \
 # ── P1/P2 跑自测 ──
 out="$(timeout 300 bash "$PF" --self-test 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "P2 --self-test rc=0" || bad "P2 --self-test rc=$rc"
-printf '%s\n' "$out" | grep -q '❌' && bad "P2 自测里有 ❌ 行" || ok "P2 自测无 ❌ 行"
+grep -q '❌' <<< "$out" && bad "P2 自测里有 ❌ 行" || ok "P2 自测无 ❌ 行"
 n_ok="$(printf '%s\n' "$out" | grep -c '✅')"
 n_line="$(printf '%s\n' "$out" | grep -cE '^  (✅|❌)')"
 echo "  扫描面：自测断言 $n_line 条（✅ $n_ok）"
@@ -69,7 +69,7 @@ else
     bad "P2 自测通过 $n_ok / 断言 $n_line —— 有失败或缺断言（规模下限 20）"
 fi
 for k in "G-P3 流式正控" "G-P3 前提自证" "G-P3 负控前提自证" "G-P3 负控"; do
-    printf '%s\n' "$out" | grep -q "✅ $k" && ok "P1 $k：✅" || bad "P1 $k：未通过或缺失"
+    grep -q "✅ $k" <<< "$out" && ok "P1 $k：✅" || bad "P1 $k：未通过或缺失"
 done
 
 echo "── 合计：通过 $PASS · 失败 $FAIL ──"
