@@ -584,6 +584,33 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m442_pxe ENV（缺 cc / python3 / 构建不出 pxvm rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m442_pxe rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m442_pxe PASS"
+      - name: m444_defchk（构建期拦未定义标识符 · M444 · 缺陷 932）
+        #   病史：ws-todo 的兜底函数写 to_str(...) 而 to_str 从未定义 ⇒ 编译过、运行到
+        #   兜底路径才炸 R1001（偏偏那是 WS_PATH 缺失时的救命索）。
+        #   判据 19 条：形状 3（含调用点早于 --pxe 分叉）· 正控 4（直读/死分支/静态轨/点名）·
+        #   负控 4（补定义必绿且真跑到 · PX_SKIP_DEFCHK 自证 · warn 降级 · 真程序无假红）·
+        #   import 解析不到不误杀 3（L010）。--negctl 删调用点 ⇒ 未定义程序立即构建成功。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m444_defchk.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m444_defchk ENV（缺 tools/px / bootstrap/pxlint / cc rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m444_defchk rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m444_defchk PASS"
+      - name: m444_stream（门档输出边跑边转 · M444 · 缺陷 933）
+        #   病史：M443 收口跑 release_preflight --gates 42 分钟，外面日志全程 0 字节。
+        #   判据 10 条：形状 3（tail 转 stderr / PREFLIGHT_STREAM_OFF / PID 收尾）·
+        #   正控 5（自测 G-P3 四条 + 通过数=断言数）· 整体 rc=0 且无 ❌。
+        #   --negctl 把流式默认关掉 ⇒ G-P3 正控当即变红（判据有牙）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m444_stream.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m444_stream ENV（缺 packaging/release_preflight.sh rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m444_stream rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m444_stream PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；
