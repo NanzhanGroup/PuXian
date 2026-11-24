@@ -1,3 +1,61 @@
+## M442 补 3（2026-11-24）：`bootstrap/pxvm` 没进「宿主架构现编」清单（缺陷 930）
+
+> **一句话**：M442-S3 让 `bootstrap/pxvm` 成为**入库件**（与其余 12 件工具同级），
+> 但 CI 与 release 的「aarch64 侧现编」入口是 `selfhost/build_native_tools.sh` ——
+> 它只认 `.px` 件清单、**不认识 C 宿主件** ⇒ aarch64 runner 上 M168 可移植性门看到
+> 仓库带来的 x86_64 `pxvm`，判「架构不符」。若不修，aarch64 自举件包里就是错架构的
+> `pxvm`（用户那边 = `Exec format error`）；而**本地全量门不含 aarch64 环境 ⇒ 本地永远绿**。
+
+### 证据（CI run 45333929040 @ 6fb05d5 · job 138241445480 step 7 逐字）
+
+```
+portability == 二进制可移植性门：13 个文件 · glibc 基线 2.34 · 期望架构 aarch64 ==
+  ✅ bootstrap/{pxc,pxi,pxl,pxpar,pxfmt,pxlint,pxlsp,pxmcp,pxtest,pxbench,pxcheck,pxdoc}
+     —— 全部「全静态（无 DT_NEEDED）· [AArch64]」（该 job 第 5 步现编的）
+  ❌ bootstrap/pxvm：架构不符 —— 需要 aarch64，实测 [Advanced Micro Devices X86-64]
+     （发布包里混进别的架构 ⇒ 用户那边就是 Exec format error）
+== 判红 1 项 ==
+```
+
+同一轮 job 的其余 aarch64 事实：`原生自举` step 4 绿、`NATIVE-BOOTSTRAP-OK ... cross=0 static=1`
+—— 补 2 的两条（缺陷 926/927）确已修好；红是**新的一条**，不是旧账复发。
+
+### 修法（把 pxvm 收进**唯一构建入口**，不在 YAML 里再写一遍）
+
+```
+selfhost/build_pxvm.sh          支持 aarch64：-DPX_NO_QUIC + 目标架构预置库
+                                （runtime/mbedtls/lib-aarch64 · third_party/zlib/lib-aarch64 ·
+                                  third_party/sqlite3/sqlite3-aarch64.o）—— 与 native_bootstrap.sh
+                                的库选择同口径；x86_64 分支行为不变（仍链 QUIC 四库）
+                                不支持架构 ⇒ rc=3 响亮失败（不再默默产出错架构件）
+selfhost/build_native_tools.sh  + 「C 宿主件」段：调 build_pxvm.sh 装 $DIR/pxvm（PX_BUILD_ENGINE=c）
+                                ⇒ ci.yml / release.yml / rebake_bin 三处**自动同口径**，
+                                  不新增第二份件清单（M201 缺陷 241 的同型复发：清单写两遍必然漂移）
+packaging/ci_known_red.tsv      M168 按机制登记（缺陷 930 · 到期 2026-11-27）；补 2 两条标注已复绿
+```
+
+### 验证（「证到的」与「推的」分开写）
+
+```
+【证到 · x86_64 回归】selfhost/build_pxvm.sh /tmp/pxvm.regress
+   ⇒ 2.1s · 4,202,000 B · ELF 64-bit x86-64 statically linked · pxvm --version = 0.2.438
+   ⇒ 内嵌指纹 PXRT-945d49d1b0a388b3 · PXVMFP-634b8f18b99a3e28（与入库件同口径、未漂）
+【证到 · aarch64 半程】CC=/opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc \
+   selfhost/native_bootstrap.sh --target-arch aarch64 --portable
+   ⇒ NATIVE-BOOTSTRAP-OK host=x86_64 target=aarch64 cross=1 no_quic=1 static=1 rc=0（25 个 runtime 对象）
+   用**本补引入的那一组 aarch64 库清单**链 pxvm 后：
+   ⇒ selfhost/check_bin_portability.sh --arch aarch64 --require-static ⇒
+       ✅ 全静态（无 DT_NEEDED）· [AArch64] · 判红 0 项 · CHECK-PORTABILITY-OK
+   ⇒ readelf -d ⇒ NEEDED 计数 0
+【推的 · 未证】本机无原生 aarch64 主机、也无 qemu ⇒ **没有在 aarch64 上实际执行过该 pxvm**。
+   执行面的权威验证 = 下一轮 CI（原生 arm64 runner 用 build_native_tools.sh 现编 + 冒烟）。
+```
+
+### 为什么本地全量门看不见它（必记）
+
+`build_native_tools.sh` 的 aarch64 分支只在「非 x86_64 宿主」上走到，而本地 320 门全在 x86_64 上跑。
+⇒ 新增入库件 / 改构建口径，**本地绿不能证明发布包绿**；这条与 M415（CI 与本地裁决相反）同族。
+
 ## M442 补 2（2026-11-24）：自举清单混进宿主 `pxvm.c` + golden 未随「编译器正主」重定基（缺陷 926 / 927 / 928）
 
 > **一句话**：远端 CI 在 `b048dfd` 上红了两条自举步（原生档 / M159 交叉档），根因是

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# build_native_tools.sh —— 原生（宿主架构）**12 件工具的唯一构建入口**（M201 建立）
+# build_native_tools.sh —— 原生（宿主架构）**入库工具的唯一构建入口**（M201 建立 · M442 补3 加 pxvm）
 # ------------------------------------------------------------
 # 为什么有它（M201 缺陷 241 = 第三方 PX-DEF-035 的根因）：
 #   原先 `ci.yml`（native-arm64 job）与 `release.yml`（aarch64 job）**各写一遍**
@@ -76,8 +76,25 @@ case "$(uname -m)" in
     *) rm -f "$DIR/pxc_vm" "$DIR/pxi_vm"; echo "── 非 x86_64：已移除 VM 轨两件（不随包发布）" ;;
 esac
 
+# ---- C 宿主件（M442 补3 · 缺陷 930）：pxvm 也是**入库件**，必须本架构现编 ----
+#   它不是 .px 源码编出来的（= runtime/pxe.c + runtime/pxvm.c + 与静态产物同一份 runtime.o），
+#   但发布口径与其余 12 件完全一致：**宿主架构 + 全静态**。
+#   不现编的代价已实测（CI run 45333929040）：aarch64 runner 上 M168 可移植性门判
+#   「bootstrap/pxvm 架构不符 —— 需要 aarch64，实测 X86-64」，真发出去就是 Exec format error。
+if [ -x "$ROOT/selfhost/build_pxvm.sh" ]; then
+    # PX_BUILD_ENGINE=c：与上面 11 件同口径（显式 C 轨）。非 x86_64 上 tools/px 本来也会自适应落 C 轨，
+    #   但显式给定才能保证「本 job 的 runtime 对象」与其余件是同一轨产物。
+    if PX_BUILD_ENGINE=c bash "$ROOT/selfhost/build_pxvm.sh" "$DIR/pxvm" > /tmp/m442_pxvm_bnt.log 2>&1; then
+        echo "✅ $DIR/pxvm  $(stat -c %s "$DIR/pxvm" 2>/dev/null || stat -f %z "$DIR/pxvm") 字节（C 宿主件 · .pxe 执行器）"
+    else
+        echo "❌ pxvm：现编失败"; tail -15 /tmp/m442_pxvm_bnt.log | sed 's/^/     /'; fail=1
+    fi
+else
+    echo "❌ pxvm：缺 selfhost/build_pxvm.sh"; fail=1
+fi
+
 if [ "$fail" != 0 ]; then echo "❌ 构建失败"; exit 1; fi
-echo "✅ 12 件（含 pxc 之外的 11 件）已装入 $DIR/"
+echo "✅ 12 件工具 + pxc + pxvm（C 宿主件）已装入 $DIR/"
 
 if [ "$DO_CHECK" = 1 ]; then
     echo "── 能力面门（解释器件必须全能力）—— examples/m201_interp_ffi/verify.sh"
