@@ -2637,3 +2637,24 @@ run m441_prune bash selfhost/check_m441_prune.sh
 #   实测 ~40s（含 bc_cli/pxvm 构建；两者命中缓存后更快）。
 gate_timeout m442_pxe 900
 run m442_pxe bash selfhost/check_m442_pxe.sh
+# ── m444_defchk · 构建前「入口级定义检查」（M444 · 缺陷 932）─────────────────
+#   病史：ws-todo 的兜底函数写 `to_str(...)` 而 to_str 从未定义 —— 编译成功、
+#     运行到兜底路径才炸 R1001，偏偏那条路径就是「WS_PATH 缺失」的救命索。
+#   修法：`px build` 在入口文件层做 L002 前置检查（默认开）——
+#     不塞 sema 的理由是实测：模块文件 lint 1000+ 处假红（引用主文件声明的全局），
+#     而入口层干净（examples/*.px 120 个入口 L002=0）。
+#   判据 19 条：形状 3（含「调用点在 --pxe 分叉之前」，换 flag 绕不过）·
+#     正控 4（直读 / 死分支 / 静态轨 / 报出 L002 与名字）· 负控 4（补定义必绿 + 产物真跑到 ·
+#     PX_SKIP_DEFCHK 自证 · warn 降级 · 真程序无假红）· import 解析不到不误杀 3（L010）。
+#   负控有牙：--negctl 删掉调用点 ⇒ 未定义程序立即构建成功（判据随之失效即证）。
+gate_timeout m444_defchk 900
+run m444_defchk bash selfhost/check_m444_defchk.sh
+# ── m444_stream · 门档输出「边跑边转」（M444 · 缺陷 933）──────────────────
+#   病史：M443 收口跑 release_preflight --gates 42 分钟，调用方日志**全程 0 字节**
+#     ⇒ 看不出跑到哪一门、判断不了慢还是卡死。
+#   修法：后台 tail -f 把新增行实时转 stderr（不接管道 ⇒ rc 仍是门自己的 rc）。
+#   判据 10 条：形状 3（tail 转发 stderr / PREFLIGHT_STREAM_OFF 开关 / PID kill+wait 收尾）·
+#     正控 5（自测 G-P3 四条 + 通过数=断言数）· 整体 rc=0 + 无 ❌。
+#   负控有牙：--negctl 把流式默认关掉 ⇒ G-P3 正控当即变红。
+gate_timeout m444_stream 600
+run m444_stream bash selfhost/check_m444_stream.sh

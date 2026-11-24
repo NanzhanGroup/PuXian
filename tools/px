@@ -270,6 +270,8 @@ px $RELEASE_VER
 
 用法:
   px build <file.px>                         编译为静态二进制（输出 <目录>/build/<name>）
+                                             M444 起构建前做**入口级定义检查**（未定义标识符 ⇒
+                                             拒绝构建；PX_SKIP_DEFCHK=1 关 / PX_DEFCHK=warn 降级）
                                               （M91：默认 = VM 字节码轨；--c = C 轨逃生舱）
   px build [--no-quic] [--target <arch>] [--cc <cc>]
             [--mbedtls-lib <dir>] [--sqlite-obj <file>] <file.px>
@@ -876,6 +878,55 @@ cmd_run_pxe() { # $1=.pxe [程序参数…]
     exec "$vm" "$pf" "$@"
 }
 
+# ══════════════════════════════════════════════════════════════
+# M444（缺陷 932）：构建前「入口级定义检查」
+# ------------------------------------------------------------
+# 病史（2026-11-24）：ws-todo 的兜底函数 infer_ws_root_from_argv 里写了 to_str(...)，
+#   而 to_str 从未定义 —— 编译成功、**运行到兜底路径才炸** R1001；偏偏那条路径正是
+#   「WS_PATH 缺失」的救命索 ⇒ 兜底比没有兜底更糟。
+#   三条轨（解释 / 字节码 / C）都只在「运行到那一刻」查名字，构建期一个字都不查。
+#
+# 为什么放在 build 而不是塞进 sema（实测依据，不是口味）：
+#   全仓 lint 扫 selfhost/ 24 件 ⇒ L002 报 1000+ 处假红（bc_emit 112 / cg_expr 176 /
+#   ibuiltin 295 …）—— 这些**模块文件**按惯例引用「主文件声明的全局」（interp.px 同构
+#   惯例），单文件静态分析看不到宿主那一份声明。把这种判定塞进编译期 ⇒ 现有构建全判红。
+#   而**入口文件**这一层是干净的：examples/*.px 120 个入口 L002 = 0 处（实测）。
+#   ⇒ 检查的边界 = 「用户交付的入口程序」，正是 ws-todo 那类程序的位置。
+#
+# 口径：只看 E L002（未定义标识符）；L001/L003 等风格项不管（那是 px lint 的事）。
+# 逃生舱（两个，各有用处）：
+#   PX_SKIP_DEFCHK=1  完全关闭（旧布局/特殊夹具）
+#   PX_DEFCHK=warn    降级为告警（迁移期：先看看有多少存量，不阻断构建）
+# 零命中即放过；检查器不存在也放过（不因为「检查器没装」把构建打死）。
+defchk_entry() {   # defchk_entry <file.px> → 0 通过/跳过 · 1 发现未定义标识符
+    local f="$1" mode="${PX_DEFCHK:-error}" out n002
+    [ "${PX_SKIP_DEFCHK:-0}" = "1" ] && return 0
+    [ -n "${PXLINT_BIN:-}" ] && [ -x "$PXLINT_BIN" ] || return 0
+    [ -f "$f" ] || return 0
+    out="$("$PXLINT_BIN" "$f" 2>&1)" || true
+    # import 在静态期解析不到 ⇒ pxlint 已剔除全部 L002 并给 L010 警告（M444）。
+    #   构建期的工作区路径可能与 lint 那一刻不同（实测 examples/m282_registry_020 的
+    #   ftp 探针：import ../registry/... 只在 gate 的临时工作区里成立）⇒ 此时判红就是误杀。
+    if printf '%s\n' "$out" | grep -q 'L010'; then
+        echo "提示: 该文件的 import 无法在静态期解析 ⇒ 跳过未定义标识符检查（构建期路径可能不同）" >&2
+        return 0
+    fi
+    n002="$(printf '%s\n' "$out" | grep -c 'E L002' || true)"
+    n002="${n002:-0}"
+    [ "$n002" -gt 0 ] || return 0
+    printf '%s\n' "$out" | grep 'E L002' | head -20 >&2
+    [ "$n002" -le 20 ] || echo "   ……（共 $n002 处，只列前 20）" >&2
+    if [ "$mode" = "warn" ]; then
+        echo "警告: 入口文件有 $n002 处未定义标识符（L002）· PX_DEFCHK=warn ⇒ 本次不阻断" >&2
+        return 0
+    fi
+    echo "错误: 构建前静态检查发现 $n002 处未定义标识符（L002）——" >&2
+    echo "  编译期不查这个名字，只有运行到那条路径才会 R1001 炸掉（缺陷 932）。" >&2
+    echo "  修改源文件补上定义/改正拼写；确有需要绕过：PX_SKIP_DEFCHK=1 px build …" >&2
+    echo "  只想先看告警不阻断：PX_DEFCHK=warn px build …" >&2
+    return 1
+}
+
 cmd_build() {    # M91：默认引擎 = vm（VM 字节码轨）。优先级：显式 flag(--c/--vm/--bc，后写胜)
     #   > PX_BUILD_ENGINE env(c|vm) > 默认 vm。--c = C 轨逃生舱（fn_* 文本轨）。
     # M168：宿主编译器可用 PX_CC 覆盖（el7 的 devtoolset 场景：PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc）
@@ -937,6 +988,9 @@ cmd_build() {    # M91：默认引擎 = vm（VM 字节码轨）。优先级：�
     local file="${1:-}"
     [ -n "$file" ] || { echo "用法: px build [选项] <file.px>" >&2; exit 1; }
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
+    # M444（缺陷 932）：构建前入口级定义检查 —— 放在 --pxe 分叉**之前**，
+    #   两条轨（静态 / 轻轨）都必须过这一关，否则「换个 flag 就绕过检查」。
+    defchk_entry "$file" || return 1
     # M442-S3：--pxe 轻轨在此分叉 —— 后续 --target/静态库/引用集裁剪全都与它无关
     if [ "$pxe" = 1 ]; then
         cmd_build_pxe "$file" "$cc"

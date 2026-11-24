@@ -221,14 +221,40 @@ gate_check() {  # gate_check <root> → 0 全绿 / 4 有红 / 2 环境错
     # 不用管道接 runner：rc 必须是门自己的 rc（缺陷 696 的形状：管道吞掉对侧状态）
     # GATE_TSV 指到临时文件：下面要用「台账行数」证明**这几门真的跑了**，
     #   因为实测 run_gates.sh 对不存在的门名会 rc=0 + 「跳过 267 门」⇒ rc=0 不足以证明跑过。
+    #
+    # ── M444 · 缺陷 933：门档输出**边跑边转**，不再攒到结束才 tail -30 ──────────
+    #   病史：2026-11-24 跑 M443 收口时本档耗时 42 分钟（1867s），而这 42 分钟里
+    #     调用方看到的日志**全程 0 字节** —— 既看不出跑到哪一门，也判断不了是慢还是卡死，
+    #     只能去翻 /tmp/gate_*.log 拼。根因就是下面这行重定向：runner 的输出进了临时 $log，
+    #     本档只在结束时 tail -30 一次。
+    #   做法：后台 tail -f 把**新增行**实时转给 stderr（run_gates.sh 每门完成即打印 ✅/❌）。
+    #     不接管道 ⇒ rc 仍是门自己的 rc（缺陷 696 的形状不重犯）；
+    #     tail 只读不写 ⇒ 不改变 $log 的内容与判据。
+    #   关掉：PREFLIGHT_STREAM_OFF=1（自测的负控就靠它证明这条判据有牙）。
+    #   ⚠️ 首版踩过的坑（留档，别再踩）：自测里写 `sp="$(strm_start …)"` 拿 PID ——
+    #     命令替换会**等后台子壳退出**（它继承了替换管道），拿到的 PID 早已是死的 ⇒
+    #     正控与负控前提全假红。我一度把它误判成「tail 全缓冲」，加了 stdbuf -oL；
+    #     实测去掉 stdbuf 同样绿 ⇒ 缓冲是假因，PID 才是真因（HONESTY：推的要说成推的）。
+    local _tp=""
+    if [ "${PREFLIGHT_STREAM_OFF:-0}" != "1" ]; then
+        tail -n +1 -f "$log" 1>&2 &
+        _tp=$!
+    fi
     GATE_TSV="$tsv" bash "$runner" --only "$(IFS=,; echo "${PRECHECK_GATES[*]}")" >"$log" 2>&1
     rc=$?
+    if [ -n "$_tp" ]; then
+        kill "$_tp" 2>/dev/null
+        wait "$_tp" 2>/dev/null
+    fi
     # ── M400 · 缺陷 763：这张表**不许再删** ───────────────────────────
     #   病史：本档的 11 门用的是同一套 900s 配额，而历史上最高的占用就在这张表里
     #   （m187 提交前门 747~755s / 900s = 83~84%，同时它在分片里只有 675~704s）。
     #   过去跑完就 `rm -f "$tsv"` ⇒ 判据的输入被删掉 ⇒ 基线永远是 10 月的手抄值。
     #   现在落盘到 $PX_PREFLIGHT_TSVDIR（默认 /data/gatevm），由 refresh_gate_baseline.sh 回灌。
     [ -n "$tep" ] && cp -f "$tsv" "$tep" 2>/dev/null && echo "计时表已落盘：$tep"
+    # 流式已把每门结果实时转出；这里再回放末 30 行，只为「结论附近几门」一定被看到
+    # （tail -f 被杀时最后一块可能没转出去 —— 宁可重复，不许漏）。
+    echo "── 末 30 行回放（流式已在上面实时输出；本条仅为防漏）──"
     tail -30 "$log"
     echo "PREFLIGHT-GATES $( [ "$rc" = 0 ] && echo OK || echo FAIL ) rc=$rc 门数=${#PRECHECK_GATES[@]} 耗时=$((SECONDS-t0))s"
     if [ "$rc" != 0 ]; then
@@ -370,6 +396,64 @@ STUB2
     [ "$rc" = 2 ] && ok "G-N5 负控：门跑期间树被改动 ⇒ rc=2（无效测量，不当绿）" || bad "G-N5 rc=$rc（应 2）"
     grep -q '门跑期间工作树被改动' "$T/g6.out" && ok "G-N5 报出了「无效测量」而不是含糊失败" || bad "G-N5 文案不对"
     [ -f "$T/g6/late.txt" ] && ok "G-N5 前提自证：扰动（跑期间的改动）确实发生了" || bad "G-N5 前提缺失"
+
+    # ── M444（缺陷 933）：门档输出必须**边跑边转**（不是结束时一次吐出）──
+    #   病史：M443 收口跑本档 42 分钟，调用方日志全程 0 字节 ⇒ 看不出在跑哪一门。
+    #   判据（带牙）：stub 先打一行 EARLY、睡 3s、再打 LATE。
+    #     正控：EARLY 必须在 stub **仍在跑**时就已经出现在输出里；
+    #     负控：PREFLIGHT_STREAM_OFF=1 时，同样的 1 秒时刻输出里**不能**有 EARLY
+    #           （且那一刻进程还活着 —— 前提自证：证明我们量的确实是「中途」而不是「跑完了」）。
+    gmkrepo "$T/g7"
+    cat > "$T/g7/selfhost/run_gates.sh" <<'STUB3'
+#!/usr/bin/env bash
+echo "STREAM-MARK-EARLY"
+sleep 3
+for i in $(seq 1 "${STUB_ROWS:-8}"); do printf 'g%s\tPASS\t1\t0\n' "$i" >> "${GATE_TSV:-/dev/null}"; done
+echo "STREAM-MARK-LATE"
+exit 0
+STUB3
+    chmod +x "$T/g7/selfhost/run_gates.sh"
+    ( cd "$T/g7" && git add -A 2>/dev/null && git -c user.email=a@b -c user.name=t commit -qm stream 2>/dev/null )
+    # ⚠️ 不能用 `sp="$(strm_start …)"`：命令替换会**等**后台子壳退出（它继承了替换管道）
+    #   ⇒ 拿到的 PID 早已是死的，正控与负控前提都会假红（首版就踩了这个）。
+    #   所以 strm_start 直接写在当前 shell，PID 用全局变量带回。
+    strm_pid=""
+    strm_start() {  # strm_start <outfile> [VAR=VAL...] → 起后台 gate_check，PID 存 strm_pid
+        local outf="$1"; shift
+        : > "$outf"
+        ( export STUB_ROWS="$NG" PREFLIGHT_RUN_GATES="$T/g7/selfhost/run_gates.sh"
+          [ $# -gt 0 ] && export "$@"
+          gate_check "$T/g7" >"$outf" 2>&1 ) &
+        strm_pid=$!
+    }
+    strm_start "$T/g7.out"
+    sp="$strm_pid"
+    early_seen=0
+    for _i in $(seq 1 60); do
+        if grep -q 'STREAM-MARK-EARLY' "$T/g7.out" 2>/dev/null; then
+            kill -0 "$sp" 2>/dev/null && early_seen=1
+            break
+        fi
+        sleep 0.1
+    done
+    wait "$sp" 2>/dev/null
+    [ "$early_seen" = 1 ] && ok "G-P3 流式正控：EARLY 行在 runner 仍在跑时就已输出" \
+                          || bad "G-P3 非流式：EARLY 行直到结束才出现（缺陷 933 复现）"
+    grep -q 'STREAM-MARK-LATE' "$T/g7.out" && ok "G-P3 前提自证：流没断（LATE 也到达）" \
+                                           || bad "G-P3 前提缺失：LATE 没到达"
+
+    strm_start "$T/g7off.out" PREFLIGHT_STREAM_OFF=1
+    sp="$strm_pid"
+    sleep 1
+    off_mid=0
+    kill -0 "$sp" 2>/dev/null || off_mid=1     # 1=已退出（前提不成立）
+    off_early=0
+    grep -q 'STREAM-MARK-EARLY' "$T/g7off.out" 2>/dev/null && off_early=1
+    wait "$sp" 2>/dev/null
+    [ "$off_mid" = 0 ] && ok "G-P3 负控前提自证：关闭流式时第 1 秒 runner 仍在跑（量的确实是中途）" \
+                       || bad "G-P3 负控前提不成立：第 1 秒 runner 已退出，判据无效"
+    [ "$off_early" = 0 ] && ok "G-P3 负控：PREFLIGHT_STREAM_OFF=1 时中途输出里没有 EARLY（判据有牙）" \
+                         || bad "G-P3 负控红不了：关掉流式后中途仍能收到 EARLY"
 
     echo "── 自测：$((n-FAIL))/$n 通过 ──"
     [ "$FAIL" = 0 ] || exit 1

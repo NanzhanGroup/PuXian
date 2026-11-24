@@ -159,18 +159,24 @@ def lx_scan_imports(path, known, visited):
 def lx_collect_import_names(items, known, file):
     let dir = lx_dirname(file)
     let visited = lc_dnew()
+    var miss = 0   # M444：解析不到的 import 个数（L002 判定的前提）
     var i = 0
     while i < len(items):
         let st = items[i]
         if st[0] == "Import":
             let cands = lx_mod_candidates(st[1], dir)
             var ci = 0
+            var hit = false
             while ci < len(cands):
                 if exists(cands[ci]):
                     lx_scan_imports(cands[ci], known, visited)
+                    hit = true
                     ci = len(cands)
                 ci += 1
+            if not hit:
+                miss += 1
         i += 1
+    return miss
 # ---------- 主流程 ----------
 def lx_diags_of(file):
     # M387（缺陷 700）：把「算诊断」抽成唯一实现 —— 单文件路径与目录路径共用它，
@@ -191,9 +197,24 @@ def lx_diags_of(file):
         bi += 1
     lc_dset(known, "pi")
     lc_dset(known, "e")
-    lx_collect_import_names(items, known, file)
+    # M444（缺陷 932 配套）：import 解析不到 ⇒ **L002 一律不可信**，剔除并出声。
+    #   病史：examples/m282_registry_020/ftp020_probe.px 以「工作区」路径 import
+    #   （../registry/ftp/0.2.0/ftp.px），in-place lint 解析不到 ⇒ 26 条假 L002。
+    #   静默放过（原状）与一律判红（把好文件判死）都不对 ⇒ 记一条 L010 警告并跳过 L002。
+    let miss = lx_collect_import_names(items, known, file)
     let diags = []
     lc_check_program(items, src, known, diags)
+    if miss > 0:
+        let kept = []
+        var ki = 0
+        while ki < len(diags):
+            if diags[ki][0] != "L002":
+                kept.append(diags[ki])
+            ki += 1
+        var msg = "有 " + str(miss) + " 个 import 无法从本文件目录解析 ⇒ 本轮不做 L002"
+        msg += "（未定义标识符）检查（构建期工作区路径可能不同）"
+        kept.append(["L010", "W", 1, 1, msg])
+        return [kept, ""]
     return [diags, ""]
 def lx_run(file, jmode, strict):
     if not exists(file):

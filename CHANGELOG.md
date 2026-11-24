@@ -1,3 +1,71 @@
+## M444（2026-11-25）：构建期就拦「未定义标识符」+ 门档边跑边转
+
+> **一句话**：两件运维债。② `px build` 在**入口文件**层做 L002 前置检查（默认开）——
+> ws-todo 那种「拼错的标识符编译期不拦、运行到兜底路径才炸」的缺陷，从此在构建那一刻就红；
+> ③ 发布前置门档（`release_preflight.sh --gates`）边跑边转，不再让 42 分钟的执行期外面看到 0 字节。
+
+### 用户令
+
+2026-11-25 04:06：「不用做①，本次做②③吧，下次做④」
+（① 通知 OFFLINE 重投 / ④ M441-2 `--no-tls` 按用户排序另议。）
+
+### ② 缺陷 932 · 构建期未定义标识符（`tools/px` + `tools/pxlint.px`）
+
+- `tools/px` 新增 `defchk_entry()`，在 `cmd_build` 里**紧接文件存在检查、且早于 `--pxe` 分叉**
+  调用（换 flag 绕不过）：入口文件有 L002 ⇒ 拒绝构建，打印诊断 + 两种逃生舱。
+  逃生舱：`PX_SKIP_DEFCHK=1`（关）· `PX_DEFCHK=warn`（只告警，迁移期用）。
+- **为什么不塞进 sema**（实测，不是口味）：全仓 lint 扫 `selfhost/` 24 件 ⇒ L002 假红 1000+ 处
+  （bc_emit 112 / cg_expr 176 / ibuiltin 295 / istmt 99 / iexpr 146 / icall 89 / ival 46 …）——
+  这些模块按惯例引用「主文件声明的全局」（interp.px 同构惯例），单文件静态分析看不到宿主那份声明。
+  塞进编译期 ⇒ 现有构建全判红。而**入口层是干净的**：`examples/*.px` 120 个入口 L002 = 0（实测）。
+- `tools/pxlint.px` 顺手补一个**静默跳过**：import 解析不到时原先会级联出假 L002
+  （实测 `examples/m282_registry_020/ftp020_probe.px` 26 条假红 —— 它的 `../registry/...` 只在
+  gate 的临时工作区里成立）。现在：`lx_collect_import_names` 返回未解析个数，>0 时
+  **剔除全部 L002** 并输出 `W L010`（说明为什么不做这项检查）；`defchk_entry` 见到 L010 即跳过
+  （构建期路径可能与 lint 时不同 ⇒ 此处判红就是误杀）。`bootstrap/pxlint` 已单件重烘。
+- 新门 `m444_defchk`（19 条判据）：形状 3（定义在 / 调用点在 / **调用行早于 `--pxe` 分叉行**）·
+  正控 4（直读 `to_str(1)` / `if x == 1:` 死分支 / 静态轨 / 报出 L002 且点名）·
+  负控 4（补定义必绿且产物真跑到那条路径 · `PX_SKIP_DEFCHK=1` 自证 · `warn` 降级 · `examples/fib.px` 无假红）·
+  import 解析不到不误杀 3（L010 在场 / L002 已剔除 / 该入口仍能构建）。
+  负控有牙：`--negctl` 删掉调用点 ⇒ 同一份未定义源码立即构建成功（判据随之失效即证），打桩后 trap 还原。
+
+### ③ 缺陷 933 · 门档输出边跑边转（`packaging/release_preflight.sh`）
+
+- `gate_check` 在 runner 启动前挂后台 `tail -n +1 -f "$log" 1>&2`，结束即 `kill` + `wait`；
+  `PREFLIGHT_STREAM_OFF=1` 可关（自测的负控靠它）。不接管道 ⇒ **rc 仍是门自己的 rc**（缺陷 696 形状不重犯）；
+  tail 只读不写 ⇒ 不改变判据输入。末尾保留「末 30 行回放」，专防「tail 被杀时最后一块没转出」。
+- `--self-test` 新增 G-P3 四条：流式正控（stub 先打 EARLY、睡 3s、再打 LATE，EARLY 必须在 stub
+  **仍在跑**时可见）· 前提自证（LATE 也到达）· 负控前提自证（关流式时第 1 秒 runner 仍在跑）·
+  负控（`PREFLIGHT_STREAM_OFF=1` 时中途输出里不得有 EARLY）。自测 22/22。
+- 新门 `m444_stream`（10 条）：形状 3 · 正控 5（G-P3 四条 + 通过数=断言数）· 整体 rc=0 且无 ❌。
+  负控有牙：`--negctl` 把 `PREFLIGHT_STREAM_OFF` 默认改 1 ⇒ G-P3 正控当即变红。
+
+### 踩过的坑（留档）
+
+- 自测首版写 `sp="$(strm_start …)"` 取后台 PID —— **命令替换会等后台子壳退出**（它继承了替换管道），
+  拿到的 PID 早已是死的 ⇒ 正控与负控前提全假红。我一度误判成「tail 全缓冲」并加了 `stdbuf -oL`；
+  实测去掉 stdbuf 同样绿 ⇒ **缓冲是假因，PID 才是真因**（推的要说成推的）。
+- 门文件里 `sed` 打桩的锚点 `return 1$` 写成 `return 1\$` ⇒ 变成「匹配字面 $」，打桩静默不生效
+  （正是 check_gate_assertions A1 描述的形状）；改成真锚点后 `--negctl` 才真正落地。
+
+### 证据
+
+```
+defchk  bash selfhost/check_m444_defchk.sh            ⇒ M444-DEFCHK OK n=19
+        bash selfhost/check_m444_defchk.sh --negctl   ⇒ NEGCTL OK（打桩后 build rc=0）
+stream  bash selfhost/check_m444_stream.sh            ⇒ M444-STREAM OK n=10
+        bash selfhost/check_m444_stream.sh --negctl   ⇒ NEGCTL OK
+自测    bash packaging/release_preflight.sh --self-test ⇒ 22/22
+重烘    selfhost/rebake_bin.sh --entries=pxlint → PXSRC-8b6951a4c88759ba
+        rebake_bin.sh --check-all ⇒ 14/14 件与当前源码一致
+lint    bootstrap/pxlint selfhost/compiler.px / tools/{lint_core,pxcheck,pxlint}.px ⇒ 全 0 错
+```
+
+### 回滚
+
+- ② `git revert` → `px build` 恢复「不查标识符」；`bootstrap/pxlint` 需随源码重烘同回；
+- ③ 删掉 `gate_check` 里的 tail 块即回到「结束时 tail -30」（判据与结论不变，只是看不见过程）。
+
 ## M443（2026-11-24）：版本位收口 —— M439–M442 并入 v0.2.443，只发一版
 
 > **一句话**：本轮不改功能代码，只把「四个里程碑攒成一个发布」真正收口：9 处版本字面量
