@@ -1,3 +1,87 @@
+## M442 补 5（2026-11-24）：CI 复绿后清零 known-red 台账（发布链卫生）
+
+> **一句话**：不是代码变更，是台账收尾 —— 补 2 / 补 3 的三条登记已在整轮 CI 实测复绿，
+> 按「红了必须登记、绿了必须删」的规则清空，避免到期日凭空多出**假红**（假红比真红更害人：
+> 它会让后来者不再信台账）。
+
+### 证据
+
+```
+CI run @ 6277cc8 · conclusion=success · 2026-11-24 17:05:36
+  判定者：M442S5-CI-WATCH（扫 nrun=20 nseen=2 nconcl=1 status=completed conclusion=success）
+  日志：/data/autodrive/M442S5-CI-WATCH.log（末行 USER-NOTIFY-OK）
+```
+
+### 改动
+
+- `packaging/ci_known_red.tsv`：删除 `原生自举`（到期 11-26）、`M159`（到期 11-26）、`M168`（到期 11-27）
+  三条；保留规则头，并写入清零依据与删除的三条原样，便于核对。
+- 无代码、无产物、无版本位变更。
+
+### 回滚
+
+- `git revert <本提交>`：台账恢复原三条，不影响任何构建与发布。
+
+## M442 补 4（2026-11-24）：`gh_get` 取不到数时**不带传输层原因**（缺陷 931）
+
+> **一句话**：`packaging/gh_get.sh` 用 `curl ... 2>/dev/null`，把 curl 的错误文本全丢掉，
+> 于是 journal 只剩 `gh_get: 取不到数 code=000 attempts=3` —— 「DNS 解析不出来 / 连不上 /
+> 被中间设备截断」三种完全不同的原因在**证据上长得一模一样**。判据本身没错（rc=4 响亮失败、
+> 不许当空结果），错的是**可诊断性**：接手的人必须重查一遍 journal 才能把根因认出来。
+
+### 现场（2026-11-24 16:00 / 16:30 两轮，dy-ops-ci-parity）
+
+```
+16:00:25 Starting dy-ops 远端 CI 对账…
+16:01:29 gh_get: 取不到数 code=000 attempts=3（重试已用完；测量失败 ≠ 空结果）
+16:01:29 CI-PARITY-ENV-FAIL 取数失败 rc=4（令牌失效 / 网络 / 无 fixture）
+16:31:21 同一形状（两轮之间 30 分钟，14:00 / 14:30 / 15:00 / 15:30 四轮全是 SYNC 绿）
+```
+
+同一窗口（15:50–16:45）本机**多个互不相关的出口同时解析失败**，这才是根因面：
+
+```
+[Email] AgentMail 收件箱拉取失败: … lookup mail.wsai.chat: i/o timeout        ×41
+[ws-core] LLM 调用失败: … dial tcp: lookup api.deepseek.com …（16:04/14/24/34 各一次）
+dy-node-probe.service: start operation timed out（×4）
+ls-local: dial remote <pool 节点>:37079 … no route to host（15:54 起，16:43 仍偶发）
+```
+
+⇒ 结论：**令牌有效、CI 无红**，是 11-24 15:54–16:44 约 50 分钟的全机 DNS/出口抖动；
+`rc=4 + p1` 的行为是**对的**（测量失败必须响亮）。近 7 天 journal 里这类解析失败共 45 条、
+**全部集中在这 50 分钟内**，不是周期性配置病。
+
+### 修法（只补可诊断性，不动判据）
+
+1. `_gh_call` 增加第 4 参 `errfile`：curl 的 `2>` 从 `/dev/null` 改为落临时文件（仍不进 argv，
+   令牌照旧走 `-K -` stdin）。
+2. `_gh_call_retry` 每次尝试后把**末次**错误读进 `GH_LAST_ERR`（`tail -1` + 去 CR + 截断 200 字符），
+   失败行变成：
+   `gh_get: 取不到数 code=000 attempts=3 末次错误=curl: (6) Could not resolve host: api.github.com（…）`
+   没有错误文本时**保持原格式**（`code=000 attempts=N（重试已用完…）`），不制造噪声。
+3. `examples/m389_gh_auth/verify.sh`：新增 C11（`http://127.0.0.1:1` 注入「连不上」⇒ 必须带非空
+   `末次错误=`）、C11b（attempts 用尽）、C11e/C11f（**成功路径不许出现**该噪声，`GH_LAST_ERR` 为空）、
+   负控 **N4**（把 `errf` 改回 `/dev/null` = 修复前形状 ⇒ C11 必须红，带 P5a/P5b 前提自证）。
+
+### 证据
+
+```
+examples/m389_gh_auth/verify.sh → M389 门结果：57 通过 / 0 失败（原 48 + 新增 9）
+  C11c 末次错误=curl: (7) Failed to connect to 127.0.0.1 port 1: Connection refused
+  N4   负控成立：丢掉错误文本后原因消失（C11 会红）
+packaging/chain/ci_parity_check.sh --selftest → CI-PARITY-SELFTEST-OK pass=11
+实盘注入 DNS 失败（GH_API=http://no-such-host-931.invalid）：
+  gh_get: 取不到数 code=000 attempts=1 末次错误=curl: (6) Could not resolve host: …（rc=4）
+实盘 dry（16:5x）：CI-PARITY sha=6277cc8 ci=in_progress 红门=0 → RC=0
+```
+
+### 副作用 / 回滚
+
+- 只改 `packaging/gh_get.sh`、`examples/m389_gh_auth/verify.sh`、`CHANGELOG.md`。
+- 每次尝试多一次 tmp 文件写（`<out>.gherr`，同目录、随即删除）；`latest_guard.sh` /
+  `release_reconcile.sh` / `release_watch.sh` 共用同一实现，**失败语义与退出码不变**（rc 三态未动）。
+- 回滚：`git revert <本次提交>` 即可回到「只有 code=000」的旧形状，无数据/配置迁移。
+
 ## M442 补 3（2026-11-24）：`bootstrap/pxvm` 没进「宿主架构现编」清单（缺陷 930）
 
 > **一句话**：M442-S3 让 `bootstrap/pxvm` 成为**入库件**（与其余 12 件工具同级），

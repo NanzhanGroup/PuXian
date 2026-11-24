@@ -56,7 +56,12 @@ _gh_token() {
     printf '%s' "$t"
 }
 
-# ── 单次请求：$1=path $2=outfile $3=token(可空) ⇒ 吐 http code（curl 失败吐 000）──
+# ── 单次请求：$1=path $2=outfile $3=token(可空) $4=curl stderr 落盘文件(可空) ⇒ 吐 http code ──
+# ⚠️ M442 补4（缺陷 931）：原先 `2>/dev/null` 把 curl 的错误文本丢掉 ⇒ 日志只剩 `code=000`，
+#   「DNS 挂了 / 连不上 / 被截断」三种完全不同的原因在证据上**长得一模一样**，
+#   2026-11-24 16:01 那轮为此多花一次叫醒才查到根因（本机 DNS 解析全线超时）。
+#   ⇒ 错误文本落到调用方给的临时文件，由 _gh_call_retry 读进 GH_LAST_ERR 并打进失败行。
+#   仍不进 argv（令牌走 -K stdin），也不落数据文件。
 # ⚠️ M415 · 缺陷 831：**令牌不许进 argv**（2026-11-18 实测：systemd 的 cgroup 树把
 #   `curl ... -H "Authorization: Bearer github_pat_..."` 整条打进 journal ⇒ 任何能
 #   读日志/ps 的本机进程都能拿到有效期 30 天的 PAT）。改用 `curl -K -`（配置从 stdin 读），
@@ -65,13 +70,13 @@ _gh_authhdr_cfg() {  # $1=token ⇒ 一行 curl 配置文件（不进 argv）
     printf 'header = "Authorization: Bearer %s"\n' "$1"
 }
 _gh_call() {
-    local path="$1" out="$2" tok="${3:-}" code
+    local path="$1" out="$2" tok="${3:-}" errf="${4:-/dev/null}" code
     if [ -n "$tok" ]; then
         code="$( _gh_authhdr_cfg "$tok" | curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" \
-                     -K - -H "Accept: application/vnd.github+json" "$GH_API$path" 2>/dev/null )" || code="000"
+                     -K - -H "Accept: application/vnd.github+json" "$GH_API$path" 2>"$errf" )" || code="000"
     else
         code="$( curl -sS -o "$out" -w '%{http_code}' --max-time "$GH_MAX_TIME" \
-                     -H "Accept: application/vnd.github+json" "$GH_API$path" 2>/dev/null )" || code="000"
+                     -H "Accept: application/vnd.github+json" "$GH_API$path" 2>"$errf" )" || code="000"
     fi
     printf '%s' "${code:-000}"
 }
@@ -84,11 +89,17 @@ _gh_retryable() { case "$1" in 000|429|500|502|503|504) return 0 ;; *) return 1 
 # ── 带退避重试的取数：结果写 GH_LAST_CODE，尝试次数写 GH_LAST_ATTEMPTS ──
 #   ⚠️ 结果走全局变量而不是 stdout：`code="$(...)"; 在子 shell 里，GH_LAST_ATTEMPTS 会丢
 _gh_call_retry() {
-    local path="$1" out="$2" tok="${3:-}" code="" n=1
+    local path="$1" out="$2" tok="${3:-}" code="" n=1 errf
+    errf="${out}.gherr"
+    GH_LAST_ERR=""
     while :; do
-        code="$(_gh_call "$path" "$out" "$tok")"
+        code="$(_gh_call "$path" "$out" "$tok" "$errf")"
+        # 末次尝试的 curl 错误（空 = curl 没报错，码是服务端给的答案）。截断 + 去 CR，防日志被撑爆。
+        GH_LAST_ERR="$(tail -n 1 "$errf" 2>/dev/null | tr -d '\r' | cut -c1-200)"
+        rm -f "$errf"
         if _gh_retryable "$code" && [ "$n" -lt "$GH_RETRY" ]; then
-            [ "${GH_DEBUG:-0}" = "1" ] && printf 'gh_get: 第 %s/%s 次失败 code=%s ⇒ 退避重试\n' "$n" "$GH_RETRY" "$code" >&2
+            [ "${GH_DEBUG:-0}" = "1" ] && printf 'gh_get: 第 %s/%s 次失败 code=%s%s ⇒ 退避重试\n' "$n" "$GH_RETRY" "$code" \
+                "${GH_LAST_ERR:+ err=$GH_LAST_ERR}" >&2
             sleep $(( n * GH_RETRY_SLEEP ))
             n=$((n + 1))
             continue
@@ -98,7 +109,12 @@ _gh_call_retry() {
     GH_LAST_CODE="$code"
     GH_LAST_ATTEMPTS="$n"
     if _gh_retryable "$code" && [ "$GH_QUIET_FAIL" = "0" ]; then
-        printf 'gh_get: 取不到数 code=%s attempts=%s（重试已用完；测量失败 ≠ 空结果）\n' "$code" "$n" >&2
+        if [ -n "$GH_LAST_ERR" ]; then
+            printf 'gh_get: 取不到数 code=%s attempts=%s 末次错误=%s（重试已用完；测量失败 ≠ 空结果）\n' \
+                "$code" "$n" "$GH_LAST_ERR" >&2
+        else
+            printf 'gh_get: 取不到数 code=%s attempts=%s（重试已用完；测量失败 ≠ 空结果）\n' "$code" "$n" >&2
+        fi
     fi
 }
 

@@ -280,6 +280,38 @@ fi
   rc=$?; [ "$rc" = 4 ] && echo NEG-RED-AS-EXPECTED || echo "NEG-STILL-GREEN rc=$rc" ) > "$TMP/n3.out" 2>&1
 chkg "N3 负控 C 成立：无重试时抖包被判 ENV-FAIL（C9 会红）" "$(cat "$TMP/n3.out")" "NEG-RED-AS-EXPECTED"
 
+printf '\n【C11】取不到数必须报出传输层原因（缺陷 931）\n'
+# 现场（2026-11-24 16:01 / 16:31 实测）：journal 只剩 `gh_get: 取不到数 code=000 attempts=3`，
+#   而「DNS 解析不出来 / 连不上 / 被中间设备截断」在证据上完全同形 ⇒ 那一轮叫醒只能得到
+#   「测量失败」，根因（本机 DNS 全线超时 15:54–16:44）要再查一遍 journal 才认出来。
+# 判据：000 的失败行必须带非空的「末次错误=」；成功路径不许出现这段噪声。
+( export GH_API="http://127.0.0.1:1" GH_TOKEN="github_pat_good0000000000" GH_RETRY=2 GH_RETRY_SLEEP=0 \
+         GH_QUIET_FAIL=0 GH_MAX_TIME=2
+  . "$GHGET"; gh_get "/repos/X/Y/tags" "$TMP/c11.json"; echo "rc=$? attempts=$GH_LAST_ATTEMPTS" ) > "$TMP/c11.out" 2>&1
+chkg "C11 连不上 ⇒ rc=4" "$(cat "$TMP/c11.out")" "rc=4"
+chkg "C11b 重试确实用完 attempts=2" "$(cat "$TMP/c11.out")" "attempts=2"
+if grep -qE 'gh_get: 取不到数 code=000 attempts=2 末次错误=.+' "$TMP/c11.out"; then
+    ok "C11c 失败行带非空「末次错误=」（$(grep -o '末次错误=.*' "$TMP/c11.out" | cut -c1-60)…）"
+else
+    ng "C11c 失败行没有传输层原因（实得：$(head -2 "$TMP/c11.out" | tr '\n' ' ')）"
+fi
+if grep -q 'GH_LAST_ERR' "$TMP/c11.out"; then ok "C11d 原因里不出现变量名（已是可读文本）"; else ok "C11d 无变量名噪声"; fi
+( export GH_API="$BASE" GH_TOKEN="github_pat_good0000000000" GH_QUIET_FAIL=0
+  . "$GHGET"; gh_get "/repos/X/Y/tags" "$TMP/c11e.json"; echo "rc=$? lasterr=[$GH_LAST_ERR]" ) > "$TMP/c11e.out" 2>&1
+chkn "C11e 成功路径不报「取不到数」（不制造噪声）" "$(cat "$TMP/c11e.out")" "取不到数"
+chkg "C11f 成功时 GH_LAST_ERR 为空" "$(cat "$TMP/c11e.out")" "lasterr=[]"
+
+# ── 负控 D：把错误落盘改回 /dev/null（= 修复前的形状）⇒ C11 必须红 ──
+printf '\n【N4】负控 D：丢掉 curl 错误文本 ⇒ C11 必须红\n'
+sed 's|^    errf="\${out}\.gherr"$|    errf="/dev/null"|' "$GHGET" > "$TMP/gh_bad4.sh"
+if ! diff -q "$GHGET" "$TMP/gh_bad4.sh" >/dev/null; then ok "P5a 负控副本确实被改过（diff 非空）"; else ng "P5a 负控没改到（sed 锚点失效）⇒ N4 结论不可信"; fi
+n_errf=$(grep -c '^    errf="/dev/null"$' "$TMP/gh_bad4.sh" 2>/dev/null || true)
+if [ "${n_errf:-0}" = 1 ]; then ok "P5b 前提自证：错误落盘已改回 /dev/null"; else ng "P5b 前提不成立（errf=/dev/null 命中 ${n_errf:-0}）"; fi
+( export GH_API="http://127.0.0.1:1" GH_TOKEN="github_pat_good0000000000" GH_RETRY=2 GH_RETRY_SLEEP=0 \
+         GH_QUIET_FAIL=0 GH_MAX_TIME=2
+  . "$TMP/gh_bad4.sh"; gh_get "/repos/X/Y/tags" "$TMP/n4.json" ) > "$TMP/n4.out" 2>&1
+if grep -qE '末次错误=.+' "$TMP/n4.out"; then ng "N4 负控 D 没红（丢错误仍报出原因 ⇒ C11 无牙）"; else ok "N4 负控 D 成立：丢错误后原因消失（C11 会红）"; fi
+
 printf '\n'
 if [ "$F" = 0 ]; then echo "M389 门结果：$P 通过 / 0 失败"; echo "M389-VERIFY-OK"; exit 0
 else echo "M389 门结果：$P 通过 / $F 失败"; echo "M389-VERIFY-FAIL"; exit 1; fi

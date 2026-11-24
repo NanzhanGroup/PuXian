@@ -1,20 +1,12 @@
-# M415 · 远端 CI 已知红登记 —— <门名>	<定性>	<到期 YYYY-MM-DD>
+# M415 · 远端 CI 已知红登记 —— <门名>\t<定性>\t<到期 YYYY-MM-DD>
 # 规则：CI 红门必须逐条登记；未登记 ⇒ GAP(rc=1)；登记过期 ⇒ GAP(rc=1)。
 # 到期前必须：修好，或重新定性并延期（延期要在 CHANGELOG 写清为什么）。
 #
-# ── 2026-11-24（M442 补 2 · 缺陷 926/927）：已修，run 45333929040 实测两条自举步均绿 ──
-# 根因（本机已复现并修绿，见 CHANGELOG「M442 补 2」）：
-#   runtime/pxvm.c 是 .pxe 宿主（自带 main），被 native_bootstrap.sh 的 `ls runtime/*.c`
-#   收进自举 runtime 清单 ⇒ 与 golden/compiler.c 的 main 撞；原生档（aarch64 runner）与
-#   交叉档（x86_64→aarch64）两条自举步同时红。CI run 45311642994 @ b048dfd。
-# 现状：该轮 CI（45333929040 @ 6fb05d5）里两条自举步已绿；整轮仍红是另一条（下面 M168）。
-#   本两条待整轮 CI 复绿后删除（保留是为了让「这轮红」的台账不出现空档）。
-原生自举	M442 补2：dup main 已修（排除 pxvm.c + 前提自证）· run 45333929040 已复绿 · 待整轮绿后删	2026-11-26
-M159	M442 补2：交叉档同一根因 · run 45333929040 已复绿 · 待整轮绿后删	2026-11-26
-#
-# ── 2026-11-24（M442 补 3 · 缺陷 930）：bootstrap/pxvm 没进「宿主架构现编」清单 ──
-#   入库件 bootstrap/pxvm 是 x86_64 的，而 aarch64 runner 的现编入口 build_native_tools.sh
-#   只认 .px 件 ⇒ M168 看到 x86_64 的 pxvm，判「架构不符」；真发出去 = Exec format error。
-#   修法：build_pxvm.sh 支持 aarch64 + build_native_tools.sh 增加 C 宿主件段（唯一入口）。
-M168	M442 补3：aarch64 侧 pxvm 未现编（架构不符）· 已修（build_pxvm aarch64 + 唯一入口）· 待 push 复验	2026-11-27
-#
+# ── 2026-11-24 17:05 清零（M442 补 5）──
+# 依据：CI run @ 6277cc8 conclusion=success（M442S5-CI-WATCH 实测，17:05:36 判绿）。
+# 删除条目：
+#   原生自举  M442 补2：dup main 已修（排除 pxvm.c + 前提自证）     到期 2026-11-26
+#   M159      M442 补2：交叉档同一根因                               到期 2026-11-26
+#   M168      M442 补3：aarch64 侧 pxvm 未现编（架构不符）已修       到期 2026-11-27
+# 说明：删除而非延期 —— 三条均已在本轮整轮 CI 里实测复绿，没有残留红。
+#       若将来同型复发，按新缺陷号重新登记，不复活旧条目。
