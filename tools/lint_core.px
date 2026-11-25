@@ -141,19 +141,23 @@ def lc_dmerge(dst, src):
 # 实测：`import "mod.px"` 后用模块顶层 `TABLE`/`TAG`/`COUNT` ⇒ 三行全被误报
 # L002（假红）。这是 Issue 63 同族（lint 对「合法可见名」的知识不全）。
 def lc_decl_names(sts):
-    var out = []
-    var i = 0
-    while i < len(sts):
-        let st = sts[i]
-        let ty = st[0]
-        if ty == "FuncDef":
-            out.append(lc_unq(st[1]))
-        elif ty == "VarDecl":
-            out.append(lc_unq(st[2]))
-        elif ty == "ChanDecl" or ty == "TypeConst":
-            out.append(lc_unq(st[1]))
-        i += 1
-    return out
+    # M446（缺陷 941 · 清歌 2026-11-25 15:04 报 P0）：**必须与 lc_check_program §3 的
+    #   known 构造同口径** —— 原实现只收 FuncDef/VarDecl/ChanDecl/TypeConst，漏掉
+    #   **赋值式顶层绑定**：`K = "hello-const"` 的 AST 是 Assign（不是 VarDecl）
+    #   ⇒ 被 import 模块的顶层常量不进名字表，上游 `import "lib.px"` 后引用即报
+    #   E L002 未定义变量。
+    #   实锤（本机 px 0.2.444）：libx.px 写 `K = "..."` 时 vconst.px 报 L002；
+    #   同一文件写成 `const K = "..."` 就通过 —— 差别只在 AST 形状，不在可见性语义
+    #   （解释轨 px run 两种写法都能取到 K）。
+    #   生产影响：清歌商城 12 个入口页全中（SITE lib.px:2 / API_VERSION lib_api.px:12 /
+    #   AD_MAX / CP_ENABLE_KEY / AS_MAX_IMAGES / V_RESEND_COOL / RV_APPEND_TRIES 全是
+    #   顶格赋值式）⇒ 被拒编译、退化解释轨（/aftersale 3.3s）。
+    #   修法：复用 lc_collect_frame_decls（已含 Assign + 嵌套块递归 + For 变量），
+    #   让「被 import 的文件」与「本文件」用同一份绑定收集逻辑（单一真源，
+    #   不再出现两处口径漂移 —— 这正是本缺陷的根因）。
+    let sink = lc_dnew()
+    lc_collect_frame_decls(sts, sink)
+    return sink.keys()
 # M171（缺陷 116）：作用域模型对齐 spec §17（帧归属规则）。
 #   ctx 由 3 项变 4 项：decl / used / known / **outer**。
 #   outer: name -> 拥有该绑定的**外层帧 ctx**（不是名字集合，是拥有者引用）——

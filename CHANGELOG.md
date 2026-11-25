@@ -1,4 +1,4 @@
-## M446（2026-11-25）：静默面清账 · 12 对回环示例真跑 · 缓存与树净机制化（缺陷 866、869、872、873、920、936–940）
+## M446（2026-11-25）：静默面清账 · 12 对回环示例真跑 · 缓存与树净机制化（缺陷 866、869、872、873、920、936–941）
 
 > **一句话**：本轮把 0.2.443 以来「记了但没立项」的静默面一次性收口 —— 三类静默
 > （非法时区当 UTC、HTTP/1.1 缺 Host 照收、204 带 Content-Length）全部改为**响亮**，
@@ -80,6 +80,30 @@
        被忽略条目，新增越账 ⇒ 红（只许收缩，新增须写理由）；--release 额外要求
        examples 构建残渣 = 0。为什么不用正则白名单：实测 git 会把「只含被忽略内容」的
        目录折叠成 `!! examples/`，白名单要么误放要么误红。门 m446_tree_clean 自测 4 项
+```
+
+### ⑦ 缺陷 941 · defchk 看不见 import 闭包里的**赋值式顶层常量**（清歌 15:04 报 P0）
+
+```
+报主  清歌 wsa-qingge 2026-11-25 15:04（m18eb37d73c14f660c469f32e）+ 15:05 收窄更正
+现象  0.2.444 上 px build --pxe vconst.px ⇒ vconst.px:4:11: E L002: 未定义变量: 'K'，rc=1 不产生产物
+      而 px run vconst.px ⇒ hello-const（解释轨正常）
+最小  libx.px: K = "hello-const" / def f()  ·  vconst.px: import "libx.px" / print(K)
+      对照：同一个 lib 写成 const K = ...（VarDecl）⇒ 通过；写成 K = ...（Assign）⇒ 报错
+根因  tools/lint_core.px 的 lc_decl_names 只收 FuncDef/VarDecl/ChanDecl/TypeConst，
+      漏掉**赋值式顶层绑定**（`K = "..."` 的 AST 是 Assign），
+      而 lc_check_program §3 构造 known 用的是 lc_collect_frame_decls（已含 Assign）
+      ⇒ 两处口径漂移：同一文件内的赋值式绑定可见，被 import 文件的不可见。
+生产  清歌商城 12 个入口页全中（SITE lib.px:2 / API_VERSION lib_api.px:12 / AD_MAX /
+      CP_ENABLE_KEY / AS_MAX_IMAGES / V_RESEND_COOL / V_RESEND_HOUR / RV_APPEND_TRIES
+      —— 全是顶格赋值式）⇒ 拒编译、退化解释轨（/aftersale 3.30s、/member 5.06s）
+修法  lc_decl_names 改为复用 lc_collect_frame_decls（单一真源），
+      被 import 文件与本文件从此用同一份绑定收集逻辑
+实测  vconst 通过 · 二级 import（a←b←d）常量通过 · 真未定义名仍报并点名 ·
+      闭包**之外**的全局名仍判 L002（as-designed，清歌 15:05 收窄口径：T/Tn 那三件不算误判）
+负控  把 lc_decl_names 回退成旧实现 + 重烘 pxlint ⇒ vconst 重新报 1 处 E L002
+      （2026-11-25 16:0x 实跑，两次重烘各证一次）⇒ 判据有牙
+门    m444_defchk 新增 N8 / N8b / N9 / N10，判据 26 → 30 条，全绿
 ```
 
 ### 本轮**发现但未修**（如实登记，不混批）

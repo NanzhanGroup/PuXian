@@ -25,6 +25,12 @@
 #   N6 `__` 内部名不计红（runtime 注入、不进名册）+ 前提自证「走了豁免且出声」
 #   S2 形状：run_gates.sh 统一导出门内默认 PX_DEFCHK=warn（否则 20+ 诊断夹具全被拦）
 #   N7 覆盖优先：门里 env 是 warn，但显式 PX_DEFCHK=error 仍拒构建（门可要求严格档）
+#   N8 缺陷 941（清歌 2026-11-25 15:04 报 P0）：import 闭包里的**赋值式顶层常量**可见
+#      （`K = "..."` 的 AST 是 Assign；原 lc_decl_names 只收 VarDecl/FuncDef ⇒ 误报 L002，
+#       清歌商城 12 个入口页全中、退化解释轨）
+#   N8b 前提自证：同一份程序里真未定义名仍被拦并点名 ⇒ N8 的绿不是「检查失效」换来的
+#   N9 二级 import：常量沿闭包递归可见（a←b←d，清歌实测函数能取到、常量取不到）
+#   N10 as-designed 边界：闭包**之外**的全局名仍判 L002（修收集面，不放宽成放行一切）
 #   G1 环境守卫：tools/px / bootstrap/pxlint 不可用 ⇒ rc=3（绝不降级成 0）
 # 退出码：0 全过 / 1 有违例 / 3 环境不成立
 # ============================================================
@@ -170,6 +176,93 @@ out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n6.px" 2>&1)"; rc=$?
               || bad "N6 把 runtime 内部名当未定义拦了：$(printf '%s' "$out" | head -2)"
 grep -q '内部名' <<< "$out" && ok "N6 前提自证：确实走了「\`__\` 豁免」分支（输出含『内部名』）" \
                                       || bad "N6 没走豁免分支（豁免没生效，或没出声 —— 静默豁免不可接受）"
+
+# ── N8/N8b/N9/N10 缺陷 941（清歌 2026-11-25 15:04 报 P0）：import 闭包里的顶层变量 ──
+#   病史：libx.px 顶格写 `K = "hello-const"`（AST 里是 Assign，**不是** VarDecl），
+#   上游 `import "libx.px"` 后 print(K) ⇒ E L002，0.2.444 拒编译（rc=1，不产生产物）。
+#   清歌商城 12 个入口页全中（SITE lib.px:2 / API_VERSION lib_api.px:12 / AD_MAX … 全是
+#   顶格赋值式）⇒ 退化解释轨（/aftersale 3.3s）。解释轨 px run 却能取到 ⇒ 是检查器的知识面缺口。
+#   根因：lc_decl_names 只收 FuncDef/VarDecl/ChanDecl/TypeConst，漏 Assign ——
+#   与「被 import 文件模块级绑定无块作用域」的语义不一致。
+#   实锤对照：同一份 lib 写 `const K = ...`（VarDecl）通过，写 `K = ...`（Assign）报错。
+mkdir -p "$T/n8"
+cat > "$T/n8/libx.px" <<'EOF'
+K = "hello-const"
+
+def f():
+    return "hello-fn"
+EOF
+cat > "$T/n8/vconst.px" <<'EOF'
+import "libx.px"
+
+def main():
+    print(K)
+    print(f())
+
+main()
+EOF
+out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n8/vconst.px" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "N8 无假红：import 来的**赋值式顶层常量** K 可见 ⇒ build rc=0" \
+              || bad "N8 仍误报：$(printf '%s' "$out" | head -2)"
+#   前提自证：检查仍在工作 —— 同一份程序里再加一个真未定义名，必须被拦并点名
+cat > "$T/n8/vconst_bad.px" <<'EOF'
+import "libx.px"
+
+def main():
+    print(K)
+    print(NOT_DEFINED_ANYWHERE)
+
+main()
+EOF
+out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n8/vconst_bad.px" 2>&1)"; rc=$?
+if [ "$rc" != 0 ] && grep -q 'NOT_DEFINED_ANYWHERE' <<< "$out"; then
+    ok "N8b 前提自证：真未定义名仍被拦并点名 ⇒ N8 的绿不是「检查整体失效」换来的"
+else
+    bad "N8b 前提不成立：真未定义名没被拦（rc=$rc）—— N8 的绿不可信"
+fi
+#   N9 二级 import：常量也必须沿闭包递归收集（清歌实测 a←b←d 的常量取不到，函数能取到）
+mkdir -p "$T/n9"
+cat > "$T/n9/a.px" <<'EOF'
+K2 = "K2-from-a"
+
+def g():
+    return "g-from-a"
+EOF
+cat > "$T/n9/b.px" <<'EOF'
+import "a.px"
+
+def h():
+    return "h-from-b"
+EOF
+cat > "$T/n9/d.px" <<'EOF'
+import "b.px"
+
+def main():
+    print(K2)
+    print(g())
+    print(h())
+
+main()
+EOF
+out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n9/d.px" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "N9 二级 import：a 的赋值式常量经 b 传递可见 ⇒ rc=0" \
+              || bad "N9 二级 import 常量仍不可见：$(printf '%s' "$out" | head -2)"
+#   N10 as-designed 边界：库文件引用 import 闭包**之外**的全局，单独作入口时仍须报
+#     （清歌 15:05 收窄口径：lib_order/lib_notify/lib_ship 用 T/Tn 而自身未 import lib_i18n
+#      ⇒ 不算误判，是真未定义；线上不出事只因 Ma 不把 lib_*.px 当路由入口）
+mkdir -p "$T/n10"
+cat > "$T/n10/lib_consumer.px" <<'EOF'
+def use():
+    return T_OUT_OF_CLOSURE
+
+print(use())
+EOF
+out="$(env -u PX_DEFCHK "$PX" build --pxe "$T/n10/lib_consumer.px" 2>&1)"; rc=$?
+if [ "$rc" != 0 ] && grep -q 'T_OUT_OF_CLOSURE' <<< "$out"; then
+    ok "N10 as-designed：闭包外的全局名仍判 L002（修的是收集面，不是把检查放宽成放行一切）"
+else
+    bad "N10 判据失效：闭包外的全局名没被拦（rc=$rc）"
+fi
 
 # ── S2 形状：门内默认 warn 的边界写在 run_gates.sh 一处 ──
 if grep -q 'export PX_DEFCHK="${PX_DEFCHK:-warn}"' selfhost/run_gates.sh; then
