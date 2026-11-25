@@ -22209,13 +22209,13 @@ static LXValue fn_pxe_sp_add(LXValue* args, int nargs, void* ctx) {
         px_srcpos("pxe_sp_add", 232);
         return px_index(px_index(_v2719, px_str("map")), _v2720);
     }
-    px_srcpos("pxe_sp_add", 233);
-    _v2721 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2719, px_str("buf"))}, 1);
-    px_srcpos("pxe_sp_add", 234);
+    px_srcpos("pxe_sp_add", 237);
+    _v2721 = px_call(px_get_global("bytes_len"), (LXValue[]){px_call(px_get_global("bytes"), (LXValue[]){px_index(_v2719, px_str("buf"))}, 1)}, 1);
+    px_srcpos("pxe_sp_add", 238);
     px_index_set(px_index(_v2719, px_str("map")), _v2720, _v2721);
-    px_srcpos("pxe_sp_add", 235);
+    px_srcpos("pxe_sp_add", 239);
     px_index_set(_v2719, px_str("buf"), px_add(px_add(px_index(_v2719, px_str("buf")), _v2720), PX_STR_LIT("\000")));
-    px_srcpos("pxe_sp_add", 236);
+    px_srcpos("pxe_sp_add", 240);
     return _v2721;
 px_err_2722:
     if (px_err_2722_proped) return px_err_2722_val;
@@ -22240,42 +22240,42 @@ static LXValue fn_pxe_crc32_of(LXValue* args, int nargs, void* ctx) {
     LXValue _v2733 = px_uninit();
     LXValue px_err_2734_val = px_null();
     int px_err_2734_proped = 0;
-    px_srcpos("pxe_crc32_of", 239);
+    px_srcpos("pxe_crc32_of", 243);
     _v2727 = px_call(px_get_global("pxe_mask"), (LXValue[]){_v2726, px_int(32LL)}, 2);
-    px_srcpos("pxe_crc32_of", 240);
+    px_srcpos("pxe_crc32_of", 244);
     _v2728 = _v2724;
-    px_srcpos("pxe_crc32_of", 241);
+    px_srcpos("pxe_crc32_of", 245);
     while (px_is_truthy(px_lt(_v2728, _v2725))) {
-        px_srcpos("pxe_crc32_of", 243);
-        _v2729 = px_call(px_get_global("pxe_mask"), (LXValue[]){px_idiv(_v2727, px_int(256LL)), px_int(32LL)}, 2);
-        px_srcpos("pxe_crc32_of", 244);
-        _v2730 = px_call(px_get_global("bytes_get"), (LXValue[]){_v2723, _v2728}, 2);
-        px_srcpos("pxe_crc32_of", 245);
-        _v2731 = px_bitxor(px_call(px_get_global("pxe_mask"), (LXValue[]){_v2727, px_int(32LL)}, 2), _v2730);
-        px_srcpos("pxe_crc32_of", 246);
-        _v2732 = px_call(px_get_global("pxe_mask"), (LXValue[]){_v2731, px_int(8LL)}, 2);
         px_srcpos("pxe_crc32_of", 247);
-        _v2733 = px_int(0LL);
+        _v2729 = px_call(px_get_global("pxe_mask"), (LXValue[]){px_idiv(_v2727, px_int(256LL)), px_int(32LL)}, 2);
         px_srcpos("pxe_crc32_of", 248);
+        _v2730 = px_call(px_get_global("bytes_get"), (LXValue[]){_v2723, _v2728}, 2);
+        px_srcpos("pxe_crc32_of", 249);
+        _v2731 = px_bitxor(px_call(px_get_global("pxe_mask"), (LXValue[]){_v2727, px_int(32LL)}, 2), _v2730);
+        px_srcpos("pxe_crc32_of", 250);
+        _v2732 = px_call(px_get_global("pxe_mask"), (LXValue[]){_v2731, px_int(8LL)}, 2);
+        px_srcpos("pxe_crc32_of", 251);
+        _v2733 = px_int(0LL);
+        px_srcpos("pxe_crc32_of", 252);
         while (px_is_truthy(px_lt(_v2733, px_int(8LL)))) {
-            px_srcpos("pxe_crc32_of", 249);
+            px_srcpos("pxe_crc32_of", 253);
             if (px_is_truthy(px_ne(px_call(px_get_global("pxe_mask"), (LXValue[]){_v2732, px_int(1LL)}, 2), px_int(0LL)))) {
-                px_srcpos("pxe_crc32_of", 250);
+                px_srcpos("pxe_crc32_of", 254);
                  _v2732 = px_call(px_get_global("pxe_mask"), (LXValue[]){px_bitxor(px_idiv(_v2732, px_int(2LL)), px_int(3988292384LL)), px_int(32LL)}, 2);
             }
             else {
-                px_srcpos("pxe_crc32_of", 252);
+                px_srcpos("pxe_crc32_of", 256);
                  _v2732 = px_call(px_get_global("pxe_mask"), (LXValue[]){px_idiv(_v2732, px_int(2LL)), px_int(32LL)}, 2);
             }
-            px_srcpos("pxe_crc32_of", 253);
+            px_srcpos("pxe_crc32_of", 257);
              _v2733 = px_add(_v2733, px_int(1LL));
         }
-        px_srcpos("pxe_crc32_of", 254);
+        px_srcpos("pxe_crc32_of", 258);
          _v2727 = px_call(px_get_global("pxe_mask"), (LXValue[]){px_bitxor(_v2732, _v2729), px_int(32LL)}, 2);
-        px_srcpos("pxe_crc32_of", 255);
+        px_srcpos("pxe_crc32_of", 259);
          _v2728 = px_add(_v2728, px_int(1LL));
     }
-    px_srcpos("pxe_crc32_of", 256);
+    px_srcpos("pxe_crc32_of", 260);
     return _v2727;
 px_err_2734:
     if (px_err_2734_proped) return px_err_2734_val;
@@ -22350,446 +22350,446 @@ static LXValue fn_bc_pxe_emit(LXValue* args, int nargs, void* ctx) {
     LXValue _v2795 = px_uninit();
     LXValue px_err_2796_val = px_null();
     int px_err_2796_proped = 0;
-    px_srcpos("bc_pxe_emit", 259);
-    _v2737 = px_index(_v2735, px_str("k_pool"));
-    px_srcpos("bc_pxe_emit", 260);
-    _v2738 = px_index(_v2735, px_str("globals"));
-    px_srcpos("bc_pxe_emit", 261);
-    _v2739 = px_index(_v2735, px_str("funcs"));
-    px_srcpos("bc_pxe_emit", 262);
-    _v2740 = px_index(_v2735, px_str("structs"));
     px_srcpos("bc_pxe_emit", 263);
-    _v2741 = px_call(px_get_global("len"), (LXValue[]){_v2737}, 1);
+    _v2737 = px_index(_v2735, px_str("k_pool"));
     px_srcpos("bc_pxe_emit", 264);
-    _v2742 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2735, px_str("n_pool"))}, 1);
+    _v2738 = px_index(_v2735, px_str("globals"));
     px_srcpos("bc_pxe_emit", 265);
-    _v2743 = px_call(px_get_global("len"), (LXValue[]){_v2738}, 1);
+    _v2739 = px_index(_v2735, px_str("funcs"));
     px_srcpos("bc_pxe_emit", 266);
-    _v2744 = px_call(px_get_global("len"), (LXValue[]){_v2739}, 1);
+    _v2740 = px_index(_v2735, px_str("structs"));
     px_srcpos("bc_pxe_emit", 267);
-    _v2745 = px_call(px_get_global("len"), (LXValue[]){_v2740}, 1);
+    _v2741 = px_call(px_get_global("len"), (LXValue[]){_v2737}, 1);
+    px_srcpos("bc_pxe_emit", 268);
+    _v2742 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2735, px_str("n_pool"))}, 1);
     px_srcpos("bc_pxe_emit", 269);
-    _v2746 = px_call(px_get_global("pxe_sp_new"), (LXValue[]){}, 0);
+    _v2743 = px_call(px_get_global("len"), (LXValue[]){_v2738}, 1);
     px_srcpos("bc_pxe_emit", 270);
-    _v2747 = px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2735, px_str("name"))}, 2);
+    _v2744 = px_call(px_get_global("len"), (LXValue[]){_v2739}, 1);
     px_srcpos("bc_pxe_emit", 271);
-    _v2748 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 272);
-    _v2749 = px_int(0LL);
+    _v2745 = px_call(px_get_global("len"), (LXValue[]){_v2740}, 1);
     px_srcpos("bc_pxe_emit", 273);
-    while (px_is_truthy(px_lt(_v2749, _v2742))) {
-        px_srcpos("bc_pxe_emit", 274);
-        (void)(px_method(_v2748, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2735, px_str("n_pool")), _v2749)}, 2)}, 1));
-        px_srcpos("bc_pxe_emit", 275);
-         _v2749 = px_add(_v2749, px_int(1LL));
-    }
+    _v2746 = px_call(px_get_global("pxe_sp_new"), (LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 274);
+    _v2747 = px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2735, px_str("name"))}, 2);
+    px_srcpos("bc_pxe_emit", 275);
+    _v2748 = px_list_n((LXValue[]){}, 0);
     px_srcpos("bc_pxe_emit", 276);
-    _v2750 = px_list_n((LXValue[]){}, 0);
+    _v2749 = px_int(0LL);
     px_srcpos("bc_pxe_emit", 277);
-     _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 278);
-    while (px_is_truthy(px_lt(_v2749, _v2743))) {
+    while (px_is_truthy(px_lt(_v2749, _v2742))) {
+        px_srcpos("bc_pxe_emit", 278);
+        (void)(px_method(_v2748, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2735, px_str("n_pool")), _v2749)}, 2)}, 1));
         px_srcpos("bc_pxe_emit", 279);
-        (void)(px_method(_v2750, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2738, _v2749)}, 2)}, 1));
-        px_srcpos("bc_pxe_emit", 280);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
+    px_srcpos("bc_pxe_emit", 280);
+    _v2750 = px_list_n((LXValue[]){}, 0);
     px_srcpos("bc_pxe_emit", 281);
-    _v2751 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 282);
-    _v2752 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 283);
-    _v2753 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 284);
-    _v2754 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 285);
-    _v2755 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 286);
-    _v2756 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 287);
      _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 288);
-    while (px_is_truthy(px_lt(_v2749, _v2744))) {
-        px_srcpos("bc_pxe_emit", 289);
-        _v2757 = px_index(_v2739, _v2749);
-        px_srcpos("bc_pxe_emit", 290);
-        (void)(px_method(_v2751, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2757, px_str("name"))}, 2)}, 1));
-        px_srcpos("bc_pxe_emit", 291);
-        (void)(px_method(_v2752, "append", (LXValue[]){_v2755}, 1));
-        px_srcpos("bc_pxe_emit", 292);
-        (void)(px_method(_v2753, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("bc"))}, 1)}, 1));
-        px_srcpos("bc_pxe_emit", 293);
-         _v2755 = px_add(_v2755, px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("bc"))}, 1));
-        px_srcpos("bc_pxe_emit", 294);
-        (void)(px_method(_v2754, "append", (LXValue[]){_v2756}, 1));
-        px_srcpos("bc_pxe_emit", 295);
-         _v2756 = px_add(_v2756, px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("upnames"))}, 1));
-        px_srcpos("bc_pxe_emit", 296);
+    px_srcpos("bc_pxe_emit", 282);
+    while (px_is_truthy(px_lt(_v2749, _v2743))) {
+        px_srcpos("bc_pxe_emit", 283);
+        (void)(px_method(_v2750, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2738, _v2749)}, 2)}, 1));
+        px_srcpos("bc_pxe_emit", 284);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 298);
-    _v2758 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 299);
+    px_srcpos("bc_pxe_emit", 285);
+    _v2751 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 286);
+    _v2752 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 287);
+    _v2753 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 288);
+    _v2754 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 289);
+    _v2755 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 290);
+    _v2756 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 291);
      _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 300);
+    px_srcpos("bc_pxe_emit", 292);
     while (px_is_truthy(px_lt(_v2749, _v2744))) {
-        px_srcpos("bc_pxe_emit", 301);
+        px_srcpos("bc_pxe_emit", 293);
         _v2757 = px_index(_v2739, _v2749);
-        px_srcpos("bc_pxe_emit", 302);
+        px_srcpos("bc_pxe_emit", 294);
+        (void)(px_method(_v2751, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2757, px_str("name"))}, 2)}, 1));
+        px_srcpos("bc_pxe_emit", 295);
+        (void)(px_method(_v2752, "append", (LXValue[]){_v2755}, 1));
+        px_srcpos("bc_pxe_emit", 296);
+        (void)(px_method(_v2753, "append", (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("bc"))}, 1)}, 1));
+        px_srcpos("bc_pxe_emit", 297);
+         _v2755 = px_add(_v2755, px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("bc"))}, 1));
+        px_srcpos("bc_pxe_emit", 298);
+        (void)(px_method(_v2754, "append", (LXValue[]){_v2756}, 1));
+        px_srcpos("bc_pxe_emit", 299);
+         _v2756 = px_add(_v2756, px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("upnames"))}, 1));
+        px_srcpos("bc_pxe_emit", 300);
+         _v2749 = px_add(_v2749, px_int(1LL));
+    }
+    px_srcpos("bc_pxe_emit", 302);
+    _v2758 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 303);
+     _v2749 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 304);
+    while (px_is_truthy(px_lt(_v2749, _v2744))) {
+        px_srcpos("bc_pxe_emit", 305);
+        _v2757 = px_index(_v2739, _v2749);
+        px_srcpos("bc_pxe_emit", 306);
         _v2759 = px_int(0LL);
-        px_srcpos("bc_pxe_emit", 303);
+        px_srcpos("bc_pxe_emit", 307);
         while (px_is_truthy(px_lt(_v2759, px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("upnames"))}, 1)))) {
-            px_srcpos("bc_pxe_emit", 304);
+            px_srcpos("bc_pxe_emit", 308);
             (void)(px_method(_v2758, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2757, px_str("upnames")), _v2759)}, 2)}, 1));
-            px_srcpos("bc_pxe_emit", 305);
+            px_srcpos("bc_pxe_emit", 309);
              _v2759 = px_add(_v2759, px_int(1LL));
         }
-        px_srcpos("bc_pxe_emit", 306);
+        px_srcpos("bc_pxe_emit", 310);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 308);
-    _v2760 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 309);
-    _v2761 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 310);
-    _v2762 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 311);
-    _v2763 = px_int(0LL);
     px_srcpos("bc_pxe_emit", 312);
-     _v2749 = px_int(0LL);
+    _v2760 = px_list_n((LXValue[]){}, 0);
     px_srcpos("bc_pxe_emit", 313);
+    _v2761 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 314);
+    _v2762 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 315);
+    _v2763 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 316);
+     _v2749 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 317);
     while (px_is_truthy(px_lt(_v2749, _v2745))) {
-        px_srcpos("bc_pxe_emit", 314);
-        _v2764 = px_index(_v2740, _v2749);
-        px_srcpos("bc_pxe_emit", 315);
-        (void)(px_method(_v2760, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2764, px_str("name"))}, 2)}, 1));
-        px_srcpos("bc_pxe_emit", 316);
-        _v2765 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2764, px_str("fnames"))}, 1);
-        px_srcpos("bc_pxe_emit", 317);
-        (void)(px_method(_v2761, "append", (LXValue[]){_v2765}, 1));
         px_srcpos("bc_pxe_emit", 318);
-        (void)(px_method(_v2762, "append", (LXValue[]){_v2763}, 1));
-        px_srcpos("bc_pxe_emit", 319);
-        _v2766 = px_int(0LL);
-        px_srcpos("bc_pxe_emit", 320);
-        while (px_is_truthy(px_lt(_v2766, _v2765))) {
-            px_srcpos("bc_pxe_emit", 321);
-            (void)(px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2764, px_str("fnames")), _v2766)}, 2));
-            px_srcpos("bc_pxe_emit", 322);
-             _v2763 = px_add(_v2763, px_int(1LL));
-            px_srcpos("bc_pxe_emit", 323);
-             _v2766 = px_add(_v2766, px_int(1LL));
-        }
-        px_srcpos("bc_pxe_emit", 324);
-         _v2749 = px_add(_v2749, px_int(1LL));
-    }
-    px_srcpos("bc_pxe_emit", 325);
-    _v2767 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 326);
-     _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 327);
-    while (px_is_truthy(px_lt(_v2749, _v2745))) {
-        px_srcpos("bc_pxe_emit", 328);
         _v2764 = px_index(_v2740, _v2749);
-        px_srcpos("bc_pxe_emit", 329);
+        px_srcpos("bc_pxe_emit", 319);
+        (void)(px_method(_v2760, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2764, px_str("name"))}, 2)}, 1));
+        px_srcpos("bc_pxe_emit", 320);
+        _v2765 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2764, px_str("fnames"))}, 1);
+        px_srcpos("bc_pxe_emit", 321);
+        (void)(px_method(_v2761, "append", (LXValue[]){_v2765}, 1));
+        px_srcpos("bc_pxe_emit", 322);
+        (void)(px_method(_v2762, "append", (LXValue[]){_v2763}, 1));
+        px_srcpos("bc_pxe_emit", 323);
         _v2766 = px_int(0LL);
-        px_srcpos("bc_pxe_emit", 330);
-        while (px_is_truthy(px_lt(_v2766, px_call(px_get_global("len"), (LXValue[]){px_index(_v2764, px_str("fnames"))}, 1)))) {
-            px_srcpos("bc_pxe_emit", 331);
-            (void)(px_method(_v2767, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2764, px_str("fnames")), _v2766)}, 2)}, 1));
-            px_srcpos("bc_pxe_emit", 332);
+        px_srcpos("bc_pxe_emit", 324);
+        while (px_is_truthy(px_lt(_v2766, _v2765))) {
+            px_srcpos("bc_pxe_emit", 325);
+            (void)(px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2764, px_str("fnames")), _v2766)}, 2));
+            px_srcpos("bc_pxe_emit", 326);
+             _v2763 = px_add(_v2763, px_int(1LL));
+            px_srcpos("bc_pxe_emit", 327);
              _v2766 = px_add(_v2766, px_int(1LL));
         }
-        px_srcpos("bc_pxe_emit", 333);
+        px_srcpos("bc_pxe_emit", 328);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 334);
-    _v2768 = px_list_n((LXValue[]){}, 0);
-    px_srcpos("bc_pxe_emit", 335);
+    px_srcpos("bc_pxe_emit", 329);
+    _v2767 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 330);
      _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 336);
-    while (px_is_truthy(px_lt(_v2749, _v2741))) {
+    px_srcpos("bc_pxe_emit", 331);
+    while (px_is_truthy(px_lt(_v2749, _v2745))) {
+        px_srcpos("bc_pxe_emit", 332);
+        _v2764 = px_index(_v2740, _v2749);
+        px_srcpos("bc_pxe_emit", 333);
+        _v2766 = px_int(0LL);
+        px_srcpos("bc_pxe_emit", 334);
+        while (px_is_truthy(px_lt(_v2766, px_call(px_get_global("len"), (LXValue[]){px_index(_v2764, px_str("fnames"))}, 1)))) {
+            px_srcpos("bc_pxe_emit", 335);
+            (void)(px_method(_v2767, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(px_index(_v2764, px_str("fnames")), _v2766)}, 2)}, 1));
+            px_srcpos("bc_pxe_emit", 336);
+             _v2766 = px_add(_v2766, px_int(1LL));
+        }
         px_srcpos("bc_pxe_emit", 337);
+         _v2749 = px_add(_v2749, px_int(1LL));
+    }
+    px_srcpos("bc_pxe_emit", 338);
+    _v2768 = px_list_n((LXValue[]){}, 0);
+    px_srcpos("bc_pxe_emit", 339);
+     _v2749 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 340);
+    while (px_is_truthy(px_lt(_v2749, _v2741))) {
+        px_srcpos("bc_pxe_emit", 341);
         _v2769 = px_index(_v2737, _v2749);
-        px_srcpos("bc_pxe_emit", 338);
+        px_srcpos("bc_pxe_emit", 342);
         if (px_is_truthy(px_eq(px_index(_v2769, px_str("kind")), px_str("str")))) {
-            px_srcpos("bc_pxe_emit", 339);
+            px_srcpos("bc_pxe_emit", 343);
             (void)(px_method(_v2768, "append", (LXValue[]){px_call(px_get_global("pxe_sp_add"), (LXValue[]){_v2746, px_index(_v2769, px_str("s"))}, 2)}, 1));
         }
         else {
-            px_srcpos("bc_pxe_emit", 341);
+            px_srcpos("bc_pxe_emit", 345);
             (void)(px_method(_v2768, "append", (LXValue[]){px_int(4294967295LL)}, 1));
         }
-        px_srcpos("bc_pxe_emit", 342);
+        px_srcpos("bc_pxe_emit", 346);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 344);
-    _v2770 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2746, px_str("buf"))}, 1);
-    px_srcpos("bc_pxe_emit", 345);
-    _v2771 = px_int(96LL);
-    px_srcpos("bc_pxe_emit", 346);
-    _v2772 = px_add(_v2771, px_mul(_v2741, px_int(24LL)));
-    px_srcpos("bc_pxe_emit", 347);
-    _v2773 = px_add(_v2772, px_mul(_v2742, px_int(4LL)));
     px_srcpos("bc_pxe_emit", 348);
-    _v2774 = px_add(_v2773, px_mul(_v2743, px_int(4LL)));
+    _v2770 = px_call(px_get_global("bytes_len"), (LXValue[]){px_call(px_get_global("bytes"), (LXValue[]){px_index(_v2746, px_str("buf"))}, 1)}, 1);
     px_srcpos("bc_pxe_emit", 349);
-    _v2775 = px_add(_v2774, px_mul(_v2744, px_int(32LL)));
+    _v2771 = px_int(96LL);
     px_srcpos("bc_pxe_emit", 350);
-    _v2776 = px_add(_v2775, px_mul(_v2756, px_int(4LL)));
+    _v2772 = px_add(_v2771, px_mul(_v2741, px_int(24LL)));
     px_srcpos("bc_pxe_emit", 351);
-    _v2777 = px_add(_v2776, px_mul(_v2745, px_int(12LL)));
+    _v2773 = px_add(_v2772, px_mul(_v2742, px_int(4LL)));
     px_srcpos("bc_pxe_emit", 352);
-    _v2778 = px_add(_v2777, px_mul(_v2763, px_int(4LL)));
+    _v2774 = px_add(_v2773, px_mul(_v2743, px_int(4LL)));
     px_srcpos("bc_pxe_emit", 353);
-    _v2779 = px_add(_v2778, px_mul(_v2755, px_int(8LL)));
+    _v2775 = px_add(_v2774, px_mul(_v2744, px_int(32LL)));
     px_srcpos("bc_pxe_emit", 354);
-    _v2780 = px_add(_v2779, _v2770);
+    _v2776 = px_add(_v2775, px_mul(_v2756, px_int(4LL)));
     px_srcpos("bc_pxe_emit", 355);
-    _v2781 = px_add(_v2780, px_int(40LL));
+    _v2777 = px_add(_v2776, px_mul(_v2745, px_int(12LL)));
     px_srcpos("bc_pxe_emit", 356);
-    if (px_is_truthy(px_gt(_v2781, px_int(67108864LL)))) {
-        px_srcpos("bc_pxe_emit", 357);
-        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_add(px_str("bc_pxe: .pxe 超过 64MiB 上限（"), px_call(px_get_global("str"), (LXValue[]){_v2781}, 1)), px_str("）"))}, 1));
-        px_srcpos("bc_pxe_emit", 358);
-        return px_neg(px_int(1LL));
-    }
+    _v2778 = px_add(_v2777, px_mul(_v2763, px_int(4LL)));
+    px_srcpos("bc_pxe_emit", 357);
+    _v2779 = px_add(_v2778, px_mul(_v2755, px_int(8LL)));
+    px_srcpos("bc_pxe_emit", 358);
+    _v2780 = px_add(_v2779, _v2770);
+    px_srcpos("bc_pxe_emit", 359);
+    _v2781 = px_add(_v2780, px_int(40LL));
     px_srcpos("bc_pxe_emit", 360);
-    if (px_is_truthy(px_ne(px_call(px_get_global("write_bytes"), (LXValue[]){_v2736, px_call(px_get_global("bytes_zeros"), (LXValue[]){_v2781}, 1)}, 2), px_bool(true)))) {
+    if (px_is_truthy(px_gt(_v2781, px_int(67108864LL)))) {
         px_srcpos("bc_pxe_emit", 361);
-        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_str("bc_pxe: 预分配失败 "), _v2736)}, 1));
+        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_add(px_str("bc_pxe: .pxe 超过 64MiB 上限（"), px_call(px_get_global("str"), (LXValue[]){_v2781}, 1)), px_str("）"))}, 1));
         px_srcpos("bc_pxe_emit", 362);
         return px_neg(px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 363);
-    _v2782 = px_call(px_get_global("open"), (LXValue[]){_v2736, px_int(2LL), px_int(420LL)}, 3);
     px_srcpos("bc_pxe_emit", 364);
-    if (px_is_truthy(px_lt(_v2782, px_int(0LL)))) {
+    if (px_is_truthy(px_ne(px_call(px_get_global("write_bytes"), (LXValue[]){_v2736, px_call(px_get_global("bytes_zeros"), (LXValue[]){_v2781}, 1)}, 2), px_bool(true)))) {
         px_srcpos("bc_pxe_emit", 365);
-        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_str("bc_pxe: open 失败 "), _v2736)}, 1));
+        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_str("bc_pxe: 预分配失败 "), _v2736)}, 1));
         px_srcpos("bc_pxe_emit", 366);
         return px_neg(px_int(1LL));
     }
     px_srcpos("bc_pxe_emit", 367);
-    _v2783 = px_call(px_get_global("mmap"), (LXValue[]){_v2782, _v2781}, 2);
-    px_srcpos("bc_pxe_emit", 369);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(0LL), px_str("PXE1")}, 3));
-    px_srcpos("bc_pxe_emit", 370);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(4LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(2LL), px_int(2LL), px_str("le")}, 3)}, 3));
+    _v2782 = px_call(px_get_global("open"), (LXValue[]){_v2736, px_int(2LL), px_int(420LL)}, 3);
+    px_srcpos("bc_pxe_emit", 368);
+    if (px_is_truthy(px_lt(_v2782, px_int(0LL)))) {
+        px_srcpos("bc_pxe_emit", 369);
+        (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_str("bc_pxe: open 失败 "), _v2736)}, 1));
+        px_srcpos("bc_pxe_emit", 370);
+        return px_neg(px_int(1LL));
+    }
     px_srcpos("bc_pxe_emit", 371);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(6LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(0LL), px_int(2LL), px_str("le")}, 3)}, 3));
-    px_srcpos("bc_pxe_emit", 372);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(8LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2741, px_int(4LL), px_str("le")}, 3)}, 3));
+    _v2783 = px_call(px_get_global("mmap"), (LXValue[]){_v2782, _v2781}, 2);
     px_srcpos("bc_pxe_emit", 373);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(12LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2742, px_int(4LL), px_str("le")}, 3)}, 3));
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(0LL), px_str("PXE1")}, 3));
     px_srcpos("bc_pxe_emit", 374);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(16LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2743, px_int(4LL), px_str("le")}, 3)}, 3));
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(4LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(2LL), px_int(2LL), px_str("le")}, 3)}, 3));
     px_srcpos("bc_pxe_emit", 375);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(20LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2744, px_int(4LL), px_str("le")}, 3)}, 3));
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(6LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(0LL), px_int(2LL), px_str("le")}, 3)}, 3));
     px_srcpos("bc_pxe_emit", 376);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(8LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2741, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 377);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(12LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2742, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 378);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(16LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2743, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 379);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(20LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2744, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 380);
     if (px_is_truthy(px_eq(px_index(_v2735, px_str("top")), px_null()))) {
-        px_srcpos("bc_pxe_emit", 377);
+        px_srcpos("bc_pxe_emit", 381);
         (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(24LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(4294967295LL), px_int(4LL), px_str("le")}, 3)}, 3));
     }
     else {
-        px_srcpos("bc_pxe_emit", 379);
+        px_srcpos("bc_pxe_emit", 383);
         (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(24LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2735, px_str("top")), px_int(4LL), px_str("le")}, 3)}, 3));
     }
-    px_srcpos("bc_pxe_emit", 380);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(28LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2745, px_int(4LL), px_str("le")}, 3)}, 3));
-    px_srcpos("bc_pxe_emit", 381);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(32LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2755, px_int(4LL), px_str("le")}, 3)}, 3));
-    px_srcpos("bc_pxe_emit", 382);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(36LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2747, px_int(4LL), px_str("le")}, 3)}, 3));
-    px_srcpos("bc_pxe_emit", 383);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(40LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2770, px_int(4LL), px_str("le")}, 3)}, 3));
     px_srcpos("bc_pxe_emit", 384);
-    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(44LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2781, px_int(4LL), px_str("le")}, 3)}, 3));
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(28LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2745, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 385);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(32LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2755, px_int(4LL), px_str("le")}, 3)}, 3));
     px_srcpos("bc_pxe_emit", 386);
-     _v2749 = px_int(0LL);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(36LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2747, px_int(4LL), px_str("le")}, 3)}, 3));
     px_srcpos("bc_pxe_emit", 387);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(40LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2770, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 388);
+    (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_int(44LL), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2781, px_int(4LL), px_str("le")}, 3)}, 3));
+    px_srcpos("bc_pxe_emit", 390);
+     _v2749 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 391);
     while (px_is_truthy(px_lt(_v2749, _v2741))) {
-        px_srcpos("bc_pxe_emit", 388);
-        _v2769 = px_index(_v2737, _v2749);
-        px_srcpos("bc_pxe_emit", 389);
-        _v2784 = px_add(_v2771, px_mul(_v2749, px_int(24LL)));
-        px_srcpos("bc_pxe_emit", 390);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_kind_num"), (LXValue[]){px_index(_v2769, px_str("kind"))}, 1), px_int(1LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 391);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2768, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 392);
-        _v2785 = px_int(0LL);
+        _v2769 = px_index(_v2737, _v2749);
         px_srcpos("bc_pxe_emit", 393);
+        _v2784 = px_add(_v2771, px_mul(_v2749, px_int(24LL)));
+        px_srcpos("bc_pxe_emit", 394);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_kind_num"), (LXValue[]){px_index(_v2769, px_str("kind"))}, 1), px_int(1LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 395);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2768, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 396);
+        _v2785 = px_int(0LL);
+        px_srcpos("bc_pxe_emit", 397);
         if (px_is_truthy(({ LXValue _t2798 = ({ LXValue _t2797 = px_eq(px_index(_v2769, px_str("kind")), px_str("int")); px_is_truthy(_t2797) ? _t2797 : px_eq(px_index(_v2769, px_str("kind")), px_str("bool")); }); px_is_truthy(_t2798) ? _t2798 : px_eq(px_index(_v2769, px_str("kind")), px_str("func")); }))) {
-            px_srcpos("bc_pxe_emit", 394);
+            px_srcpos("bc_pxe_emit", 398);
              _v2785 = px_index(_v2769, px_str("i"));
         }
-        px_srcpos("bc_pxe_emit", 395);
-        if (px_is_truthy(px_eq(px_index(_v2769, px_str("kind")), px_str("str")))) {
-            px_srcpos("bc_pxe_emit", 396);
-             _v2785 = px_call(px_get_global("len"), (LXValue[]){px_index(_v2769, px_str("s"))}, 1);
-        }
-        px_srcpos("bc_pxe_emit", 397);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(8LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2785, px_int(8LL), px_str("le"), px_bool(true)}, 4)}, 3));
-        px_srcpos("bc_pxe_emit", 398);
-        _v2786 = px_int(0LL);
         px_srcpos("bc_pxe_emit", 399);
+        if (px_is_truthy(px_eq(px_index(_v2769, px_str("kind")), px_str("str")))) {
+            px_srcpos("bc_pxe_emit", 401);
+             _v2785 = px_call(px_get_global("bytes_len"), (LXValue[]){px_call(px_get_global("bytes"), (LXValue[]){px_index(_v2769, px_str("s"))}, 1)}, 1);
+        }
+        px_srcpos("bc_pxe_emit", 402);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(8LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2785, px_int(8LL), px_str("le"), px_bool(true)}, 4)}, 3));
+        px_srcpos("bc_pxe_emit", 403);
+        _v2786 = px_int(0LL);
+        px_srcpos("bc_pxe_emit", 404);
         if (px_is_truthy(px_eq(px_index(_v2769, px_str("kind")), px_str("float")))) {
-            px_srcpos("bc_pxe_emit", 400);
+            px_srcpos("bc_pxe_emit", 405);
              _v2786 = px_call(px_get_global("float64_bits"), (LXValue[]){px_index(_v2769, px_str("f"))}, 1);
         }
-        px_srcpos("bc_pxe_emit", 401);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(16LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2786, px_int(8LL), px_str("le"), px_bool(true)}, 4)}, 3));
-        px_srcpos("bc_pxe_emit", 402);
-         _v2749 = px_add(_v2749, px_int(1LL));
-    }
-    px_srcpos("bc_pxe_emit", 404);
-     _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 405);
-    while (px_is_truthy(px_lt(_v2749, _v2742))) {
         px_srcpos("bc_pxe_emit", 406);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2772, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2748, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(16LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2786, px_int(8LL), px_str("le"), px_bool(true)}, 4)}, 3));
         px_srcpos("bc_pxe_emit", 407);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 408);
-     _v2749 = px_int(0LL);
     px_srcpos("bc_pxe_emit", 409);
-    while (px_is_truthy(px_lt(_v2749, _v2743))) {
-        px_srcpos("bc_pxe_emit", 410);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2773, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2750, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+     _v2749 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 410);
+    while (px_is_truthy(px_lt(_v2749, _v2742))) {
         px_srcpos("bc_pxe_emit", 411);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2772, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2748, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 412);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
     px_srcpos("bc_pxe_emit", 413);
      _v2749 = px_int(0LL);
     px_srcpos("bc_pxe_emit", 414);
-    while (px_is_truthy(px_lt(_v2749, _v2744))) {
+    while (px_is_truthy(px_lt(_v2749, _v2743))) {
         px_srcpos("bc_pxe_emit", 415);
-        _v2757 = px_index(_v2739, _v2749);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2773, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2750, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 416);
-        _v2784 = px_add(_v2774, px_mul(_v2749, px_int(32LL)));
-        px_srcpos("bc_pxe_emit", 417);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2751, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 418);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2757, px_str("arity")), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 419);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(8LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2757, px_str("ndefault")), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 420);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(12LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2757, px_str("nslots")), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 421);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(16LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2752, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 422);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(20LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2753, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 423);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(24LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("upnames"))}, 1), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 424);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(28LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(0LL), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 425);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 427);
+    px_srcpos("bc_pxe_emit", 418);
      _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 428);
-    while (px_is_truthy(px_lt(_v2749, px_call(px_get_global("len"), (LXValue[]){_v2758}, 1)))) {
+    px_srcpos("bc_pxe_emit", 419);
+    while (px_is_truthy(px_lt(_v2749, _v2744))) {
+        px_srcpos("bc_pxe_emit", 420);
+        _v2757 = px_index(_v2739, _v2749);
+        px_srcpos("bc_pxe_emit", 421);
+        _v2784 = px_add(_v2774, px_mul(_v2749, px_int(32LL)));
+        px_srcpos("bc_pxe_emit", 422);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2751, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 423);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2757, px_str("arity")), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 424);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(8LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2757, px_str("ndefault")), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 425);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(12LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2757, px_str("nslots")), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 426);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(16LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2752, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 427);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(20LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2753, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 428);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(24LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_index(_v2757, px_str("upnames"))}, 1), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 429);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2775, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2758, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(28LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_int(0LL), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 430);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
     px_srcpos("bc_pxe_emit", 432);
      _v2749 = px_int(0LL);
     px_srcpos("bc_pxe_emit", 433);
-    while (px_is_truthy(px_lt(_v2749, _v2745))) {
+    while (px_is_truthy(px_lt(_v2749, px_call(px_get_global("len"), (LXValue[]){_v2758}, 1)))) {
         px_srcpos("bc_pxe_emit", 434);
-        _v2784 = px_add(_v2776, px_mul(_v2749, px_int(12LL)));
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2775, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2758, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 435);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2760, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 436);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2761, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 437);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(8LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2762, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
-        px_srcpos("bc_pxe_emit", 438);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 439);
+    px_srcpos("bc_pxe_emit", 437);
      _v2749 = px_int(0LL);
-    px_srcpos("bc_pxe_emit", 440);
-    while (px_is_truthy(px_lt(_v2749, px_call(px_get_global("len"), (LXValue[]){_v2767}, 1)))) {
+    px_srcpos("bc_pxe_emit", 438);
+    while (px_is_truthy(px_lt(_v2749, _v2745))) {
+        px_srcpos("bc_pxe_emit", 439);
+        _v2784 = px_add(_v2776, px_mul(_v2749, px_int(12LL)));
+        px_srcpos("bc_pxe_emit", 440);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2760, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 441);
-        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2777, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2767, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2761, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 442);
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(8LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2762, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
+        px_srcpos("bc_pxe_emit", 443);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
     px_srcpos("bc_pxe_emit", 444);
      _v2749 = px_int(0LL);
     px_srcpos("bc_pxe_emit", 445);
-    while (px_is_truthy(px_lt(_v2749, _v2744))) {
+    while (px_is_truthy(px_lt(_v2749, px_call(px_get_global("len"), (LXValue[]){_v2767}, 1)))) {
         px_srcpos("bc_pxe_emit", 446);
-        _v2787 = px_index(px_index(_v2739, _v2749), px_str("bc"));
+        (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2777, px_mul(_v2749, px_int(4LL))), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_index(_v2767, _v2749), px_int(4LL), px_str("le")}, 3)}, 3));
         px_srcpos("bc_pxe_emit", 447);
-        _v2788 = px_int(0LL);
-        px_srcpos("bc_pxe_emit", 448);
-        while (px_is_truthy(px_lt(_v2788, px_call(px_get_global("len"), (LXValue[]){_v2787}, 1)))) {
-            px_srcpos("bc_pxe_emit", 449);
-            _v2789 = px_index(_v2787, _v2788);
-            px_srcpos("bc_pxe_emit", 450);
-            _v2784 = px_add(_v2778, px_mul(px_add(px_index(_v2752, _v2749), _v2788), px_int(8LL)));
-            px_srcpos("bc_pxe_emit", 451);
-            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_op_num"), (LXValue[]){px_index(_v2789, px_int(0LL))}, 1), px_int(1LL), px_str("le")}, 3)}, 3));
-            px_srcpos("bc_pxe_emit", 452);
-            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(1LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(1LL)), px_int(8LL)}, 2), px_int(1LL), px_str("le")}, 3)}, 3));
-            px_srcpos("bc_pxe_emit", 453);
-            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(2LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(2LL)), px_int(16LL)}, 2), px_int(2LL), px_str("le")}, 3)}, 3));
-            px_srcpos("bc_pxe_emit", 454);
-            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(3LL)), px_int(16LL)}, 2), px_int(2LL), px_str("le")}, 3)}, 3));
-            px_srcpos("bc_pxe_emit", 455);
-            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(6LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(4LL)), px_int(16LL)}, 2), px_int(2LL), px_str("le")}, 3)}, 3));
-            px_srcpos("bc_pxe_emit", 456);
-             _v2788 = px_add(_v2788, px_int(1LL));
-        }
-        px_srcpos("bc_pxe_emit", 457);
          _v2749 = px_add(_v2749, px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 459);
+    px_srcpos("bc_pxe_emit", 449);
+     _v2749 = px_int(0LL);
+    px_srcpos("bc_pxe_emit", 450);
+    while (px_is_truthy(px_lt(_v2749, _v2744))) {
+        px_srcpos("bc_pxe_emit", 451);
+        _v2787 = px_index(px_index(_v2739, _v2749), px_str("bc"));
+        px_srcpos("bc_pxe_emit", 452);
+        _v2788 = px_int(0LL);
+        px_srcpos("bc_pxe_emit", 453);
+        while (px_is_truthy(px_lt(_v2788, px_call(px_get_global("len"), (LXValue[]){_v2787}, 1)))) {
+            px_srcpos("bc_pxe_emit", 454);
+            _v2789 = px_index(_v2787, _v2788);
+            px_srcpos("bc_pxe_emit", 455);
+            _v2784 = px_add(_v2778, px_mul(px_add(px_index(_v2752, _v2749), _v2788), px_int(8LL)));
+            px_srcpos("bc_pxe_emit", 456);
+            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2784, px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_op_num"), (LXValue[]){px_index(_v2789, px_int(0LL))}, 1), px_int(1LL), px_str("le")}, 3)}, 3));
+            px_srcpos("bc_pxe_emit", 457);
+            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(1LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(1LL)), px_int(8LL)}, 2), px_int(1LL), px_str("le")}, 3)}, 3));
+            px_srcpos("bc_pxe_emit", 458);
+            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(2LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(2LL)), px_int(16LL)}, 2), px_int(2LL), px_str("le")}, 3)}, 3));
+            px_srcpos("bc_pxe_emit", 459);
+            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(4LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(3LL)), px_int(16LL)}, 2), px_int(2LL), px_str("le")}, 3)}, 3));
+            px_srcpos("bc_pxe_emit", 460);
+            (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, px_add(_v2784, px_int(6LL)), px_call(px_get_global("int_to_bytes"), (LXValue[]){px_call(px_get_global("pxe_mask"), (LXValue[]){px_index(_v2789, px_int(4LL)), px_int(16LL)}, 2), px_int(2LL), px_str("le")}, 3)}, 3));
+            px_srcpos("bc_pxe_emit", 461);
+             _v2788 = px_add(_v2788, px_int(1LL));
+        }
+        px_srcpos("bc_pxe_emit", 462);
+         _v2749 = px_add(_v2749, px_int(1LL));
+    }
+    px_srcpos("bc_pxe_emit", 464);
     if (px_is_truthy(px_gt(_v2770, px_int(0LL)))) {
-        px_srcpos("bc_pxe_emit", 460);
+        px_srcpos("bc_pxe_emit", 465);
         (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2779, px_index(_v2746, px_str("buf"))}, 3));
     }
-    px_srcpos("bc_pxe_emit", 462);
+    px_srcpos("bc_pxe_emit", 467);
     _v2790 = px_call(px_get_global("pxe_crc32_of"), (LXValue[]){_v2783, px_int(0LL), _v2780, px_int(4294967295LL)}, 4);
-    px_srcpos("bc_pxe_emit", 463);
+    px_srcpos("bc_pxe_emit", 468);
      _v2790 = px_call(px_get_global("pxe_mask"), (LXValue[]){px_bitxor(_v2790, px_int(4294967295LL)), px_int(32LL)}, 2);
-    px_srcpos("bc_pxe_emit", 464);
+    px_srcpos("bc_pxe_emit", 469);
     (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2783, _v2780, px_call(px_get_global("int_to_bytes"), (LXValue[]){_v2790, px_int(4LL), px_str("le")}, 3)}, 3));
-    px_srcpos("bc_pxe_emit", 465);
-    (void)(px_call(px_get_global("munmap"), (LXValue[]){_v2783}, 1));
-    px_srcpos("bc_pxe_emit", 466);
-    (void)(px_call(px_get_global("close"), (LXValue[]){_v2782}, 1));
     px_srcpos("bc_pxe_emit", 470);
-    _v2791 = px_call(px_get_global("read_bytes"), (LXValue[]){_v2736}, 1);
+    (void)(px_call(px_get_global("munmap"), (LXValue[]){_v2783}, 1));
     px_srcpos("bc_pxe_emit", 471);
+    (void)(px_call(px_get_global("close"), (LXValue[]){_v2782}, 1));
+    px_srcpos("bc_pxe_emit", 475);
+    _v2791 = px_call(px_get_global("read_bytes"), (LXValue[]){_v2736}, 1);
+    px_srcpos("bc_pxe_emit", 476);
     _v2792 = px_call(px_get_global("bytes_slice"), (LXValue[]){_v2791, px_int(0LL), _v2780}, 3);
-    px_srcpos("bc_pxe_emit", 472);
+    px_srcpos("bc_pxe_emit", 477);
     _v2793 = px_call(px_get_global("sha256_bytes"), (LXValue[]){_v2792}, 1);
-    px_srcpos("bc_pxe_emit", 473);
+    px_srcpos("bc_pxe_emit", 478);
     _v2794 = px_call(px_get_global("open"), (LXValue[]){_v2736, px_int(2LL), px_int(420LL)}, 3);
-    px_srcpos("bc_pxe_emit", 474);
+    px_srcpos("bc_pxe_emit", 479);
     if (px_is_truthy(px_lt(_v2794, px_int(0LL)))) {
-        px_srcpos("bc_pxe_emit", 475);
+        px_srcpos("bc_pxe_emit", 480);
         (void)(px_call(px_get_global("print_err"), (LXValue[]){px_add(px_str("bc_pxe: 二次 open 失败 "), _v2736)}, 1));
-        px_srcpos("bc_pxe_emit", 476);
+        px_srcpos("bc_pxe_emit", 481);
         return px_neg(px_int(1LL));
     }
-    px_srcpos("bc_pxe_emit", 477);
+    px_srcpos("bc_pxe_emit", 482);
     _v2795 = px_call(px_get_global("mmap"), (LXValue[]){_v2794, _v2781}, 2);
-    px_srcpos("bc_pxe_emit", 478);
+    px_srcpos("bc_pxe_emit", 483);
     (void)(px_call(px_get_global("mem_write"), (LXValue[]){_v2795, px_add(_v2780, px_int(4LL)), _v2793}, 3));
-    px_srcpos("bc_pxe_emit", 479);
+    px_srcpos("bc_pxe_emit", 484);
     (void)(px_call(px_get_global("munmap"), (LXValue[]){_v2795}, 1));
-    px_srcpos("bc_pxe_emit", 480);
+    px_srcpos("bc_pxe_emit", 485);
     (void)(px_call(px_get_global("close"), (LXValue[]){_v2794}, 1));
-    px_srcpos("bc_pxe_emit", 481);
+    px_srcpos("bc_pxe_emit", 486);
     return _v2781;
 px_err_2796:
     if (px_err_2796_proped) return px_err_2796_val;
