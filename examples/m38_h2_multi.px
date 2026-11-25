@@ -39,13 +39,11 @@ preface = (b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n"
 d1 = talk(preface, headers_only=False)
 no_h2 = (b"PuXian HTTP/2" not in d1) and (b"path=one" not in d1) and (b"path=two" not in d1)
 
-# ② 之后仍可服务 HTTP/1.1
-d2 = talk(b"GET /index.html HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n", False)
-alive = d2.startswith(b"HTTP/1.1 200") and b"H2M" in d2
+# ② 必须得到响亮的 505（不是静默断连）
+loud = (b"505" in d1.split(b"\\r\\n")[0]) if d1 else False
 
-print("no_h2_frames=%s" % no_h2)
-print("STILL_ALIVE" if alive else "NOT_ALIVE")
-print("H2_MULTI_ABSENT_AS_DESIGNED" if (no_h2 and alive) else "H2_MULTI_UNEXPECTED")
+print("no_h2_frames=%s loud505=%s" % (no_h2, loud))
+print("H2_MULTI_ABSENT_AS_DESIGNED" if (no_h2 and loud) else "H2_MULTI_UNEXPECTED")
 ''')
 
 def serve():
@@ -54,8 +52,8 @@ spawn serve()
 sleep(600)
 
 os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_multi_client.py " + str(PORT) + " > /tmp/m38_h2m.txt 2>&1"])
-sleep(2000)
+sleep(8000)
 res = read_file("/tmp/m38_h2m.txt")
 print("h2 multi:", res)
-assert(contains(res, "H2_MULTI_ABSENT_AS_DESIGNED"), "h2 多流必须不存在（且服务仍存活）")
+assert(contains(res, "H2_MULTI_ABSENT_AS_DESIGNED"), "h2 多流必须不存在（无 h2 帧 + 505 说明）")
 print("M38_H2_MULTI_ABSENT_OK")

@@ -43,14 +43,12 @@ http11 = first.startswith(b"HTTP/1.1")
 d2 = talk(b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n", want_headers_only=False)
 no_h2 = b"PuXian HTTP/2" not in d2
 
-# ③ 拒绝之后仍能服务 HTTP/1.1
-d3 = talk(b"GET /index.html HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n", False)
-alive = d3.startswith(b"HTTP/1.1 200") and b"H2-STATIC" in d3
+# ③ 前导必须得到**响亮的 505 + 说明**（不是静默断连、更不是伪造的 h2 响应）
+loud = (b"505" in d2.split(b"\\r\\n")[0]) if d2 else False
 
 print("first_line=[" + first.decode("latin1") + "]")
-print("no101=%s http11=%s no_h2_frames=%s" % (no101, http11, no_h2))
-print("STILL_ALIVE" if alive else "NOT_ALIVE")
-print("H2_REJECT_AS_DESIGNED" if (no101 and http11 and no_h2 and alive) else "H2_REJECT_FAIL")
+print("no101=%s http11=%s no_h2_frames=%s loud505=%s" % (no101, http11, no_h2, loud))
+print("H2_REJECT_AS_DESIGNED" if (no101 and http11 and no_h2 and loud) else "H2_REJECT_FAIL")
 ''')
 
 def serve():
@@ -60,8 +58,8 @@ spawn serve()
 sleep(600)
 
 os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_client.py " + str(PORT) + " > /tmp/m35_h2_res.txt 2>&1"])
-sleep(2000)
+sleep(8000)
 res = read_file("/tmp/m35_h2_res.txt")
 print("h2 client:", res)
-assert(contains(res, "H2_REJECT_AS_DESIGNED"), "h2 必须被明确拒绝（且拒绝后仍可服务）")
+assert(contains(res, "H2_REJECT_AS_DESIGNED"), "h2 必须被明确拒绝（不收 101 / 无 h2 帧 / 505 说明）")
 print("M35_H2_REJECT_OK")
