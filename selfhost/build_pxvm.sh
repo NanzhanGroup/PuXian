@@ -54,16 +54,34 @@ trap 'rm -rf "$WORK"' EXIT
 
 # 1) 用平凡程序驱动 px build ⇒ runtime 对象进入 .rtcache/<semkey>/
 #    （非 x86_64 宿主上 tools/px 会自动落 C 轨 + no_quic —— M159 自适应，CI 有断言）
+#    ★ 必须 --full（缺陷 935 · 2026-11-25 清歌报）：pxvm 是 **.pxe 宿主**，输入是用户程序，
+#      与 pxi（解释器）同属「泛化分派件」⇒ 口径见 selfhost/build_native_tools.sh 抬头：
+#      泛化分派件必须 --full，否则 runtime.o 按**本预热程序的引用集**裁剪 ⇒ 链接出的 pxvm
+#      缺 119 个 native（sqlite_/aes_/rsa_/ed25519_/ws_/xml_/zip_/zlib_/img_/quic_/h3_ 整族）。
+#      后果不是「报缺模块」而是 `R1001 未定义变量: sqlite_open` —— 看着像脚本写错，极难定位。
+#      实测（本机 x86_64）：--min 4.2MB / 279 native ⇄ --full 9.7MB / 394 native。
 printf 'def main():\n    return 0\n' > "$WORK/tiny.px"
-if ! "$PX" build "$WORK/tiny.px" >/dev/null 2>"$WORK/boot.log"; then
+if ! "$PX" build --full "$WORK/tiny.px" >/dev/null 2>"$WORK/boot.log"; then
     echo "build_pxvm: px build 预热失败 —— $(tail -3 "$WORK/boot.log" | tr '\n' ' ')" >&2
     exit 3
 fi
 
-# 2) 定位 sem 目录：.rtcache 下含 runtime.o 且 mtime 最新者（= 刚被使用的那份）
-SEM="$(ls -dt "$ROOT"/.rtcache/*/runtime.o 2>/dev/null | head -1)"
-SEM="$(dirname "${SEM:-/nonexistent}")"
-[ -f "$SEM/runtime.o" ] || { echo "build_pxvm: 找不到 runtime 对象目录" >&2; exit 3; }
+# 2) 定位 sem 目录：**按 key 取，不按 mtime 猜**（缺陷 936 · 与 M152 缺陷 144 同型）
+#   为什么（2026-11-25 实测）：rt_ensure 命中缓存时**不刷新 mtime** ⇒ 「mtime 最新」恒为
+#   上一次现编的那个**裁剪档**目录。本机实测：全量档 945d49d1b0a388b3（runtime.o 1065112B ·
+#   346/436 native）mtime=11-24 01:24，而 mtime 最新的是 774c09d801a0463d（296 native）
+#   ⇒ 链接进来的 runtime 少 50+ native（pxvm 侧只剩 279），全量/裁剪两档在产物上看不出来。
+#   `px rtcache`（无参 = cuts 空 = 全量档）取的就是当前源码 rt_key 对应的**权威**目录。
+SEM="$("$PX" rtcache 2>/dev/null | tail -1)"
+[ -n "$SEM" ] && [ -d "$SEM" ] || { echo "build_pxvm: px rtcache 取不到全量 runtime 目录（先跑 ./tools/px build --full examples/hello.px）" >&2; exit 3; }
+[ -f "$SEM/runtime.o" ] || { echo "build_pxvm: $SEM 里没有 runtime.o" >&2; exit 3; }
+# 自证：链接前先确认这份对象里真的带关键模块（否则又链出一个残缺 pxvm，而门要靠 strings 才看出来）
+strings -n3 "$SEM"/*.o > "$WORK/objs.strings" 2>/dev/null
+miss=""
+for k in sqlite_open aes_encrypt rsa_gen_key ed25519_keygen zlib_compress xml_parse ws_serve zip_pack img_decode; do
+    grep -qx -- "$k" "$WORK/objs.strings" || miss="$miss $k"
+done
+[ -z "$miss" ] || { echo "build_pxvm: runtime 对象缺 $miss（选中 $SEM 不是全量档 ⇒ 检查 --full 预热是否生效）" >&2; exit 3; }
 
 # 3) 编译 pxvm 侧两件（pxe.c loader + pxvm.c 宿主）
 INC="-I$SEM -I$RT/mbedtls/include -I$RT/third_party/miniz -I$RT/third_party/sqlite3 \

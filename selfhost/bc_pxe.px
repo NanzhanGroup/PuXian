@@ -230,7 +230,11 @@ def pxe_sp_add(S, s):
         return 4294967295
     if S["map"].has(s):
         return S["map"][s]
-    let off = len(S["buf"])
+    # 缺陷 934（M444 补 · 清歌/晨曦 11-25 双报）：**偏移与长度一律用字节口径**。
+    #   len(str) 按 rune 计（实测 len("中文")==2 · len("😀")==1），而 loader(pxe.c V5)
+    #   按字节寻址 ⇒ 含非 ASCII 时 str_off 偏小、段尾被视图截断且丢 NUL ⇒ 加载即 ESTR。
+    #   字节长唯一可靠口径 = bytes_len(bytes(s))（stdlib/gfx.px、go_json_scan.px 同法）。
+    let off = bytes_len(bytes(S["buf"]))
     S["map"][s] = off
     S["buf"] = S["buf"] + s + "\u{0}"
     return off
@@ -341,7 +345,7 @@ def bc_pxe_emit(m, path):
             ksoff.append(4294967295)
         i = i + 1
     # ---- pass B：段偏移（全部由计数推导；末尾 40B TRAILER）----
-    let slen = len(S["buf"])
+    let slen = bytes_len(bytes(S["buf"]))  # 字节口径（缺陷 934）
     let o_K = 96
     let o_N = o_K + nK * 24
     let o_G = o_N + nN * 4
@@ -393,7 +397,8 @@ def bc_pxe_emit(m, path):
         if kk["kind"] == "int" or kk["kind"] == "bool" or kk["kind"] == "func":
             iv = kk["i"]
         if kk["kind"] == "str":
-            iv = len(kk["s"])
+            # K 段 i64 = 真**字节**长；M444（缺陷 934）：这里原来用 len() 按 rune 计（M155 口径）
+            iv = bytes_len(bytes(kk["s"]))
         mem_write(view, p + 8, int_to_bytes(iv, 8, "le", true))
         var fbits = 0
         if kk["kind"] == "float":

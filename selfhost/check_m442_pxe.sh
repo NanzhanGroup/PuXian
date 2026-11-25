@@ -129,7 +129,35 @@ def main():
     return 0
 EOF
 cp "$ROOT/tools/pxslice.px" pxslice.px
+# ── 缺陷 934（2026-11-25 清歌 + 晨曦 双报 · 节点总线）──────────────────────
+#   病灶：含**非 ASCII 字面量**的 .pxe 在 0.2.443 一律加载失败（ESTR/V5 字符串越界）——
+#   bc_pxe.px 的池偏移与 K 段字节长用了 len()（按 rune 计），而 loader(pxe.c) 按字节寻址。
+#   三个夹具锁死这个面（原 6 个 ASCII 样例全绿 ⇒ 发布出去才发现，是本门的面缺口）：
+#     e1 纯中文 · e2 中英混排 + 4 字节 emoji + len 语义 · e3 多模块（库含中文 / main 全 ASCII
+#     = 「能加载但常量池串位」这个更隐蔽的形状）
+cat > e1.px <<'EOF'
+def main():
+    print("中文")
+    return 0
+EOF
+cat > e2.px <<'EOF'
+def main():
+    print("hello 世界 🎉é")
+    print(str(len("中文")))
+    return 0
+EOF
+cat > e3lib.px <<'EOF'
+def label():
+    return "响应码：200 OK"
+EOF
+cat > e3.px <<'EOF'
+import "./e3lib.px"
+def main():
+    print("ONLY A STRING")
+    return 0
+EOF
 SAMPLES="h3 t2 st cl nul pxslice"
+NASAMPLES="e1 e2 e3"
 
 echo "── 构建（bc_cli / pxvm / 静态产物 / 解释轨）"
 cd "$ROOT"
@@ -142,14 +170,14 @@ ok "构建 pxvm（$(stat -c %s "$TMP/pxvm") B）"
 
 echo "── P 正向判据"
 pfail=0
-for s in $SAMPLES; do
+for s in $SAMPLES $NASAMPLES; do
     "$BC" "$s.px" > "$s.dump" 2>&1 || { bad "P0 dump 失败 $s"; pfail=1; continue; }
     "$BC" --emit-pxe "$s.px" > "$s.pxe.log" 2>&1 || { bad "P0 emit-pxe 失败 $s"; pfail=1; continue; }
     [ -f "$s.pxe" ] || { bad "P0 未产出 $s.pxe"; pfail=1; continue; }
 done
 [ $pfail -eq 0 ] && ok "P0 6 样例 dump + .pxe 全部产出"
 
-for s in $SAMPLES; do
+for s in $SAMPLES $NASAMPLES; do
     if python3 "$ROOT/selfhost/m442_parity.py" "$s.dump" "$s.pxe" > "$s.parity" 2>&1; then
         ok "P1 parity 逐字段一致 $s（$(sed -n 's/^parity2: OK（\(.*\)）$/\1/p' "$s.parity")）"
     else
@@ -160,7 +188,7 @@ done
 # P2 三轨等价：解释轨 / 静态 VM-C 轨 / .pxe+pxvm 轨（stdout + 退出码全等）
 # 注意：用文件 + cmp 比对，**不要用 $(...) 装 stdout** —— bash 会丢弃 NUL 字节，
 #   那样 nul.px 这条判据就被悄悄弱化（实测踩到 warning: ignored null byte）。
-for s in $SAMPLES; do
+for s in $SAMPLES $NASAMPLES; do
     "$PX" build "$s.px" >/dev/null 2>&1 || { bad "P2 静态构建失败 $s"; continue; }
     "$TMP/s/build/$s" > "$TMP/$s.out.static" 2>&1; r_static=$?
     echo "$r_static" > "$TMP/$s.rc.static"
@@ -206,6 +234,59 @@ if [ "$pct" -lt 100 ]; then
     ok "P5 体积 pxslice.pxe=${pxe_size}B vs 静态 ${st_size}B（$((pct/100)).$((pct%100))%）"
 else
     bad "P5 体积未收敛：pxslice.pxe=${pxe_size}B / 静态 ${st_size}B"
+fi
+
+echo "── P6 非 ASCII 常量池契约（缺陷 934 的契约直读判据）"
+# 为什么在 P1/P2 之外还要这一条：P1（parity）与 P2（三轨对拍）都是「产物 ⇄ 产物」比对，
+#   若 emitter 与比对方同时采用同一错误口径，可以一起错（缺陷 934 就是这样通关的：
+#   全 ASCII 样例下 rune==byte，两边都看不出差异）。这条直接按 pxe.c 头部契约读字节：
+#   str_off 必须能在 S 段内定位到一个 NUL 结尾的串、该串的**字节长**必须等于 K 段 i64。
+p6bad=""
+for s in $NASAMPLES; do
+    python3 - "$s.pxe" <<'PY' > "$s.p6.log" 2>&1
+import struct, sys
+d = open(sys.argv[1], 'rb').read()
+if d[:4] != b'PXE1':
+    print('  magic 不符'); sys.exit(1)
+nK = struct.unpack_from('<I', d, 8)[0]
+slen = struct.unpack_from('<I', d, 40)[0]
+total = struct.unpack_from('<I', d, 44)[0]
+bad = []
+if total != len(d):
+    bad.append('header total=%d 文件实长=%d' % (total, len(d)))
+o_S = total - 40 - slen
+if o_S < 96:
+    bad.append('S 段起点 %d < 96（段重叠）' % o_S)
+    print('  bad=%s' % bad); sys.exit(1)
+nstr = 0
+for i in range(nK):
+    p = 96 + i * 24
+    if d[p] != 2:
+        continue
+    nstr += 1
+    off, blen = struct.unpack_from('<Iq', d, p + 4)
+    if off >= slen:
+        bad.append('K[%d] str_off=%d 越界 slen=%d' % (i, off, slen)); continue
+    z = d[o_S + off:o_S + slen].find(b'\x00')
+    if z < 0:
+        bad.append('K[%d] str_off=%d 起无 NUL 终止' % (i, off)); continue
+    if z != blen:
+        bad.append('K[%d] 串实字节长 %d ≠ K.i64 %d' % (i, z, blen))
+if slen > 0 and d[total - 41] != 0:
+    bad.append('S 段末字节 ≠ NUL（池未封尾）')
+if nstr == 0:
+    bad.append('前提不成立：nstr=0（判据空跑）')
+print('  nK=%d nstr=%d slen=%d %s' % (nK, nstr, slen, ('bad=' + str(bad)) if bad else 'contract OK'))
+sys.exit(1 if bad else 0)
+PY
+    p6rc=$?
+    sed -n '1,3p' "$s.p6.log"
+    [ "$p6rc" -eq 0 ] || p6bad="$p6bad $s"
+done
+if [ -z "$p6bad" ]; then
+    ok "P6 常量池字节口径契约（str_off 可定位 · 字节长=K.i64 · 池尾 NUL）$NASAMPLES"
+else
+    bad "P6 常量池契约不符：$p6bad"
 fi
 
 echo "── Q 阶段3：编译器正主发射 + px build --pxe + .pxecache"
@@ -300,6 +381,64 @@ if "$ROOT/selfhost/rebake_bin.sh" --check-pxvm > "$TMP/q7.log" 2>&1; then
 else
     bad "Q7 pxvm 来源门红：$(tail -2 "$TMP/q7.log" | tr '\n' ' ')"
 fi
+
+echo "── Q7b pxvm 能力面（缺陷 935：.pxe 宿主必须全量档）"
+# 病灶（2026-11-25 清歌报 · 节点总线）：发布的 pxvm 是 --min 级能力面，缺 119/436 native
+#   （sqlite_/aes_/rsa_/ed25519_/ws_/xml_/zip_/zlib_/img_/quic_/h3_ 整族）。
+#   两层根因（都已修）：① build_pxvm.sh 的预热程序不带 --full ⇒ runtime.o 按引用集裁剪；
+#   ② 取 sem 目录用 mtime 最新 ⇒ rt_ensure 命中不刷 mtime，恒选到裁剪档（M152 缺陷 144 同型）。
+#   后果不是「报缺模块」而是 `R1001 未定义变量: sqlite_open` —— 极像脚本写错。
+refs_all="$TMP/native_all.txt"
+grep -ohE 'px_(set_global|ffi_register)\("[^"]+"' "$RT"/*.c 2>/dev/null \
+    | sed 's/.*("//; s/"$//' | LC_ALL=C sort -u > "$refs_all"
+alln="$(wc -l < "$refs_all" | tr -d ' ')"
+strings -n3 "$TMP/pxvm" | LC_ALL=C sort -u > "$TMP/pxvm.str"
+havn="$(grep -Fxf "$refs_all" "$TMP/pxvm.str" | LC_ALL=C sort -u | wc -l | tr -d ' ')"
+q7bmiss=""
+for k in sqlite_open aes_encrypt rsa_gen_key ed25519_keygen zlib_compress xml_parse ws_serve zip_pack img_decode; do
+    grep -qx -- "$k" "$TMP/pxvm.str" || q7bmiss="$q7bmiss $k"
+done
+if [ "$alln" -ge 400 ] && [ "$havn" -ge 390 ] && [ -z "$q7bmiss" ]; then
+    ok "Q7b pxvm 全量档：native $havn/$alln（--min 档实测 279）· 9 个关键模块齐全"
+else
+    bad "Q7b pxvm 能力面不足：native $havn/$alln · 缺[${q7bmiss:- 无}]（查 --full 预热 + px rtcache 取目录）"
+fi
+# N12 负控（判据有牙）：等长抹掉 sqlite_open 串 ⇒ 上面那条必须判红；前提自证「抹之前确实有」
+python3 - "$TMP/pxvm" "$TMP/pxvm_nosqlite" <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read()
+old = b'sqlite_open\x00'
+assert d.count(old) >= 1, '前提不成立：pxvm 里没有 sqlite_open 串'
+open(sys.argv[2], 'wb').write(d.replace(old, b'sqlite_opex\x00'))
+PY
+if [ $? -ne 0 ]; then
+    bad "N12 负控前提不成立（造不出缺 sqlite_open 的副本）"
+else
+    strings -n3 "$TMP/pxvm_nosqlite" | LC_ALL=C sort -u > "$TMP/pxvm_nosqlite.str"
+    if grep -qx -- "sqlite_open" "$TMP/pxvm_nosqlite.str"; then
+        bad "N12 判据无牙：抹掉 sqlite_open 后仍判定为存在"
+    else
+        ok "N12 判据有牙（抹掉 sqlite_open ⇒ 必报缺，且文件大小不变 $(stat -c %s "$TMP/pxvm_nosqlite")B）"
+    fi
+fi
+
+echo "── Q8 入库件中文 .pxe 回归（缺陷 934 的发布闸：未重烘 ⇒ 这里必红）"
+# 为什么放在 Q 面（入库件）而不是 P 面（现场构建）：用户拿到的 px 是 bootstrap/ 里的入库件。
+#   只改 selfhost/bc_pxe.px 而不重烘 ⇒ 用户侧依然是 rune 口径，这个缺陷会原样复发。
+#   ⇒ 「源码修了但入库件没跟上」必须由门自己判红（不靠人记得）。
+for s in $NASAMPLES; do
+    if ! "$ROOT/bootstrap/pxc_vm" --emit-pxe --out "$TMP/in_$s.pxe" "$TMP/s/$s.px" > "$TMP/in_$s.log" 2>&1; then
+        bad "Q8 入库 pxc_vm 发射失败 $s：$(tail -1 "$TMP/in_$s.log" 2>/dev/null)"
+        continue
+    fi
+    "$TMP/pxvm" "$TMP/in_$s.pxe" > "$TMP/in_$s.out" 2>&1
+    q8rc=$?
+    if [ "$q8rc" -eq 0 ] && cmp -s "$TMP/in_$s.out" "$TMP/$s.out.static"; then
+        ok "Q8 入库件非 ASCII .pxe 可加载且与静态等价 $s（rc=0）"
+    else
+        bad "Q8 入库件仍是 rune 口径 $s（rc=$q8rc · 修法 ./selfhost/rebake_bin.sh --rebake-all）：$(head -c 90 "$TMP/in_$s.out" 2>/dev/null | tr -d '\000' | tr '\n' ' ')"
+    fi
+done
 
 echo "── B 自举边界：runtime 库 ⇄ 宿主程序（M442-S3 · 2026-11-24 CI 红）"
 # 为什么有这一块（2026-11-24 实测 · CI run 45311642994 @ b048dfd）：
