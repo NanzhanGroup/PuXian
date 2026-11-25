@@ -79,5 +79,5 @@ else
   fi
 fi
 
-echo "CACHE-BOUNDED 通过=$ok_n 失败=$bad_n"
+echo "CACHE-BOUNDED-OK pass=$ok_n fail=$bad_n"
 [ "$bad_n" = 0 ] && exit 0 || exit 1

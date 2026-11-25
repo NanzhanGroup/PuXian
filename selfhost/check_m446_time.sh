@@ -107,5 +107,5 @@ else
   ok "N1 负控：篡改期望一行 ⇒ 比对必红"
 fi
 
-echo "M446-TIME 通过=$ok_n 失败=$bad_n"
+echo "M446-TIME-OK pass=$ok_n fail=$bad_n"
 [ "$bad_n" = 0 ] && exit 0 || exit 1

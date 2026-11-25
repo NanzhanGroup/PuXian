@@ -90,5 +90,5 @@ else
   tail -5 "$TMP/neg.log" | sed 's/^/     /'
 fi
 
-echo "PAIRS-RUN 通过=$ok_n 失败=$bad_n 配对=$TOTAL"
+echo "PAIRS-RUN-OK pass=$ok_n fail=$bad_n pairs=$TOTAL"
 [ "$bad_n" = 0 ] && exit 0 || exit 1

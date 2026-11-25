@@ -80,7 +80,7 @@ check_repo() {
     fi
   fi
 
-  echo "TREE-CLEAN 通过=$ok_n 失败=$bad_n"
+  echo "TREE-CLEAN-OK pass=$ok_n fail=$bad_n"
   [ "$bad_n" = 0 ] && return 0 || return 1
 }
 

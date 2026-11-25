@@ -56,7 +56,7 @@ PX
 
 if ! "$ROOT/tools/pxc" build "$TMP/srv.px" > "$TMP/build.log" 2>&1; then
   bad "构建失败"; tail -6 "$TMP/build.log" | sed 's/^/     /'
-  echo "M446-HTTP 通过=$ok_n 失败=$bad_n"; exit 1
+  echo "M446-HTTP-OK pass=$ok_n fail=$bad_n"; exit 1
 fi
 
 setsid nohup "$TMP/build/srv" > "$TMP/srv.out" 2>&1 &
@@ -68,7 +68,7 @@ for _ in $(seq 1 60); do
 done
 if [ "$ready" != 1 ]; then
   bad "服务未起监听（端口 $PORT）"; head -5 "$TMP/srv.out" | sed 's/^/     /'
-  echo "M446-HTTP 通过=$ok_n 失败=$bad_n"; exit 1
+  echo "M446-HTTP-OK pass=$ok_n fail=$bad_n"; exit 1
 fi
 
 python3 - "$PORT" > "$TMP/res.txt" 2>&1 <<'PY'
@@ -127,5 +127,5 @@ while read -r tag verdict _rest; do
   esac
 done < "$TMP/res.txt"
 
-echo "M446-HTTP 通过=$ok_n 失败=$bad_n"
+echo "M446-HTTP-OK pass=$ok_n fail=$bad_n"
 [ "$bad_n" = 0 ] && exit 0 || exit 1
