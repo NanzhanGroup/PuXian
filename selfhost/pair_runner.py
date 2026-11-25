@@ -20,7 +20,7 @@
 #      且必须出现 P2-RC-FAIL（证明扰动真发生了，CRITERIA ④）
 #
 # 用法：
-#   pair_runner.py --repo /data/code/puxian
+#   pair_runner.py --repo <仓库根>（默认按脚本位置推导）
 #   pair_runner.py --repo DIR --pair m47_h3,m46_quic [--break-server] [--verbose]
 #   pair_runner.py --repo DIR --list
 # 退出码：0 符合预期（正控全绿 / 负控全失败）/ 1 不符合预期 / 3 环境不成立
@@ -213,7 +213,9 @@ def run_pair(repo, name, cli_src, srv_src, workroot, break_server=False, verbose
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--repo', default='/data/code/puxian')
+    ap.add_argument('--repo',
+                    default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    help='仓库根（默认按脚本位置推导；禁止写死开发机路径 — 缺陷 300 / M317）')
     ap.add_argument('--pair', default='')
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--break-server', action='store_true')
