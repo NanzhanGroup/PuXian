@@ -2658,3 +2658,20 @@ run m444_defchk bash selfhost/check_m444_defchk.sh
 #   负控有牙：--negctl 把流式默认关掉 ⇒ G-P3 正控当即变红。
 gate_timeout m444_stream 600
 run m444_stream bash selfhost/check_m444_stream.sh
+
+step "M446：时区 / HTTP 框架 / 配对示例 / 缓存有界（4 门）"
+#   M446 的四条面各自留门（一个缺陷修完留一门防复发）：
+#     · m446_time          time_format/time_parse 的 tz 非法必须响亮 + 外部定标（CPython）
+#     · m446_http          HTTP/1.1 缺 Host ⇒ 400（两条轨都要守）· 204 不得带 Content-Length
+#     · m446_pairs_run     12 对 H3/QUIC/QPACK 回环示例必须真跑（端口动态分配 + 端口释放判据）
+#     · m446_cache_bounded .buildcache/.rtcache 的回收机制必须存在、有界、自测绿
+gate_timeout m446_time 300
+run m446_time bash selfhost/check_m446_time.sh
+gate_timeout m446_http 300
+run m446_http bash selfhost/check_m446_http.sh
+gate_timeout m446_pairs_run 900
+run m446_pairs_run bash selfhost/check_pairs_run.sh
+gate_timeout m446_cache_bounded 300
+run m446_cache_bounded bash selfhost/check_cache_bounded.sh
+gate_timeout m446_tree_clean 300
+run m446_tree_clean bash selfhost/check_tree_clean.sh

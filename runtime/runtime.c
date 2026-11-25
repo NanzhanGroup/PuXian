@@ -21933,6 +21933,11 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
     } else if (v.type == PX_NULL) {
         status = 204;
     }
+    // M446（RFC 9110 §15.3.5 / §15.4.5）：204 与 304 **没有消息体**，且不得带 Content-Length。
+    //   修前 handler 返回 null（status=204）仍写 "Content-Length: 0"，且 body 非空时还会被
+    //   gzip/chunked 包装 —— 对 204 来说 0 长度的 CL 本身就不合法（会让部分客户端等体）。
+    if (status == 204 || status == 304) { body_len = 0; gzip = 0; chunked = 0; }
+
     // body 预处理：gzip 压缩 / chunked 编码
     char* owned = NULL;
     if (gzip) {
@@ -21958,7 +21963,7 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
     char* out = xmalloc(8192 + body_len);
     int off = 0;
     off += snprintf(out + off, 8192 + body_len - off, "HTTP/1.1 %d %s\r\n", status, reason);
-    if (!chunked) {
+    if (!chunked && status != 204 && status != 304) {
         off += snprintf(out + off, 8192 + body_len - off, "Content-Length: %d\r\n", body_len);
     }
     off += snprintf(out + off, 8192 + body_len - off, keep_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n");
@@ -22749,6 +22754,11 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
             hline = eol ? eol + 2 : hline + strlen(hline);
         }
+
+        // M446（RFC 9112 §3.2）：**HTTP/1.1 请求必须带 Host**（HTTP/1.0 不要求）。
+        //   修前 host_n 只在「重复 / 值非法」时判 400，缺失直接放行 ⇒ 与 Go/RFC 不一致，
+        //   且 vhost 路由会静默落到默认站点（用户以为域名配错了，其实是请求没带 Host）。
+        if (!fr_reject && host_n == 0 && strncmp(version, "HTTP/1.1", 8) == 0) fr_reject = 400;
 
         // M432（缺陷 891）：长度声明终判 —— 非法/歧义一律回绝并关连接（不在污染连接上继续读）
         if (!fr_reject) fr_reject = px_framing_resolve(&fr);
@@ -28064,9 +28074,12 @@ static void px_out11_begin(PxHttpOut* o, int status, const char* ct, long long b
     PxConn* c = (PxConn*)o->impl;
     const char* reason = px_http_status_reason(status);
     char head[8192];   // M109-S2：2048 → 8192（extra 预算升至 4096 后，原 2048 会在此处静默截断）
-    int off = snprintf(head, sizeof(head),
-                       "HTTP/1.1 %d %s\r\nContent-Length: %lld\r\nConnection: %s\r\n",
-                       status, reason, body_len, keep_alive ? "keep-alive" : "close");
+    int off = snprintf(head, sizeof(head), "HTTP/1.1 %d %s\r\n", status, reason);
+    // M446：204/304 不带 Content-Length（RFC 9110 §15.3.5 / §15.4.5）
+    if (status != 204 && status != 304)
+        off += snprintf(head + off, sizeof(head) - (size_t)off, "Content-Length: %lld\r\n", body_len);
+    off += snprintf(head + off, sizeof(head) - (size_t)off, "Connection: %s\r\n",
+                    keep_alive ? "keep-alive" : "close");
     if (ct && *ct) off += snprintf(head + off, sizeof(head) - (size_t)off, "Content-Type: %s\r\n", ct);
     if (extra_headers && *extra_headers) {
         int l = (int)strlen(extra_headers);
@@ -28102,8 +28115,9 @@ static void px_out11_end(PxHttpOut* o) {
 static void px_out11_respond(PxHttpOut* o, int status, const char* ct, const char* body,
                              int body_len, int head_only, int keep_alive,
                              const char* extra_headers) {
-    o->begin(o, status, ct, (long long)body_len, head_only, keep_alive, extra_headers);
-    if (!head_only && body_len > 0) o->write(o, body, (size_t)body_len);
+    int no_body = (status == 204 || status == 304);   // M446：这两个状态无消息体
+    o->begin(o, status, ct, no_body ? 0 : (long long)body_len, head_only, keep_alive, extra_headers);
+    if (!head_only && !no_body && body_len > 0) o->write(o, body, (size_t)body_len);
     o->end(o);
 }
 
@@ -29835,6 +29849,11 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         char req_id[64];
         px_new_req_id(req_id, sizeof(req_id));
         // M36：每请求清除线程局部上下文（防跨请求泄漏）
+        // M446（RFC 9112 §3.2）：px_serve 轨同样要求 **HTTP/1.1 必须带 Host**。
+        //   修前这条判据只加在 http_serve 轨 ⇒ 同一个缺失在 px_serve 上仍静默 200
+        //   （2026-11-25 实测：GET /index.html HTTP/1.1 无 Host ⇒ 200 + 正常体）。
+        if (!fr_reject && host_n == 0 && strncmp(ver, "HTTP/1.1", 8) == 0) fr_reject = 400;
+
         // M432（缺陷 891）：长度声明终判（放在 req_id 生成之后：拒绝响应要带 X-Request-Id）
         if (!fr_reject) fr_reject = px_framing_resolve(&fr);
         if (fr_reject) {
@@ -31551,29 +31570,6 @@ static int64_t px_local_off(void) {
     return (int64_t)lt.tm_gmtoff;
 }
 
-static int64_t px_tz_off(const char* tz) {
-    if (!tz || !*tz) return 0;
-    if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) return 0;
-    if (strcasecmp(tz, "local") == 0) return px_local_off();   // M115：本机时区
-    if (tz[0] != '+' && tz[0] != '-') return 0;
-    int64_t sign = tz[0] == '-' ? -1 : 1;
-    const char* rest = tz + 1;
-    int64_t hh = 0, mm = 0;
-    const char* colon = strchr(rest, ':');
-    if (colon) {
-        hh = atoll(rest);
-        mm = atoll(colon + 1);
-    } else if (strlen(rest) == 4) {
-        char hb[3] = {rest[0], rest[1], 0};
-        char mb[3] = {rest[2], rest[3], 0};
-        hh = atoll(hb);
-        mm = atoll(mb);
-    } else {
-        hh = atoll(rest);
-    }
-    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return 0;
-    return sign * (hh * 3600 + mm * 60);
-}
 
 // ── 时区偏移「严格解析」：区分「合法 0 偏移」与「非法」（M426 · 缺陷 869）────────
 //   来历：tz_offset("+0800") 长期返回 null。bi_tz_offset 自己做了一遍合法性校验，
@@ -31660,7 +31656,16 @@ LXValue bi_time_format(LXValue* args, int nargs, void* ctx) {
     //   修前恒按 UTC 处理，而编译器/运行时的注释从没写过这一条 ⇒ 服务端日志时间戳
     //   静默少 8 小时。要 UTC 就显式传 "UTC"（既有调用点绝大多数都显式传了）。
     int64_t off = px_local_off();
-    if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
+    if (nargs == 3 && args[2].type == PX_STR) {
+        // M446（缺陷 869 同族 · 2026-11-25 实测）：非法时区过去**静默当 UTC** ——
+        //   time_format(0,"%H:%M","bogus") 与 ("+99") 都返回 "00:00"，用户以为对了。
+        //   与 M426 给 tz_offset 建的严格解析收成同一处：px_tz_off_checked。
+        int64_t off_chk = 0;
+        if (!px_tz_off_checked(args[2].as.obj->as.str.data, &off_chk))
+            px_error("R1002: 非法时区 \"%s\"（接受 UTC / Z / local / ±H / ±HH / ±HH:MM / ±HHMM；"
+                     "偏移范围 ±00:00..±23:59）", args[2].as.obj->as.str.data);
+        off = off_chk;
+    }
     else if (nargs == 3 && args[2].type == PX_NULL) off = 0;   // 显式 null = UTC（逃生口）
     int64_t y, mo, d, h, mi, s, wd;
     px_breakdown(args[0].as.i, off, &y, &mo, &d, &h, &mi, &s, &wd);
@@ -31746,7 +31751,16 @@ LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
     //   修前恒按 UTC 处理，而编译器/运行时的注释从没写过这一条 ⇒ 服务端日志时间戳
     //   静默少 8 小时。要 UTC 就显式传 "UTC"（既有调用点绝大多数都显式传了）。
     int64_t off = px_local_off();
-    if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
+    if (nargs == 3 && args[2].type == PX_STR) {
+        // M446（缺陷 869 同族 · 2026-11-25 实测）：非法时区过去**静默当 UTC** ——
+        //   time_format(0,"%H:%M","bogus") 与 ("+99") 都返回 "00:00"，用户以为对了。
+        //   与 M426 给 tz_offset 建的严格解析收成同一处：px_tz_off_checked。
+        int64_t off_chk = 0;
+        if (!px_tz_off_checked(args[2].as.obj->as.str.data, &off_chk))
+            px_error("R1002: 非法时区 \"%s\"（接受 UTC / Z / local / ±H / ±HH / ±HH:MM / ±HHMM；"
+                     "偏移范围 ±00:00..±23:59）", args[2].as.obj->as.str.data);
+        off = off_chk;
+    }
     else if (nargs == 3 && args[2].type == PX_NULL) off = 0;   // 显式 null = UTC（逃生口）
     const char* s = args[0].as.obj->as.str.data;
     int slen = args[0].as.obj->as.str.len;
@@ -31779,7 +31793,10 @@ LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
                         char buf[16];
                         memcpy(buf, s + si, (size_t)(end - si));
                         buf[end - si] = 0;
-                        parsed_z = px_tz_off(buf);
+                        // M446：源码串里的 %z 非法 ⇒ 解析失败返回 null（修前 px_tz_off 静默当 UTC）
+                        int64_t zz = 0;
+                        if (!px_tz_off_checked(buf, &zz)) return px_null();
+                        parsed_z = zz;
                         have_z = 1;
                         si = end;
                     } else if (si + 2 < slen && strncmp(s + si, "UTC", 3) == 0) {

@@ -40,7 +40,5 @@ m54_s3_migrate_client.px	pair	2027-03-31	连接迁移客户端：需配套 serve
 m54_s3_migrate_server.px	pair	2027-03-31	连接迁移服务端：等客户端连接，单独跑超时
 m54_s4_streams_client.px	pair	2027-03-31	多流客户端：需配套 server，单独跑必拒连
 m54_s4_streams_server.px	pair	2027-03-31	多流服务端：等客户端连接，单独跑超时
-m35_h2.px	relative	2027-03-31	示例断言 HTTP/2 端到端可用，而 px-serve 明确拒绝 h2 前导（缺陷 872，待改示例）
-m38_h2_multi.px	relative	2027-03-31	示例断言 HTTP/2 多流，产品明确不支持 h2（缺陷 872，待改示例）
 m115_proc_env.px	interactive	2027-03-31	需预建 /tmp/m115_proc_env 目录（示例不自包含，排下一轮改成自建）
 m39_err_main.px	demo-rc1	2027-03-31	示例故意演示错误传播：main 抛错 ⇒ 进程 rc=1 是设计预期，不是失败

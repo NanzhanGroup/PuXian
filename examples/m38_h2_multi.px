@@ -1,51 +1,61 @@
-# M38② HTTP/2 多流：同一连接多个 stream 请求并发（HEADERS 各自响应）
-# 双模式一致：h2_serve 帧循环按 stream id 独立响应
+# M38② HTTP/2 多流**不可用**（设计事实）：同一连接发两个 HEADERS 帧也不会有两个响应
+# ------------------------------------------------------------
+# 旧版本断言「同一连接两个 stream 各自响应」—— 产品明确不支持 h2（缺陷 872），
+# 示例教用户写一个不可能成立的预期。本版把断言反过来，并证明拒绝是可控的：
+#   ① prior-knowledge 前导 + 两个 HEADERS 帧 → 不得出现任何 HTTP/2 响应帧
+#   ② 服务端不得因此崩溃：随后仍能服务 HTTP/1.1 请求
 PORT = 18179
 D = "/tmp/px_m38_h2m"
 mkdir(D)
 write_file(D + "/index.html", "H2M")
 
-def serve():
-    # M180：h2 **演示帧层**收进显式开关（口径 = docs/HTTP2_DECISION.md：h2 不做）
-    px_serve(PORT, D, 10000, {"h2_demo": true})
-spawn serve()
-sleep(400)
-
-# python h2 客户端：同一连接发 stream 1 + stream 3 两个 HEADERS → 两个响应
 write_file("/tmp/h2_multi_client.py", '''
-import socket, time, sys
+import socket, sys
 port = int(sys.argv[1])
-s = socket.create_connection(("127.0.0.1", port), timeout=5)
-s.settimeout(4)
-# h2c upgrade
-s.sendall(b"GET / HTTP/1.1\\r\\nHost: x\\r\\nConnection: Upgrade\\r\\nUpgrade: h2c\\r\\nHTTP2-Settings: AAMAAABkAAQCAAAAAAIAAAAA\\r\\n\\r\\n")
-time.sleep(0.3)
-s.sendall(b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n")
-s.sendall(b"\\x00\\x00\\x00\\x04\\x00\\x00\\x00\\x00\\x00")  # SETTINGS
-# stream 1: GET /one（HPACK: 82 86 44 03 one = :method GET + :scheme http + :path /one）
-s.sendall(b"\\x00\\x00\\x07\\x01\\x05\\x00\\x00\\x00\\x01\\x82\\x86\\x44\\x03one")
-# stream 3: GET /two（82 86 44 03 two）
-s.sendall(b"\\x00\\x00\\x07\\x01\\x05\\x00\\x00\\x00\\x03\\x82\\x86\\x44\\x03two")
-time.sleep(0.5)
-data = b""
-try:
-    while True:
-        chunk = s.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-        # 两个响应都收到
-        if data.count(b"PuXian HTTP/2") >= 2:
-            break
-except Exception:
-    pass
-s.close()
-ok = data.count(b"path=one") >= 1 and data.count(b"path=two") >= 1
-print("H2_MULTI_OK" if ok else "H2_MULTI_FAIL")
+
+def talk(payload, headers_only=True):
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.settimeout(4)
+    s.sendall(payload)
+    data = b""
+    try:
+        while True:
+            ch = s.recv(4096)
+            if not ch:
+                break
+            data += ch
+            if headers_only and b"\\r\\n\\r\\n" in data:
+                break
+    except Exception:
+        pass
+    s.close()
+    return data
+
+# ① h2 前导 + stream 1 / stream 3 两个 HEADERS
+preface = (b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n"
+           b"\\x00\\x00\\x00\\x04\\x00\\x00\\x00\\x00\\x00"
+           b"\\x00\\x00\\x07\\x01\\x05\\x00\\x00\\x00\\x01\\x82\\x86\\x44\\x03one"
+           b"\\x00\\x00\\x07\\x01\\x05\\x00\\x00\\x00\\x03\\x82\\x86\\x44\\x03two")
+d1 = talk(preface, headers_only=False)
+no_h2 = (b"PuXian HTTP/2" not in d1) and (b"path=one" not in d1) and (b"path=two" not in d1)
+
+# ② 之后仍可服务 HTTP/1.1
+d2 = talk(b"GET /index.html HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n", False)
+alive = d2.startswith(b"HTTP/1.1 200") and b"H2M" in d2
+
+print("no_h2_frames=%s" % no_h2)
+print("STILL_ALIVE" if alive else "NOT_ALIVE")
+print("H2_MULTI_ABSENT_AS_DESIGNED" if (no_h2 and alive) else "H2_MULTI_UNEXPECTED")
 ''')
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(600)
+
 os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_multi_client.py " + str(PORT) + " > /tmp/m38_h2m.txt 2>&1"])
-sleep(1500)
+sleep(2000)
 res = read_file("/tmp/m38_h2m.txt")
 print("h2 multi:", res)
-assert(contains(res, "H2_MULTI_OK"), "HTTP/2 多流")
-print("M38_H2_MULTI_OK")
+assert(contains(res, "H2_MULTI_ABSENT_AS_DESIGNED"), "h2 多流必须不存在（且服务仍存活）")
+print("M38_H2_MULTI_ABSENT_OK")

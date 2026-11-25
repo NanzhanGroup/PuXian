@@ -623,6 +623,74 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m444_stream ENV（缺 packaging/release_preflight.sh rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m444_stream rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m444_stream PASS"
+      - name: m446_time（时区参数：非法必须响亮 + CPython 外部定标 · M446）
+        #   病史：time_format(0,"%H:%M","bogus") 与 ("+99") 都返回 "00:00"（静默当 UTC）；
+        #   time_parse 的 %z 分支同病。修复后由本门守两件事：① 合法时区的期望值由 CPython
+        #   独立算出（A==B==C==期望，不是照输出抄）② 非法时区必须 rc≠0 且报 R1002 指名。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m446_time.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m446_time ENV（缺 tools/pxc / tools/px rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m446_time rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m446_time PASS"
+      - name: m446_http（HTTP 框架 RFC 硬约束 · M446）
+        #   病史①：GET /index.html HTTP/1.1 不带 Host ⇒ 200（RFC 9112 §3.2 要求 400），
+        #          且 http_serve 与 px_serve 是**两条轨**，只修一条仍会漏。
+        #   病史②：handler 返回 null（204）仍写 Content-Length: 0（RFC 9110 §15.3.5 禁止）。
+        #   判据：C1 缺 Host ⇒ 400 · C2 HTTP/1.0 不要求 · C3 204 无 CL 无体 ·
+        #        C4 200 的 CL/体完好（防误伤）· N1 带 Host ⇒ 200（红的来源是缺 Host）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m446_http.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m446_http ENV（缺 tools/pxc / python3 rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m446_http rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m446_http PASS"
+      - name: m446_pairs_run（12 对 H3/QUIC/QPACK 回环示例必须真跑 · M446）
+        #   病史：配对示例端口写死 + 无人调度 ⇒ 只能整对豁免（等于不跑），而它们是
+        #   H3/QUIC 唯一的端到端证据。本门用端口动态分配 + server/client 同映射，
+        #   判据：C1 配对枚举 ≥12 · C2 全对 rc=0 · C3 至少 1 对真起过服务 ·
+        #        N1 负控（server 端口 +1 ⇒ 必失败且 P2-RC-FAIL 自证扰动真发生）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_pairs_run.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m446_pairs_run ENV（缺 tools/pxc / examples rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m446_pairs_run rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m446_pairs_run PASS"
+      - name: m446_cache_bounded（编译缓存必须是有界机制 · M446）
+        #   病史：.buildcache 从 2.3G/588 涨到 4.9G/1206（全量门一轮 +25MB），只有 /tmp 里
+        #   的一次性脚本（早被清）。本门守「仓库内有权威脚本 + 自测全绿 + 上限有界 +
+        #   负控去掉年轻键保护必红」，部署面（/usr/local/sbin + timer）仅本机校验。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_cache_bounded.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m446_cache_bounded ENV（缺 selfhost/px_cache_gc.sh rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m446_cache_bounded rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m446_cache_bounded PASS"
+      - name: m446_tree_clean（「树净」不许被 .gitignore 掩盖 · M446 · 缺陷 873）
+        #   病史：git status --porcelain 只报未忽略文件 ⇒ 构建残渣、临时产物、
+        #   甚至一条过粗的 .gitignore 规则吞掉真文件，都不会让树看起来脏。
+        #   口径：C1 跟踪文件干净 · C2 被忽略条目必须已在账上（tree_clean_baseline.txt，
+        #   只许收缩；新增要在 CHANGELOG 说明理由）· C3 --release 要求 examples 构建残渣=0。
+        #   自测 4：N1 账外忽略必红 · N2 入账后不红（证明账生效）· N3 未跟踪必红 · N4 发布闸有牙。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_tree_clean.sh --self-test
+          st=$?
+          if [ $st -ne 0 ]; then echo "❌ m446_tree_clean 自测失败 rc=$st"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          bash selfhost/check_tree_clean.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m446_tree_clean ENV（非 git 仓 rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m446_tree_clean rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m446_tree_clean PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

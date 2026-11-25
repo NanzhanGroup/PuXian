@@ -74,3 +74,7 @@ __pycache__/
 
 # M307：S5 一次性基准机流程的回传暂存（每次跑 s5_remote_baseline.sh 生成；raw 留证另存 raw_baseline_v2.<sig>.json）
 examples/m267_perf/_s5_incoming/
+
+# 本机跑门时的临时产物（不是源码）
+/srv.pid
+/cli.out

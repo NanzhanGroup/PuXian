@@ -1,3 +1,107 @@
+## M446（2026-11-25）：静默面清账 · 12 对回环示例真跑 · 缓存与树净机制化（缺陷 866、869、872、873、920、936–939）
+
+> **一句话**：本轮把 0.2.443 以来「记了但没立项」的静默面一次性收口 —— 三类静默
+> （非法时区当 UTC、HTTP/1.1 缺 Host 照收、204 带 Content-Length）全部改为**响亮**，
+> 并给每类留下带外部定标/负控的门；同时把 12 对 H3/QUIC/QPACK 回环示例从「整对豁免」
+> 变成**真跑**（端口动态分配 + 端口释放判据），把编译缓存与「树净」从「靠人记得」变成
+> **有账、有界、有门**。
+
+**用户令**：2026-11-25 14:41「自主决策、自主规划，处理上面这些问题。中间可以提交，
+不打 tag，全部处理完成打 tag」。
+
+### ① 缺陷 936 · 时区参数非法时**静默当 UTC**（缺陷 869 的同族另一半）
+
+```
+修前实测（0.2.444）  time_format(0,"%H:%M","bogus") → "00:00"
+                     time_format(0,"%H:%M","+99")   → "00:00"     （应报错）
+                     time_parse 的 %z 分支           → 静默按 UTC 解析
+根因  M426 给 tz_offset 建了严格解析 px_tz_off_checked，但 time_format / time_parse
+      仍在调旧的 px_tz_off（非法一律 return 0）⇒ 同一份契约、两个入口、只修了一个
+修法  三处全部改走 px_tz_off_checked；非法 ⇒ R1002 指名（含可接受语法与范围）；
+      删掉已无调用的 px_tz_off（避免「第三个人又去用它」）
+判据  selfhost/check_m446_time.sh：合法面 7 条期望值由 **CPython
+      datetime/strftime 独立算出**（不是照输出抄），编译轨与解释轨都要逐行相等；
+      非法面 5 例（bogus / +99 / +24:00 / +08:60 / 空串）必须 rc≠0 且文案含「非法时区」；
+      N1 负控：篡改期望一行 ⇒ 比对必红
+```
+
+### ② 缺陷 937 · HTTP/1.1 缺 Host 照收（**两条轨**只修一条仍会漏）
+
+```
+修前实测  GET /index.html HTTP/1.1（无 Host）⇒ 200 + 正常体
+          RFC 9112 §3.2 要求 400；且 http_serve 与 px_serve 是两套独立解析
+修法  两条轨各加一条：host_n == 0 且版本 HTTP/1.1 ⇒ 400（HTTP/1.0 不要求）
+实测  编修后：1.1 缺 Host ⇒ 400 · 1.0 缺 Host ⇒ 200（不一刀切）
+判据  selfhost/check_m446_http.sh C1/C2 + N1（补上 Host ⇒ 200，证明红的来源是缺 Host）
+```
+
+### ③ 缺陷 938 · 204/304 仍写 `Content-Length: 0`（且体可能被 gzip/chunked 包装）
+
+```
+修前   handler 返回 null（status=204）⇒ "Content-Length: 0"，且 body 非空时照旧压/分块
+口径   RFC 9110 §15.3.5 / §15.4.5：204、304 **无消息体**且不带 Content-Length
+修法   http_serve 轨构造前统一清零体与压缩位；两处响应拼装都条件写 CL；
+       px_serve 轨 px_out11_begin/respond 同步（两轨同一契约）
+判据  m446_http.sh C3（204 无 CL 无体）+ C4（200 的 CL 与体完好 ⇒ 防误伤）
+```
+
+### ④ 缺陷 939 · 12 对 H3/QUIC/QPACK 回环示例**从未被跑过**
+
+```
+病根   examples 的 *_client.px / *_server.px 端口写死（17997/18010/18020…）⇒
+       并发必撞、上一对漏下的监听会让下一对假绿 ⇒ 顶层示例门只能把它们整对豁免
+做法   selfhost/pair_runner.py：按源码里端口字面量的**出现顺序**各分配一个空闲端口
+       （保持 TCP/UDP 的相对关系），编译在临时目录，server 起来后按「日志宣布 listening」
+       或「ss 见端口」判就绪，跑 client，收尾按 TERM→2s→KILL 兜底（实测 px_serve
+       产物对 SIGTERM 不立刻退出，不兜底会挂死），最后验端口已释放
+实测   12/12 全绿（含 m53_s1 的 QUIC echo、m53_s3 的双栈、m53_s4 的 px_serve http3）
+判据   selfhost/check_pairs_run.sh：C1 枚举 ≥12 · C2 全对 rc=0 · C3 至少 1 对真起过服务 ·
+       N1 负控（server 端口 +1000 ⇒ 该对必失败，且必须出现 P2-RC-FAIL 自证扰动真发生）
+```
+
+### ⑤ 缺陷 872 闭环 · h2 两例改成「拒绝 as designed」
+
+```
+病根   m35_h2 / m38_h2_multi 断言「HTTP/2 端到端可用」，而产品口径是 h2 不做
+       （docs/HTTP2_DECISION.md）⇒ 示例在教用户用一个不存在的功能
+修法   两个示例改成证明**拒绝是响亮的**：① h2c 升级不收 101（按 HTTP/1.1 服务）
+       ② prior-knowledge 前导不产生任何 HTTP/2 帧 ③ 拒绝之后服务仍存活（防「崩溃也算拒绝」）
+清账   examples/examples_run_exempt.tsv 删除这两条（现在它们能独立跑通）
+```
+
+### ⑥ 缺陷 866-2 / 873 机制化 · 缓存有界 · 树净不许被 .gitignore 掩盖
+
+```
+缓存   .buildcache 实测 4.9G / 1206 条（11-24 记录 2.3G / 588，已翻倍；全量门一轮 +25MB）
+       ⇒ 权威脚本 selfhost/px_cache_gc.sh（有上限、有年轻键保护、有 --self-test 4 项）、
+         部署件 /usr/local/sbin/dy-px-cache-gc.sh + dy-px-cache-gc.timer（每 6h，
+         失败走原生 dy-notify p1）· 门 m446_cache_bounded（含「去掉年轻键保护 ⇒ 自测必红」负控）
+树净   缺陷 873 的口径定为**账本制**：selfhost/tree_clean_baseline.txt 记录当前 96 条
+       被忽略条目，新增越账 ⇒ 红（只许收缩，新增须写理由）；--release 额外要求
+       examples 构建残渣 = 0。为什么不用正则白名单：实测 git 会把「只含被忽略内容」的
+       目录折叠成 `!! examples/`，白名单要么误放要么误红。门 m446_tree_clean 自测 4 项
+```
+
+### 本轮明确**未做**（不是漏了）
+
+```
+--no-tls（M441-2）  263 处 mbedtls 引用分 10 个区段，且 aes/rsa/zip/ws(sha1) 共用同一底座
+                    ⇒ 不是「删 TLS」而是重排依赖图，收益上限 10.9%（342KB/3.15MB）。
+                    与 ②③（同批动 runtime.c 的请求/响应路径）混在一轮会让「重烘后哪处改动
+                    引起回归」无法定性 ⇒ 仍单独立项，作为下一轮**唯一**的 runtime 改动。
+其它门的外部定标      M445 已给 m439/m177 落地；time 面本轮由 m446_time 落地（CPython 定标）。
+                    其余门按 M445 排的次序（字符串/字节口径 → base32/base64）下一轮继续。
+```
+
+### 门与注册
+
+```
+新增 5 门（gates.registry.sh + ci.yml 双向一致，check_gate_registry 13/0 通过）：
+  m446_time · m446_http · m446_pairs_run · m446_cache_bounded · m446_tree_clean
+本地实测：m446_cache_bounded 5/0 · m446_tree_clean 自测 4/0 · m446_time 与 m446_http
+        见下（重烘后跑；重烘前 m446_time 的解释轨会红 —— 那正是「只修编译轨」的挡板）
+```
+
 ## M445（2026-11-25）：外部定标门范式（A==B==C==**期望**）· 承接缺陷 920 的门面缺口
 
 > **一句话**：缺陷 920（json_parse 不合并代理对）之所以能一路流到发版，是因为门只证
