@@ -178,6 +178,47 @@ else
     bad "S2 run_gates.sh 没有导出门内 warn —— 20+ 诊断夹具会全红（05:0x 实测 9 红）"
 fi
 
+# ── S3 形状：CI 顶层也要降级（2026-11-25 131e619 实测：漏了这处 ⇒ 7 门红）──
+#   为什么：CI 直接 `bash examples/<门>/verify.sh`，**不经** run_gates.sh ⇒ S2 那处导出行
+#   管不到它。131e619 的工具链质量门 job 因此红了 m169/m172/m199/m237/m392/m407。
+#   判据读 YAML 的**顶层** env（不是某个 job 的 env —— 那样只有那个 job 受益）。
+ci_top_env() {  # $1 = ci.yml 路径 → 打印顶层 PX_DEFCHK 取值（解析失败打印 ERR）
+    python3 - "$1" <<'PY'
+import sys
+try:
+    import yaml
+except Exception:
+    print("ERR-NO-YAML"); sys.exit(0)
+try:
+    d = yaml.safe_load(open(sys.argv[1]))
+except Exception:
+    print("ERR-BAD-YAML"); sys.exit(0)
+print(str(((d or {}).get("env") or {}).get("PX_DEFCHK", "")).lower() or "MISSING")
+PY
+}
+CIY=".github/workflows/ci.yml"
+v="$(ci_top_env "$CIY")"
+if [ "$v" = "warn" ]; then
+    ok "S3 形状：ci.yml 顶层 env PX_DEFCHK=warn（CI 直跑诊断夹具不再被拦）"
+else
+    bad "S3 ci.yml 顶层 env 取值 '$v'（要 warn）—— 131e619 实测漏这处红 7 门"
+fi
+# S3 负控：把顶层 env 段整块抹掉 ⇒ 同一条判据必须转红（否则它测的不是这件事）
+TMPCI="$T/ci-noenv.yml"
+python3 - "$CIY" "$TMPCI" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+s2, n = re.subn(r'(?m)^env:\n(?:^[ \t]+.*\n)+', '', s, count=1)
+open(sys.argv[2], "w").write(s2)
+print("stripped=%d" % n, file=sys.stderr)
+PY
+v2="$(ci_top_env "$TMPCI")"
+if [ "$v2" != "warn" ]; then
+    ok "S3 负控：抹掉顶层 env 段后判据转红（'$v2'）⇒ 判据有牙"
+else
+    bad "S3 负控失败：抹掉 env 段仍判绿 ⇒ 该判据测的不是顶层 env"
+fi
+
 # ── N7 覆盖优先：门里是 warn，但显式 error 仍拒构建（门可以要求严格档）──
 cat > "$T/n7.px" <<'EOF'
 def f():

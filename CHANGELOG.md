@@ -78,12 +78,22 @@
   实测去掉 stdbuf 同样绿 ⇒ **缓冲是假因，PID 才是真因**（推的要说成推的）。
 - 门文件里 `sed` 打桩的锚点 `return 1$` 写成 `return 1\$` ⇒ 变成「匹配字面 $」，打桩静默不生效
   （正是 check_gate_assertions A1 描述的形状）；改成真锚点后 `--negctl` 才真正落地。
+- **边界只写在 run_gates.sh 一处是不够的**（2026-11-25 131e619 CI 实测）：CI 直接
+  `bash examples/<门>/verify.sh` 不走 run_gates.sh ⇒ 那行 export 管不到 ⇒ 工具链质量门 job 红了
+  7 门（m169/m172/m199/m237/m392/m407），m392 原文 `E L002: 未定义变量: 'nope6'`。
+  修：ci.yml 顶层 `env: PX_DEFCHK: warn`，并给 m444_defchk 加 S3 正控 + S3 负控（抹掉顶层 env 段
+  必转红）——「降级」这件事本身也要有判据，否则将来改 CI 时会被静默丢掉。
+  本地三对复现（同一份源码，只切档位）：m237 41s 红 ⇄ 28s 绿 · m392 1s 红 ⇄ 11s 绿 · m407 38s 红 ⇄ 14s 绿。
+  形态教训与 m410 同族：**改了哪个调用点，门就要覆盖它**（CRITERIA ⑧）—— 我 05:11 修「门内不红」时
+  只数了 run_gates 一个入口，没数 CI 的入口。
 
 ### 证据
 
 ```
-defchk  bash selfhost/check_m444_defchk.sh            ⇒ M444-DEFCHK OK n=19
+defchk  bash selfhost/check_m444_defchk.sh            ⇒ M444-DEFCHK OK n=26（含 S3 正控 + S3 负控）
         bash selfhost/check_m444_defchk.sh --negctl   ⇒ NEGCTL OK（打桩后 build rc=0）
+CI 档   .github/workflows/ci.yml 顶层 env PX_DEFCHK=warn（堵 131e619 的 7 门红）
+复现    m237 err 41s 红 ⇄ warn 28s 绿 · m392 err 1s 红 ⇄ warn 11s 绿 · m407 err 38s 红 ⇄ warn 14s 绿
 stream  bash selfhost/check_m444_stream.sh            ⇒ M444-STREAM OK n=10
         bash selfhost/check_m444_stream.sh --negctl   ⇒ NEGCTL OK
 自测    bash packaging/release_preflight.sh --self-test ⇒ 22/22

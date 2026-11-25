@@ -25,7 +25,19 @@ concurrency:
 #   2026-11-03 GitHub 把 latest 切到 ubuntu-26.04 + gcc 15.2 ⇒ ① multiarch-cross 的
 #   `apt-get install qemu-user-static` 直接无候选包（exit 100 ×3）；② 门内 runtime 预编译
 #   在 gcc 15 下失败（`tools/make_release.sh` 同现象）。24.04 上两条均绿。
-#   26.04/gcc15 兼容是单独一轮的事；在那之前不把 CI 结论挂在"当天最新镜像"上。
+#   26.04/gcc15 兼容是单独一轮的事；在那之前不把 CI 结论挂在"当天最新镜像"上。# ---- M444（缺陷 932 的形状补 · 2026-11-25 131e619 CI 实测）----
+# CI 跑的全是「门 + 诊断夹具」，其中 20+ 个夹具**故意**引用未定义标识符来测运行期
+#   R1001/R1002（m169 / m199 / m237 / m392 / m407 …）。`px build` 的 defchk 默认 error
+#   ⇒ 这些夹具在 CI 直跑（不经 selfhost/run_gates.sh）会被拦成「编译失败」⇒ 门判红，
+#   而实质是「门要测的那个错误根本没机会发生」。
+#   实测（131e619 · 工具链质量门 job）：红了 m169/m172/m199/m237/m392/m407 七个，
+#   m392 的失败行原文 `E L002: 未定义变量: 'nope6' … 构建前静态检查发现 1 处`。
+#   ⇒ 本 workflow 顶层统一降级为 warn（与 run_gates.sh 同一口径：出声、不阻断）。
+#   产品构建要严格档的地方显式 PX_DEFCHK=error；门 m444_defchk 的 N7/S3 判据盯着
+#   「显式 error 仍拒构建」与「本文件这行不丢」两件事，免得降级被悄悄吞掉。
+env:
+  PX_DEFCHK: warn
+
 jobs:
   regression:
     name: 自举回归（PuXian-only）
