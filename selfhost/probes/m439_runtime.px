@@ -1,7 +1,13 @@
 # M439 探针 · 缺陷 920（json_parse 代理对）+ 缺陷 919（sqlite_exec 两参契约 / sqlite_changes）
 # 期望输出见同目录 m439_runtime.expected（逐字节比对；三轨：解释 · VM · C 必须一致）
+# M445：c01..c18 的期望值**不在本文件里**，唯一来源是 m439_surrogate_oracle.tsv（外部定标）
 def hx(s):
     return bytes_to_hex(bytes(s))
+
+# M445：外部定标行。输出「tag hex rune数」，三轨同跑同比。
+def row(tag, src):
+    s = json_parse(src)
+    print(tag + " " + hx(s) + " " + str(len(s)))
 
 def main():
     # ---- 缺陷 920：UTF-16 代理对必须合并成 4 字节（与 Go encoding/json 一致）----
@@ -13,6 +19,27 @@ def main():
     print("920_hi_then_a " + hx(json_parse("\"\\ud83d\\u0041\"")))
     print("920_hi_lo_lo " + hx(json_parse("\"\\ud83d\\ude00\\udf00\"")))
     print("920_len      " + str(len(json_parse("\"\\ud83d\\ude80\""))))
+    # ---- M445：晨曦 18 组外部定标（c01..c18 与 01-surrogate-cases.md 表行号一一对应）----
+    # 覆盖缺陷 920 的边界：末尾对 / 上下边界 / 低+低 / 大小写 / 对后接 BMP / NUL / 全角回归 /
+    #   VS16+ZWJ 混合 / 原生 4 字节路径。逐条同时给 hex 与 rune 数：两条正交判据。
+    row("c01", "\"\\ud83d\\ude80\"")
+    row("c02", "\"🚀\"")
+    row("c03", "\"\\ud83d\\ude80\\ud83d\\ude00\\ud83c\\udf00\"")
+    row("c04", "\"end\\ud83d\\ude80\"")
+    row("c05", "\"a \\ud83d b\"")
+    row("c06", "\"a \\ude80 b\"")
+    row("c07", "\"\\ud800\\udc00\"")
+    row("c08", "\"\\udbff\\udfff\"")
+    row("c09", "\"\\ud83d\\ud83d\"")
+    row("c10", "\"\\ude80\\ude80\"")
+    row("c11", "\"\\uD83D\\uDE80\"")
+    row("c12", "\"\\ud83dX\"")
+    row("c13", "\"\\ud83d\\ude80\\u00e9\"")
+    row("c14", "\"\\u00e9\"")
+    row("c15", "\"\\u4e2d\\u6587\"")
+    row("c16", "\"\\u0000\"")
+    row("c17", "\"log（测试）=> \"")
+    row("c18", "\"\\ud83c\\udff3\\ufe0f\\u200d\\ud83c\\udf08\"")
     # ---- 缺陷 919：两参 sqlite_exec 成功恒 0（历史契约）· 出错 null · 行数走 sqlite_changes ----
     let db = sqlite_open(":memory:")
     print("919_ddl_ret  " + str(sqlite_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT)")))

@@ -25,6 +25,11 @@
 #   [3] 名册门 ⑦ 全绿（两轨内置集一致）
 #   [4] 负控：把 `min/max` 的单参数分支改回「直接返回实参」⇒ 用例 A 的编译轨必须与
 #       解释轨**不一致**（定点字符串）；sha256 逐字节还原复绿
+#   [5] 外部定标（M445 试点）：用例 A 的 20 条期望值不再「照输出抄」，而是
+#       oracle/truth.py（CPython 独立实现）算出的 builtins.oracle.tsv。
+#       三轨（interp/vm/c）每一条都要与该表逐条相等 —— 口径从 A==B==C 升为 A==B==C==**期望**。
+#       算不出的（px 特有规约）必须显式标 px-spec 并写 note 理由，数量必须对上。
+#       负控：篡改 oracle 副本一个值 ⇒ 必红（否则「外部定标」是空话）。
 # CI 用 --neg-skip。
 # ============================================================
 . "$(dirname "$0")/../../selfhost/gate_lock.sh" || { echo "❌ [M276] 门级互斥锁 source 失败（selfhost/gate_lock.sh）" >&2; exit 2; }
@@ -91,8 +96,43 @@ o=$(bash "$ROOT/selfhost/builtin_list_check.sh" 2>&1); rc=$?
 chk "builtin_list_check rc=0" "[ $rc -eq 0 ]"
 chk "含 ⑦ 两轨内置集一致" "echo \"\$o\" | grep -q '⑦ 两轨内置集一致'"
 
+echo "=== [5] 外部定标：用例 A 的 20 条 ⇄ oracle（CPython 独立真值，M445 试点）"
+ORA=$D/oracle/builtins.oracle.tsv
+PY=$D/oracle/truth.py
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ ENV rc=3 缺 python3（外部定标无法现场重算，不降级成绿）"; exit 3
+fi
+if [ ! -e "$ORA" ] || [ ! -e "$PY" ]; then
+    chk "外部定标文件在位（builtins.oracle.tsv + truth.py）" "false"
+else
+    chk "外部定标文件在位（builtins.oracle.tsv + truth.py）" "true"
+    if python3 "$PY" > "$W/oracle.regen" 2> "$W/oracle.regen.err"; then
+        chk "[5a] truth.py 现场重算 rc=0" "true"
+        chk "[5a] 现场重算 == 落盘 oracle 逐字节（落盘被改/没重生成 ⇒ 红）" "cmp -s $W/oracle.regen $ORA"
+    else
+        chk "[5a] truth.py 现场重算 rc=0" "false"
+        tail -3 "$W/oracle.regen.err" | sed 's/^/     /'
+    fi
+    awk -F'\t' '!/^#/ && NF>=2 {print $1"\t"$2}' "$ORA" > "$W/oracle.exp"
+    for t in interp vm c; do
+        awk '!/M177A-BUILTIN-PARITY-OK/ && NF>0 {sub(/ /,"\t"); print}' "$W/iter_builtins.$t.out" > "$W/$t.oracle.out"
+        chk "[5b] 用例 A/$t 输出 == 外部 oracle（$t 轨逐条等于 CPython 真值）" "cmp -s $W/oracle.exp $W/$t.oracle.out"
+    done
+    nspec=$(awk -F'\t' '!/^#/ && $3=="px-spec"' "$ORA" | wc -l)
+    nnote=$(grep -c '^# note\[' "$ORA" || true)
+    chk "[5c] px-spec 行数($nspec) == note 理由数($nnote)（无外部参照必须写明）" "[ \"$nspec\" = \"$nnote\" ]"
+    sed $'s/^4\tsum_list=6\t/4\tsum_list=7\t/' "$ORA" > "$W/oracle.neg"
+    if cmp -s "$W/oracle.neg" "$ORA"; then
+        chk "[5d] 负控前提自证：oracle 副本已篡改" "false"
+    else
+        chk "[5d] 负控前提自证：oracle 副本已篡改（sum_list 6→7）" "true"
+        awk -F'\t' '!/^#/ && NF>=2 {print $1"\t"$2}' "$W/oracle.neg" > "$W/oracle.neg.exp"
+        chk "[5d] 判据识破 oracle 篡改（无牙则此处红）" "! cmp -s $W/oracle.neg.exp $W/interp.oracle.out"
+    fi
+fi
+
 if [ $NEG -eq 1 ]; then
-echo "=== [4] 负控：min/max 单参数改回「直接返回实参」⇒ 用例 A 编译轨必须与解释轨不一致"
+echo "=== [6] 负控：min/max 单参数改回「直接返回实参」⇒ 用例 A 编译轨必须与解释轨不一致"
 snapshot
 SHA0=$(sha256sum "$RT" | cut -c1-16)
 python3 - "$RT" <<'PYEOF'

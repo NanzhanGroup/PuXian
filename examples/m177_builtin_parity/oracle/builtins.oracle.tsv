@@ -1,0 +1,26 @@
+# M445 外部定标 · m177_builtin_parity 用例 A（20 条内置面矩阵）
+# 生成器：examples/m177_builtin_parity/oracle/truth.py（CPython 独立实现，非 px 输出）
+# 格式：N<TAB>期望输出行<TAB>来源(py|px-spec)
+# py = 由 CPython 语义独立算出；px-spec = px 特有规约（无外部参照，必须写明理由）
+# py=19 条 · px-spec=1 条
+1	dict=dict len=0	py
+2	unique=[3, 1, 2]	py
+3	flatten=[1, 2, 3]	py
+4	sum_list=6	py
+5	sum_tuple=6	py
+6	sum_gen=12	py
+7	min_list=1	py
+8	min_tuple=1	py
+9	min_gen=1	py
+10	max_list=3	py
+11	max_tuple=3	py
+12	max_gen=3	py
+13	min_multi=3	py
+14	max_multi=7	py
+15	min_str_single=b	py
+# note[16] CPython min(9) 抛 TypeError；px 规约=单标量原样返回（M177 修复时三轨统一的契约）
+16	min_one_scalar=9	px-spec
+17	unique_gen=[0, 1, 2]	py
+18	flatten_tuple=[1, 2, 3]	py
+19	min_str_iter=a	py
+20	max_float=2.5	py

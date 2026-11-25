@@ -6,6 +6,24 @@
 920_hi_then_a efbfbd41
 920_hi_lo_lo f09f9880efbfbd
 920_len      1
+c01 f09f9a80 1
+c02 f09f9a80 1
+c03 f09f9a80f09f9880f09f8c80 3
+c04 656e64f09f9a80 4
+c05 6120efbfbd2062 5
+c06 6120efbfbd2062 5
+c07 f0908080 1
+c08 f48fbfbf 1
+c09 efbfbdefbfbd 2
+c10 efbfbdefbfbd 2
+c11 f09f9a80 1
+c12 efbfbd58 2
+c13 f09f9a80c3a9 2
+c14 c3a9 1
+c15 e4b8ade69687 2
+c16 00 1
+c17 6c6f67efbc88e6b58be8af95efbc893d3e20 10
+c18 f09f8fb3efb88fe2808df09f8c88 4
 919_ddl_ret  0
 919_ins_ret  0
 919_ins_chg  1

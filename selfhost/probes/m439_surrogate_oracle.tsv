@@ -1,0 +1,27 @@
+# M445 · 代理对解码的**外部定标**表（oracle）
+#
+# 来源：晨曦 wsa-chenxi 2026-11-24 转交「三轨一致地做错」样本
+#       /data/autodrive/inbox/20261124-chenxi-surrogate/work/01-surrogate-cases.md
+# 定标依据：RFC 8259 §7（\uXXXX 必须按 UTF-16 surrogate pair 解释）+ Go 1.2x encoding/json 实测
+# 说明：这张表的期望值**不来自 px 自身**，是本门唯一的「说明书写了什么」的外部依据。
+#       没有它，门只能证「三轨彼此一致」（三轨一起错就抓不到 —— 缺陷 920 正是如此）。
+# 格式：tag<TAB>hex<TAB>rune_num （# 开头为注释、空行忽略）
+# 校验：check_m439_runtime.sh 判据 [7] 逐行比对 expected 与本表；判据 [8] 数本表行数 = 18。
+c01	f09f9a80	1
+c02	f09f9a80	1
+c03	f09f9a80f09f9880f09f8c80	3
+c04	656e64f09f9a80	4
+c05	6120efbfbd2062	5
+c06	6120efbfbd2062	5
+c07	f0908080	1
+c08	f48fbfbf	1
+c09	efbfbdefbfbd	2
+c10	efbfbdefbfbd	2
+c11	f09f9a80	1
+c12	efbfbd58	2
+c13	f09f9a80c3a9	2
+c14	c3a9	1
+c15	e4b8ade69687	2
+c16	00	1
+c17	6c6f67efbc88e6b58be8af95efbc893d3e20	10
+c18	f09f8fb3efb88fe2808df09f8c88	4

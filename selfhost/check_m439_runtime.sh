@@ -12,7 +12,7 @@
 #   （CESU-8，非法 UTF-8，静默），与 Go 的 F0 9F 9A 80 不一致；影响所有 px 程序。
 #   修：高代理 + 紧跟低代理合并成 4 字节；孤立代理 → U+FFFD。
 #
-# 判据（6 组，逐组可单独变红）：
+# 判据（8 组，逐组可单独变红）：
 #   [1] 静态形状（注释口径 / 两参分支不取 changes / 新内置已注册 / 合并公式在位 / 4 字节分支在位）
 #   [2] 解释轨输出与 m439_runtime.expected 逐字节一致
 #   [3] VM 轨 同上
@@ -21,6 +21,13 @@
 #       ⇒ 判据必须报不一致；且每次都先自证「扰动确实发生」
 #   [6] 前提自证：内置名册含 sqlite_changes（gen_builtin_list --check 绿），
 #       否则「编译器不认识新内置」会让轨道静默跑旧名册
+#   [7] 外部定标（M445）：expected 的 18 条 c 行 **逐字节等于** m439_surrogate_oracle.tsv
+#       —— 这张 oracle 来自晨曦用 Go encoding/json 生成的外部定标，不是 px 自己的输出。
+#       只做 A==B==C 只能证「三轨一致地做错」（缺陷 920 就是这样漏出去的）；
+#       本判据把口径升级为 A==B==C==**期望**，且「期望」有外部来源可追溯。
+#       负控：改 oracle 副本一个字节 ⇒ 必报不一致（否则「来源可追溯」是空话）。
+#   [8] 覆盖自证：probe 里 row("c01")..row("c18") 18 条齐全；oracle 表行数 = 18。
+#       缺一条 ⇒ 红（防止「以后有人删掉难跑的用例让门变绿」）
 # 用法：bash selfhost/check_m439_runtime.sh
 # 退出码：0 = 绿 · 1 = 红 · 2 = 环境不成立
 # ============================================================
@@ -45,7 +52,7 @@ bad() { echo "  ❌ $1"; fail=$((fail+1)); }
 echo "== M439 门 · 缺陷 919/920（运行时） =="
 
 # ---------------- [1] 静态形状 ----------------
-echo "[1/6] 静态形状"
+echo "[1/8] 静态形状"
 sq=$(cat runtime/runtime_sqlite.c)
 two_arg=$(awk '/if \(nargs == 2\) \{/,/^    \}/' runtime/runtime_sqlite.c)
 # 判据读代码不读注释：本分支的注释里**故意**写着「不要改成 sqlite3_changes(db)」，
@@ -100,7 +107,7 @@ grep -q '0xFFFDu' runtime/runtime.c \
   || bad "缺 U+FFFD 回落（孤立代理会产出 CESU-8）"
 
 # ---------------- [6] 名册（先跑，因为三轨要用） ----------------
-echo "[6/6] 内置名册派生无漂移"
+echo "[6/8] 内置名册派生无漂移"
 if bash tools/gen_builtin_list.sh --check >/dev/null 2>&1; then
   ok "tools/gen_builtin_list.sh --check 绿（名册 = runtime 注册表）"
 else
@@ -111,7 +118,7 @@ grep -q 'sqlite_changes' tools/lint_core.px \
   || bad "名册缺 sqlite_changes"
 
 # ---------------- [2] 解释轨 ----------------
-echo "[2/6] 解释轨（bootstrap/pxi）"
+echo "[2/8] 解释轨（bootstrap/pxi）"
 timeout 120 "$PXI" "$CASE" > "$W/interp.out" 2> "$W/interp.err"
 rc=$?
 [ "$rc" = 0 ] && ok "解释轨 rc=0" || { bad "解释轨 rc=$rc"; tail -3 "$W/interp.err" | sed 's/^/     /'; }
@@ -122,7 +129,7 @@ else
 fi
 
 # ---------------- [3] VM 轨 ----------------
-echo "[3/6] VM 轨"
+echo "[3/8] VM 轨"
 cp "$CASE" "$W/p.px"
 if timeout 500 "$PX" build "$W/p.px" > "$W/vm.log" 2>&1 && [ -x "$W/build/p" ]; then
   timeout 120 "$W/build/p" > "$W/vm.out" 2>/dev/null
@@ -137,7 +144,7 @@ fi
 rm -rf "$W/build"
 
 # ---------------- [4] C 轨 ----------------
-echo "[4/6] C 轨"
+echo "[4/8] C 轨"
 if timeout 600 "$PX" build --c "$W/p.px" > "$W/c.log" 2>&1 && [ -x "$W/build/p" ]; then
   timeout 120 "$W/build/p" > "$W/c.out" 2>/dev/null
   if cmp -s "$W/c.out" "$EXPECT"; then
@@ -149,9 +156,59 @@ else
   bad "C 轨编译失败"; tail -3 "$W/c.log" | sed 's/^/     /'
 fi
 
+# ---------------- [7] 外部定标自证（M445）----------------
+# 病根：本门过去只做「三轨 vs expected」，而 expected 是我自己按修复后的输出写的 ⇒
+#   若三轨一起错（缺陷 920 就是这么跑的），门仍然绿。
+# 口径：expected 的 c01..c18 必须逐字节等于**外部** oracle（Go encoding/json 定标）。
+ORACLE=selfhost/probes/m439_surrogate_oracle.tsv
+echo "[7/8] 外部定标表 «» 期望值"
+if [ ! -e "$ORACLE" ]; then
+  bad "缺 $ORACLE（外部定标表被删 ⇒ 本门退回裸三轨自证，缺陷 920 同型风险）"
+else
+  oracle_rows=$(grep -cvE '^[[:space:]]*(#|$)' "$ORACLE")
+  if [ "$oracle_rows" = 18 ]; then
+    ok "oracle 表 18 行（与晨曦 18 组定标一致）"
+  else
+    bad "oracle 表行数=$oracle_rows（应 18）—— 被删/被改多改少都是红"
+  fi
+  awk -F'\t' '!/^[[:space:]]*#/ && NF>=3 && $1!="" {printf "%s %s %s\n", $1, $2, $3}' "$ORACLE" > "$W/oracle.exp"
+  grep -E '^c[0-9][0-9] ' "$EXPECT" > "$W/exp.crows" || true
+  if cmp -s "$W/oracle.exp" "$W/exp.crows"; then
+    ok "expected 的 18 条 c 行 == oracle 表（期望来源可追溯，不是「照程序输出抄的」）"
+  else
+    bad "expected 的 c 行与 oracle 表不一致（期望被改了，或 oracle 被改了）"
+    diff "$W/oracle.exp" "$W/exp.crows" | head -8 | sed 's/^/     /'
+  fi
+fi
+# [7] 负控：篡改 oracle 副本 ⇒ 同一比对必须报不一致（判据有牙 + 前提自证）
+awk -F'\t' 'BEGIN{OFS="\t"} !/^[[:space:]]*#/ && NF>=3 && $1=="c07" {print $1,"f0908081",$3; next} {print}' "$ORACLE" > "$W/oracle.neg"
+if grep -qE '^c07[[:space:]]+f0908081[[:space:]]+1$' "$W/oracle.neg"; then
+  ok "[7-] 负控前提自证：oracle 副本 c07 已篡改（f0908080 → f0908081）"
+  awk -F'\t' '!/^[[:space:]]*#/ && NF>=3 && $1!="" {printf "%s %s %s\n", $1, $2, $3}' "$W/oracle.neg" > "$W/oracle.neg.exp"
+  if cmp -s "$W/oracle.neg.exp" "$W/exp.crows"; then
+    bad "[7-] 判据没识破 oracle 篡改 —— 「期望来源可追溯」是空话"
+  else
+    ok "[7-] 判据识破 oracle 篡改（口径真的落在 oracle 上）"
+  fi
+else
+  bad "[7-] 负控前提不成立（副本没改动，负控是空转）"
+fi
+
+# ---------------- [8] 覆盖自证（M445）----------------
+echo "[8/8] 用例覆盖 c01..c18"
+missing=""
+for i in $(seq -w 1 18); do
+  grep -q "row(\"c$i\"" "$CASE" || missing="$missing c$i"
+done
+if [ -z "$missing" ]; then
+  ok "probe 覆盖 c01..c18 全部 18 条（缺一条就红，防「删难跑的用例让门变绿」）"
+else
+  bad "probe 缺用例:$missing"
+fi
+
 # ---------------- [5] 负控 ----------------
 # 判据本身必须有牙：把「期望」改成未修 / 假修时的值，同一比较函数必须报不一致。
-echo "[5/6] 负控（判据有牙）"
+echo "[5/8] 负控（判据有牙）"
 neg() { # $1 标签 · $2 sed 表达式 · 余下为「扰动前该字符串应出现次数」
   local label="$1" expr="$2"; shift 2
   cp "$EXPECT" "$W/neg.exp"
