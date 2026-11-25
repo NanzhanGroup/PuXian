@@ -63,7 +63,19 @@ if python3 "$RUNNER" --repo "$ROOT" --work "$TMP/w" > "$TMP/main.log" 2>&1; then
     if printf '%s' "$SUM" | grep -q 'fail=0'; then
       ok "C2 全对通过（$SUM）"
     else
-      bad "C2 有失败：$SUM"; grep '^❌' "$TMP/main.log" | sed 's/^/     /'
+      # 概率性现象不硬断言（CRITERIA ⑤）：先只重跑**失败的那几对**一次，
+      #   二次仍红才判红。实测 2026-11-25 首跑 11/12、单跑 12/12 ⇒ 属时序抖动，
+      #   但「重试」必须留痕（不能把 flaky 洗成绿）。
+      local retry_names
+      retry_names=$(grep '^❌ ' "$TMP/main.log" | awk '{print $2}' | paste -sd, -)
+      echo "     ℹ️  首跑有失败对：${retry_names:-?} ⇒ 只重跑这些一次"
+      if [ -n "$retry_names" ] && python3 "$RUNNER" --repo "$ROOT" --pair "$retry_names" \
+           --work "$TMP/w2" > "$TMP/retry.log" 2>&1; then
+        ok "C2 首跑有抖动（$SUM）· 失败对重跑通过：$retry_names"
+        echo "     （原失败明细见 $TMP/main.log；重跑日志见 $TMP/retry.log）"
+      else
+        bad "C2 首跑失败且重跑仍失败：$SUM"; grep '^❌' "$TMP/main.log" "$TMP/retry.log" 2>/dev/null | sed 's/^/     /'
+      fi
     fi
   else
     bad "C2 运行器未输出 PAIR-SUMMARY（异常退出）"
