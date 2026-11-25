@@ -60,11 +60,27 @@ check_repo() {
     bad "C2 缺基线账 $bl（用 --emit-baseline 生成后提交）"
   else
     new=$(comm -23 <(printf '%s\n' "$cur") <(sort -u "$bl") | grep -v '^$' || true)
-    if [ -z "$new" ]; then
-      ok "C2 被忽略条目未越账（当前 $(printf '%s\n' "$cur" | grep -c .) 条）"
+    # ── M446（缺陷 945）：把「.gitignore 明示的示例构建残渣」与「被藏的真文件」分开 ──
+    #   病灶（2026-11-25 第三轮实测）：同一个 HEAD、同一本账，主树只多 1 条
+    #   （examples/m65_lsp/build/），8 分片那轮多 7 条 —— 差集取决于**这一轮跑了哪些
+    #   示例门**（verify.sh 就地 `px build $HERE/x.px`）。⇒ 账本式判据在这里
+    #   结构性不稳定：它测的是「跑过哪些门」，不是「有没有被藏的真文件」。
+    #   口径：只对 `examples/<名>/(build|artifacts)/` 这类 .gitignore **明示**的构建
+    #   输出目录不判红（并在 C3 --release 里要求为 0，打 tag 前必须清）；
+    #   其余账外忽略项一律照旧判红（含折叠形态 `!! examples/` —— 它可能藏真文件）。
+    local vol_re='^examples/[^/]+/(build|artifacts)/$'
+    local vol real_new
+    vol=$(printf '%s\n' "$new" | grep -E "$vol_re" || true)
+    real_new=$(printf '%s\n' "$new" | grep -vE "$vol_re" | grep -v '^$' || true)
+    if [ -z "$real_new" ]; then
+      if [ -n "$vol" ]; then
+        ok "C2 被忽略条目未越账（账外 $(printf '%s\n' "$vol" | grep -c .) 条均为 .gitignore 明示的示例构建残渣，--release 拦）"
+      else
+        ok "C2 被忽略条目未越账（当前 $(printf '%s\n' "$cur" | grep -c .) 条）"
+      fi
     else
-      bad "C2 出现 $(printf '%s\n' "$new" | wc -l) 条**账外**忽略项（可能被 .gitignore 藏了真文件）"
-      printf '%s\n' "$new" | head -8 | sed 's/^/     /'
+      bad "C2 出现 $(printf '%s\n' "$real_new" | wc -l) 条**账外**忽略项（可能被 .gitignore 藏了真文件）"
+      printf '%s\n' "$real_new" | head -8 | sed 's/^/     /'
     fi
     local gone
     gone=$(comm -13 <(printf '%s\n' "$cur") <(sort -u "$bl") | grep -v '^$' || true)
@@ -115,6 +131,36 @@ selftest() {
   # N4：--release ⇒ examples 构建残渣必红
   if check_repo "$T" 1 "$BL" >/dev/null 2>&1; then echo "❌ N4 --release 未拦住"; rc=2
   else echo "✅ N4 --release 拦住 examples 构建残渣"; fi
+
+  # ── M446（缺陷 945）新增两条负控：豁免必须**既生效又不过宽** ──
+  # N5：账外但属 .gitignore 明示的示例构建残渣 ⇒ 日常档不红、--release 仍红
+  local T2 BL2; T2=$(mktemp -d /tmp/treeclean2.XXXXXX); BL2=$(mktemp /tmp/treebase2.XXXXXX)
+  ( cd "$T2" && git init -q . && printf 'examples/*/build/\n' > .gitignore \
+    && mkdir -p examples/x && printf 'src\n' > examples/x/a.px \
+    && git add .gitignore examples/x/a.px \
+    && git -c user.email=a@b -c user.name=t commit -qm init \
+    && mkdir -p examples/x/build && : > examples/x/build/out.bin ) >/dev/null 2>&1 \
+    || { echo "ENV: N5 临时仓建不起来"; rm -rf "$T2" "$BL2"; return 3; }
+  : > "$BL2"
+  if check_repo "$T2" 0 "$BL2" >/dev/null 2>&1; then
+    echo "✅ N5 明示的示例构建残渣未入账 ⇒ 日常档不红（豁免生效）"
+  else
+    echo "❌ N5 构建残渣仍被判红（豁免没生效）"; check_repo "$T2" 0 "$BL2" | sed 's/^/     /'; rc=2
+  fi
+  if check_repo "$T2" 1 "$BL2" >/dev/null 2>&1; then
+    echo "❌ N5b --release 未拦住残渣（豁免漏到发布档）"; rc=2
+  else
+    echo "✅ N5b --release 仍拦住残渣（豁免只放宽日常档）"
+  fi
+  # N6：账外且**非**构建残渣 ⇒ 仍红（证明豁免没有把真文件放行）
+  ( cd "$T2" && printf 'junk/\n' >> .gitignore && mkdir -p junk && : > junk/o \
+    && git add .gitignore && git -c user.email=a@b -c user.name=t commit -qm gitignore ) >/dev/null 2>&1
+  if check_repo "$T2" 0 "$BL2" >/dev/null 2>&1; then
+    echo "❌ N6 非残渣账外项未见红（豁免过宽）"; rc=2
+  else
+    echo "✅ N6 非残渣账外项 ⇒ 仍红（豁免不过宽）"
+  fi
+  rm -rf "$T2"; rm -f "$BL2"
 
   rm -rf "$T"; rm -f "$BL"
   [ $rc = 0 ] && echo "SELFTEST-OK" || echo "SELFTEST-FAIL"

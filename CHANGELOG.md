@@ -139,6 +139,50 @@
         见下（重烘后跑；重烘前 m446_time 的解释轨会红 —— 那正是「只修编译轨」的挡板）
 ```
 
+### 补 6（2026-11-25 22:2x）· 全量门的运行环境与完成信号（缺陷 942–945）
+
+```
+背景  第三轮全量门（HEAD dd7d689）19:52 就判决完了（绿 319 · 红 8），而等门的
+      finalize3 一直到 22:09 才喊「4h 未出结论」⇒ 白等 2h17m。逐条复现 8 红，
+      是**四个独立根因**，没有一条是 M446 产品代码红：
+
+① 缺陷 942 · 自驱写操作闸污染门环境（6 门假红）
+   自驱会话 PATH 首位是 data/mutate-shim/<任务号>/，门内 selftest 调 git tag
+   （pkg_make_tag / pkg_tag_guard / pkg_publish_gh_pages / m388_publish_chain）
+   与 sqlite3（m413/m414 探 token_cache ⇒ user_present=unknown ⇒ wait-unknown）
+   被写闸 rc=4 拦下。
+   证据  同树同门：shim PATH 下 6 红；env -i PATH=/usr/local/sbin:... 复跑 6 绿。
+   修法  run_gates.sh / shard_run.sh 启程点剥掉 mutate-shim。
+        链 run_release_chain.sh 保持「PATH 含 shim ⇒ 拒绝起链 exit 9」不变 ——
+        链会 push/tag，门不会，两类入口风险不同。
+   复验  shim PATH（未剥前的同一环境变量）下重跑 6 门 ⇒ 全绿。
+
+② 缺陷 943 · 分片档从不落机读尾行 ⇒ 等门的人必然等满超时
+   等门脚本写的是 grep -q '^RC=' <日志>，而 shard_run.sh 从 0 到末只打
+   「合计：绿 x · 红 y」与人话尾行 ⇒ 完成信号没有机器可判的形状。
+   修法  shard_run.sh 三条出口（0 全绿 / 1 有红 / 6 空跑）各落一行 RC=<code>。
+
+③ 缺陷 945 · m446_tree_clean 的账本判据结构性不稳定
+   同一 HEAD、同一本账：主树只多 1 条（examples/m65_lsp/build/），8 分片那轮多 7 条
+   —— 差集取决于「这一轮跑了哪些示例门」（verify.sh 就地 px build $HERE/x.px），
+   测的是「跑过哪些门」，不是「有没有被 .gitignore 藏了的真文件」。
+   修法  只对 .gitignore **明示**的 examples/<名>/(build|artifacts)/ 不判红，
+        且仍由 --release 要求为 0（打 tag 前必须清）；
+        其余账外项（含折叠形态 !! examples/）照旧判红。
+   负控  N5 残渣未入账 ⇒ 日常档不红、--release 仍红；
+        N6 非残渣账外项 ⇒ 仍红（证明豁免不过宽）。自测 7/7。
+
+④ 缺陷 944 · 缓存回收脚本「部署了等于没部署」
+   C3 要求部署副本与仓库逐字节一致，而脚本按 BASH_SOURCE 推导 REPO；
+   部署副本住 /usr/local/sbin ⇒ 推导得 /usr/local（不是仓）⇒ 旧口径
+   「什么都没找到也不报」rc=0 退出 = **静默空转**（缺陷 866 同族）。
+   修法  px_cache_gc.sh：MODE≠selftest 时校验 $REPO/selfhost/px_cache_gc.sh，
+        缺 ⇒ rc=3 指名；check_cache_bounded.sh 增 C3c：单元必须给 PX_REPO，
+        缺 ⇒ 红（实测：现单元确实缺 ⇒ C3c 已红，判据有牙）。
+   未做  部署动作（cp + 单元 Environment=PX_REPO=/data/code/puxian）属系统面
+        ⇒ 待用户批准后执行（档位 local 不越界）。
+```
+
 ## M445（2026-11-25）：外部定标门范式（A==B==C==**期望**）· 承接缺陷 920 的门面缺口
 
 > **一句话**：缺陷 920（json_parse 不合并代理对）之所以能一路流到发版，是因为门只证

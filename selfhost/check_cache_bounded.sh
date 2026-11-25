@@ -52,6 +52,19 @@ if [ -f "$DEPLOY" ]; then
   else
     bad "C3 部署副本已漂移（$DEPLOY ≠ selfhost/px_cache_gc.sh）⇒ 以仓库为准重新部署"
   fi
+  # C3c（缺陷 944）：部署副本住 /usr/local/sbin ⇒ 按脚本位置推导得到 /usr/local，
+  # 而 /usr/local 不是仓 ⇒ 旧口径「什么都没找到也不报」= 静默空转。
+  # 因此字节一致的部署**必须**由单元提供 PX_REPO，否则部署了等于没部署。
+  UNIT=dy-px-cache-gc.service
+  if systemctl cat "$UNIT" >/dev/null 2>&1; then
+    if systemctl cat "$UNIT" 2>/dev/null | grep -qE '^Environment=.*PX_REPO=[^ ]'; then
+      ok "C3c 单元已给 PX_REPO（部署副本不会推导成 /usr/local）"
+    else
+      bad "C3c $UNIT 缺 PX_REPO ⇒ 部署副本 REPO 推导成 /usr/local 并**静默空转**（缺陷 944）"
+    fi
+  else
+    ok "C3c 跳过：本机无 $UNIT"
+  fi
   if systemctl cat dy-px-cache-gc.timer >/dev/null 2>&1; then
     if systemctl is-enabled dy-px-cache-gc.timer >/dev/null 2>&1; then
       ok "C3b 定时器已安装且 enabled"

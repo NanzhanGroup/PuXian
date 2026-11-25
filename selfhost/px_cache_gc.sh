@@ -37,6 +37,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ── M446（缺陷 944）：REPO 必须真的是 PuXian 仓 ──
+#   部署副本住 /usr/local/sbin ⇒ 按脚本位置推导得到 /usr/local（不是仓）
+#   ⇒ 旧口径会「什么都没找到、也什么都不报」地 rc=0 退出 = **静默空转**
+#   （缺陷 866 家族：删不动当成功）。部署时由 systemd 单元给
+#   PX_REPO=/data/code/puxian（见 dy-px-cache-gc.service 的 Environment=）。
+if [ "$MODE" != selftest ] && [ ! -f "$REPO/selfhost/px_cache_gc.sh" ]; then
+  echo "ENV: REPO=$REPO 不是 PuXian 仓（缺 selfhost/px_cache_gc.sh）；部署副本请由 systemd 单元提供 PX_REPO=<仓库路径>" >&2
+  exit 3
+fi
+
 log()  { echo "[$(date '+%F %T')] $*"; }
 dir_kb(){ du -sk "$1" 2>/dev/null | awk '{print $1}'; }
 mb()   { awk -v k="$1" 'BEGIN{printf "%.1f", k/1024}'; }

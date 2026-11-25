@@ -52,6 +52,18 @@
 # ══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
+# ── M446（缺陷 942）：剥掉自驱写操作闸注入的 shim 目录 ──
+#   自驱会话 PATH 首位是 data/mutate-shim/<任务号>/，分片里的 selftest 调
+#   `git tag` / `sqlite3` 会被闸 rc=4 拦 ⇒ 六门假红（实测见
+#   selfhost/run_gates.sh 同名段）。run_release_chain.sh 对链是拒绝起链，
+#   分片档只剥不拒：否则自驱轮次永远跑不出全量门。
+case ":${PATH}:" in
+  *:/data/app/ws/data/mutate-shim/*)
+    PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/mutate-shim/' | paste -sd: -)
+    export PATH
+    echo "（M446 缺陷 942：已从 PATH 剥掉 mutate-shim）" ;;
+esac
+
 N=""; N_SET=0; DRY=0; PREP_ONLY=0
 # ── M351（缺陷 613）：耗时表默认值移出 /tmp ──
 #   旧默认 = /tmp/gatevm/times_m302_full.tsv（10-12 手工产物，2026-10-28 实测仍在）。两处病：
@@ -817,6 +829,7 @@ for i in $(seq 1 "$N"); do
 done
 if [ "$SH_OK" -eq 0 ]; then
   echo "  ❌ 空跑：$N 个分片一个门都没跑出来（看 $LOG/shard1.log —— 多半是残留锁/建树失败）"
+  echo "RC=6"          # M446（缺陷 943）：机读尾行，等的人靠它判完成
   exit 6
 fi
 # ── M355（缺陷 623）：有红 ⇒ **退出码必须非 0** ──
@@ -825,10 +838,17 @@ fi
 #   全靠链上 release_guard 解析「合计：绿 x · 红 y」那一行才兜住 —— 这是「判据第二通道」，
 #   任何直接调 shard_run 的人（脚本、人、将来的 CI）都会把红读成绿。
 #   专用码约定：0=全绿 · 1=有红（本行）· 6=空跑（上方）· 其它=自身故障。
+#   ⭐ M446（缺陷 943）：**末尾必须落机读 `RC=<code>`** —— 2026-11-25 第三轮实测：
+#     finalize3 的等门循环写的是 `grep -q '^RC=' <日志>`，而本脚本从 0 到末只打
+#     「合计：绿 x · 红 y」与人话尾行、从不出 `RC=` ⇒ 等门的人**必然**等满超时
+#     （那一轮 19:52 门就判决完了，等到 22:09 报「4h 未出结论」，白等 2h17m）。
+#     判据不能只活在人话里：完成信号要有机器可判的形状。
 if [ "$TOT_FAIL" != 0 ]; then
   echo "  ❌ 有红 ⇒ 逐条看 $LOG/shard*.log"
   echo "日志目录：$LOG"
+  echo "RC=1"
   exit 1
 fi
 echo "日志目录：$LOG"
+echo "RC=0"
 exit 0

@@ -41,6 +41,23 @@
 #     目的：下一个「即将顶穿」的门在**当次全量门**里就被看见，而不是等它某天超时。
 # ============================================================
 set -uo pipefail
+
+# ── M446（缺陷 942）：剥掉自驱写操作闸注入的 shim 目录 ──
+#   病灶（2026-11-25 第三轮全量门实测）：自驱会话把 data/mutate-shim/<任务号>/
+#   放在 PATH 首位，门内 selftest 调 `git tag` / `sqlite3` 被闸 rc=4 拦下
+#   ⇒ pkg_make_tag / pkg_tag_guard / pkg_publish_gh_pages / m388_publish_chain
+#      （git）与 m413_notify_ack / m414_notify_waiting（sqlite3 探不到 token_cache
+#      ⇒ user_present=unknown ⇒ wait-unknown）**六门假红**。
+#   实测：同一棵树 `env -i PATH=/usr/local/sbin:...` 复跑 ⇒ 六门全绿。
+#   口径：门是受信任的仓库代码（run_release_chain.sh 对链是直接拒绝起链，见其 L62），
+#        门运行器只剥 shim 不拒绝 —— 否则自驱轮次根本跑不了门。
+case ":${PATH}:" in
+  *:/data/app/ws/data/mutate-shim/*)
+    PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/mutate-shim/' | paste -sd: -)
+    export PATH
+    echo "（M446 缺陷 942：已从 PATH 剥掉 mutate-shim —— 门内 selftest 的 git/sqlite3 不再被写闸假红）" ;;
+esac
+
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 GATE_ROOT="$(pwd)"   # M405：门内判据要用绝对路径（门自己的 cwd 不受影响，各自在子 shell 里跑）
 export LC_ALL=C LANG=C
