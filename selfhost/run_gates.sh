@@ -51,11 +51,15 @@ set -uo pipefail
 #   实测：同一棵树 `env -i PATH=/usr/local/sbin:...` 复跑 ⇒ 六门全绿。
 #   口径：门是受信任的仓库代码（run_release_chain.sh 对链是直接拒绝起链，见其 L62），
 #        门运行器只剥 shim 不拒绝 —— 否则自驱轮次根本跑不了门。
+#   ⚠️ 提示必须走 stderr（2026-11-27 实测）：`run_gates.sh --list` 的 stdout 是
+#      **纯门名清单**（check_gate_timeouts 的 P6 / check_gate_registry 的输入），
+#      这行提示打到 stdout ⇒ 被当成第 329 扇门「（M446 缺陷 942：…）」⇒ 两门同根假红
+#      （清单 329 门 / 基线 328 行）。诊断信息一律 >&2，永远不进 --list 的 stdout。
 case ":${PATH}:" in
   *:/data/app/ws/data/mutate-shim/*)
     PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/mutate-shim/' | paste -sd: -)
     export PATH
-    echo "（M446 缺陷 942：已从 PATH 剥掉 mutate-shim —— 门内 selftest 的 git/sqlite3 不再被写闸假红）" ;;
+    echo "（M446 缺陷 942：已从 PATH 剥掉 mutate-shim —— 门内 selftest 的 git/sqlite3 不再被写闸假红）" >&2 ;;
 esac
 
 cd "$(cd "$(dirname "$0")/.." && pwd)"

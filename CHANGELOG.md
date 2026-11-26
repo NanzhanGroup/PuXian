@@ -1,4 +1,4 @@
-## M447（2026-11-26）：无缓冲通道 lost wakeup（缺陷 950）· 判据自伤与误判清账（949/947/948/940）· 第 6 轮 5 红收口（登记 960/961）
+## M447（2026-11-26）：无缓冲通道 lost wakeup（缺陷 950）· 判据自伤与误判清账（949/947/948/940）· 第 6 轮 5 红收口（登记 960/961/962）
 
 > **一句话**：第 5 轮全量门里被「LOAD-SENSITIVE 豁免」掉的那个 m426 红，不是负载假红 ——
 > 是 **VM 轨无缓冲通道的 lost wakeup**：接收方登记等待前从不唤醒已先到的发送方，
@@ -137,7 +137,24 @@ M446 登记「px_serve 回 505 后 worker 退出、监听消失」
         同族要查：还有哪些门就地改 runtime / 就地改仓库文件（M276 门级互斥锁只防并发，不防打断）
 ```
 
-### ⑨ 环境
+### ⑨ 缺陷 962（新）· 运行器诊断信息写进 stdout ⇒ `--list` 清单被污染，两门同根假红
+
+```
+事故    第 6 轮 5 红收口后单跑复核：gate_timeouts P6 报「基线缺 1 / **329** 门」，
+        缺的门名竟是「（M446 缺陷 942：已从 PATH 剥掉 mutate-shim —— …）」；
+        m400_baseline_feedback T3b 同形（门清单 329 / 基线 328）。门清单实际 328 门。
+根因    缺陷 942 的修（run_gates.sh 剥 mutate-shim）把提示 `echo` 打到 **stdout**，
+        而 `run_gates.sh --list` 的 stdout 是「纯门名清单」（check_gate_timeouts 的 P6 /
+        check_gate_registry 的输入）⇒ 提示被当成第 329 扇门。
+        只在「自驱会话 PATH 里带 mutate-shim」时出现 ⇒ 人跑门看不见，自驱轮次必踩。
+证据    负控（旧脚本）  PATH=<shim>:$PATH bash selfhost/run_gates.sh --list
+                      ⇒ 329 行，首行是中文提示
+        正控（修后）      同命令 ⇒ 328 行，首行 gate_registry，提示在 stderr
+修法    该提示改 `>&2`；并在注释里钉死口径：诊断信息一律 stderr，永不进 --list 的 stdout
+影响面  仅运行器输出通道；门判据/产品代码未动。gate_timeouts 与 m400 预计随修转绿（需复跑证实）
+```
+
+### ⑩ 环境
 
 ```
 根盘  93% → 78%（清 /data/gatevm 可重建分片工作树 wt1-8 / tmp1-8 / m442s3-exp，释放 15G）
