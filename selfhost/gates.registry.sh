@@ -2675,3 +2675,10 @@ gate_timeout m446_cache_bounded 300
 run m446_cache_bounded bash selfhost/check_cache_bounded.sh
 gate_timeout m446_tree_clean 300
 run m446_tree_clean bash selfhost/check_tree_clean.sh
+
+step "M447：无缓冲通道 lost wakeup（1 门）"
+#   缺陷 950：接收方登记等待前不唤醒已先到的发送方 ⇒ 两条等待链永不交叉（lost wakeup）。
+#   主判据是**确定性复现**（发送方先到 → 修前第 1 轮即挂），不依赖负载，
+#   因此不受 M411「低负载复跑绿 ⇒ 豁免」误分类影响（m426 那次红就是这个）。
+gate_timeout m447_chan 900
+run m447_chan bash selfhost/check_m447_chan.sh

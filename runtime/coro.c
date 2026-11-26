@@ -496,16 +496,23 @@ int px_coro_chan_recv_wait(LXValue ch) {
     if (ch.type != PX_CHAN) return 0;
     LXObject* o = ch.as.obj;
     int r = 0;
+    struct PxCoro* ws = NULL;   // M447：已先到的发送者（解锁后唤醒）
     pthread_mutex_lock(&o->as.chan.mu);
     if (o->as.chan.len > 0) {
         r = PX_CORO_WAIT_RETRY;
     } else if (o->as.chan.closed) {
         r = 0;
     } else {
+        // M447（缺陷 950c）：协程接收者挂 cw_recv 之前，必须唤醒已先到的发送者
+        //   （协程 cw_send / pthread cv_send）。旧实现只挂自己就返回，
+        //   若发送者已挂 cw_send ⇒ 两个等待链永不交叉 = lost wakeup。
         coro_list_append(&o->as.chan.cw_recv, g_cur_coro);
+        ws = px_coro_take_waiter(&o->as.chan.cw_send);
+        pthread_cond_signal(&o->as.chan.cv_send);
         r = PX_CORO_WAIT_BLOCKED;
     }
     pthread_mutex_unlock(&o->as.chan.mu);
+    px_coro_wake(ws);
     return r;
 }
 

@@ -17170,10 +17170,25 @@ LXValue px_chan_recv(LXValue ch) {
             pthread_mutex_unlock(&o->as.chan.mu);
             px_error("R1011: 从已关闭且为空的通道接收");
         }
-        if (o->as.chan.cap == 0) o->as.chan.recv_waiting++;
+        // M447（缺陷 950）：无缓冲 rendezvous 是「双方到场」语义 —— 登记接收之前
+        //   必须唤醒可能已先到的发送者。旧实现只 recv_waiting++ 就 cond_wait，
+        //   而发送者若先到（has_recver 为假）会挂 cw_send / cv_send 上等待；
+        //   两边互等无人 signal ⇒ lost wakeup，主线程永久阻塞（实测第 1 轮即挂）。
+        //   这里 signal cv_send（pthread 发送者）+ 摘一个协程发送者（解锁后 wake）。
+        if (o->as.chan.cap == 0) {
+            o->as.chan.recv_waiting++;
+            // 立即唤醒（不能延到 cond_wait 之后：那时主线程已被唤醒，醒来时
+            //   发送者还睡着 ⇒ 依旧互等）。px_coro_wake 只碰 g_coro_mu，
+            //   锁序 chan.mu → g_coro_mu 与既有调用点一致。
+            px_coro_wake(chan_sig_send(o));
+        }
         pthread_cond_wait(&o->as.chan.cv_recv, &o->as.chan.mu);
         if (o->as.chan.cap == 0 && o->as.chan.len == 0 && !o->as.chan.closed) {
-            // 被唤醒但值被别的接收者取走（竞争），继续等待
+            // 被唤醒但值被别的接收者取走（竞争），继续等待。
+            // M447（缺陷 950b）：先撤销本次登记再回循环顶重新登记 —— 旧实现漏撤销，
+            //   recv_waiting 单调泄漏 ⇒ 后续 send 误判「有接收者」把值写进孤立单槽，
+            //   无人取走 ⇒ 第二次挂死（同族假绿源）。
+            if (o->as.chan.recv_waiting > 0) o->as.chan.recv_waiting--;
         }
     }
 }
