@@ -38,8 +38,8 @@ echo "[1] 静态：BASELINE.tsv 形态"
 if [ ! -f "$BL" ]; then bad "[1] 缺 BASELINE.tsv"; else
   n=$(grep -vcE '^\s*(#|$)' "$BL" || true)
   nn=$(grep -vE '^\s*(#|$)' "$BL" | awk -F'\t' 'NF>=3 && $2 ~ /^[0-9]+$/ && length($3)>3' | wc -l)
-  chk "[1a] 基线条目数" "$n" "6"
-  chk "[1b] 全部「数字阈值 + 非空理由」" "$nn" "6"
+  chk "[1a] 基线条目数" "$n" "8"
+  chk "[1b] 全部「数字阈值 + 非空理由」" "$nn" "8"
   case "$(head -2 "$BL")" in *M280*) ok "[1c] 表头含来历锚点";; *) bad "[1c] 表头缺来历";; esac
   case "$(cat "$BL")" in *收敛*) ok "[1d] 含方法论锚点（收敛判据）";; *) bad "[1d] 缺收敛判据说明";; esac
 fi
@@ -110,6 +110,22 @@ else
     # ── v3（M296）：**均值**代替单点 —— 单点方差极大（CI 两次实测末轮增量 11968 ⇄ 2272，5×）
     inc(){ echo $(( CH[$1] - CH[$(( $1 - 1 ))] )); }
     avg3(){ echo $(( ($1 + $2 + $3) / 3 )); }
+    # ── v6（M446 补8）：三数中位数（对单点阶跃鲁棒；avg3 保留给别处/兼容）──
+    med3(){ printf '%s\n' "$1" "$2" "$3" | sort -n | sed -n 2p; }
+    # rss_verdict <f_med> <l_med> <l_max> <ratio> <flat_ok> <step_hard>
+    #   0 = 收敛（绿） · 1 = 未收敛（红）
+    #   ① 单轮硬上限先否决（防「中位/均值被小值拉低、另一轮暴涨」）
+    #   ② 比值通道：后段中位数 ≤ 前段中位数 × ratio%
+    #   ③ 稳态通道：后段中位数 ≤ flat_ok（阶跃落在前段时比值通道会虚高，用绝对小量兜住）
+    rss_verdict() {
+      local f="$1" l="$2" lm="$3" ratio="$4" flat="$5" hard="$6" lim
+      [ "$f" -lt 0 ] && f=0
+      [ "$lm" -gt "$hard" ] && return 1
+      lim=$(( f * ratio / 100 ))
+      [ "$l" -le "$lim" ] && return 0
+      [ "$l" -le "$flat" ] && return 0
+      return 1
+    }
     d1=$(inc 1)
     f_avg=$(avg3 "$(inc 1)" "$(inc 2)" "$(inc 3)")
     l_avg=$(avg3 "$(inc $((ROUNDS-2)))" "$(inc $((ROUNDS-1)))" "$(inc $ROUNDS)")
@@ -118,8 +134,9 @@ else
     L_CPU=$(lim cpu_tick_per_round); L_FIRST=$(lim rss_first_round_kb)
     L_RATIO=$(lim rss_converge_ratio); L_THR=$(lim thread_after_warmup); L_FD=$(lim fd_grow_total)
     L_PEAK=$(lim rss_peak_max_kb)
+    L_FLAT=$(lim rss_flat_ok_kb); L_STEP=$(lim rss_step_hard_kb)
 
-    echo "[3] 判据（收敛性 = 后段均值 vs 前段均值；不是单点绝对增量）"
+    echo "[3] 判据（收敛性 = 后段 3 轮**中位数** vs 前段 3 轮中位数；v6 起，见 BASELINE 头注）"
     # ── v5（M317 · 2026-10-21）：[3a] 改「中位数 + 离群轮数 + 单轮硬上限」─────────────
     #   v4（离群 ≤1 轮）仍会假红：同机 7 次实测里 2 次出现 **2 轮**离群
     #   （run3 = 18/25 · 关掉时间触发 PX_GC_MAX_INTERVAL_MS=0 的 run2 = 19/44
@@ -148,11 +165,21 @@ else
     fi
     # [3b] 只抓「一上来就失控」——绝对增量跨分配器不可比（见 BASELINE.tsv 头注的 CI/本机对照）
     le "[3b] 首轮 RSS 预热增量(KB)" "$d1" "$L_FIRST"
-    lim6=$(( f_avg * L_RATIO / 100 ))
-    if [ "$l_avg" -le "$lim6" ]; then
-      ok "[3c] RSS 收敛（后 3 轮均值 +$l_avg ≤ 前 3 轮均值 $f_avg 的 ${L_RATIO}% = $lim6）"
+    # ── [3c] v6（M446 补8）：均值 → 中位数 + 单轮硬上限 + 稳态通道 ────────────────
+    #   为什么改（同机同码 6 次实测，数据见 BASELINE.tsv 头注 v6）：
+    #     原判据「后 3 轮均值 ≤ 前 3 轮均值 ×60%」的背景基线由「一次内存阶跃落在第几轮」决定
+    #     ⇒ 同一份代码 41MB 判绿、63MB 判红；a8c2312 第 2 次跑（峰 69MB）反而绿 = 假绿。
+    #   新口径：中位数（鲁棒）+ 硬上限（防掩盖）+ 稳态小量（防阈值虚高）。
+    f_med=$(med3 "$(inc 1)" "$(inc 2)" "$(inc 3)")
+    l_med=$(med3 "$(inc $((ROUNDS-2)))" "$(inc $((ROUNDS-1)))" "$(inc $ROUNDS)")
+    l_max=0
+    for _r in $(seq $((ROUNDS-2)) "$ROUNDS"); do _v=$(inc "$_r"); [ "$_v" -gt "$l_max" ] && l_max=$_v; done
+    _fm=$f_med; [ "$_fm" -lt 0 ] && _fm=0
+    lim6=$(( _fm * L_RATIO / 100 ))
+    if rss_verdict "$f_med" "$l_med" "$l_max" "$L_RATIO" "$L_FLAT" "$L_STEP"; then
+      ok "[3c] RSS 收敛（后 3 轮中位数 +$l_med ≤ 前 3 轮中位数 $f_med 的 ${L_RATIO}% = $lim6 或 ≤ 稳态阈值 $L_FLAT；后段单轮峰值 $l_max ≤ 硬上限 $L_STEP）"
     else
-      bad "[3c] RSS 未收敛（后 3 轮均值 +$l_avg > $lim6 = 前 3 轮均值 $f_avg 的 ${L_RATIO}%）—— 疑似泄漏"
+      bad "[3c] RSS 未收敛（后 3 轮中位数 +$l_med vs 阈值 max($lim6, $L_FLAT)；后段单轮峰值 $l_max vs 硬上限 $L_STEP）—— 疑似泄漏"
     fi
     le "[3f] RSS 峰值(KB)" "$peak" "$L_PEAK"
     dthr=$(( $(thr) - T3 ))
@@ -180,6 +207,31 @@ else
       ok "[3h] 前提自证：每轮成功请求 ≥16/20（$(for r in 1 2 3; do printf '%s ' "${RQ[$r]}"; done)…）"
     else
       bad "[3h] 有 $weak 轮成功请求 <16/20 —— **RSS 曲线不可比**（测的不是同一件事）：$(for r in $(seq 1 "$ROUNDS"); do printf '%s ' "${RQ[$r]}"; done)"
+    fi
+
+    # ── [3i] v6 新增：**判据自测**（合成曲线 · 确定性 · 不依赖分配器）──────────────
+    #   为什么必须加：v6 之前 [3c] 从来没有过负控（CRITERIA ③）——它的「够牙」只是被假定。
+    #   本段用 7 条合成曲线直接打判据函数，其中 3 条是**实测出现过的形状**
+    #   （预热收敛 / 阶跃落前段曾假绿 / 阶跃落后段曾假红），4 条是真异常形状。
+    echo "[3i] 判据自测：合成曲线（确定性强负控，不依赖分配器）"
+    i_ok=0; i_bad=0
+    ivchk() { # <标签> <期望 0绿/1红> <f_med> <l_med> <l_max>
+      local tag="$1" want="$2" got
+      if rss_verdict "$3" "$4" "$5" "$L_RATIO" "$L_FLAT" "$L_STEP"; then got=0; else got=1; fi
+      if [ "$got" = "$want" ]; then i_ok=$((i_ok+1))
+      else i_bad=$((i_bad+1)); bad "[3i] 曲线「$tag」判定错（got=$got want=$want：f=$3 l=$4 lm=$5）"; fi
+    }
+    ivchk "预热收敛(v0.2.444 实测形状)"      0 9900  800  1900
+    ivchk "阶跃落前段(a8c2312 第2次·曾假绿)" 0 4100  800   900
+    ivchk "阶跃落后段(f2ea347 9轮·曾假红)"   0 9900  900  5758
+    ivchk "稳定泄漏 2MB/轮"                 1 2000 2000  2000
+    ivchk "慢增长 1.6MB/轮(上轮实测那条)"    1 1600 1600  1600
+    ivchk "前段平后段漏(0→800/轮)"          1    0  800   800
+    ivchk "后段单轮暴涨 40MB(中位数被掩盖)"  1 9900  300 40000
+    if [ "$i_bad" = "0" ]; then
+      ok "[3i] 判据自测 7/7（3 条实测形状 + 3 条泄漏形状 + 1 条暴涨形状全部判对）"
+    else
+      bad "[3i] 判据自测失败 $i_bad 条 —— [3c] 的判定逻辑本身不可信"
     fi
 
     echo "[4] 负控：注入忙自旋 ⇒ CPU 判据必须判红"
@@ -210,6 +262,10 @@ cat <<'TXT'
      · CPU 判据取 **9 轮中位数**（偶发 ≤2 轮突发不计，单轮硬上限 5×）：本机实测突发 18~44 tick、
        忙等 460~502 tick ⇒ 「偶发突发」与「持续烧 CPU」可分辨；本门只判后者。
      · RSS 看 VmRSS；allocator 不归还内存时「不回落」可能掩盖真泄漏 ⇒ 本门只做**筛查**。
+     · **[3c] v6 的真实边界（如实）**：预热后的稳定 +1.6MB/轮（glibc arena 扩张实测）与
+       「缓慢泄漏 +1.6MB/轮」在 9 轮窗口内**无法区分** —— 两者都靠「前段中位数」比值判绿。
+       本门对慢泄漏的兜底只有 [3f] 峰值上限（512MB）与轮数放大（30 轮实测收敛 +849/轮）。
+       要真正区分需要「同样请求量跑 2N 轮后比后半段」或有界分配器统计 —— 未做，不假装已闭环。
      · 线程/fd 只数**个数**，不判身份/类型。
      · **未覆盖**：长时间（>1h）稳态漂移；多 listener 并发；TLS 路径的资源面。
 TXT
