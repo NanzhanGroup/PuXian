@@ -691,6 +691,20 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m446_tree_clean ENV（非 git 仓 rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m446_tree_clean rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m446_tree_clean PASS"
+      - name: m447_chan（无缓冲通道 rendezvous 必须双向唤醒 · M447 · 缺陷 950）
+        #   病史：0.2.444/0.2.446 上接收方登记等待前不唤醒已先到的发送方 ⇒ 两条等待链
+        #   永不交叉（lost wakeup），主线程永久阻塞。第 5 轮全量门里的 m426 红就是这个，
+        #   当时被「低负载复跑绿」误判成 LOAD-SENSITIVE 豁免。
+        #   主判据是**确定性复现**（发送方先到 → 主线程 recv，50 轮），不依赖负载；
+        #   负控把唤醒语句回退 ⇒ 同一场景必挂（rc=124）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m447_chan.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m447_chan ENV（缺 tools/px 或 runtime 源 rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m447_chan rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m447_chan PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；

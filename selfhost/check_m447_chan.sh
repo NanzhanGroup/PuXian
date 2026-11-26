@@ -47,6 +47,24 @@ ok_n=0; bad_n=0
 ok()  { echo "✅ $*"; ok_n=$((ok_n+1)); }
 bad() { echo "❌ $*"; bad_n=$((bad_n+1)); }
 
+# ---- 污染自愈（缺陷 961 · 2026-11-27）----
+#   N1 负控会**就地**改 runtime.c（把唤醒语句换成占位）。若门在 N1 期间被 SIGKILL
+#   （工具层 120s 兜底 / 分片超时 / OOM），trap 跑不到 ⇒ 源码留在「唤醒被抹掉」状态，
+#   此后本次与**后续所有轮次**（含其他门）都会红，且真因极难看出。
+#   实证：2026-11-27 01:44 本门被工具层 120s 兜底打断，runtime.c:17183 留在 _sink 占位，
+#        git status 显示 M runtime/runtime.c。
+#   判据：负控锚点在场 **且** 真唤醒语句缺失 ⇒ 判为污染 ⇒ 先备份再 git 还原。
+if grep -q '_sink = NULL' "$RT" 2>/dev/null && ! grep -q 'px_coro_wake(chan_sig_send(o))' "$RT" 2>/dev/null; then
+  BAKP="/tmp/m447rt-polluted-$(date +%s).c"
+  cp -f "$RT" "$BAKP" 2>/dev/null || true
+  if ( cd "$ROOT" && git checkout -- runtime/runtime.c ) 2>/dev/null; then
+    echo "⚠ 检测到上次 N1 负控被打断：runtime.c 带 _sink 残留 ⇒ 已备份 $BAKP 并 git 还原" >&2
+  else
+    echo "ENV: runtime.c 带负控残留且无法自愈（非 git 仓/还原失败），备份在 $BAKP" >&2
+    exit 3
+  fi
+fi
+
 TMP="$(mktemp -d /tmp/m447chan.XXXXXX)"
 BAK=""
 cleanup() {
@@ -132,14 +150,39 @@ if [ -n "${BIN3:-}" ] && [ -x "$BIN3" ]; then
 fi
 
 # ---- C4 回归（有缓冲 / select / 多值）----
+# 判据纪律（本门自纠，2026-11-27）：concurrent.px 是 chan[int](4) 有缓冲 + 两个 spawn
+#   ⇒ 两次 recv 的先后**由调度决定，顺序不确定**。
+#   实测同一二进制连跑 30 次：25 次 first:2/second:4、5 次 first:4/second:2（约 17% 反转）。
+#   ⇒ 原判据「grep -q 'first: 2' && grep -q 'second: 4'」是**概率性现象硬断言**（CRITERIA ⑤），
+#     约 1/6 概率假红；第 6 轮全量门正是踩这个（首跑 rc=1 out=first: 4 second: 2）。
+#   正确判据：rc=0 且 {first, second} == {2,4}（集合相等，顺序不作判据）+ 连跑 10 次全绿。
+#   负控由 N1 承担（回退唤醒 ⇒ C2 必挂）；C4 只负责「有缓冲通道没被误伤」，不承担主判据。
+chan_out() {  # $1=二进制  ⇒ 打印 "rc v1 v2"
+  local o r v1 v2
+  o=$(timeout 30 "$1" 2>&1); r=$?
+  v1=$(printf '%s\n' "$o" | grep -oP '^first: \K[0-9]+' | head -1)
+  v2=$(printf '%s\n' "$o" | grep -oP '^second: \K[0-9]+' | head -1)
+  echo "$r ${v1:-x} ${v2:-x}"
+}
 BIN4=$(build "$EX/concurrent.px" ccp) || bad "C4 concurrent 编译失败"
 if [ -n "${BIN4:-}" ] && [ -x "$BIN4" ]; then
-  OUT4=$(timeout 30 "$BIN4" 2>&1); rc4=$?
-  if [ $rc4 -eq 0 ] && echo "$OUT4" | grep -q 'first: 2' && echo "$OUT4" | grep -q 'second: 4'; then
-    ok "C4 回归：有缓冲通道 / 多值语义未受影响"
+  read -r rc4 v1 v2 < <(chan_out "$BIN4")
+  if [ "$rc4" = "0" ] && { { [ "$v1" = 2 ] && [ "$v2" = 4 ]; } || { [ "$v1" = 4 ] && [ "$v2" = 2 ]; }; }; then
+    ok "C4 回归：有缓冲通道两值均达（集合 {first,second}={$v1,$v2} 相等；顺序不作判据）"
   else
-    bad "C4 回归失败 rc=$rc4 out=$(echo "$OUT4" | head -2 | tr '\n' ' ')"
+    bad "C4 回归失败 rc=$rc4 first=${v1:-缺失} second=${v2:-缺失}（期望集合 {2,4}）"
   fi
+  # C4b：连跑 10 次，任一非 {2,4} 即红（抓「概率性坏」，不抓顺序）
+  c4b_bad=0
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    read -r r ci cj < <(chan_out "$BIN4")
+    if [ "$r" != "0" ] || ! { { [ "$ci" = 2 ] && [ "$cj" = 4 ]; } || { [ "$ci" = 4 ] && [ "$cj" = 2 ]; }; }; then
+      c4b_bad=$((c4b_bad+1))
+      echo "     C4b 第 $_i 次异常：rc=$r first=$ci second=$cj"
+    fi
+  done
+  [ "$c4b_bad" = "0" ] && ok "C4b 连跑 10 次全绿（有缓冲通道稳定，无概率性坏）" \
+                       || bad "C4b 连跑 10 次有 $c4b_bad 次异常（有缓冲通道不稳定）"
 fi
 
 # ---- N1 负控（有牙）----
