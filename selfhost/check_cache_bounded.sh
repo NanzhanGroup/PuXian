@@ -55,24 +55,65 @@ if [ -f "$DEPLOY" ]; then
   # C3c（缺陷 944）：部署副本住 /usr/local/sbin ⇒ 按脚本位置推导得到 /usr/local，
   # 而 /usr/local 不是仓 ⇒ 旧口径「什么都没找到也不报」= 静默空转。
   # 因此字节一致的部署**必须**由单元提供 PX_REPO，否则部署了等于没部署。
+  #
+  # M446 补7（2026-11-26 · 缺陷 947）：**bus 不可用 ≠ 机制缺失**。
+  #   分片用 unshare --mount --pid --fork --mount-proc，在里面 systemctl 报
+  #   「Failed to connect to bus: No data available」⇒ 旧口径把「看不见」读成
+  #   「缺 timer / 缺 PX_REPO」⇒ 假红（m446_cache_bounded 复跑仍红 1s 的真因）。
+  #   修：先探 bus；bus 不可用 ⇒ 退到**文件级判据**（unit/drop-in/timers.target.wants），
+  #   并在输出里明写「降级」——降级本身要看得见，不能洗成普通绿。
   UNIT=dy-px-cache-gc.service
-  if systemctl cat "$UNIT" >/dev/null 2>&1; then
-    if systemctl cat "$UNIT" 2>/dev/null | grep -qE '^Environment=.*PX_REPO=[^ ]'; then
-      ok "C3c 单元已给 PX_REPO（部署副本不会推导成 /usr/local）"
+  TIMER=dy-px-cache-gc.timer
+  BUS_OK=0
+  # 探 bus 用 show，**不要用 is-system-running**：宿主 degraded 时它 rc=1（本机现值就是
+  # degraded）⇒ 会把「bus 好用」误判成「不可用」，那是同一家族的假红。
+  systemctl show --property=Version --value >/dev/null 2>&1 && BUS_OK=1
+  UDIR=/etc/systemd/system
+
+  if [ "$BUS_OK" = 1 ]; then
+    if systemctl cat "$UNIT" >/dev/null 2>&1; then
+      if systemctl cat "$UNIT" 2>/dev/null | grep -qE '^Environment=.*PX_REPO=[^ ]'; then
+        ok "C3c 单元已给 PX_REPO（部署副本不会推导成 /usr/local）"
+      else
+        bad "C3c $UNIT 缺 PX_REPO ⇒ 部署副本 REPO 推导成 /usr/local 并**静默空转**（缺陷 944）"
+      fi
     else
-      bad "C3c $UNIT 缺 PX_REPO ⇒ 部署副本 REPO 推导成 /usr/local 并**静默空转**（缺陷 944）"
+      ok "C3c 跳过：本机无 $UNIT"
     fi
   else
-    ok "C3c 跳过：本机无 $UNIT"
+    # 文件级：主 unit 或任一 drop-in 给出 PX_REPO 即算（drop-in 文件名不固定，按内容找）
+    if [ -f "$UDIR/$UNIT" ]; then
+      if grep -rqsE '^[[:space:]]*Environment=.*PX_REPO=[^ ]' "$UDIR/$UNIT" "$UDIR/$UNIT.d" 2>/dev/null; then
+        ok "C3c 文件级判据（bus 不可用 ⇒ 降级）：$UNIT 或其 drop-in 已给 PX_REPO"
+      else
+        bad "C3c 文件级判据：$UNIT 在场但无 PX_REPO ⇒ 部署副本会静默空转（缺陷 944）"
+      fi
+    else
+      ok "C3c 跳过：本机无 $UNIT（bus 不可用，文件级判据同样找不到）"
+    fi
   fi
-  if systemctl cat dy-px-cache-gc.timer >/dev/null 2>&1; then
-    if systemctl is-enabled dy-px-cache-gc.timer >/dev/null 2>&1; then
-      ok "C3b 定时器已安装且 enabled"
+
+  if [ "$BUS_OK" = 1 ]; then
+    if systemctl cat "$TIMER" >/dev/null 2>&1; then
+      if systemctl is-enabled "$TIMER" >/dev/null 2>&1; then
+        ok "C3b 定时器已安装且 enabled"
+      else
+        bad "C3b 定时器存在但未 enabled（等于不会跑）"
+      fi
     else
-      bad "C3b 定时器存在但未 enabled（等于不会跑）"
+      bad "C3b 缺 $TIMER（机制没有驱动力）"
     fi
   else
-    bad "C3b 缺 dy-px-cache-gc.timer（机制没有驱动力）"
+    # 文件级：timer 文件在场 **且** 挂在 timers.target.wants（否则等于不启用）
+    if [ -f "$UDIR/$TIMER" ]; then
+      if [ -L "$UDIR/timers.target.wants/$TIMER" ] || [ -f "$UDIR/timers.target.wants/$TIMER" ]; then
+        ok "C3b 文件级判据（bus 不可用 ⇒ 降级）：$TIMER 在场且已挂 timers.target.wants"
+      else
+        bad "C3b 文件级判据：$TIMER 在场但未 enabled（缺 timers.target.wants 链接 ⇒ 不会跑）"
+      fi
+    else
+      bad "C3b 缺 $TIMER（机制没有驱动力）"
+    fi
   fi
 else
   echo "⏭  C3 跳过：本机未部署（CI 环境正常）"
@@ -92,5 +133,12 @@ else
   fi
 fi
 
-echo "CACHE-BOUNDED-OK pass=$ok_n fail=$bad_n"
-[ "$bad_n" = 0 ] && exit 0 || exit 1
+# 末行口径（缺陷 506 家族）：有红时**不许**以 OK 收尾 —— 否则「末行判红」正则与 rc
+# 会给出互相矛盾的信号，后来者无法判断是门绿了还是被兜底拦了。
+if [ "$bad_n" = 0 ]; then
+  echo "CACHE-BOUNDED-OK pass=$ok_n fail=0"
+  exit 0
+else
+  echo "CACHE-BOUNDED-RED pass=$ok_n fail=$bad_n"
+  exit 1
+fi
