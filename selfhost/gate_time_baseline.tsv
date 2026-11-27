@@ -6,374 +6,373 @@
 # 刷新：不用手跑 —— packaging/chain/release_postupgrade.sh 判绿后自动调 selfhost/refresh_gate_baseline.sh。
 #
 # 本次输入：
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/quiet-lane1.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/quiet-lane2.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/quiet-lane3.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/quiet.times.tsv（16 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard1.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard2.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard3.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard4.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard5.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard6.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard7.times.tsv（328 行）
-#   - chain-20261127-014440 = /data/gatevm/shard-20261127-014440/shard8.times.tsv（328 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/quiet-lane1.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/quiet-lane2.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/quiet-lane3.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/quiet.times.tsv（16 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard1.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard2.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard3.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard4.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard5.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard6.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard7.times.tsv（329 行）
-#   - chain-20261127-151257 = /data/gatevm/shard-20261127-151257/shard8.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/quiet-lane1.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/quiet-lane2.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/quiet-lane3.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/quiet.times.tsv（16 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard1.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard2.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard3.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard4.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard5.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard6.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard7.times.tsv（329 行）
-#   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard8.times.tsv（329 行）
-#   - m448-954 = /tmp/m448-smtp954.times.tsv（1 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/quiet-lane1.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/quiet-lane2.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/quiet-lane3.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/quiet.times.tsv（16 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard1.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard2.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard3.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard4.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard5.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard6.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard7.times.tsv（330 行）
+#   - chain-20261127-200743 = /data/gatevm/shard-20261127-200743/shard8.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/quiet-lane1.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/quiet-lane2.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/quiet-lane3.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/quiet.times.tsv（16 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard1.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard2.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard3.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard4.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard5.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard6.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard7.times.tsv（330 行）
+#   - chain-20261127-222520 = /data/gatevm/shard-20261127-222520/shard8.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/quiet-lane1.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/quiet-lane2.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/quiet-lane3.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/quiet.times.tsv（17 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard1.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard2.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard3.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard4.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard5.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard6.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard7.times.tsv（330 行）
+#   - chain-20261128-003307 = /data/gatevm/shard-20261128-003307/shard8.times.tsv（330 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-27 20:01:44 +0800
+# 生成时间：2026-11-28 02:35:06 +0800
 #
 # 门名	秒	状态	来源
-bootstrap_prove	13	OK	chain-20261127-174342
-check_all	3	OK	chain-20261127-014440
-check_c	53	OK	chain-20261127-151257
-check_defect_refs	1	OK	chain-20261127-014440
-check_gate_paths	28	OK	chain-20261127-151257
-check_vm	35	OK	chain-20261127-151257
-cross_ports	101	OK	chain-20261127-151257
-diff_codegen	3	OK	chain-20261127-014440
-diff_errors	1	OK	chain-20261127-014440
-diff_interp	5	OK	chain-20261127-014440
-diff_lexer	1	OK	chain-20261127-174342
-diff_parser	1	OK	chain-20261127-014440
-diff_value	2	OK	chain-20261127-151257
-eco_index	2	OK	chain-20261127-014440
-eintr_guard	1	OK	chain-20261127-014440
-emitc_freeze	59	OK	chain-20261127-174342
-emitc_hook	1	OK	chain-20261127-014440
-engine_parity	26	OK	chain-20261127-151257
-ex_fib	2	OK	chain-20261127-014440
-ex_m26_ushr	2	OK	chain-20261127-014440
-ex_match	2	OK	chain-20261127-151257
-ex_struct	1	OK	chain-20261127-014440
-fmt_check	25	FAIL	chain-20261127-151257
-gate_anchor_sentinel	3	OK	chain-20261127-014440
-gate_inputs	2	OK	chain-20261127-151257
-gate_lock_guard	1	OK	chain-20261127-014440
-gate_registry	1	OK	chain-20261127-014440
-gate_timeouts	33	OK	chain-20261127-014440
-gate_verdict_selftest	1	OK	chain-20261127-151257
-gcstress_ledger	1	OK	chain-20261127-151257
-interp_builtin_list	1	OK	chain-20261127-174342
-interp_builtin_parity	3	OK	chain-20261127-014440
-lint_gate	17	OK	chain-20261127-151257
-lock_alloc	2	OK	chain-20261127-014440
-m116	132	OK	chain-20261127-151257
-m118	6	OK	chain-20261127-174342
-m119	8	OK	chain-20261127-014440
-m120	15	OK	chain-20261127-014440
-m122	46	OK	chain-20261127-014440
-m123_http_conn_alive	28	OK	chain-20261127-014440
-m128_unlock_grow	36	FAIL	chain-20261127-174342
-m130_flock_chmod	9	OK	chain-20261127-014440
-m131_stream_post	23	OK	chain-20261127-014440
-m132_sse_chunked	7	OK	chain-20261127-014440
-m133_unix_timeout	9	OK	chain-20261127-151257
-m134_gc_obj_roots	4	OK	chain-20261127-151257
-m136_go_json_fidelity	9	OK	chain-20261127-174342
-m137_sse_connect_ex	11	OK	chain-20261127-151257
-m138_regex_go_parity	7	OK	chain-20261127-014440
-m139_bare_ident_stmt	8	OK	chain-20261127-014440
-m140_http_conn_errno	4	OK	chain-20261127-014440
-m141_now_ns	9	OK	chain-20261127-151257
-m142_go_json_indent	13	OK	chain-20261127-151257
-m143_float32	13	OK	chain-20261127-014440
-m144_http_bigbody	14	OK	chain-20261127-014440
-m145_cycle_safe	14	OK	chain-20261127-014440
-m146_float64_bits	13	OK	chain-20261127-014440
-m147_fmt_dec	78	OK	chain-20261127-014440
-m148_ieee_div	113	OK	chain-20261127-014440
-m149_tcp_deadline	133	OK	chain-20261127-014440
-m150_tls_crypto	129	OK	chain-20261127-014440
-m151_pg_tls_bytes	74	OK	chain-20261127-014440
-m153_alloc	111	OK	chain-20261127-014440
-m154_alloc2	146	OK	chain-20261127-014440
-m155_nul_bytes	139	OK	chain-20261127-014440
-m156_onnx	3	OK	chain-20261127-151257
-m157_onnx_exec	71	OK	chain-20261127-014440
-m158_interp_fn	234	OK	chain-20261127-151257
-m159_hostarch	2	OK	chain-20261127-014440
-m160_closure	232	OK	chain-20261127-151257
-m161_genexp	246	OK	chain-20261127-151257
-m162_sorted	181	OK	chain-20261127-014440
-m163_dict_key	70	OK	chain-20261127-151257
-m164_iter	239	OK	chain-20261127-014440
-m165_eval_order	202	OK	chain-20261127-014440
-m166_iter_mutate	178	OK	chain-20261127-014440
-m167_unpack	190	OK	chain-20261127-151257
-m169_toplevel_scope	227	OK	chain-20261127-151257
-m170_gc_bridge	175	OK	chain-20261127-014440
-m171_lint_scope	134	OK	chain-20261127-014440
-m172_diag_channel	199	OK	chain-20261127-014440
-m173_http_proxy	117	OK	chain-20261127-014440
-m174_dict_get	44	OK	chain-20261127-151257
-m175_bytes_stderr	97	OK	chain-20261127-014440
-m176_reuseport	92	OK	chain-20261127-014440
-m177_builtin_parity	47	OK	chain-20261127-014440
-m178_iterable_args	260	OK	chain-20261127-014440
-m179_arith_diag	266	OK	chain-20261127-014440
-m180_h2_h3_stance	72	OK	chain-20261127-014440
-m181_uninit_read	171	OK	chain-20261127-174342
-m182_hdr_root	115	OK	chain-20261127-174342
-m183_gc_root_handover	199	OK	chain-20261127-014440
-m184_num_fs_strict	224	OK	chain-20261127-014440
-m185_bytes_face	186	OK	chain-20261127-151257
-m186_native_passthrough	185	OK	chain-20261127-014440
-m187_registry_import	413	OK	chain-20261127-014440
-m188_std_face	190	OK	chain-20261127-014440
-m189_bytes_bounds	182	OK	chain-20261127-014440
-m190_arity	331	OK	chain-20261127-014440
-m191_error_codes	82	OK	chain-20261127-014440
-m192_encfamily	180	OK	chain-20261127-014440
-m193_errcodes2	162	OK	chain-20261127-014440
-m194_arg_guards	141	OK	chain-20261127-014440
-m195_arg_guards2	133	OK	chain-20261127-014440
-m196_msg_parity	97	OK	chain-20261127-014440
-m197_builtin_arity	77	OK	chain-20261127-014440
-m198_argface	140	OK	chain-20261127-014440
-m199_argtype	514	OK	chain-20261127-014440
-m200_ffi_globals	155	OK	chain-20261127-014440
-m201_bytes_dec	125	OK	chain-20261127-014440
-m201_interp_ffi	43	OK	chain-20261127-014440
-m202_crypto_ext	252	OK	chain-20261127-014440
-m203_iter_index_msg	251	OK	chain-20261127-014440
-m204_assign_op	264	OK	chain-20261127-014440
-m205_cli_channels	10	OK	chain-20261127-014440
-m206_gcroot	110	OK	chain-20261127-151257
-m207_gcstress	77	OK	chain-20261127-014440
-m208_vm_c_local_roots	214	OK	chain-20261127-014440
-m209_gcroot_rules	123	OK	chain-20261127-014440
-m210_param_kw	231	OK	chain-20261127-014440
-m211_conn_read_eintr	50	OK	chain-20261127-014440
-m212_gcroot_derive	39	OK	chain-20261127-014440
-m213_gcroot_precision	97	OK	chain-20261127-014440
-m214_audit_exempt	112	OK	chain-20261127-174342
-m215_int_truth	128	OK	chain-20261127-014440
-m216_float_to_int	645	OK	chain-20261127-014440
-m217_shift_count	626	OK	chain-20261127-014440
-m218_logic_value	361	OK	chain-20261127-014440
-m219_link_flags	72	OK	chain-20261127-151257
-m220_result_ops	628	OK	chain-20261127-014440
-m221_devbuild_cache	381	OK	chain-20261127-014440
-m222_http_body	117	OK	chain-20261127-014440
-m223_devbuild_fingerprint	338	OK	chain-20261127-174342
-m224_gzip_negotiate	92	OK	chain-20261127-014440
-m225_h3_conn_reuse	236	OK	chain-20261127-151257
-m226_method_surface	320	OK	chain-20261127-014440
-m227_two_faces	210	OK	chain-20261127-174342
-m228_membership	568	OK	chain-20261127-014440
-m229_result_tuple	173	OK	chain-20261127-014440
-m230_index_slice	193	OK	chain-20261127-014440
-m231_op_matrix	312	OK	chain-20261127-151257
-m232_truthiness	242	OK	chain-20261127-014440
-m233_text_cstr	418	OK	chain-20261127-014440
-m234_bytes_family	500	OK	chain-20261127-014440
-m235_ws_conn_uaf	113	OK	chain-20261127-174342
-m236_ws_stream	421	OK	chain-20261127-014440
-m237_field_enum	241	OK	chain-20261127-014440
-m239_match_case	263	OK	chain-20261127-174342
-m242_table_ptr	19	OK	chain-20261127-014440
-m244_gate_parallel	477	OK	chain-20261127-014440
-m245_tls_cert_reload	99	OK	chain-20261127-174342
-m246_compound_assign	197	OK	chain-20261127-151257
-m250_onnx_tensor	538	OK	chain-20261127-014440
-m253_bcorpus	356	OK	chain-20261127-174342
-m255_ws_takeover_rst	44	OK	chain-20261127-151257
-m256_eintr	146	OK	chain-20261127-174342
-m257_alloc_integrity	34	OK	chain-20261127-014440
-m258_root_restore	7	OK	chain-20261127-174342
-m259_root_trunc	5	OK	chain-20261127-174342
-m260_gc_repro	39	OK	chain-20261127-174342
-m261_lock_alloc	13	OK	chain-20261127-014440
-m262_lock_alloc2	91	OK	chain-20261127-151257
-m263_resp_crosstalk	18	OK	chain-20261127-014440
-m264_gate_shared_tmp	6	OK	chain-20261127-151257
-m267_perf	159	OK	chain-20261127-151257
-m269_gcroot_coverage	34	OK	chain-20261127-151257
-m271_run_fast	21	OK	chain-20261127-151257
-m276_gate_lock	6	OK	chain-20261127-014440
-m278_release_reconcile	2	OK	chain-20261127-014440
-m279_std_surface	16	OK	chain-20261127-014440
-m280_resource_baseline	61	OK	chain-20261127-014440
-m282_registry_020	56	OK	chain-20261127-014440
-m283_gate_premise	88	OK	chain-20261127-014440
-m284_orchestrator	53	OK	chain-20261127-174342
-m285_gate_assertions	99	OK	chain-20261127-014440
-m286_anchor_multi	58	OK	chain-20261127-014440
-m287_devbuild_slots	388	OK	chain-20261127-014440
-m288_ws_handshake_residual	263	OK	chain-20261127-151257
-m291_gcrotate	167	OK	chain-20261127-014440
-m293_h3_robustness	49	OK	chain-20261127-014440
-m294_h3_qpack_share	50	OK	chain-20261127-014440
-m295_quic_slot	18	OK	chain-20261127-014440
-m296_quic_accept_reuse	321	OK	chain-20261127-174342
-m297_quic_path_switch	128	OK	chain-20261127-151257
-m298_quic_write_wait	102	OK	chain-20261127-014440
-m299_wake_channel	2	OK	chain-20261127-014440
-m300_stdlib_surface2	628	OK	chain-20261127-014440
-m301_argcount	322	OK	chain-20261127-014440
-m302_stdlib_surface3	439	OK	chain-20261127-014440
-m304_patch_primitive	9	OK	chain-20261127-174342
-m306_onnx_quant	104	OK	chain-20261127-174342
-m308_onnx_ops	167	OK	chain-20261127-014440
-m309_pxpkg_sync	5	OK	chain-20261127-151257
-m311_real_model	19	OK	chain-20261127-174342
-m312_gc_lock_order	184	OK	chain-20261127-174342
-m313_accept_nodelay	37	OK	chain-20261127-014440
-m313_mysql_driver	45	OK	chain-20261127-014440
-m314_mysql_err_conn	36	OK	chain-20261127-151257
-m315_onnx_ort_kernel	5	OK	chain-20261127-014440
-m316_http_dup_host	131	OK	chain-20261127-014440
-m317_gc_time_trigger	670	OK	chain-20261127-014440
-m318_mem_layers	31	OK	chain-20261127-151257
-m319_ws_eof_spin	323	OK	chain-20261127-174342
-m324_tls_failclosed	53	OK	chain-20261127-014440
-m362_divmod	3	OK	chain-20261127-014440
-m365_named_args	55	OK	chain-20261127-151257
-m366_enum_payload	34	OK	chain-20261127-014440
-m366_tagmsg	1	OK	chain-20261127-014440
-m367_enum_parse	5	OK	chain-20261127-014440
-m369_name_shadow	31	OK	chain-20261127-014440
-m372_data_enum	7	OK	chain-20261127-014440
-m372_sni_slot	5	OK	chain-20261127-151257
-m373_data_enum_nested	19	OK	chain-20261127-014440
-m374_data_enum_named	9	OK	chain-20261127-151257
-m375_ws_connect_timeout	37	OK	chain-20261127-151257
-m376_sigterm_drain	45	OK	chain-20261127-014440
-m381_stdlib_registry_parity	1	OK	chain-20261127-174342
-m383_gate_logs	1	OK	chain-20261127-014440
-m383_speed_path	11	OK	chain-20261127-151257
-m384_px_defects	1	OK	chain-20261127-014440
-m386_px_semantics	5	OK	chain-20261127-151257
-m387_lint_dir	108	OK	chain-20261127-174342
-m388_publish_chain	5	OK	chain-20261127-174342
-m389_gh_auth	32	OK	chain-20261127-151257
-m390_px_semantics	32	OK	chain-20261127-174342
-m391_parser_features	1	OK	chain-20261127-151257
-m392_try_catch	8	OK	chain-20261127-014440
-m394_release_watch	1	OK	chain-20261127-174342
-m395_list_copy	8	OK	chain-20261127-151257
-m396_dict_index	7	OK	chain-20261127-014440
-m397_bytes_ops	9	OK	chain-20261127-151257
-m398_freeze_deps	4	OK	chain-20261127-014440
-m400_baseline_feedback	305	OK	chain-20261127-014440
-m401_default_args	8	OK	chain-20261127-174342
-m403_orphan_batch	787	OK	chain-20261127-014440
-m406_struct_field_default	24	OK	chain-20261127-151257
-m407_rt_error_format	36	OK	chain-20261127-014440
-m408_builtin_err_trap	41	OK	chain-20261127-174342
-m408_proxy_connect	2	OK	chain-20261127-174342
-m409_gc_container_lifetime	4	OK	chain-20261127-014440
-m410_criteria_scan	4	OK	chain-20261127-014440
-m411_loadsensitive	1	OK	chain-20261127-014440
-m412_chain_tail	1	OK	chain-20261127-151257
-m413_notify_ack	4	OK	chain-20261127-174342
-m414_notify_waiting	4	OK	chain-20261127-174342
-m415_cleanenv	36	OK	chain-20261127-014440
-m418_alloc_fail_budget	8	OK	chain-20261127-014440
-m419_keyword_sync	2	OK	chain-20261127-014440
-m420_memsan_cron	78	OK	chain-20261127-014440
-m420_route_intresp	34	OK	chain-20261127-014440
-m421_examples_coverage	56	OK	chain-20261127-151257
-m422_examples_compile	105	OK	chain-20261127-174342
-m423_pxexec_portable	4	OK	chain-20261127-014440
-m424_pxexec_direct	5	OK	chain-20261127-014440
-m425_build_cache	61	OK	chain-20261127-014440
-m426_examples_run	253	OK	chain-20261127-014440
-m427_opts_whitelist	85	OK	chain-20261127-014440
-m428_opts_valuerange	93	OK	chain-20261127-014440
-m429_pxrun_signal	9	OK	chain-20261127-014440
-m430_gate_portscan	7	OK	chain-20261127-014440
-m432_request_framing	124	OK	chain-20261127-014440
-m433_publish_scope	1	OK	chain-20261127-014440
-m434_header_syntax	137	OK	chain-20261127-014440
-m435_resp_header_guard	39	OK	chain-20261127-014440
-m436_px_deps	5	OK	chain-20261127-014440
-m436_pxrun_stdin	3	OK	chain-20261127-174342
-m437_dup2_corpus	3	OK	chain-20261127-151257
-m437_worker	7	OK	chain-20261127-151257
-m438_pxslice_offs	20	OK	chain-20261127-014440
-m438_spawn_posix	7	OK	chain-20261127-014440
-m439_norm	2	OK	chain-20261127-014440
-m439_runtime	4	OK	chain-20261127-014440
-m440_fastmemo	17	OK	chain-20261127-014440
-m441_prune	91	OK	chain-20261127-014440
-m442_pxe	74	OK	chain-20261127-014440
-m444_defchk	5	OK	chain-20261127-014440
-m444_stream	8	OK	chain-20261127-174342
-m446_cache_bounded	0	OK	chain-20261127-014440
-m446_http	5	OK	chain-20261127-014440
-m446_pairs_run	137	OK	chain-20261127-014440
-m446_time	2	OK	chain-20261127-014440
-m446_tree_clean	1	OK	chain-20261127-151257
-m447_chan	65	OK	chain-20261127-014440
-m448_png957	4	OK	chain-20261127-151257
-m448_smtp_tls	69	OK	m448-954
-m63_langfix	6	OK	chain-20261127-014440
-m64_fmt	1	OK	chain-20261127-014440
-m64_lint	0	OK	chain-20261127-014440
-m65_lsp	6	OK	chain-20261127-174342
-m65_mcp	2	OK	chain-20261127-014440
-m66_lunar	8	OK	chain-20261127-014440
-m66_pxml	50	OK	chain-20261127-151257
-m66_yaml	6	OK	chain-20261127-014440
-m71_mcp_build	2	OK	chain-20261127-014440
-m82_http_serve_unix	3	OK	chain-20261127-151257
-m97_s2b_http_hpool_dead	4	OK	chain-20261127-014440
-m97_s2_http_keepalive	4	OK	chain-20261127-014440
-m97_s3_http_keepalive_long	4	OK	chain-20261127-014440
-neg_residue	1	OK	chain-20261127-151257
-onnx_load_coverage	0	OK	chain-20261127-014440
-orphan_gates	0	OK	chain-20261127-014440
-pkg_guard_monotonic	1	OK	chain-20261127-014440
-pkg_install_rpm	1	OK	chain-20261127-014440
-pkg_latest_guard	2	OK	chain-20261127-014440
-pkg_loadavg_verdict	6	OK	chain-20261127-014440
-pkg_make_release	95	OK	chain-20261127-014440
-pkg_make_tag	6	OK	chain-20261127-151257
-pkg_pipe_grep	4	OK	chain-20261127-151257
-pkg_publish_gh_pages	2	OK	chain-20261127-014440
-pkg_pxrepo_mirror	2	OK	chain-20261127-014440
-pkg_tag_guard	4	OK	chain-20261127-014440
-portability_selftest	2	OK	chain-20261127-151257
-portability_shipped	1	OK	chain-20261127-014440
-pymain_guard	2	OK	chain-20261127-014440
-quiet_archive	1	OK	chain-20261127-174342
-realhost_smoke	0	OK	chain-20261127-014440
-registry_external	1	OK	chain-20261127-014440
-release_assets	1	OK	chain-20261127-151257
-release_readiness_selftest	1	OK	chain-20261127-014440
-sed_inplace_ledger	0	OK	chain-20261127-014440
-selfwake_guard	46	OK	chain-20261127-014440
-shard_gate_verdict_selftest	1	OK	chain-20261127-014440
-shard_wt_recovery	2	OK	chain-20261127-151257
-shell_contract	6	OK	chain-20261127-014440
-spec_consistency	1	OK	chain-20261127-014440
-upstream_confirm_selftest	5	OK	chain-20261127-014440
-upstream_tests	1560	OK	chain-20261127-014440
-version_drift	1	OK	chain-20261127-174342
-version_golden	0	OK	chain-20261127-014440
-zombie_reap	26	OK	chain-20261127-151257
+bootstrap_prove	13	FAIL	chain-20261127-200743
+check_all	3	OK	chain-20261127-200743
+check_c	54	OK	chain-20261127-200743
+check_defect_refs	1	OK	chain-20261127-222520
+check_gate_paths	27	OK	chain-20261128-003307
+check_vm	34	OK	chain-20261127-200743
+cross_ports	106	OK	chain-20261127-200743
+diff_codegen	3	OK	chain-20261128-003307
+diff_errors	1	OK	chain-20261127-200743
+diff_interp	5	OK	chain-20261127-222520
+diff_lexer	1	OK	chain-20261127-200743
+diff_parser	2	OK	chain-20261127-222520
+diff_value	2	OK	chain-20261127-222520
+eco_index	3	OK	chain-20261127-222520
+eintr_guard	1	OK	chain-20261127-200743
+emitc_freeze	53	OK	chain-20261127-222520
+emitc_hook	1	OK	chain-20261127-200743
+engine_parity	25	OK	chain-20261127-200743
+ex_fib	1	OK	chain-20261127-200743
+ex_m26_ushr	2	OK	chain-20261127-200743
+ex_match	2	OK	chain-20261127-222520
+ex_struct	1	OK	chain-20261127-200743
+fmt_check	26	OK	chain-20261127-200743
+gate_anchor_sentinel	3	OK	chain-20261127-200743
+gate_inputs	2	OK	chain-20261127-222520
+gate_lock_guard	1	OK	chain-20261127-200743
+gate_registry	1	OK	chain-20261127-200743
+gate_timeouts	31	OK	chain-20261127-200743
+gate_verdict_selftest	0	OK	chain-20261127-200743
+gcstress_ledger	0	OK	chain-20261127-200743
+interp_builtin_list	1	OK	chain-20261127-222520
+interp_builtin_parity	3	OK	chain-20261128-003307
+lint_gate	18	OK	chain-20261127-200743
+lock_alloc	2	OK	chain-20261127-200743
+m116	172	OK	chain-20261127-200743
+m118	6	OK	chain-20261127-222520
+m119	8	OK	chain-20261128-003307
+m120	15	OK	chain-20261127-200743
+m122	46	OK	chain-20261127-222520
+m123_http_conn_alive	28	OK	chain-20261127-200743
+m128_unlock_grow	36	OK	chain-20261127-200743
+m130_flock_chmod	10	OK	chain-20261127-222520
+m131_stream_post	23	OK	chain-20261127-200743
+m132_sse_chunked	6	OK	chain-20261127-200743
+m133_unix_timeout	10	OK	chain-20261127-200743
+m134_gc_obj_roots	4	OK	chain-20261127-200743
+m136_go_json_fidelity	8	OK	chain-20261128-003307
+m137_sse_connect_ex	11	OK	chain-20261127-200743
+m138_regex_go_parity	8	OK	chain-20261127-200743
+m139_bare_ident_stmt	9	OK	chain-20261127-200743
+m140_http_conn_errno	6	OK	chain-20261128-003307
+m141_now_ns	10	OK	chain-20261127-222520
+m142_go_json_indent	13	OK	chain-20261127-200743
+m143_float32	13	OK	chain-20261127-200743
+m144_http_bigbody	14	OK	chain-20261127-200743
+m145_cycle_safe	16	OK	chain-20261127-200743
+m146_float64_bits	12	OK	chain-20261127-200743
+m147_fmt_dec	78	OK	chain-20261127-200743
+m148_ieee_div	119	OK	chain-20261127-200743
+m149_tcp_deadline	140	OK	chain-20261127-200743
+m150_tls_crypto	137	OK	chain-20261127-200743
+m151_pg_tls_bytes	76	OK	chain-20261127-200743
+m153_alloc	122	OK	chain-20261127-200743
+m154_alloc2	152	OK	chain-20261127-200743
+m155_nul_bytes	146	OK	chain-20261127-222520
+m156_onnx	3	OK	chain-20261127-200743
+m157_onnx_exec	79	OK	chain-20261127-200743
+m158_interp_fn	235	OK	chain-20261127-200743
+m159_hostarch	3	OK	chain-20261127-200743
+m160_closure	233	OK	chain-20261127-200743
+m161_genexp	250	OK	chain-20261127-200743
+m162_sorted	181	OK	chain-20261127-200743
+m163_dict_key	68	OK	chain-20261127-200743
+m164_iter	250	OK	chain-20261127-200743
+m165_eval_order	209	OK	chain-20261127-200743
+m166_iter_mutate	189	OK	chain-20261127-200743
+m167_unpack	188	OK	chain-20261127-200743
+m169_toplevel_scope	229	OK	chain-20261127-200743
+m170_gc_bridge	310	OK	chain-20261127-200743
+m171_lint_scope	141	OK	chain-20261127-200743
+m172_diag_channel	195	OK	chain-20261127-200743
+m173_http_proxy	156	OK	chain-20261127-200743
+m174_dict_get	48	OK	chain-20261127-200743
+m175_bytes_stderr	83	OK	chain-20261127-200743
+m176_reuseport	95	OK	chain-20261127-200743
+m177_builtin_parity	46	OK	chain-20261127-200743
+m178_iterable_args	225	OK	chain-20261127-200743
+m179_arith_diag	271	OK	chain-20261127-200743
+m180_h2_h3_stance	114	OK	chain-20261127-200743
+m181_uninit_read	170	OK	chain-20261127-200743
+m182_hdr_root	112	OK	chain-20261127-200743
+m183_gc_root_handover	188	OK	chain-20261128-003307
+m184_num_fs_strict	193	OK	chain-20261127-200743
+m185_bytes_face	180	OK	chain-20261127-200743
+m186_native_passthrough	172	OK	chain-20261127-200743
+m187_registry_import	357	OK	chain-20261127-200743
+m188_std_face	174	OK	chain-20261128-003307
+m189_bytes_bounds	177	OK	chain-20261127-200743
+m190_arity	291	OK	chain-20261127-200743
+m191_error_codes	72	OK	chain-20261127-200743
+m192_encfamily	196	OK	chain-20261127-200743
+m193_errcodes2	184	OK	chain-20261127-200743
+m194_arg_guards	161	OK	chain-20261127-200743
+m195_arg_guards2	116	OK	chain-20261127-200743
+m196_msg_parity	88	OK	chain-20261127-200743
+m197_builtin_arity	78	OK	chain-20261127-200743
+m198_argface	143	OK	chain-20261127-200743
+m199_argtype	462	OK	chain-20261127-200743
+m200_ffi_globals	157	OK	chain-20261127-200743
+m201_bytes_dec	126	OK	chain-20261127-200743
+m201_interp_ffi	37	OK	chain-20261128-003307
+m202_crypto_ext	226	OK	chain-20261127-200743
+m203_iter_index_msg	221	OK	chain-20261127-200743
+m204_assign_op	250	OK	chain-20261127-200743
+m205_cli_channels	11	OK	chain-20261127-200743
+m206_gcroot	108	OK	chain-20261127-200743
+m207_gcstress	72	OK	chain-20261127-222520
+m208_vm_c_local_roots	217	OK	chain-20261127-222520
+m209_gcroot_rules	113	OK	chain-20261127-200743
+m210_param_kw	228	OK	chain-20261127-200743
+m211_conn_read_eintr	47	OK	chain-20261127-200743
+m212_gcroot_derive	41	OK	chain-20261127-200743
+m213_gcroot_precision	86	OK	chain-20261127-222520
+m214_audit_exempt	105	OK	chain-20261127-200743
+m215_int_truth	124	OK	chain-20261127-200743
+m216_float_to_int	655	OK	chain-20261127-222520
+m217_shift_count	555	OK	chain-20261127-200743
+m218_logic_value	371	OK	chain-20261127-222520
+m219_link_flags	74	OK	chain-20261127-222520
+m220_result_ops	654	OK	chain-20261127-222520
+m221_devbuild_cache	369	OK	chain-20261127-222520
+m222_http_body	141	OK	chain-20261127-200743
+m223_devbuild_fingerprint	347	OK	chain-20261127-200743
+m224_gzip_negotiate	126	OK	chain-20261127-222520
+m225_h3_conn_reuse	326	OK	chain-20261127-222520
+m226_method_surface	313	OK	chain-20261127-222520
+m227_two_faces	198	OK	chain-20261127-200743
+m228_membership	580	OK	chain-20261127-222520
+m229_result_tuple	171	OK	chain-20261127-222520
+m230_index_slice	202	OK	chain-20261127-222520
+m231_op_matrix	315	OK	chain-20261127-200743
+m232_truthiness	224	OK	chain-20261127-200743
+m233_text_cstr	400	OK	chain-20261127-222520
+m234_bytes_family	500	OK	chain-20261127-222520
+m235_ws_conn_uaf	113	OK	chain-20261128-003307
+m236_ws_stream	437	OK	chain-20261127-222520
+m237_field_enum	262	OK	chain-20261127-222520
+m239_match_case	257	OK	chain-20261127-200743
+m242_table_ptr	60	OK	chain-20261127-222520
+m244_gate_parallel	465	OK	chain-20261127-222520
+m245_tls_cert_reload	99	OK	chain-20261127-222520
+m246_compound_assign	203	OK	chain-20261127-200743
+m250_onnx_tensor	548	OK	chain-20261127-222520
+m253_bcorpus	372	OK	chain-20261127-222520
+m255_ws_takeover_rst	49	OK	chain-20261127-222520
+m256_eintr	115	OK	chain-20261127-222520
+m257_alloc_integrity	35	OK	chain-20261127-200743
+m258_root_restore	6	OK	chain-20261127-200743
+m259_root_trunc	4	OK	chain-20261127-200743
+m260_gc_repro	53	OK	chain-20261128-003307
+m261_lock_alloc	15	OK	chain-20261127-222520
+m262_lock_alloc2	125	OK	chain-20261127-200743
+m263_resp_crosstalk	19	OK	chain-20261127-200743
+m264_gate_shared_tmp	6	OK	chain-20261127-222520
+m267_perf	156	OK	chain-20261127-222520
+m269_gcroot_coverage	33	OK	chain-20261127-200743
+m271_run_fast	20	OK	chain-20261127-222520
+m276_gate_lock	6	OK	chain-20261127-222520
+m278_release_reconcile	2	OK	chain-20261127-200743
+m279_std_surface	16	OK	chain-20261127-222520
+m280_resource_baseline	60	OK	chain-20261127-200743
+m282_registry_020	56	OK	chain-20261127-222520
+m283_gate_premise	87	OK	chain-20261127-222520
+m284_orchestrator	54	OK	chain-20261127-200743
+m285_gate_assertions	102	OK	chain-20261127-222520
+m286_anchor_multi	53	OK	chain-20261127-200743
+m287_devbuild_slots	393	OK	chain-20261127-200743
+m288_ws_handshake_residual	251	OK	chain-20261127-200743
+m291_gcrotate	156	OK	chain-20261127-200743
+m293_h3_robustness	48	OK	chain-20261127-200743
+m294_h3_qpack_share	94	OK	chain-20261127-222520
+m295_quic_slot	18	OK	chain-20261127-200743
+m296_quic_accept_reuse	307	OK	chain-20261127-200743
+m297_quic_path_switch	157	OK	chain-20261127-200743
+m298_quic_write_wait	141	OK	chain-20261127-222520
+m299_wake_channel	2	OK	chain-20261127-200743
+m300_stdlib_surface2	622	OK	chain-20261127-200743
+m301_argcount	318	OK	chain-20261127-200743
+m302_stdlib_surface3	408	OK	chain-20261127-200743
+m304_patch_primitive	9	OK	chain-20261127-200743
+m306_onnx_quant	108	OK	chain-20261127-200743
+m308_onnx_ops	169	OK	chain-20261127-222520
+m309_pxpkg_sync	5	OK	chain-20261127-200743
+m311_real_model	16	OK	chain-20261127-200743
+m312_gc_lock_order	185	OK	chain-20261127-200743
+m313_accept_nodelay	41	OK	chain-20261127-222520
+m313_mysql_driver	46	OK	chain-20261127-200743
+m314_mysql_err_conn	34	OK	chain-20261127-222520
+m315_onnx_ort_kernel	5	OK	chain-20261127-200743
+m316_http_dup_host	141	OK	chain-20261127-222520
+m317_gc_time_trigger	620	OK	chain-20261127-200743
+m318_mem_layers	28	OK	chain-20261127-222520
+m319_ws_eof_spin	268	OK	chain-20261127-222520
+m324_tls_failclosed	49	OK	chain-20261128-003307
+m362_divmod	4	OK	chain-20261127-222520
+m365_named_args	55	OK	chain-20261127-222520
+m366_enum_payload	39	OK	chain-20261127-200743
+m366_tagmsg	1	OK	chain-20261127-200743
+m367_enum_parse	4	OK	chain-20261127-200743
+m369_name_shadow	31	OK	chain-20261127-222520
+m372_data_enum	7	OK	chain-20261127-222520
+m372_sni_slot	4	OK	chain-20261127-200743
+m373_data_enum_nested	18	OK	chain-20261127-200743
+m374_data_enum_named	8	OK	chain-20261127-200743
+m375_ws_connect_timeout	37	OK	chain-20261127-200743
+m376_sigterm_drain	46	OK	chain-20261127-200743
+m381_stdlib_registry_parity	1	OK	chain-20261127-200743
+m383_gate_logs	0	OK	chain-20261127-200743
+m383_speed_path	11	OK	chain-20261127-200743
+m384_px_defects	0	OK	chain-20261127-200743
+m386_px_semantics	4	OK	chain-20261127-200743
+m387_lint_dir	106	OK	chain-20261127-222520
+m388_publish_chain	5	OK	chain-20261128-003307
+m389_gh_auth	32	OK	chain-20261127-200743
+m390_px_semantics	36	OK	chain-20261127-200743
+m391_parser_features	1	OK	chain-20261127-200743
+m392_try_catch	9	OK	chain-20261127-200743
+m394_release_watch	1	OK	chain-20261127-200743
+m395_list_copy	6	OK	chain-20261127-200743
+m396_dict_index	7	OK	chain-20261127-200743
+m397_bytes_ops	9	OK	chain-20261128-003307
+m398_freeze_deps	5	OK	chain-20261127-200743
+m400_baseline_feedback	300	OK	chain-20261127-200743
+m401_default_args	7	OK	chain-20261127-200743
+m403_orphan_batch	738	OK	chain-20261127-200743
+m406_struct_field_default	22	OK	chain-20261127-200743
+m407_rt_error_format	33	OK	chain-20261127-200743
+m408_builtin_err_trap	39	OK	chain-20261127-222520
+m408_proxy_connect	2	OK	chain-20261127-200743
+m409_gc_container_lifetime	3	OK	chain-20261127-200743
+m410_criteria_scan	5	OK	chain-20261128-003307
+m411_loadsensitive	1	OK	chain-20261127-200743
+m412_chain_tail	1	OK	chain-20261127-200743
+m413_notify_ack	4	OK	chain-20261127-222520
+m414_notify_waiting	4	OK	chain-20261127-222520
+m415_cleanenv	36	OK	chain-20261127-200743
+m418_alloc_fail_budget	8	OK	chain-20261127-222520
+m419_keyword_sync	2	OK	chain-20261127-200743
+m420_memsan_cron	76	OK	chain-20261127-222520
+m420_route_intresp	35	OK	chain-20261127-200743
+m421_examples_coverage	53	OK	chain-20261127-200743
+m422_examples_compile	392	OK	chain-20261127-222520
+m423_pxexec_portable	4	OK	chain-20261127-222520
+m424_pxexec_direct	6	OK	chain-20261127-222520
+m425_build_cache	64	OK	chain-20261127-222520
+m426_examples_run	419	OK	chain-20261127-200743
+m427_opts_whitelist	84	OK	chain-20261127-222520
+m428_opts_valuerange	93	OK	chain-20261127-200743
+m429_pxrun_signal	10	OK	chain-20261127-222520
+m430_gate_portscan	8	OK	chain-20261127-222520
+m432_request_framing	125	OK	chain-20261127-222520
+m433_publish_scope	1	OK	chain-20261127-200743
+m434_header_syntax	139	OK	chain-20261127-222520
+m435_resp_header_guard	40	OK	chain-20261127-200743
+m436_px_deps	6	OK	chain-20261127-222520
+m436_pxrun_stdin	3	OK	chain-20261127-200743
+m437_dup2_corpus	3	OK	chain-20261127-222520
+m437_worker	6	OK	chain-20261127-200743
+m438_pxslice_offs	19	OK	chain-20261127-200743
+m438_spawn_posix	6	OK	chain-20261127-200743
+m439_norm	3	OK	chain-20261127-222520
+m439_runtime	4	OK	chain-20261127-200743
+m440_fastmemo	17	OK	chain-20261127-222520
+m441_prune	86	OK	chain-20261127-200743
+m442_pxe	70	OK	chain-20261128-003307
+m444_defchk	5	OK	chain-20261127-200743
+m444_stream	8	OK	chain-20261127-200743
+m446_cache_bounded	1	OK	chain-20261127-222520
+m446_http	6	OK	chain-20261127-222520
+m446_pairs_run	134	OK	chain-20261127-200743
+m446_time	2	OK	chain-20261127-200743
+m446_tree_clean	1	OK	chain-20261127-222520
+m447_chan	95	OK	chain-20261128-003307
+m448_png957	35	OK	chain-20261127-200743
+m448_smtp_tls	69	OK	chain-20261128-003307
+m63_langfix	7	OK	chain-20261127-200743
+m64_fmt	1	OK	chain-20261128-003307
+m64_lint	1	OK	chain-20261127-200743
+m65_lsp	5	OK	chain-20261127-200743
+m65_mcp	2	OK	chain-20261127-200743
+m66_lunar	8	OK	chain-20261127-200743
+m66_pxml	52	OK	chain-20261127-200743
+m66_yaml	6	OK	chain-20261127-200743
+m71_mcp_build	2	OK	chain-20261127-222520
+m82_http_serve_unix	3	OK	chain-20261127-200743
+m97_s2b_http_hpool_dead	4	OK	chain-20261127-222520
+m97_s2_http_keepalive	4	OK	chain-20261127-200743
+m97_s3_http_keepalive_long	6	OK	chain-20261127-200743
+neg_residue	1	OK	chain-20261127-200743
+onnx_load_coverage	1	OK	chain-20261127-200743
+orphan_gates	0	OK	chain-20261127-200743
+pkg_guard_monotonic	1	OK	chain-20261127-200743
+pkg_install_rpm	1	OK	chain-20261127-200743
+pkg_latest_guard	2	OK	chain-20261128-003307
+pkg_loadavg_verdict	6	OK	chain-20261127-200743
+pkg_make_release	91	OK	chain-20261127-200743
+pkg_make_tag	6	OK	chain-20261128-003307
+pkg_pipe_grep	4	OK	chain-20261127-200743
+pkg_publish_gh_pages	2	OK	chain-20261127-222520
+pkg_pxrepo_mirror	3	OK	chain-20261127-200743
+pkg_tag_guard	3	OK	chain-20261127-200743
+portability_selftest	1	OK	chain-20261127-200743
+portability_shipped	1	OK	chain-20261127-200743
+pymain_guard	3	OK	chain-20261127-200743
+quiet_archive	0	OK	chain-20261127-200743
+realhost_smoke	0	OK	chain-20261127-200743
+registry_external	1	OK	chain-20261127-200743
+release_assets	1	OK	chain-20261127-200743
+release_readiness_selftest	1	OK	chain-20261127-200743
+sed_inplace_ledger	1	OK	chain-20261127-200743
+selfwake_guard	44	OK	chain-20261127-200743
+shard_gate_verdict_selftest	1	OK	chain-20261127-200743
+shard_wt_recovery	1	OK	chain-20261127-200743
+shell_contract	7	OK	chain-20261127-200743
+spec_consistency	1	OK	chain-20261127-200743
+upstream_confirm_selftest	4	OK	chain-20261127-200743
+upstream_tests	1601	OK	chain-20261127-222520
+version_drift	0	OK	chain-20261127-200743
+version_golden	1	OK	chain-20261127-222520
+zombie_reap	26	OK	chain-20261127-200743
