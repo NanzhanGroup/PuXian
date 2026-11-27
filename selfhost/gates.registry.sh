@@ -2690,3 +2690,9 @@ step "M448：std.png 可选真压缩（1 门）"
 #   负控把 level 分支阉掉 ⇒ C3 必红。
 gate_timeout m448_png957 600
 run m448_png957 bash selfhost/check_m448_png957.sh
+
+# ── M448 · 缺陷 954：std.smtp 接入 STARTTLS / implicit TLS ────────────────
+#   判据体 selfhost/assets/smtp954_{client.px,server.py,run.sh}（18 断言）15:10 就在，
+#   但一直没入册（缺陷 963 同族：改了包没跟上配套）。C2 静态断言数 ≥18 防被删剩几条仍绿。
+gate_timeout m448_smtp_tls 600
+run m448_smtp_tls bash selfhost/check_m448_smtp954.sh

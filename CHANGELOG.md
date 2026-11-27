@@ -1,3 +1,121 @@
+## M448（2026-11-27）：smtp STARTTLS / PNG 真压缩 / 文档小缺陷集 / --list 污染收口 / 分片判据 C-locale 失效 / m128 一次性闸跨线程失效（缺陷 954、957、959、962、963、964）
+
+> **一句话**：把晨曦提的 9 条外部需求里「改库不改 runtime」的那批做完并留门 ——
+> smtp 接上 STARTTLS/implicit TLS（默认明文路径行为不变）、png 支持可选真压缩
+> （默认产物逐字节不变，level=6 体积 8.5x）、文档/注释的过时前提逐条证伪改写；
+> 收口 M447 全量门 7 红（6 项「改了包没跟上配套」+ 1 项分片判据在 C locale 下失效）；
+> 并把 r10 唯一的红查到底 —— **不是负载敏感，是 m128 的一次性注入闸跨协程线程失效**（964）。
+> 951 图像内建 / 952 字体 / 953 PSD / 955 imap TLS / 956 MIME multipart 另批。
+
+**用户令**：2026-11-26 22:49「自主决策、自主立项、持续处理所有未解决的 PuXian 问题，
+除非必要不用等我授权，每两小时向 ws-android 报一次进度」；
+2026-11-27 19:50「判绿自动去发布，不要等我授权了」。
+需求来源：晨曦（wsa-chenxi）2026-11-26 提交的 9 条，登记在 `docs/EXTERNAL_REQUESTS.md`（951–959）。
+
+### ① 缺陷 954（P1）· `std.smtp` 接入 STARTTLS / implicit TLS
+
+```
+改前    stdlib/smtp.px:11 注释「STARTTLS 暂不支持」—— 而 TLS 能力早在 M151-S1 就有了
+改后    opts.tls：false（缺省，行为与改前逐字节一致）| "starttls" | "implicit" | true≡starttls
+        同一套会话代码跑两条 IO 通道（tcp_* / tls_*）；STARTTLS 成功后按 RFC 3207 **重新 EHLO**
+        其它取值 ⇒ 直接报错，**不降级**（静默降级 = 把加密写成明文，是最危险的一种「兼容」）
+E1      selfhost/assets/smtp954_server.py（假服务端）+ smtp954_client.px，18/18 绿：
+        C1 明文发信 169B 送达 · C2/C2b STARTTLS（TLSv1.3 / TLS_AES_256_GCM_SHA384，ehlo_after_tls=true）
+        C3 implicit（465 风格连上即 TLS）· C4/C5 服务端不广告 STARTTLS 而客户端仍要求 ⇒ 失败、from/rcpt 空
+        C6 STARTTLS + AUTH（auth=true）· V tls_verify=true + 自签证书 ⇒ unknown CA 被拒（证明校验真在工作）
+门      selfhost/check_m448_smtp954.sh（注册 m448_smtp_tls）
+        P 前提缺依赖 rc=3 · C1 18 断言 · C2 防「判据被删一半仍绿」· C3 语义锚
+        N1 负控：临时副本里把 STARTTLS 降级 ⇒ S2 必红（且自证副本真被改了）
+        N1c 真树未被碰（缺陷 961 纪律）
+```
+
+### ② 缺陷 957（P1）· `std.png` 支持可选真压缩（默认路径逐字节不变）
+
+```
+改前    png 只有 stored（IDAT 不压缩）；zlib.px 注释说「解释轨 FFI 未注册」—— 实测已不成立
+改后    png_encode opts.level：缺省 0 = stored（**不传 opts ⇒ 产物与 M61-S2 逐字节相同**）
+        level=1..9 ⇒ IDAT 走 zlib_compress；越界 / 非 dict / FFI 失败一律回退 stored
+判据    C1 默认产物 sha == python 独立重构的锚 7bee77b8…（外部定标，不是自己比自己）
+        C2 level=6 体积 8.5x（18507 → 2181 字节）· C3 负控：阉掉 level 分支 ⇒ 体积比 1.00x（判据有牙）
+门      selfhost/check_m448_png957.sh（注册 m448_png957）
+为什么不改默认：verify_s4 按 sha256 跨架构对拍 + 金标 mandelbrot.png + emitc 闭包指纹
+        ⇒ 默认改 6 会让三类判据同时漂移。「把默认改成压缩」另立议题，不在本条内偷偷做。
+```
+
+### ③ 缺陷 959（P2）· 文档/注释小缺陷集（5 子项，E1 三条 / E2 两条）
+
+```
+E1 成立并已改
+  · bytes_slice 半开区间没写清 ⇒ CHEATSHEET 补明（含越界语义）
+  · bytes_set 返回**新对象**（COW 语义）没写清 ⇒ 补明，并指出「循环里逐字节 set = O(n²)」的后果
+  · smtp「STARTTLS 不支持」过时前提 ⇒ 随 ① 改写
+  · zlib / png 两轨「解释轨 FFI 未注册」过时 ⇒ 实跑 examples/m61_zlib（A–G 全 PASS，10400B→110B）后改写
+E2 仍不可复现（如实记录，不硬改）
+  · pxe-manifest 尾换行：全盘 0 命中
+  · `px run --fast` 点号形本地模块：仅解释轨可用（属能力差异，不是缺陷）
+```
+
+### ④ 缺陷 962（M447 ⑨ 登记的那条）· 收口复验
+
+```
+判据    PATH 带 mutate-shim 时 `run_gates.sh --list` 必须 328 行 + 首行 gate_registry
+实测    修前 329 行（首行是中文诊断）· 修后 328 行（诊断走 stderr）
+连带    gate_timeouts 45/45 · gate_registry 13/13 · m400 pass=17 fail=0 · m447_chan 7/7
+```
+
+### ⑤ 缺陷 963（新）· 分片「空跑必红」判据在 C locale 下失效，把「有红」误报成「空跑」
+
+```
+事故    r9（head=dce1294a）322 门跑完全部绿行，分片仍 exit 6「空跑」，把真正的 rc=1「有红」吃掉
+根因    shard_run.sh 用 `[…✅❌…]` **字符类**判绿行 —— C locale 下被当字节集 ⇒ 恒不匹配 ⇒ 计数恒 0
+证据    同一份 shard3.log：UTF-8 shell `grep -c` = 38 行；`LC_ALL=C grep -c` = 0 行
+修法    显式 LC_ALL=C + 字面交替 `^(✅|❌) `
+负控    shard_gate_verdict.sh --self-test 新增 S4（静态）/ S5（行为·C locale 实证）⇒ 16/16 绿
+```
+
+### ⑥ 缺陷 964（新）· m128 一次性注入闸跨协程线程失效 ⇒ 门随负载抖动（r10 唯一红的真因）
+
+```
+现场    r10（head=31eb8ee）19:43 shard3：m128_unlock_grow pass=90 fail=4，全在 C7
+        （期望 200，实得 HTTP/1.1 500）。quiet 单选复跑仍 rc=1 ⇒ 排除「只是并发压力」。
+证据    单进程 pid=54926 一份日志里：两行「[px-m128] 注入命中：站点=dict_vals_grow，申请 131072 字节」
+        + 两行「协程运行时错误已隔离（第 1 次）」（计数器被 500 消费回 0 后又是第 1 次）
+根因    m128_site_hit 的一次性闸是普通 static int，而协程 = pthread worker，
+        两条线程可同时读到 fired==0 ⇒ 双双判为首次命中 ⇒ 第二次命中落在**父协程**上
+        ⇒ /inv?kind=dict 自己变 500 ⇒ C7 四条断言连带失败。
+        一次性闸的用途本是「失败后由后续请求验证对象仍完好」，闸漏 ⇒ 后续核对自己也失败 ⇒ 什么都证不了。
+修法    与缺陷 840（注入预算）同口径：占闸改 __atomic_exchange_n（谁抢到谁算首次），
+        读闸改 __atomic_load_n；闸变量仍是**进程级单例**（不改 __thread —— 线程局部会让每条协程各命中一次）
+判据    verify.sh 新增 C13，分两面：
+        C13a 契约面（确定性）：占闸必须是原子交换 + 闸变量仍是 static int 单例
+             ⇒ 写回普通置位 / 改成 __thread ⇒ 立刻红
+        C13b 行为面（压力）：两条并发 /inv?kind=dict 各自撞 4096→8192 槽扩容 ⇒ 日志命中行只能 1 行
+实测    正控 pass=99 fail=0（19:55:39 rc=0）；负控（回退原子占闸）C13a 必红，见交接单轮次记录
+```
+
+### ⑦ M447 全量门 7 红收口（6 项同根：改了包没跟上配套）
+
+```
+fmt_check          stdlib/smtp.px 一行注释缩进 ⇒ pxfmt -w（diff 仅 1 行）
+emitc_freeze       smtp_test.px 闭包含 stdlib/smtp.px ⇒ --freeze 重定基 529 文件（14/14 逐字节核）
+m381 / m282 / m187 registry/smtp 未镜像 + THIRD_PARTY.md 三行 sha 漂移
+                   · png/smtp = 本地自有包 ⇒ 台账重算 sha
+                   · zlib/0.2.0 = **上游照搬包** ⇒ 061add29 改其注释违反「逐字节照搬」，**回退该行**
+eco_index          生成器重生成 docs/ecosystem_index.json
+m300               新增 6 个 helper，按 M304 口径如实入账（不写假语料），cap 200→206
+```
+
+### ⑧ 环境与纪律
+
+```
+重烘    964 改了 runtime/runtime.c ⇒ rt_key 381bc504… → 98a29caf… ⇒ **必须全件重烘**
+        （rebake_bin.sh --check-all 实测 15 件失配 = 判据确实抓到了代码级改动，不是「改注释」那类）
+git     fetch 窄化为只取 main+tags（缺陷 960 的治根）；每日 05:20 兜底 GC 单元 dy-px-git-gc.timer
+磁盘    根盘 85G → 48G（清 .git 半截 pack 垃圾 2085 个 / 38G，根因=远端 gh-pages 的 GB 级 rpm 被 timeout 剪断）
+双会话  19:43 自驱会话（dy-ops-auto-af5068c5）与前台会话同时在改 m128 树 ⇒ 19:57 已了结自驱任务并停进程
+        （用户在场时前台优先；今后自驱在用户对话期间不动同一棵树）
+```
+
 ## M447（2026-11-26）：无缓冲通道 lost wakeup（缺陷 950）· 判据自伤与误判清账（949/947/948/940）· 第 6 轮 5 红收口（登记 960/961/962）
 
 > **一句话**：第 5 轮全量门里被「LOAD-SENSITIVE 豁免」掉的那个 m426 红，不是负载假红 ——

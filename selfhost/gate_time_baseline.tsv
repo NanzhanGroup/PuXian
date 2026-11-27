@@ -42,8 +42,9 @@
 #   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard6.times.tsv（329 行）
 #   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard7.times.tsv（329 行）
 #   - chain-20261127-174342 = /data/gatevm/shard-20261127-174342/shard8.times.tsv（329 行）
+#   - m448-954 = /tmp/m448-smtp954.times.tsv（1 行）
 #   - retain（只补缺）= /data/code/puxian/selfhost/gate_time_baseline.tsv
-# 生成时间：2026-11-27 19:43:41 +0800
+# 生成时间：2026-11-27 20:01:44 +0800
 #
 # 门名	秒	状态	来源
 bootstrap_prove	13	OK	chain-20261127-174342
@@ -330,6 +331,7 @@ m446_time	2	OK	chain-20261127-014440
 m446_tree_clean	1	OK	chain-20261127-151257
 m447_chan	65	OK	chain-20261127-014440
 m448_png957	4	OK	chain-20261127-151257
+m448_smtp_tls	69	OK	m448-954
 m63_langfix	6	OK	chain-20261127-014440
 m64_fmt	1	OK	chain-20261127-014440
 m64_lint	0	OK	chain-20261127-014440

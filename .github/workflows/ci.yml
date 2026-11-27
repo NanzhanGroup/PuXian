@@ -718,6 +718,19 @@ jobs:
           if [ $rc -eq 3 ]; then echo "⚠ m448_png957 ENV（缺 tools/pxc / python3 / stdlib/png.px rc=3）"; exit 0; fi
           if [ $rc -ne 0 ]; then echo "❌ m448_png957 rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
           echo "✅ m448_png957 PASS"
+      - name: m448_smtp_tls（std.smtp STARTTLS / implicit TLS · M448 · 缺陷 954）
+        #   病史：smtp.px 注释写「STARTTLS 暂不支持」而 TLS 能力 M151-S1 早就有了；
+        #   判据体（smtp954_run.sh 18 断言）15:10 就写好了，但一直没入册 ⇒ 谁再改 smtp.px 都没人挡。
+        #   判据：18 断言全绿（明文 / STARTTLS / implicit / 不降级 / 未通告 / 非法值）+ 断言数不许被删 + 语义锚。
+        #   负控：/tmp 副本里把 client 的 starttls 降级成 plain ⇒ S2 必红（真树不许碰）。
+        if: always()
+        run: |
+          set +e
+          bash selfhost/check_m448_smtp954.sh
+          rc=$?
+          if [ $rc -eq 3 ]; then echo "⚠ m448_smtp_tls ENV（缺 python3/openssl/tools/px rc=3）"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "❌ m448_smtp_tls rc=$rc"; export GHA_ANNOTATION_FAIL=1; exit 1; fi
+          echo "✅ m448_smtp_tls PASS"
       - name: 端口残留扫描 · 门跑完不许留监听（M430 · 缺陷 879）
         #   修前实测：假门「起监听就退出」⇒ run_gates.sh 判 ✅、TSV 记 OK，而监听与孤儿留着。
         #   机制：门前缀 PUXIAN_GATE_MARK（进程树继承，孤儿化后 environ 仍带）⇒ 精确归属；
