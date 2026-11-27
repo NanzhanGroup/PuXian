@@ -137,6 +137,40 @@ m410_criteria_scan  ❌→✅ host:publish_on_green.sh 命中 R1（判绿未证�
                    m410 自检 11/11 绿（正控 R1/R2 仍抓得住坏件，牙没掉）
 ```
 
+### ⑩ CI 假红收口（缺陷 967）· m448_smtp_tls 把工作目录写死在开发机上
+
+```
+现象   CI @ d2e1db79「工具链自举质量门」红，唯一红门 m448_smtp_tls（rc=1，pass=10 fail=3）；
+       本地同门前一刻实测全绿（pass=13 fail=0，1m7s）⇒ 典型 parity gap
+证据   CI 日志原文：
+         mkdir: cannot create directory '/data': Permission denied
+         selfhost/check_m448_smtp954.sh: line 56: /data/gatevm/m448-954-gate/main.log: No such file or directory
+         ✗ C1 E1 判据体全绿 rc=1 / ✗ C1b 汇总行无值 / ✗ N1b 负控没红在 S2
+       根因：check_m448_smtp954.sh:28 OUT 默认 /data/gatevm/m448-954-gate（runner 上 / 只读）；
+             同族 assets/smtp954_run.sh:12 默认 /data/gatevm/m448-954/out
+             ⇒ 三条红都不是被测行为，是「日志写不下去」
+修     OUT 缺省改 mktemp -d "${TMPDIR:-/tmp}/m448-954-gate.XXXXXX" 并在退出时清理；
+       显式 M448_SMTP954_OUT 仍尊重（分片/调试），但不可写 ⇒ rc=3 ENV，不再伪装成红；
+       新增 C0 判据「工作目录可写」——把这类假红的**病因**变成一条会响的断言
+自证   修后本机跑门：M448_SMTP954-OK pass=14 fail=0（1m6s）
+       不可写注入：M448_SMTP954_OUT=/proc/nope/x ⇒ rc=3 ENV 一行说明（不再是 3 条假红）
+       旁证：check_gate_paths rc=0 · check_gate_shared_tmp rc=0 · check_gate_registry rc=0
+遗留   远端复绿需 push 本提交 —— 档位 local，已 p0 请 publish（不自行提档）
+```
+
+### ⑪ CI 红门收口（缺陷 968）· upstream_tests 超时声明裕度被实测反超
+
+```
+现象   CI 红门 gate_timeouts：47 通过 / 1 失败，唯一红
+         upstream_tests 声明 2400s / 实测 1601s = 1.4×（< 1.5×）
+       同轮 m400_baseline_feedback 的 4 条红（N1b/N2b/N2d/N2c）报的是同一行 ⇒ 968 的连带，非独立缺陷
+根因   selfhost/gates.registry.sh 的 gate_timeout upstream_tests 2400 写于 M409（当时基线 1213s = 1.98×）；
+       基线回灌后升到 1601s（chain-20261127-222520）⇒ 2400/1601 = 1.499× 跌破 P3 的 1.5× 下限
+修     gate_timeout upstream_tests 2400 → 2460（2460/1601 = 1.54×）
+自证   bash selfhost/check_gate_timeouts.sh ⇒ M311-TIMEOUTS-OK 48 通过 / 0 失败（39s）
+负控   无需新负控：P3 本身即判据，旧值 2400 在本轮已实测判红（rc=1），改值后转绿
+```
+
 ## M447（2026-11-26）：无缓冲通道 lost wakeup（缺陷 950）· 判据自伤与误判清账（949/947/948/940）· 第 6 轮 5 红收口（登记 960/961/962）
 
 > **一句话**：第 5 轮全量门里被「LOAD-SENSITIVE 豁免」掉的那个 m426 红，不是负载假红 ——

@@ -1170,7 +1170,7 @@ step "M190 · 上游 registry-px 真实用例回归（238 用例 × 双轨 · EX
 #     （M310 D2 段2 rc=124）。此前只有宿主侧 `/data/gatevm/shard_run.sh` 硬写 1800 兜着
 #     ⇒ 同一件事实有两份真相，且**仓里那份缺失**。现在：1800 = 1.87× 实测（≥1.5× 裕度），
 #     守卫 `selfhost/check_gate_timeouts.sh` 用基线逐门盯裕度。
-gate_timeout upstream_tests 2400   # M409：实测 1213s（chain-20261115-195907）⇒ 1800 仅 1.4× < 1.5× ⇒ 2400（1.98×）
+gate_timeout upstream_tests 2460   # 缺陷 968：基线回升到 1601s（chain-20261127-222520）⇒ 2400 仅 1.499× < 1.5× ⇒ 2460（1.54×）；M409 原值 2400（当时实测 1213s）
 run upstream_tests bash selfhost/run_upstream_tests.sh
 # ── M287s2：上游回归的「失败确认步 / FLAKE」自证 ─────────────────────────
 #   动机（实测）：上游 `mock_test` 的桩服务器 `mk_start_server` = `spawn mk_server_loop(...)`

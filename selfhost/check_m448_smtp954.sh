@@ -25,7 +25,18 @@ REPO=${REPO:-$(cd "$SELF_DIR/.." && pwd)}
 RUN="$SELF_DIR/assets/smtp954_run.sh"
 CLI="$SELF_DIR/assets/smtp954_client.px"
 SMTP="$REPO/stdlib/smtp.px"
-OUT=${M448_SMTP954_OUT:-/data/gatevm/m448-954-gate}
+# 工作目录：默认必须是**可移植**的（2026-11-27 CI 实测）——
+#   原先写死 /data/gatevm/m448-954-gate，本机存在、GitHub runner 上 `/data` 不可创建
+#   ⇒ main.log / neg.log 全落空，C1/C1b/N1b 三条假红，而本地同一条门全绿（parity gap）。
+#   有显式 M448_SMTP954_OUT 时尊重它（分片/调试用）；否则 mktemp，退出时清理。
+OUT=${M448_SMTP954_OUT:-}
+CLEAN_OUT=0
+if [ -z "$OUT" ]; then
+  OUT=$(mktemp -d "${TMPDIR:-/tmp}/m448-954-gate.XXXXXX") || { echo "[m448_smtp954] ENV：无法创建工作目录 ⇒ rc=3"; exit 3; }
+  CLEAN_OUT=1
+fi
+trap '[ "$CLEAN_OUT" = 1 ] && rm -rf "$OUT"' EXIT
+mkdir -p "$OUT" 2>/dev/null || { echo "[m448_smtp954] ENV：工作目录不可写（$OUT）⇒ rc=3"; exit 3; }
 pass=0; fail=0
 ck() { if [ "$2" = "$3" ]; then echo "✓ $1"; pass=$((pass+1)); else echo "✗ $1（want [$3] got [$2]）"; fail=$((fail+1)); fi; }
 say() { echo "[m448_smtp954] $*"; }
@@ -38,6 +49,9 @@ done
 [ -f "$SMTP" ]          || { say "ENV：缺 $SMTP ⇒ rc=3"; exit 3; }
 [ -f "$RUN" ]           || { say "ENV：缺 $RUN ⇒ rc=3"; exit 3; }
 [ -f "$CLI" ]           || { say "ENV：缺 $CLI ⇒ rc=3"; exit 3; }
+
+# ── C0 工作目录可写：2026-11-27 CI 假红（写死 /data/... ⇒ runner 上不可写）的唯一正面判据 ──
+ck "C0 工作目录可写（CI runner 无 /data 写权限）" "$([ -w "$OUT" ] && echo yes || echo no)" yes
 
 # ── C2 静态：判据不许被删掉一半、不许空跑 ──
 n_ck=$(grep -c '^ck ' "$RUN" 2>/dev/null || echo 0)

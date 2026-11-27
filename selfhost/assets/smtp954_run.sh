@@ -9,7 +9,8 @@
 set -u
 D=$(cd "$(dirname "$0")" && pwd)
 REPO=${1:-$(cd "$D/../.." && pwd)}
-OUT=${SMTP954_OUT:-/data/gatevm/m448-954/out}
+# 工作目录必须可移植（2026-11-27 CI：写死 /data/... ⇒ runner 上不可写，判据体假红）
+OUT=${SMTP954_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/m448-954-run.XXXXXX")}
 PY=python3
 pass=0; fail=0
 ck() { if [ "$2" = "$3" ]; then echo "✅ $1"; pass=$((pass+1)); else echo "❌ $1（want [$3] got [$2]）"; fail=$((fail+1)); fi; }
