@@ -6,8 +6,7 @@
 #   zl_uncompress(data)        → Ok(bytes) | Err
 #   zl_crc32(data)             → Ok(int)  （IEEE CRC-32，同 zlib.crc32）
 # 底层：import "c/zlib" → extern def zlib_compress/uncompress/crc32
-#   （两轨均可用：解释轨与编译轨都能直调 libz —— PX-DEF-035 已修；
-#     实跑 examples/m61_zlib/m61_zlib.px A–G 全 PASS）
+#   （编译轨可用；解释轨 pxi FFI 表未注册 zlib → 返回 Err，登记 PX-DEF-035）
 # level 0..9（0 不压缩 / 6 默认）；level 由本库先校验，避免原生 px_error 杀进程。
 # 数据面无状态：压缩率/时长由官方 C 实现承担，纯 .px 不做二次压缩。
 # ============================================================

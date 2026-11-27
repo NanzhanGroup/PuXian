@@ -286,6 +286,35 @@ EOF
     pass "S3 旧式「绿==门清单」不在（缺陷 580 未复发）"
   fi
 
+  # ── S4/S5（缺陷 963 · M448 轮）：shard_run.sh 的「空跑必红」计数必须与 locale 无关 ──
+  #   现场（2026-11-27 M447 全量门）：链由 systemd-run 起、环境无 LANG ⇒ **C locale**，
+  #   而计数式 `^[✅❌] …` 里 `[…]` 被当**字节集**（✅ = e2 9c 85）⇒ 对不上「三字节 + 空格」
+  #   ⇒ 恒 0 ⇒ 322 门跑完仍判「空跑」并 `exit 6`，把 rc=1「有红」的语义吃掉。
+  #   S4 = 静态（不许退回字符类）· S5 = 行为（C locale 下实证：旧式 0 / 新式 2）。
+  local sr_f n_old n_new
+  sr_f="$(dirname "$0")/shard_run.sh"
+  if [ ! -f "$sr_f" ]; then
+    fail "S4 找不到 shard_run.sh（$sr_f）⇒ 静态判据无从校验"
+  else
+    # 扫描面剔注释行（本判据的来历必须写在注释里，否则读不懂；口径同 S0-S3 的 code 抽取）
+    LC_ALL=C grep -vE '^[[:space:]]*#' "$sr_f" > "$T/shard_run.code" 2>/dev/null || true
+  fi
+  if [ -f "$sr_f" ] && [ ! -s "$T/shard_run.code" ]; then
+    fail "S4 shard_run.sh 代码行抽取为空 ⇒ 静态判据无从校验（EXTRACTION-FAIL）"
+  elif [ -f "$sr_f" ] && LC_ALL=C grep -qF '[✅❌]' "$T/shard_run.code"; then
+    fail "S4 shard_run.sh 又用了「[✅❌]」字符类（C locale 下恒 0 ⇒ 假「空跑」· 缺陷 963 复发）"
+  else
+    pass "S4 shard_run.sh 无「[✅❌]」字符类（缺陷 963 未复发）"
+  fi
+  printf '✅ demo_a（1s）\n❌ demo_b（2s）\n' > "$T/locale_fixture.log"
+  n_old=$(LC_ALL=C grep -cE '^[✅❌] [a-zA-Z0-9_]+（' "$T/locale_fixture.log" 2>/dev/null) || n_old=0
+  n_new=$(LC_ALL=C grep -cE '^(✅|❌) [a-zA-Z0-9_]+（' "$T/locale_fixture.log" 2>/dev/null) || n_new=0
+  if [ "$n_old" = 0 ] && [ "$n_new" = 2 ]; then
+    pass "S5 C locale 实证：字符类=$n_old（旧式失效）· 字面交替=$n_new（新式有效）"
+  else
+    fail "S5 C locale 实证不符（字符类=$n_old 期望 0 · 交替=$n_new 期望 2）⇒ 缺陷 963 的修法不成立"
+  fi
+
   printf '\n通过 %d · 失败 %d\n' "$OK" "$BAD"
   [ "$BAD" -eq 0 ] && { printf 'SHARD-GATE-VERDICT-SELFTEST-OK\n'; return 0; }
   printf 'SHARD-GATE-VERDICT-SELFTEST-FAIL\n'

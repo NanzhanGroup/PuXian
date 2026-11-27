@@ -1,6 +1,5 @@
 # stdlib 覆盖面台账基线（**只减不增**）· 未提及的门语料函数
 # 格式：<module>.<fn>	<理由>
-#
 # ⚠️ M304（2026-10-12 · 分片首航实测）· **cap 167 → 200 的一次性说明**：
 #   扫描面此前用裸 glob ⇒ 把 **gitignored 的 build 产物**也算进"覆盖"面。
 #   实证：`examples/m142_go_json_indent/build/tamper/go_json_scan.px`（**门自己跑出来的**
@@ -13,8 +12,14 @@
 #      ⇒ 不写"假语料"去凑覆盖（那比账难看更糟）；如实入账。
 #   ⚠️ 防复发：`examples/m300_stdlib_surface2/verify.sh` [1j] 造一个**未跟踪**的 examples/ 文件
 #      调用未覆盖导出 ⇒ 未提及数**必须不变**（正判据，不是靠我记着）。
+# ⚠️ M448（2026-11-27）· **cap 200 → 206 的一次性说明**：
+#   std.smtp 接入 STARTTLS/implicit TLS（缺陷 954）：明文与 TLS 共用同一套会话代码，
+#   新建 6 个内部 helper（sm_io_tcp/sm_io_tls/sm_rd/sm_wr_all/sm_close/sm_opt）。
+#   它们**只为库内部服务**（外部调用面无意义）⇒ 不写「假语料」去凑覆盖（同 M304 口径），
+#   如实入账，cap 随之上调一次。
 #
-# cap=200
+# cap=206
+
 cookiejar.cj_blank	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_clean	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 cookiejar.cj_domain_match	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
@@ -118,17 +123,23 @@ pxml.px_seen	存量欠账：尚无门的语料以调用形态提及（M300 首�
 pxml.px_tname	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 pxml.px_tokenize	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_build_msg	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_close	新增导出（M448 · TLS/明文共用会话层内部 helper）：尚无门的语料以调用形态提及
 smtp.sm_code	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_done	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_dot_escape	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_io_tcp	新增导出（M448 · TLS/明文共用会话层内部 helper）：尚无门的语料以调用形态提及
+smtp.sm_io_tls	新增导出（M448 · TLS/明文共用会话层内部 helper）：尚无门的语料以调用形态提及
 smtp.sm_isdigit	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_last_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_opt	新增导出（M448 · TLS/明文共用会话层内部 helper）：尚无门的语料以调用形态提及
+smtp.sm_rd	新增导出（M448 · TLS/明文共用会话层内部 helper）：尚无门的语料以调用形态提及
 smtp.sm_read_reply	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_reply_done	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_rfind	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_rtrim	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_send_line	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 smtp.sm_to_list	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
+smtp.sm_wr_all	新增导出（M448 · TLS/明文共用会话层内部 helper）：尚无门的语料以调用形态提及
 smtp.smtp_send	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 time_go.go_date	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）
 time_go.go_date_time	存量欠账：尚无门的语料以调用形态提及（M300 首次建账）

@@ -7,10 +7,17 @@
 #   smtp_try (host, port, from, to, msg, opts?) → {ok, err} # 带诊断
 #     from / to：邮箱地址（to 可 str 或 list[str]）
 #     msg：{"subject":..., "text":...} 或 {"subject":..., "html":...}
-#     opts（可选 dict）：{"user","password","helo"} —— 有 user 则 AUTH LOGIN；
-#                        默认明文（25/内网 587）；本库实现只走明文，但语言侧
-#                        tls_connect / tls_upgrade 已于 M151-S1 就位 ⇒ STARTTLS
-#                        能力可行、尚未接入（缺陷 954：opts.tls = "starttls"|"implicit"）
+#     opts（可选 dict）：
+#        "user" / "password" —— 有 user 则 AUTH LOGIN
+#        "helo"              —— EHLO 名，缺省 "localhost"
+#        "tls"               —— false（缺省=明文，行为不变）| "starttls"（587 风格：EHLO 后
+#                               发 STARTTLS 并在**同一 fd** 上升级）| "implicit"（465 风格：
+#                               连上即 TLS）；true 等同 "starttls"；其它值一律报错不降级
+#        "tls_verify"        —— bool，缺省 false（加密不验证证书，与 tls_connect 同口径）
+#        "tls_servername"    —— SNI 名，缺省用 host
+#        "tls_timeout_ms"    —— 握手/读超时毫秒，缺省 10000
+#     STARTTLS 全程按 RFC 3207：升级成功后**重新 EHLO**（升级前的 EHLO 状态作废）。
+#     明文本与 TLS 共用同一套会话代码，读写按句柄类型分流到 tcp_* / tls_*（缺陷 954）。
 #   DATA 消息行首 "." 自动转义；长消息 tcp_send 循环发满。
 #   ⚠️ 不处理 RFC 2047 标题编码（非 ASCII Subject 请自行 base64 编码头）；
 #      Date 头由本库按服务器本地时间生成（多数 server 接受缺省/宽松格式）。
@@ -57,12 +64,52 @@ def sm_reply_done(buf):
     if not (sm_isdigit(line[0]) and sm_isdigit(line[1]) and sm_isdigit(line[2])):
         return false
     return line[3] == " " or line[3] == "\t"
+# ---- IO 抽象：同一套会话代码跑在明文/TLS 上（缺陷 954）----
+#   io = {"kind":"tcp","h":<fd>} 或 {"kind":"tls","h":<tls 句柄 id>}
+def sm_io_tcp(fd):
+    return {"kind": "tcp", "h": fd}
+def sm_io_tls(id):
+    return {"kind": "tls", "h": id}
+def sm_rd(io, maxlen):
+    if io["kind"] == "tls":
+        var r = tls_recv(io["h"], maxlen)
+        if not bool(r["ok"]):
+            return ""
+        if bool(r["eof"]):
+            return ""
+        return bytes_to_str(r["data"])
+    return tcp_recv(io["h"], maxlen)
+# 发满；内部转 bytes 切片（str 下标按 rune，多字节字符下会与「已写字节数」错位）
+def sm_wr_all(io, s):
+    var b = bytes(s)
+    var total = bytes_len(b)
+    var sent = 0
+    while sent < total:
+        var part = bytes_slice(b, sent, total)
+        var n = 0
+        if io["kind"] == "tls":
+            var r = tls_send(io["h"], part)
+            if not bool(r["ok"]):
+                return false
+            n = int(r["n"])
+        else:
+            n = tcp_send(io["h"], part)
+        if n <= 0:
+            return false
+        sent += n
+    return true
+def sm_close(io):
+    if io == null:
+        return false
+    if io["kind"] == "tls":
+        return tls_close(io["h"])
+    return tcp_close(io["h"])
 # ---- 读完整回复（阻塞直到终行；最多约 20s 防挂死）----
-def sm_read_reply(fd):
+def sm_read_reply(io):
     var buf = ""
     var tries = 0
     while tries < 1000:
-        var chunk = tcp_recv(fd, 1024)
+        var chunk = sm_rd(io, 1024)
         if len(chunk) == 0:
             break
         buf += chunk
@@ -77,16 +124,8 @@ def sm_code(buf):
         return -1
     return int(line[0:3])
 # ---- 发整行命令（追加 CRLF，循环发满）----
-def sm_send_line(fd, line):
-    var payload = line + "\r\n"
-    var sent = 0
-    var total = len(payload)
-    while sent < total:
-        var n = tcp_send(fd, payload[sent:total])
-        if n <= 0:
-            return false
-        sent += n
-    return true
+def sm_send_line(io, line):
+    return sm_wr_all(io, line + "\r\n")
 # ---- DATA 体：行首 "." 转义 ".."（先按 \n 归一行为 \r\n，裸 \n/\r\n 混合均正确处理）----
 def sm_dot_escape(body):
     var lines = split(body, "\n")
@@ -136,79 +175,149 @@ def sm_to_list(to):
         r.append(to)
     return r
 # ---- 会话失败：关连接并返回诊断 ----
-def sm_done(fd, ok, err):
-    if fd >= 0:
-        tcp_close(fd)
+def sm_done(io, ok, err):
+    sm_close(io)
     if ok:
         return {"ok": true, "err": ""}
     return {"ok": false, "err": err}
+# ---- opts 取值（opts 可缺省 / null）----
+def sm_opt(opts, k, dflt):
+    if opts == null or type(opts) != "dict":
+        return dflt
+    if opts.has(k):
+        return opts[k]
+    return dflt
 # ---- 带诊断的发送（主实现）----
-def smtp_try(host, port, from_addr, to_addrs, msg, opts):
+def smtp_try(host, port, from_addr, to_addrs, msg, opts = null):
     var tos = sm_to_list(to_addrs)
-    var fd = tcp_connect(host, port)
-    if fd < 0:
-        return sm_done(fd, false, "TCP 连接 " + host + ":" + str(port) + " 失败")
-    var rbuf = sm_read_reply(fd)
+    # ── TLS 模式解析：非法值一律响亮报错，**不许静默降级成明文** ──
+    var tls_raw = sm_opt(opts, "tls", false)
+    var tls_mode = "none"
+    if tls_raw == true:
+        tls_mode = "starttls"
+    elif tls_raw == false or tls_raw == null:
+        tls_mode = "none"
+    elif type(tls_raw) == "string":
+        var tl = to_lower(tls_raw)
+        if tl == "starttls" or tl == "implicit":
+            tls_mode = tl
+        elif tl == "none" or tl == "":
+            tls_mode = "none"
+        else:
+            return {"ok": false, "err": "opts.tls 只接受 false|\"starttls\"|\"implicit\"，实际: " + str(tls_raw)}
+    else:
+        return {"ok": false, "err": "opts.tls 只接受 false|\"starttls\"|\"implicit\"，实际: " + str(tls_raw)}
+    var verify = sm_opt(opts, "tls_verify", false)
+    if type(verify) != "bool":
+        verify = false
+    var servername = host
+    var sn = sm_opt(opts, "tls_servername", "")
+    if type(sn) == "string" and len(sn) > 0:
+        servername = sn
+    var tmo = sm_opt(opts, "tls_timeout_ms", 10000)
+    if type(tmo) != "int" or tmo <= 0:
+        tmo = 10000
+    var io = null
+    # ── 连接失败一律**返回 {ok,err}**，不许抛异常：本函数的契约就是「带诊断」，
+    #    调用方（告警/事务邮件）据此降级；tcp_connect 在连不上时是抛错而非返负值（缺陷 954b）。
+    if tls_mode == "implicit":
+        var tc = null
+        try:
+            tc = tls_connect(host, port, {"verify": verify, "servername": servername, "timeout_ms": tmo, "read_timeout_ms": tmo})
+        catch e:
+            return {"ok": false, "err": "TLS 连接 " + host + ":" + str(port) + " 失败: " + str(e)}
+        if not bool(tc["ok"]):
+            return {"ok": false, "err": "TLS 连接 " + host + ":" + str(port) + " 失败: " + str(tc["err"])}
+        io = sm_io_tls(int(tc["id"]))
+    else:
+        var fd = -1
+        try:
+            fd = tcp_connect(host, port)
+        catch e:
+            return {"ok": false, "err": "TCP 连接 " + host + ":" + str(port) + " 失败: " + str(e)}
+        if fd < 0:
+            return {"ok": false, "err": "TCP 连接 " + host + ":" + str(port) + " 失败"}
+        io = sm_io_tcp(fd)
+    var rbuf = sm_read_reply(io)
     if sm_code(rbuf) != 220:
-        return sm_done(fd, false, "未收到 220 欢迎: " + sm_last_line(rbuf))
-    var helo = "localhost"
-    if opts != null and opts.has("helo"):
-        helo = opts["helo"]
-    if not sm_send_line(fd, "EHLO " + helo):
-        return sm_done(fd, false, "发送 EHLO 失败")
-    rbuf = sm_read_reply(fd)
+        return sm_done(io, false, "未收到 220 欢迎: " + sm_last_line(rbuf))
+    var helo = sm_opt(opts, "helo", "localhost")
+    if not sm_send_line(io, "EHLO " + helo):
+        return sm_done(io, false, "发送 EHLO 失败")
+    rbuf = sm_read_reply(io)
     if sm_code(rbuf) != 250:
-        return sm_done(fd, false, "EHLO 被拒: " + sm_last_line(rbuf))
+        return sm_done(io, false, "EHLO 被拒: " + sm_last_line(rbuf))
+    # ── STARTTLS（RFC 3207）：广告才升级；不广告 ⇒ 拒绝明文降级 ──
+    if tls_mode == "starttls":
+        if sm_rfind(to_upper(rbuf), "STARTTLS") < 0:
+            return sm_done(io, false, "服务端 EHLO 未通告 STARTTLS（拒绝明文降级）")
+        if not sm_send_line(io, "STARTTLS"):
+            return sm_done(io, false, "发送 STARTTLS 失败")
+        rbuf = sm_read_reply(io)
+        if sm_code(rbuf) != 220:
+            return sm_done(io, false, "STARTTLS 被拒: " + sm_last_line(rbuf))
+        var up = tls_upgrade(io["h"], {"host": host, "servername": servername, "verify": verify, "read_timeout_ms": tmo})
+        if not bool(up["ok"]):
+            var up_err = str(up["err"])
+            sm_close(io)  # 握手失败时 fd 仍归调用方
+            return {"ok": false, "err": "STARTTLS 握手失败: " + up_err}
+        io = sm_io_tls(int(up["id"]))
+        # 升级前的 EHLO 扩展表作废：必须重新 EHLO
+        if not sm_send_line(io, "EHLO " + helo):
+            return sm_done(io, false, "TLS 内发送 EHLO 失败")
+        rbuf = sm_read_reply(io)
+        if sm_code(rbuf) != 250:
+            return sm_done(io, false, "TLS 内 EHLO 被拒: " + sm_last_line(rbuf))
     # AUTH LOGIN（可选）
-    if opts != null and opts.has("user"):
-        if not sm_send_line(fd, "AUTH LOGIN"):
-            return sm_done(fd, false, "发送 AUTH LOGIN 失败")
-        rbuf = sm_read_reply(fd)
+    if opts != null and type(opts) == "dict" and opts.has("user"):
+        if not sm_send_line(io, "AUTH LOGIN"):
+            return sm_done(io, false, "发送 AUTH LOGIN 失败")
+        rbuf = sm_read_reply(io)
         if sm_code(rbuf) != 334:
-            return sm_done(fd, false, "AUTH 不支持: " + sm_last_line(rbuf))
-        if not sm_send_line(fd, base64_encode(opts["user"])):
-            return sm_done(fd, false, "发送用户名失败")
-        rbuf = sm_read_reply(fd)
+            return sm_done(io, false, "AUTH 不支持: " + sm_last_line(rbuf))
+        if not sm_send_line(io, base64_encode(opts["user"])):
+            return sm_done(io, false, "发送用户名失败")
+        rbuf = sm_read_reply(io)
         if sm_code(rbuf) != 334:
-            return sm_done(fd, false, "用户名被拒: " + sm_last_line(rbuf))
-        if not sm_send_line(fd, base64_encode(opts["password"])):
-            return sm_done(fd, false, "发送密码失败")
-        rbuf = sm_read_reply(fd)
+            return sm_done(io, false, "用户名被拒: " + sm_last_line(rbuf))
+        if not sm_send_line(io, base64_encode(opts["password"])):
+            return sm_done(io, false, "发送密码失败")
+        rbuf = sm_read_reply(io)
         if sm_code(rbuf) != 235:
-            return sm_done(fd, false, "认证失败: " + sm_last_line(rbuf))
+            return sm_done(io, false, "认证失败: " + sm_last_line(rbuf))
     # MAIL FROM / RCPT TO
-    if not sm_send_line(fd, "MAIL FROM:<" + from_addr + ">"):
-        return sm_done(fd, false, "发送 MAIL FROM 失败")
-    rbuf = sm_read_reply(fd)
+    if not sm_send_line(io, "MAIL FROM:<" + from_addr + ">"):
+        return sm_done(io, false, "发送 MAIL FROM 失败")
+    rbuf = sm_read_reply(io)
     if sm_code(rbuf) != 250:
-        return sm_done(fd, false, "MAIL FROM 被拒: " + sm_last_line(rbuf))
+        return sm_done(io, false, "MAIL FROM 被拒: " + sm_last_line(rbuf))
     var i = 0
     while i < len(tos):
-        if not sm_send_line(fd, "RCPT TO:<" + tos[i] + ">"):
-            return sm_done(fd, false, "发送 RCPT TO 失败")
-        rbuf = sm_read_reply(fd)
+        if not sm_send_line(io, "RCPT TO:<" + tos[i] + ">"):
+            return sm_done(io, false, "发送 RCPT TO 失败")
+        rbuf = sm_read_reply(io)
         var rc = sm_code(rbuf)
         if rc != 250 and rc != 251:
-            return sm_done(fd, false, "收件人 " + tos[i] + " 被拒: " + sm_last_line(rbuf))
+            return sm_done(io, false, "收件人 " + tos[i] + " 被拒: " + sm_last_line(rbuf))
         i += 1
     # DATA
-    if not sm_send_line(fd, "DATA"):
-        return sm_done(fd, false, "发送 DATA 失败")
-    rbuf = sm_read_reply(fd)
+    if not sm_send_line(io, "DATA"):
+        return sm_done(io, false, "发送 DATA 失败")
+    rbuf = sm_read_reply(io)
     if sm_code(rbuf) != 354:
-        return sm_done(fd, false, "DATA 被拒: " + sm_last_line(rbuf))
+        return sm_done(io, false, "DATA 被拒: " + sm_last_line(rbuf))
     var raw = sm_dot_escape(sm_build_msg(from_addr, tos, msg))
-    if not sm_send_line(fd, raw + "\r\n."):
-        return sm_done(fd, false, "发送消息体失败")
-    rbuf = sm_read_reply(fd)
+    if not sm_wr_all(io, raw + "\r\n.\r\n"):
+        return sm_done(io, false, "发送消息体失败")
+    rbuf = sm_read_reply(io)
     if sm_code(rbuf) != 250:
-        return sm_done(fd, false, "消息被拒: " + sm_last_line(rbuf))
-    var q_ok = sm_send_line(fd, "QUIT")
+        return sm_done(io, false, "消息被拒: " + sm_last_line(rbuf))
+    var q_ok = sm_send_line(io, "QUIT")
     if q_ok:
-        sm_read_reply(fd)
-    var e = sm_done(fd, true, "")
+        sm_read_reply(io)
+    var e = sm_done(io, true, "")
     return e
 # ---- 布尔便捷版（对齐 M83_PLAN API：send(...) → bool）----
-def smtp_send(host, port, from_addr, to_addrs, msg, opts):
+def smtp_send(host, port, from_addr, to_addrs, msg, opts = null):
     var r = smtp_try(host, port, from_addr, to_addrs, msg, opts)
     return r["ok"]

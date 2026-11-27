@@ -259,7 +259,7 @@ def smtp_try(host, port, from_addr, to_addrs, msg, opts = null):
         var up = tls_upgrade(io["h"], {"host": host, "servername": servername, "verify": verify, "read_timeout_ms": tmo})
         if not bool(up["ok"]):
             var up_err = str(up["err"])
-            sm_close(io)      # 握手失败时 fd 仍归调用方
+            sm_close(io)  # 握手失败时 fd 仍归调用方
             return {"ok": false, "err": "STARTTLS 握手失败: " + up_err}
         io = sm_io_tls(int(up["id"]))
         # 升级前的 EHLO 扩展表作废：必须重新 EHLO
