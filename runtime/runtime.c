@@ -1429,16 +1429,27 @@ static int m128_retry_max(void) {
 // 站点标签注入（测试钩子，默认关；一次性）
 // 注：环境变量**每次读**（不缓存）—— 这样门可以先用一个请求 env_set 打开钩子（避免启动期
 //   或 HTTP 层的无关分配抢先命中），且「关」时成本仅两次 getenv（只发生在扩容路径上）。
+// M448 R10（缺陷 964）：一次性闸原先用**普通 static int** —— 病灶与缺陷 840（M418 注入预算）
+//   同族：本函数会被**多个协程线程**同时调用（协程 = pthread worker，见 coro.c 的
+//   coro_worker）。两个线程在「读 fired==0」与「写 fired=1」之间交错 ⇒ **都**判为首次命中。
+//   现场（2026-11-27 19:43 shard3 的 m128 门 C7，单进程 pid=54926 一份日志）：
+//     两行 `[px-m128] 注入命中：站点=dict_vals_grow`（都是 131072 字节）＋ 两行
+//     「协程运行时错误已隔离（第 1 次）」（计数器被 500 消费回 0 后又是第 1 次）
+//     ⇒ 第二次命中打在**父协程**上 ⇒ /inv?kind=dict 变 500 ⇒ C7 判红（4 条断言连带失败）。
+//   一次性闸本来的用途是「失败之后对象是否仍完好、服务是否仍可用由后续请求验证」，闸漏
+//   ⇒ 后续核对请求自己也失败 ⇒ 什么都证不了（同时把门变成随负载抖动的假红）。
+//   修法与缺陷 840 同口径：占闸用**原子交换**（谁抢到谁算首次，其余一律不算命中）。
 static int m128_site_hit(size_t n, const char* site) {
-    static int fired = 0;
-    if (fired || !site) return 0;
+    static int fired = 0;                       // 原子访问（只用 __atomic_* 碰它）
+    if (__atomic_load_n(&fired, __ATOMIC_ACQUIRE) || !site) return 0;
     const char* pat = getenv("PX_ALLOC_FAIL_SITE");
     if (!pat || !*pat) return 0;
     if (strstr(site, pat) == NULL) return 0;
     const char* m = getenv("PX_ALLOC_FAIL_SITE_MIN");
     size_t min_bytes = (m && *m) ? (size_t)strtoull(m, NULL, 10) : 0;
     if (n < min_bytes) return 0;
-    fired = 1;
+    // 抢闸：先到者拿到 1 次注入；后到者（另一协程线程）读回 1 ⇒ 不算命中。
+    if (__atomic_exchange_n(&fired, 1, __ATOMIC_ACQ_REL)) return 0;
     fprintf(stderr, "[px-m128] 注入命中：站点=%s，申请 %zu 字节（临界区外 ⇒ 期望请求级 5xx）\n",
             site, n);
     fflush(stderr);

@@ -100,7 +100,7 @@ site_case() {
 echo "== M128 验证（扩容分配移出临界区：这些站点上的分配失败 ⇒ 请求级 5xx）=="
 
 echo
-echo "[0/12] 编译 + 材料自检"
+echo "[0/13] 编译 + 材料自检"
 if "$PX" build "$DIR/unlock_grow.px" > /tmp/m128_build.log 2>&1 && [ -x "$BIN" ]; then
   ok "编译成功（$(stat -c%s "$BIN") 字节）"
 else
@@ -111,22 +111,22 @@ grep -qa "px-m128" "$BIN" && ok "二进制含 M128 站点注入诊断文案（�
 grep -q "PX_GROW_RETRY_MAX" runtime/runtime.c && ok "runtime.c 含兜底开关 PX_GROW_RETRY_MAX" || bad "缺 PX_GROW_RETRY_MAX"
 
 echo
-echo "[1/12] C1 list 扩容（站点 list_grow）"
+echo "[1/13] C1 list 扩容（站点 list_grow）"
 start_bin C1 1
 site_case C1 list_grow "/list?n=20000" "/list?n=100" "list=100"
 
 echo
-echo "[2/12] C2 dict keys 数组扩容（站点 dict_keys_grow）"
+echo "[2/13] C2 dict keys 数组扩容（站点 dict_keys_grow）"
 start_bin C2 1
 site_case C2 dict_keys_grow "/dict?n=20000" "/dict?n=100" "dict=100"
 
 echo
-echo "[3/12] C3 dict vals 数组扩容（站点 dict_vals_grow）"
+echo "[3/13] C3 dict vals 数组扩容（站点 dict_vals_grow）"
 start_bin C3 1
 site_case C3 dict_vals_grow "/dict?n=20000" "/dict?n=100" "dict=100"
 
 echo
-echo "[4/12] C4 键副本（站点 dict_key_dup；长键让键副本成为唯一大分配）"
+echo "[4/13] C4 键副本（站点 dict_key_dup；长键让键副本成为唯一大分配）"
 if start_bin C4 1; then :; fi
 if [ -n "$PID" ]; then
   req_full "/arm?site=dict_key_dup&min=200" /tmp/m128_C4_arm.out > /dev/null
@@ -142,7 +142,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[5/12] C5 对象表扩容（站点 gc_objs_grow）"
+echo "[5/13] C5 对象表扩容（站点 gc_objs_grow）"
 if start_bin C5 1; then :; fi
 if [ -n "$PID" ]; then
   req_full "/arm?site=gc_objs_grow&min=$ARRAY_MIN" /tmp/m128_C5_arm.out > /dev/null
@@ -165,7 +165,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[6/12] C6 不变量 · list（子协程扩容中被隔离终止，父协程核对对象完好且仍可用）"
+echo "[6/13] C6 不变量 · list（子协程扩容中被隔离终止，父协程核对对象完好且仍可用）"
 if start_bin C6 1; then :; fi
 if [ -n "$PID" ]; then
   AH=$(req_full "/arm?site=list_grow&min=$ARRAY_MIN" /tmp/m128_C6_arm.out)
@@ -187,7 +187,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[7/12] C7 不变量 · dict（同上；另核对已有键的值完好）"
+echo "[7/13] C7 不变量 · dict（同上；另核对已有键的值完好）"
 if start_bin C7 1; then :; fi
 if [ -n "$PID" ]; then
   AH=$(req_full "/arm?site=dict_vals_grow&min=$ARRAY_MIN" /tmp/m128_C7_arm.out)
@@ -210,7 +210,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[8/12] C8 A/B 对照：旧路径（PX_GROW_RETRY_MAX=0，锁内扩容）+ 同尺寸注入 ⇒ 仍致命"
+echo "[8/13] C8 A/B 对照：旧路径（PX_GROW_RETRY_MAX=0，锁内扩容）+ 同尺寸注入 ⇒ 仍致命"
 if start_bin C8 1 PX_GROW_RETRY_MAX=0 PX_ALLOC_FAIL_MIN=2097152; then :; fi
 if [ -n "$PID" ]; then
   [ "$(probe)" = "HTTP/1.1 200 OK" ] && ok "C8 启动正常（旧路径无注入时服务可用）" || bad "C8 启动后 /health 非 200"
@@ -222,7 +222,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[9/12] C9 M261 连带：rate_limit 建桶已移出临界区 ⇒ 注入不再命中（期望值移位）"
+echo "[9/13] C9 M261 连带：rate_limit 建桶已移出临界区 ⇒ 注入不再命中（期望值移位）"
 if start_bin C9 1 PX_ALLOC_FAIL_IN_LOCK=g_rate_mu; then :; fi
 if [ -n "$PID" ]; then
   H=$(req_full "/rates" /tmp/m128_C9_tgt.out); echo "     /rates → '${H:-（无响应）}'"
@@ -252,7 +252,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[10/12] C10 负控 · 无注入（默认路径全功能 + 自然退出）"
+echo "[10/13] C10 负控 · 无注入（默认路径全功能 + 自然退出）"
 if start_bin C10 1; then :; fi
 if [ -n "$PID" ]; then
   C10_RETRY=0
@@ -306,7 +306,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[11/12] C11 负控 · 兜底路径（PX_GROW_RETRY_MAX=0）功能等价、无注入"
+echo "[11/13] C11 负控 · 兜底路径（PX_GROW_RETRY_MAX=0）功能等价、无注入"
 if start_bin C11 1 PX_GROW_RETRY_MAX=0; then :; fi
 if [ -n "$PID" ]; then
   for P in "/list?n=20000:list=20000" "/dict?n=20000:dict=20000" "/grown?n=9000:objs=9000"; do
@@ -319,7 +319,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo
-echo "[12/12] C12 材料完整性"
+echo "[12/13] C12 材料完整性"
 grep -q "m128_alloc" runtime/runtime.c && ok "runtime.c 含 m128_alloc（阶段 A 分配出口）" || bad "缺 m128_alloc"
 for S in list_grow dict_keys_grow dict_vals_grow dict_key_dup gc_objs_grow; do
   grep -q "\"$S\"" runtime/runtime.c && ok "runtime.c 含站点标签 $S" || bad "缺站点标签 $S"
@@ -329,6 +329,42 @@ grep -q "px_list_push_locked\|px_dict_set_locked" runtime/runtime.c && ok "保�
 [ -f "$DIR/unlock_grow.px" ] && ok "验收器 unlock_grow.px 在" || bad "缺 unlock_grow.px"
 grep -q "PX_GROW_RETRY_MAX" "$DIR/README.md" && ok "README 记录兜底开关与边界" || bad "README 未记录兜底开关"
 grep -q "PX_ALLOC_FAIL_SITE" "$DIR/README.md" && ok "README 记录站点注入钩子" || bad "README 未记录站点注入"
+
+echo
+echo "[13/13] C13 一次性注入闸「跨线程只算一次」（缺陷 964）"
+# 病灶（2026-11-27 19:43 shard3 现场，单进程一份日志 pid=54926）：
+#   两行 `[px-m128] 注入命中：站点=dict_vals_grow`（都是 131072 字节）+ 两行「第 1 次」隔离
+#   ⇒ 一次性闸是普通 static int，被两条协程线程（协程 = pthread worker）**同时**读到 fired==0；
+#     第二次命中落在**父协程**上 ⇒ /inv?kind=dict 自己变 500 ⇒ C7 的 4 条断言连带失败。
+#   一次性闸的用途本是「失败后由后续请求验证对象仍完好」，闸漏则后续核对自己也失败 ⇒ 什么都证不了。
+# 判据分两面：
+#   C13a 契约面（确定性）：占闸必须是**原子交换**，且闸变量仍是进程级单例（不是 __thread）。
+#        写回普通置位 / 改成线程局部 ⇒ 本判据立刻红（负控实测见 CHANGELOG M448 R10 节）。
+#   C13b 行为面（压力）：两条并发 /inv?kind=dict 各自在 4096 槽扩容 ⇒ 日志命中行**只能 1 行**。
+grep -q "__atomic_exchange_n(&fired, 1" runtime/runtime.c \
+  && ok "C13a 一次性闸用原子交换占闸（__atomic_exchange_n）" \
+  || bad "C13a 一次性闸不是原子占闸（普通 static int ⇒ 两条协程线程会同时判为首次）"
+grep -q "static int fired" runtime/runtime.c \
+  && ok "C13a 闸变量仍是进程级单例（非 __thread：线程局部会让每条协程都各命中一次）" \
+  || bad "C13a 闸变量缺失或被改成线程局部"
+if start_bin C13 1; then :; fi
+if [ -n "$PID" ]; then
+  req_full "/arm?site=dict_vals_grow&min=$ARRAY_MIN" /tmp/m128_C13_arm.out > /dev/null
+  req_full "/inv?kind=dict" /tmp/m128_C13_a.out > /dev/null &
+  PA=$!
+  req_full "/inv?kind=dict" /tmp/m128_C13_b.out > /dev/null &
+  PB=$!
+  wait "$PA" "$PB" 2>/dev/null
+  sleep 0.5
+  NH=$(grep -c "px-m128] 注入命中：站点=dict_vals_grow" "$LOG")
+  HA=$(head -1 /tmp/m128_C13_a.out | tr -d '\r'); HB=$(head -1 /tmp/m128_C13_b.out | tr -d '\r')
+  echo "     两请求：A='$HA' B='$HB' · 命中行数=$NH（期望 1）"
+  [ "$NH" = "1" ] && ok "C13b 两协程并发抢同一站点 ⇒ 只命中 1 次（一次性契约跨线程成立）" \
+                  || bad "C13b 命中 $NH 次（≠1 ⇒ 后一次命中会打在另一请求的核对面 ⇒ 假红）"
+  alive && ok "C13b 进程存活" || bad "C13b 进程已退出"
+  grep -q "无法安全回滚" "$LOG" && bad "C13b 触发锁审计（失败点不在临界区外）" || ok "C13b 未触发锁审计"
+  kill9
+fi
 
 echo
 echo "== M128 门结束：pass=$pass fail=$fail =="
