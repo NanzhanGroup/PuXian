@@ -94,6 +94,18 @@
 
 **处置建议**：`opts.tls = "starttls" | "implicit" | false`（默认 false 保兼容）+ `opts.tls_verify`；
 同步更正 `stdlib/smtp.px` 头注释与 `M83_PLAN §S5` 的边界描述。
+
+**已处置（M448 · 2026-11-27，E1 实测 18/18 绿）**
+- 实现：`stdlib/smtp.px` 加 `opts.tls`（`false`缺省 / `"starttls"` / `"implicit"` / `true`=`starttls`）
+  + `tls_verify` / `tls_servername` / `tls_timeout_ms`；明文与 TLS 共用一套会话代码（`sm_rd`/`sm_wr_all`/`sm_close` 按句柄类型分流）。
+  RFC 3207：升级成功后**重新 EHLO**；服务端不广告 STARTTLS **拒绝明文降级**；非法值响亮报错。默认路径（不传 opts）行为不变。
+- 判据装置（仓内）：`selfhost/assets/smtp954_server.py`（假 SMTP 端：plain / advertise-fake / starttls / implicit，
+  记录 tls_version·ehlo_after_tls·data_bytes）· `smtp954_client.px` · `smtp954_run.sh`。
+  跑法：`selfhost/assets/smtp954_run.sh`（约 90s，含 6 个场景 / 18 条断言）。
+- 实测：`M448_SMTP_TLS pass=18 fail=0`。要点：starttls 与 implicit 均 `tls_version=TLSv1.3`、
+  升级后 `ehlo_after_tls=true`、TLS 内 data_bytes 与明文一致 262；两个负控（广告后拒绝 454 / 不广告）都报错且
+  服务端**未收到**明文 MAIL FROM（真的没降级）；`{"tls":"bogus"}` 被拒。
+- 遗留：该装置**尚未入册为门**（gates.registry + ci.yml + gate_timeouts 基线），排进 M448 收口轮。
 判据：587 STARTTLS 实连一回 + 465 隐式实连一回 + 默认 false 行为不变（防回归）。
 
 ### 955 · imap 无 TLS（P1）

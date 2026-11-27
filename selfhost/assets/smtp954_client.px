@@ -1,0 +1,24 @@
+# 缺陷 954 E1 客户端：std.smtp 的 opts.tls（plain / starttls / implicit / bogus）
+# 用法：smtp954_client <host> <port> <mode>
+import std.smtp
+
+def main():
+    var av = args()
+    var host = av[1]
+    var port = int(av[2])
+    var mode = av[3]
+    var msg = json_parse("{}")
+    msg.set("subject", "M448-954 STARTTLS test")
+    # 正文带 CJK 多字节 + 行首点：一并验证 bytes 切片发满与 . 转义没被 TLS 分支改坏
+    msg.set("text", "第一行 中文正文（多字节，验证 bytes 切片发满）\n.dot leading line\ntail O K")
+    var opts = null
+    if mode == "starttls":
+        opts = {"tls": "starttls", "tls_verify": false, "tls_servername": "localhost", "tls_timeout_ms": 8000}
+    elif mode == "implicit":
+        opts = {"tls": "implicit", "tls_verify": false, "tls_servername": "localhost", "tls_timeout_ms": 8000}
+    elif mode == "bogus":
+        opts = {"tls": "bogus"}
+    var r = smtp_try(host, port, "sender@px.test", ["rcpt@px.test"], msg, opts)
+    print("RESULT mode=" + mode + " ok=" + str(bool(r["ok"])) + " err=" + str(r["err"]))
+    if not bool(r["ok"]):
+        exit(1)
