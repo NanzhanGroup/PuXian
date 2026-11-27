@@ -116,6 +116,27 @@ git     fetch 窄化为只取 main+tags（缺陷 960 的治根）；每日 05:20
         （用户在场时前台优先；今后自驱在用户对话期间不动同一棵树）
 ```
 
+### ⑨ L1 收口（M448 r2 全量门 3 红 · 缺陷 965 / 966）
+
+```
+bootstrap_prove     ❌→✅ golden/compiler.c 里还是 0.2.447（源码 PXC_VER 已 0.2.448）
+                   根因（965）：964 那一轮重烘只换了 rt_key 与 bootstrap/ 入库件，
+                   **两条自举基准没跟着版本位重定基** ⇒ 自举产物与基准差一行版本串
+version_golden      ❌→✅ 同一根因（compiler.c + compiler.bc.dump 双双落后）
+                   修：./bootstrap_prove.sh --update-golden（复用 B.c 缓存，11s）
+                       ./bootstrap_prove_bc.sh --update-golden（VM 重放 50430 行逐字节自证）
+                   两条基准与源码同批提交（本提交）
+                   旧红证据：/data/gatevm/shard-20261127-200743/red/shard{1,5}_gate_*.log
+m410_criteria_scan  ❌→✅ host:publish_on_green.sh 命中 R1（判绿未证扫描面）
+                   现场（966）：19:48 为缺陷 964 加「里程碑号 vs CHANGELOG 顶部」闸，
+                   把该脚本带进了 m410 的宿主扫描面（策略只扫 mtime ≥ 11-16 的文件），
+                   首次被 R1 抓到 —— **不是新引入的缺陷，是旧形状第一次进面**
+                   修：判绿段打印扫描面 nverdict=（STAMP 里 CHAIN-VERDICT=GREEN 行数）
+                       + 零值守卫；负控实测 STAMP=RED ⇒ STAMP-SCAN nverdict=0 + exit 1
+                   （22:21:46 实跑，日志 /data/autodrive/m448-publish.log）
+                   m410 自检 11/11 绿（正控 R1/R2 仍抓得住坏件，牙没掉）
+```
+
 ## M447（2026-11-26）：无缓冲通道 lost wakeup（缺陷 950）· 判据自伤与误判清账（949/947/948/940）· 第 6 轮 5 红收口（登记 960/961/962）
 
 > **一句话**：第 5 轮全量门里被「LOAD-SENSITIVE 豁免」掉的那个 m426 红，不是负载假红 ——
