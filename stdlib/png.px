@@ -5,7 +5,8 @@
 #   pixels = list[int]（w*h），每像素 0xRRGGBB —— 与 std.gfx 画布像素布局一致
 # 实现：签名 + IHDR/IDAT/IEND chunk + 纯语言 CRC-32（IEEE）+ zlib stored block
 #       （CMF=0x78 FLG=0x01 + BFINAL/BTYPE stored 块 ≤65535 + ADLER32）
-#       零新 C、零 FFI（A 线 zlib FFI 通后可选联动：IDAT 换 zlib_compress 真压缩，见 M61-PLAN §4）
+#       零新 C、零 FFI（本库自身不调 FFI。注意：zlib FFI 早已通 —— 解释轨/编译轨
+#       均可 import "c/zlib"，见 examples/m61_zlib；IDAT 换真压缩列入缺陷 957）
 # 依赖 builtin：bytes/bytes_len/bytes_get/bytes_concat/bytes_slice/int_to_bytes/hex_to_bytes
 # 说明：PNG chunk 内 CRC 覆盖 type+data；stored 流 0x78 0x01 是标准 no-compression zlib 头
 # ============================================================

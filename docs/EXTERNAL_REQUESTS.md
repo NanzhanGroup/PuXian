@@ -144,11 +144,20 @@
 | `bytes_set` 返回**新对象**、b 本身不变 | E1（`runtime.c:16352` malloc+memcpy） |
 | `stdlib/smtp.px:11` STARTTLS 过时 | E1（见 954） |
 | `registry/zlib/0.2.0/zlib.px:10` + `stdlib/png.px:8` 解释轨 FFI 过时 | E1（见 957 实测） |
-| `pxe-manifest.json` 的 `px_version` 带尾部换行（`trim()` 不剥 `\n`） | E2（本次未在产物中找到该文件，待复现） |
-| `px run --fast` 是否仍不解析 import（0.2.373 的 R1001） | E2（未复验） |
+| `pxe-manifest.json` 的 `px_version` 带尾部换行（`trim()` 不剥 `\n`） | **E2 未复现**（2026-11-27）：全盘 `find / -name pxe-manifest.json` 0 命中，仓库内也无 `px_version` 生成点 ⇒ 无产物可验。待报告方给生成命令 |
+| `px run --fast` 是否仍不解析 import（0.2.373 的 R1001） | **E1 已复现，形态比记录更细**（2026-11-27）：字符串形 `import "lib1.px"` ⇒ `px build` / `--fast` 均 rc=0 正确（M378 的修有效）；**点号形本地模块** `import lib1` / `import util.helper` ⇒ 解释轨 OK，`px build` rc=1 `E L002: 未定义变量: 'lib1'`，`--fast` 同红且**不回落解释轨**（rc=1）。同时 `px deps main.px` 能正确解出 `lib1.px`（deps 2）⇒ **依赖闭包解析与编译期模块解析口径不一致** |
 
 处置：随 M447 一并改文档（零风险）；`pxe-manifest` 与 `--fast` 两条先补复现再定性，
 **不要凭记录直接改**。
+
+**959 处置实况（2026-11-27，纯文档/注释，零运行时代码）**
+- 已改：`docs/PUXIAN_CHEATSHEET.md` §bytes（`bytes_slice` 半开区间 `[start,end)` 第三参是结束下标；
+  `bytes_set` COW 返回新对象、逐字节改写 O(n²)）· `stdlib/smtp.px` 头注释（STARTTLS 能力已由 M151-S1
+  的 `tls_connect`/`tls_upgrade` 就位，本库未接入，指 954）· `stdlib/png.px:8`（zlib FFI 早已通，
+  解释/编译两轨均可 `import "c/zlib"`）· `registry/zlib/0.2.0/zlib.px:9`（PX-DEF-035 已修，两轨可用）。
+- 复现（E1，本机）：`./tools/px run examples/m61_zlib/m61_zlib.px` ⇒ A–G 全 PASS（解释轨含内）；
+  `grep -n tls_connect runtime/runtime.c` ⇒ 14316 注册、18822 有句柄表。
+- `--fast` 点号形本地 import 的硬失败**未修**（属编译轨模块解析，非文档）：留作 M448 候选缺陷。
 
 ---
 

@@ -8,8 +8,9 @@
 #     from / to：邮箱地址（to 可 str 或 list[str]）
 #     msg：{"subject":..., "text":...} 或 {"subject":..., "html":...}
 #     opts（可选 dict）：{"user","password","helo"} —— 有 user 则 AUTH LOGIN；
-#                        默认明文（25/内网 587）；STARTTLS 暂不支持（语言无
-#                        客户端 TLS 包装 native，见 M83_PLAN §S5 边界）
+#                        默认明文（25/内网 587）；本库实现只走明文，但语言侧
+#                        tls_connect / tls_upgrade 已于 M151-S1 就位 ⇒ STARTTLS
+#                        能力可行、尚未接入（缺陷 954：opts.tls = "starttls"|"implicit"）
 #   DATA 消息行首 "." 自动转义；长消息 tcp_send 循环发满。
 #   ⚠️ 不处理 RFC 2047 标题编码（非 ASCII Subject 请自行 base64 编码头）；
 #      Date 头由本库按服务器本地时间生成（多数 server 接受缺省/宽松格式）。
