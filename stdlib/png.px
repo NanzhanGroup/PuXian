@@ -1,15 +1,22 @@
 # ============================================================
-# 普贤标准库：std.png —— 纯语言 PNG 编码器（stored 无压缩，M61-S2，第 6 个 stdlib）
+# 普贤标准库：std.png —— 纯语言 PNG 编码器（M61-S2 起；957 加可选真压缩）
 # 用法：import std.png
-#   png_encode(w, h, pixels) -> bytes  完整 PNG 文件（8bit RGB truecolor，逐行 filter=0）
+#   png_encode(w, h, pixels, opts?) -> bytes  完整 PNG 文件（8bit RGB truecolor，逐行 filter=0）
+#     opts 缺省 / {} ⇒ level 0 = **stored 无压缩**（与 M61-S2 产物逐字节相同，保兼容）
+#     {"level": 1..9} ⇒ IDAT 用 zlib_compress 真压缩（体积通常小 3–10 倍）；
+#                       越界值按 0 处理，FFI 返回 null 时自动回退 stored（不产出坏文件）
 #   pixels = list[int]（w*h），每像素 0xRRGGBB —— 与 std.gfx 画布像素布局一致
-# 实现：签名 + IHDR/IDAT/IEND chunk + 纯语言 CRC-32（IEEE）+ zlib stored block
-#       （CMF=0x78 FLG=0x01 + BFINAL/BTYPE stored 块 ≤65535 + ADLER32）
-#       零新 C、零 FFI（本库自身不调 FFI。注意：zlib FFI 早已通 —— 解释轨/编译轨
-#       均可 import "c/zlib"，见 examples/m61_zlib；IDAT 换真压缩列入缺陷 957）
+# 实现：签名 + IHDR/IDAT/IEND chunk + 纯语言 CRC-32（IEEE）
+#       level=0 ⇒ 纯语言 zlib stored block（CMF=0x78 FLG=0x01 + BFINAL/BTYPE≤65535 + ADLER32）
+#       level>0 ⇒ extern zlib_compress（runtime_zlib.c 的 compress2；解释/编译两轨均可用，
+#                 见 examples/m61_zlib）—— 只有显式开 level 才会调用 FFI，默认零 FFI 依赖
 # 依赖 builtin：bytes/bytes_len/bytes_get/bytes_concat/bytes_slice/int_to_bytes/hex_to_bytes
 # 说明：PNG chunk 内 CRC 覆盖 type+data；stored 流 0x78 0x01 是标准 no-compression zlib 头
+#       缺陷 957 判据见 docs/EXTERNAL_REQUESTS.md
 # ============================================================
+# ---- FFI（仅 opts.level > 0 时调用；默认路径不碰它）----
+# 注册点在 runtime/runtime_zlib.c：px_ffi_register("zlib_compress", ...) → compress2
+extern def zlib_compress(data: bytes, level: int) -> bytes
 # ---- 内部：CRC-32 查表（IEEE poly 0xEDB88320）----
 def _crc32_table():
     var t = []
@@ -64,6 +71,13 @@ def _zlib_stored(d):
         off = off + blen
     out = bytes_concat(out, int_to_bytes(_adler32(d), 4))
     return out
+# ---- 内部：IDAT 流（level<=0 → stored；否则 zlib_compress，失败回退 stored）----
+def _zlib_stream(d, level):
+    if level > 0:
+        var c = zlib_compress(d, level)
+        if c != null and bytes_len(c) > 2:
+            return c
+    return _zlib_stored(d)
 # ---- 内部：一个 PNG chunk ----
 def _chunk(tbl, type_s, data):
     var td = bytes_concat(bytes(type_s), data)
@@ -71,7 +85,13 @@ def _chunk(tbl, type_s, data):
     var c = bytes_concat(int_to_bytes(bytes_len(data), 4), td)
     return bytes_concat(c, int_to_bytes(crc, 4))
 # ---- 主入口：PNG 编码 ----
-def png_encode(w, h, pixels):
+def png_encode(w, h, pixels, opts = {}):
+    # 0) 取 level：默认 0（stored，与 M61-S2 逐字节一致）；显式 1..9 才真压缩
+    var level = 0
+    if type(opts) == "dict" and opts.has("level"):
+        var lv = opts["level"]
+        if type(lv) == "int" and lv > 0 and lv <= 9:
+            level = lv
     # 1) 图像数据：逐行 filter=0 + RGB
     var rows = bytes("")
     var y = 0
@@ -95,6 +115,6 @@ def png_encode(w, h, pixels):
     var tbl = _crc32_table()
     var out = hex_to_bytes("89504e470d0a1a0a")
     out = bytes_concat(out, _chunk(tbl, "IHDR", ihdr))
-    out = bytes_concat(out, _chunk(tbl, "IDAT", _zlib_stored(rows)))
+    out = bytes_concat(out, _chunk(tbl, "IDAT", _zlib_stream(rows, level)))
     out = bytes_concat(out, _chunk(tbl, "IEND", bytes("")))
     return out

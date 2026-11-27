@@ -365,9 +365,9 @@ examples/m60_dev/dev_s1.px src=27881403c733ea39 dep=f1b73a878f0e3891 rc=0 out=25
 examples/m60_dev/dev_s2.px src=0a558de1209274dd dep=cf6fde4b74c405e2 rc=0 out=6c6c4c0b47c7485dd7de8e587e8fa549 err=e3b0c44298fc1c14
 examples/m60_dev/dev_s3.px src=2ade1e2dd4fabaf8 dep=7de568a837942b57 rc=0 out=faf704fade3117e1c82da00f365a92c1 err=e3b0c44298fc1c14
 examples/m60_dev/dev_s4.px src=b4851eb47f9e3d82 dep=c5f6f34e88caae5c rc=0 out=4f273aa2fe894cc95fa45c26fc0b9ddd err=e3b0c44298fc1c14
-examples/m61_gfx/demo_mandelbrot.px src=4a5fd1e54e7b545e dep=08aaf2ad3a8044d8 rc=0 out=393b627addbb9ba0fc8ff57decc53359 err=e3b0c44298fc1c14
-examples/m61_gfx/demo_scene.px src=fb0557c7078375c5 dep=8376eded190f5884 rc=0 out=112b39ed3cfdc62c06cdf63f60c94df6 err=e3b0c44298fc1c14
-examples/m61_gfx/m61_s4_det.px src=49a32801fb9cbee4 dep=83098eb31585562c rc=0 out=13c2677daf30d5e016e97a61fdb67fa3 err=e3b0c44298fc1c14
+examples/m61_gfx/demo_mandelbrot.px src=4a5fd1e54e7b545e dep=9b49238b4d13588e rc=0 out=1f12977404daaf15fe180e6e536e02c9 err=e3b0c44298fc1c14
+examples/m61_gfx/demo_scene.px src=fb0557c7078375c5 dep=a24445c083285772 rc=0 out=76bdf8492c3db45205a78e536d08f59f err=e3b0c44298fc1c14
+examples/m61_gfx/m61_s4_det.px src=49a32801fb9cbee4 dep=0833470a31a2610b rc=0 out=aa92e8a150c86afe90ce809d185a3603 err=e3b0c44298fc1c14
 examples/m61_gfx/m61_s4_impsmoke.px src=b1912ee184fdef05 dep=1a3465c9d08dbb66 rc=0 out=906eb4be8a8a900b6da70ac34adb34d9 err=e3b0c44298fc1c14
 examples/m61_gfx/m61_s4_zpng.px src=ff4dc20162014f10 dep=299222563b763413 rc=0 out=7ec807ef692a4a07e0c3c40e41bccf3d err=e3b0c44298fc1c14
 examples/m61_gfx/m61_s4_zpxi.px src=8e349918030b52cd dep=08688a7111f7d7df rc=0 out=fa031d3c6023a0a91d2b456d2bac44a0 err=e3b0c44298fc1c14
@@ -424,7 +424,7 @@ examples/m83_s4/s4_verify.px src=676a19572c5f8241 dep=c19a813dcaaccde9 rc=0 out=
 examples/m83_s5/libs_test.px src=c3a87733ac8cd527 dep=5cb5423bb8b5dc99 rc=0 out=b23234d78f089bf373f607ce231ae550 err=e3b0c44298fc1c14
 examples/m83_s5/m83_s5_client.px src=1017f9477bac50de dep=0ca63b86734e7192 rc=0 out=4b219b1565af649ec44efedd603ca669 err=e3b0c44298fc1c14
 examples/m83_s5/serve_daemon.px src=b948e3b0294db7a4 dep=ffbb330f3a88c3bf rc=0 out=adce983ca7520c398ae5f62ff713b03c err=e3b0c44298fc1c14
-examples/m83_s5/smtp_test.px src=2053517885af434e dep=396b019d8b06568d rc=0 out=db08c7b6845273cbcfafff5d0d6f57cd err=e3b0c44298fc1c14
+examples/m83_s5/smtp_test.px src=2053517885af434e dep=2a1dbcc4f1705a7a rc=0 out=ee43330667a07a12a89ffc55693ddde3 err=e3b0c44298fc1c14
 examples/m83_s6/serve_sse_daemon.px src=55ca3bedb54573ec dep=1a95b0d051b4bdb3 rc=0 out=e7babee0d47c146e6f4f1a4ede4aadc4 err=e3b0c44298fc1c14
 examples/m84_s1_http_ct/http_ct_client.px src=48c461b4114ff684 dep=03459e555b18ffde rc=0 out=9ce37511fe195aa9d6b4e85758e0b724 err=e3b0c44298fc1c14
 examples/m84_s2_hmac/s2_verify.px src=df1f84a201ac4239 dep=9cb4194dcd25360f rc=0 out=bdc88c0f162a9f399abace9dcad3c1ad err=e3b0c44298fc1c14

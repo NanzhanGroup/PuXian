@@ -2682,3 +2682,11 @@ step "M447：无缓冲通道 lost wakeup（1 门）"
 #   因此不受 M411「低负载复跑绿 ⇒ 豁免」误分类影响（m426 那次红就是这个）。
 gate_timeout m447_chan 900
 run m447_chan bash selfhost/check_m447_chan.sh
+
+step "M448：std.png 可选真压缩（1 门）"
+#   缺陷 957：png.px 只有 stored 无压缩（产物比真压缩大 3–10 倍）。
+#   本门同时守两个方向：显式 opts.level>0 必须真压（体积比 ≥3x、解码回像素逐字节一致），
+#   而**默认三参调用必须与 M61-S2 stored 产物逐字节相同**（sha256 锚 + python 独立重构对拍）；
+#   负控把 level 分支阉掉 ⇒ C3 必红。
+gate_timeout m448_png957 600
+run m448_png957 bash selfhost/check_m448_png957.sh

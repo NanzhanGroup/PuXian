@@ -130,6 +130,26 @@
 `level=0` 保持现有 stored 路径（保兼容 + 留对拍基准）；同步更正两处注释。
 判据：解码回像素逐字节一致 + 体积比 stored 小 3 倍以上 + level=0 产物与旧版逐字节相同。
 
+**957 处置实况（2026-11-27，M448 · 改库不改 runtime）**
+- 实现：`png_encode(w, h, pixels, opts = {})`。`opts.level` 缺省 **0 = stored**（不传 opts 时**逐字节不变**）；
+  `{"level": 1..9}` ⇒ IDAT 走 `extern def zlib_compress`（runtime_zlib.c 的 compress2，两轨均已通）；
+  越界值（99 / -1 / 字符串 "6"）与非 dict 的 opts 一律回退 stored；FFI 返回 null 也回退 ⇒ 永不产出坏文件。
+  **默认值取 0 而不是建议里的 6**，理由（实测）：`examples/m61_gfx/verify_s4.sh` 按 sha256 对拍
+  x86 ⇄ aarch64、仓库有金标 `mandelbrot.png`、emitc 冻结按闭包指纹 —— 默认改 6 会让这些判据一起漂移。
+  ⇒ 「改默认」是独立议题（需同步改三类判据），本轮不开。
+- E1 判据（新门 `m448_png957` = `selfhost/check_m448_png957.sh`，6 判据含负控，已注册 registry + ci.yml，基线 4s）：
+  · C1 默认三参产物 sha256 = `7bee77b8…`（与 python **独立重构**的 M61-S2 口径 stored 字节相同；
+    另实测：新实现 level 0 与改前实现同一图逐字节相同、`demo_mandelbrot` 产物仍等于仓库金标 `mandelbrot.png`）
+  · C2 `level=6` 产物 python 独立解码（逐 chunk CRC + `zlib.decompress`）通过，像素与 stored 逐字节一致
+  · C3 体积比 stored/compressed = **8.5x**（IDAT 18507 → 2181 字节；96×64 混合图：标题条 + 8 行渐变 + 棋盘精灵）
+  · C4 显式 `level=0` / 99 / -1 / "6" 全部回退为 stored 且逐字节相同
+  · N1 负控：把 level 分支阉掉 ⇒ 体积比回落 **1.00x**，C3 真能红
+- 同步：`registry/png/0.1.0/png.px` 镜像（parity 门 13/13 绿）· emitc 冻结重定基 4 条（3 条 png 闭包 +
+  1 条上一轮 smtp 注释改动遗留的 `m83_s5/smtp_test`）· 门耗时基线用 `refresh_gate_baseline.sh
+  --extra-tsv` 官方回灌（**未手改 tsv**），`check_gate_timeouts.sh` 47/47 绿。
+- 已知非本轮问题：`examples/m61_gfx/verify_s2.sh` 的 demo_scene 步仍是历史红
+  （`set_px` 收到 float，2026-10-05 已入 `selfhost/gcstress_ledger.tsv`），与 957 无关。
+
 ### 958 · ws_recv 不带 opcode/fin（P2）
 
 报告方建议 `ws_recv_ex -> {data, opcode, fin}`；同时**明确建议 wst-browser 保持 Go 版不迁**
