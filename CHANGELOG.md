@@ -1,4 +1,4 @@
-## M449（2026-11-28）：补发轮 —— 让最新 tag 的源码快照自带门修复、并使 tag 提交的 CI 全绿（缺陷 967、968 闭环）
+## M449（2026-11-28）：补发轮 —— 让最新 tag 的源码快照自带门修复、并使 tag 提交的 CI 全绿（缺陷 967、968 闭环 · 登记 969）
 
 > **一句话**：v0.2.448 发布后 CI 在 967/968 上假红，修复提交 6f608b6a 只动 `selfhost/` 门面，
 > 按 GATE_6 不单独发版 ⇒ 已发布的 v0.2.448 **源码快照里仍是旧门脚本**（OUT 写死 `/data`）。
@@ -44,6 +44,29 @@ C4  产品面零改动自证：git diff v0.2.448..v0.2.449 -- runtime/ stdlib/ �
 ```
 不为「补发」改任何产品代码 —— 953 PSD 删宏 / 955 imap TLS / 956 MIME multipart /
 952 字体(stb_truetype) / 951 图像五内建 全部留给 M450（计划见 /data/autodrive/NEXT-QUEUE.md）
+```
+
+### ⑤ 缺陷 969（新）· m128 门的就绪判据弱于「能服务」（r1 唯一红的真因 · 门面，非产品）
+
+```
+现场   r1（stamp /data/gatevm/shard-20261128-132818 · HEAD fcda560b）shard1 第 22 门
+       m128_unlock_grow rc=1 pass=94 fail=5，5 条红**全在 C7**（不变量·dict）：
+       「C7 /arm 请求未被受理（''）⇒ 注入没装上」+ 4 条连带（before=4097 期望 4096 / vlast=v4096 / len=4102）
+       服务端 /data/gatevm/tmp1/m128_C7.log 只有 `M128 READY` 一行：无 bind 报错、无命中行
+       ⇒ 客户端那次 /arm **没连上**（不是「装上了却没命中」）
+机理   examples/m128_unlock_grow/unlock_grow.px 末尾 `spawn http_serve(...)` 之后**立刻** print READY，
+       而 bind/listen 发生在协程真正被调度之后 ⇒ **READY 行不等于「已 listen」**。
+       门的 start_bin() 只 grep READY 当就绪判据 ⇒ 争用下（分片 taskset 0-1 · GATE_JOBS=2）窗口放大
+证据   /data/autodrive/m449-m128-probe-listen.sh  绑 0-1 核 + 两自旋：5 轮里 3 轮 READY 时 18199 尚未监听（ss）
+       /data/autodrive/m449-m128-probe-load.sh    同负载 12 轮按 READY 立刻发 /arm ⇒ ok=3 fail=9；空载 10/10 全 200
+       定性：**判据自伤**，不是产品缺陷、也不是负载敏感（负载只放大窗口，根因是就绪信号选错）
+修法   start_bin()：READY 之后**必须**再等 /health 真回 200（80×0.25s=20s）才算就绪；
+       两段判据分开报错（无 READY / READY 了但不服务），不再让「READY 已打印」冒充「可服务」
+复验   同争用条件连跑 3 次 pass=99 fail=0（修前 94/5）
+       · 负控：把 verify.sh 里的 start_bin 块**原样抽出**喂「只 print READY 从不 listen」的假二进制
+         ⇒ 21s 后必报红且 PID 清空（NEG-CTRL=OK · /data/autodrive/logs/m449-m128-negcontrol.log）
+处置   r1 在 ~35min 处**主动中止**（当时 8 片已出 38 门，除 m128 外 0 红）⇒ 修门后重起 r2 全量链，
+       不把「判据自伤」当 LOAD-SENSITIVE 豁免掉（那正是判据纪律禁止的自欺形态）
 ```
 
 ## M448（2026-11-27）：smtp STARTTLS / PNG 真压缩 / 文档小缺陷集 / --list 污染收口 / 分片判据 C-locale 失效 / m128 一次性闸跨线程失效（缺陷 954、957、959、962、963、964）

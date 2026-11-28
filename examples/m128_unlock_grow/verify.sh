@@ -61,7 +61,19 @@ start_bin() {   # $1=tag $2=wait(1=等 READY) [env=val ...]
   local i
   if [ "$need_ready" = 1 ]; then
     for i in $(seq 1 60); do grep -q "M128 READY" "$LOG" && break; sleep 0.25; done
+    # M449（缺陷 969）：**READY 行不等于「能服务」** —— 例子里 `spawn http_serve(...)` 之后
+    #   立刻 print READY，而 bind/listen 发生在协程真正被调度之后。CPU 争用（分片 jobs=2 绑 2 核）
+    #   会把这段窗口拉到可见量级：实测 12 轮里 9 轮 READY 时 18199 尚未监听 ⇒
+    #   紧随其后的 `/arm` connect 失败（空响应）⇒ 注入没装上 ⇒ C7 的 5 条断言连带红
+    #   （2026-11-28 M449 r1 现场：pass=94 fail=5，全部落在 C7，服务端日志只有 READY 一行）。
+    #   修法：READY 之后**必须**再等 /health 真回 200（服务真的能应答）才算就绪；
+    #   两段判据分别报错，不再让「READY 已打印」冒充「可服务」。
+    local ok200=0
+    if grep -q "M128 READY" "$LOG"; then
+      for i in $(seq 1 80); do [ "$(probe)" = "HTTP/1.1 200 OK" ] && { ok200=1; break; }; sleep 0.25; done
+    fi
     grep -q "M128 READY" "$LOG" || { bad "$tag 启动失败（无 READY）"; tail -3 "$LOG" | sed 's/^/     /'; PID=""; }
+    [ -z "$PID" ] || [ "$ok200" = 1 ] || { bad "$tag 启动失败（READY 已打印但 /health 20s 内未就绪 ⇒ listen 未完成）"; tail -3 "$LOG" | sed 's/^/     /'; PID=""; }
   fi
 }
 alive()  { kill -0 "$PID" 2>/dev/null; }
