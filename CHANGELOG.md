@@ -1,3 +1,59 @@
+## M450（2026-11-28）：补发轮 ② —— v0.2.449 的 tag 提交 CI 红在缺陷 971，修复随本版带出
+
+> **一句话**：v0.2.449 发布后 CI 在 `m438_pxslice_offs` 上红（缺陷 971：性能探针用毫秒计时，
+> 快机器上 2000 次切片不足 1ms 被截断成 0，门把「快过分辨率」判成「没采到数」⇒ **越快越红**）。
+> 修复 `6be106c5` 只动 `selfhost/` 门面，按 GATE_6 不单独发版 ⇒ 已发布的 v0.2.449 **源码快照里仍带旧判据**。
+> 本轮是**补发**：版本位 0.2.449→0.2.450 + 重烘 14 件 + 两条自举 golden 复核 + 全量门 ⇒ tag v0.2.450。
+> **产品面改动 = 0**（`runtime/` `stdlib/` 零改动；唯一源码 diff 是 9 处版本字面量）。
+
+**用户令**：2026-11-28 20:14「批 A」（批准推送 971 修复）；延续 2026-11-28 11:45「补补」定的纪律——
+**最新 tag 的提交上 CI 必须全绿**（GATE_5 不许重推已发 tag ⇒ 只能靠新 tag 落实）。
+
+### ① 缺陷 971（已修 · 门面，非产品）
+
+```
+现场   v0.2.449 tag 提交 882a7a4c 上 PuXian CI = failure（run 46126005554），
+       唯一失败步骤 = m438_pxslice_offs：小计 12 通过 1 失败，[5]「缺耗时数据，无法自证」
+       而同一提交链上 c6ee6ac0 的 CI = success ⇒ 该红**与环境快慢相关**，不是确定性回归
+机理   probes/m438_slice_perf.px 用 now_ms()（毫秒分辨率）计时；缓存表生效后 2000 次切片 <1ms
+       ⇒ total_ms = 0 ⇒ 门把「太快」读成「没采到数」⇒ 越快的机器越红（判据方向反了）
+修法   探针增输出 total_us=（total_ms 保留兼容）；门内 us_of() 优先取微秒、旧语料回落 ms×1000，
+       阈值 ms×1000 等价平移（**不放松**）；[5] 分母 max(t,1) ⇒ t=0 视为「快过 1us 的合法结果」
+证据   正控 13/0 rc=0（2000 次 = 4602us · 20000 次 = 31477us）
+       整门负控 PX_NO_STR_OFFS_SLICE=1 ⇒ 10/3 rc=1（2000 次 954772us > 200000us）⇒ 判据仍有牙
+旁证   gate_assertions 违例 0 · gate_inputs 36/384 OK · defect_refs 845 条一致 · gate_registry 13/0
+```
+
+### ② 本轮动作（机械段）
+
+```
+推送   6be106c5（971 修复 · 3 个门面文件）→ origin/main（AI 20:15 完成，CI 由 m971-ci-watch 盯）
+版本位 0.2.449 → 0.2.450（9 处：tools/px · tools/pxc(符号链接) · selfhost/compiler.px ·
+       selfhost/interp.px · tools/pxfmt.px · tools/pxlsp.px · tools/pxmcp.px ×2 ·
+       selfhost/golden/compiler.c · selfhost/golden/compiler.bc.dump）
+重烘   --rebake-all：12 件 + pxc/pxc_vm = 14 件成功 / 失败 0 · 源码链 PXSRC-49834c3b82d6367a
+       验收 --check-all：14/14 与当前源码一致（无指纹 0 件 · runtime 链错 0 件）
+golden bootstrap_prove.sh ⇒ ✅ B.c 与基准逐字节一致（23612 行 C）
+       bootstrap_prove_bc.sh ⇒ ✅ VM 重放 == golden/compiler.bc.dump（50430 行）逐字节一致
+门     全量 330 门（链内低负载豁免机制不变）· 绿 ⇒ publish_on_green --ms 450 自动 push + tag
+```
+
+### ③ 判据（怎么算这一轮真的补上了）
+
+```
+C1  tag v0.2.450 解引用 == HEAD，且 tag 快照里 check_m438_pxslice_offs.sh 含 total_us 微秒口径（grep 得到）
+C2  tag 提交上 PuXian CI == success（971 闭环的直接证据；本地绿不算）
+C3  产品面零改动自证：git diff v0.2.449..v0.2.450 -- runtime/ stdlib/ 输出 0 行
+C4  版本链：源码 0.2.450 vs 最新 tag v0.2.449（差 1）⇒ version_drift 绿
+```
+
+### ④ 不做的
+
+```
+不为「补发」改任何产品代码 —— 951 图像五内建 / 953 PSD 删宏 / 952 字体 / 955 imap TLS /
+956 MIME multipart 全部顺延（内容轮改称 M451，计划见 /data/autodrive/NEXT-QUEUE.md）
+```
+
 ## M449（2026-11-28）：补发轮 —— 让最新 tag 的源码快照自带门修复、并使 tag 提交的 CI 全绿（缺陷 967、968 闭环 · 登记 969）
 
 > **一句话**：v0.2.448 发布后 CI 在 967/968 上假红，修复提交 6f608b6a 只动 `selfhost/` 门面，
