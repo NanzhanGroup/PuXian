@@ -1,3 +1,51 @@
+## M449（2026-11-28）：补发轮 —— 让最新 tag 的源码快照自带门修复、并使 tag 提交的 CI 全绿（缺陷 967、968 闭环）
+
+> **一句话**：v0.2.448 发布后 CI 在 967/968 上假红，修复提交 6f608b6a 只动 `selfhost/` 门面，
+> 按 GATE_6 不单独发版 ⇒ 已发布的 v0.2.448 **源码快照里仍是旧门脚本**（OUT 写死 `/data`）。
+> 本轮是**补发**：版本位 0.2.448→0.2.449 + 重烘 + 两条自举 golden 重定基 + 全量门 ⇒ tag v0.2.449，
+> 让「最新 tag 的源码快照自带修好的门、且 tag 提交的 CI 全绿」。
+> **产品面改动 = 0**（runtime/stdlib/tools 语义零改动；唯一源码 diff 是 7 处版本字面量）。
+
+**用户令**：2026-11-28 11:45「补补，做下一个计划吧」（补 v0.2.449 + 给下一里程碑计划）。
+
+### ① 为什么要补（M448 时就写明的两个残留）
+
+```
+残留 A  v0.2.448 的源码快照里仍是旧门脚本（m448_smtp_tls 的 OUT 写死 /data）
+        ⇒ 谁在非 /data 机器上解包这个 tar 跑门，会撞同一个假红
+残留 B  tag 对象 d2e1db79 的 PuXian CI 永久记着 failure（GATE_5：已推 tag 不删不重推）
+        ⇒ 只能靠新 tag 来落实「最新 tag 必须 CI 全绿」这条口径
+```
+
+### ② 本轮动作
+
+```
+版本位  0.2.448 → 0.2.449（7 处：tools/px · selfhost/compiler.px · selfhost/interp.px
+        · tools/pxfmt.px · tools/pxlsp.px · tools/pxmcp.px ×2）
+重烘    版本字面量进 compiler.px ⇒ PXSRC 指纹换代 ⇒ bootstrap/pxc + pxc_vm 必须重烘
+        （rebake_bin.sh；判据 = 入库件内嵌指纹 == 现算源码链指纹）
+golden  两条自举基准随版本位重定基（bootstrap_prove.sh --update-golden ·
+        bootstrap_prove_bc.sh --update-golden）
+门      全量 330 门（含 m448_smtp_tls 的可移植版：mktemp -d + C0「工作目录可写」）
+发布    绿 ⇒ publish_on_green --ms 449 自动 push + tag（GATE_5 同一次 push）+ 镜像核验
+```
+
+### ③ 判据（怎么算这一轮真的补上了）
+
+```
+C1  tag v0.2.449 解引用 == HEAD，且 tag 快照里 check_m448_smtp954.sh 含 C0 判据（grep 得到）
+C2  tag 提交上 PuXian CI == success（967 闭环的直接证据；本地绿不算）
+C3  version_drift：源码 0.2.449 vs 最新 tag v0.2.448（差 1）⇒ 绿
+C4  产品面零改动自证：git diff v0.2.448..v0.2.449 -- runtime/ stdlib/ 输出 0 行
+```
+
+### ④ 不做的
+
+```
+不为「补发」改任何产品代码 —— 953 PSD 删宏 / 955 imap TLS / 956 MIME multipart /
+952 字体(stb_truetype) / 951 图像五内建 全部留给 M450（计划见 /data/autodrive/NEXT-QUEUE.md）
+```
+
 ## M448（2026-11-27）：smtp STARTTLS / PNG 真压缩 / 文档小缺陷集 / --list 污染收口 / 分片判据 C-locale 失效 / m128 一次性闸跨线程失效（缺陷 954、957、959、962、963、964）
 
 > **一句话**：把晨曦提的 9 条外部需求里「改库不改 runtime」的那批做完并留门 ——
