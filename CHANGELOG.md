@@ -156,6 +156,11 @@ m410_criteria_scan  ❌→✅ host:publish_on_green.sh 命中 R1（判绿未证�
        不可写注入：M448_SMTP954_OUT=/proc/nope/x ⇒ rc=3 ENV 一行说明（不再是 3 条假红）
        旁证：check_gate_paths rc=0 · check_gate_shared_tmp rc=0 · check_gate_registry rc=0
 遗留   远端复绿需 push 本提交 —— 档位 local，已 p0 请 publish（不自行提档）
+已了结 11:12:18 push 6f608b6a（本地全量 330/330 · rc=0 · 8 分片+17 门 quiet 全绿）
+       CI 复绿实测：6f608b6a 上 PuXian CI = success · Tag Guard = success
+       不打新 tag：本提交产品面（runtime/stdlib/tools/spec/bootstrap）0 文件改动
+       ⇒ 已发布件 v0.2.448 不受影响（GATE_6 推 main 不触发发布；GATE_5 已推 tag 不重推）
+       残留：v0.2.448 的源码快照仍含旧门脚本（OUT 写死 /data）⇒ 由下一里程碑带出
 ```
 
 ### ⑪ CI 红门收口（缺陷 968）· upstream_tests 超时声明裕度被实测反超
