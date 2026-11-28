@@ -15,6 +15,7 @@
 #   [3] 摊还性（C 轨）：2000 次切片 ≤ 200ms、20000 次 ≤ 1000ms
 #   [4] 负控：PX_NO_STR_OFFS_SLICE=1（同一二进制只切一条路径）⇒ 2000 次 ≥ 200ms
 #   [5] 前提自证：负控确实慢下来（≥5×）⇒ [4] 不是空转
+#       （正面 <1us 时按 1us 计，比值是下界 —— 缺陷 971：快得测不出来不能判红）
 # 用法：bash selfhost/check_m438_pxslice_offs.sh
 # 退出码：0 = 绿 · 1 = 红 · 2 = 环境不成立
 # ============================================================
@@ -73,15 +74,28 @@ grep -q 'FAIL ' "$W/interp.out" && bad "语料自报 FAIL（等价性用例不�
 echo "[3/5] 摊还性（C 轨 · 90K 串）"
 cp "$PERF" "$W/p.px"
 rm -rf "$W/build"
+# 耗时统一取微秒：语料给 total_us 就用它；旧语料/旧快照只有 total_ms ⇒ ×1000 回落。
+# 为什么（2026-11-28 · 缺陷 971）：CI runner 上正面 2000 次 = 0ms（毫秒截断）⇒
+#   [5] 的「t2000 > 0」前提不成立 ⇒ 判「缺耗时数据」⇒ 门红，而代码其实比要求快得多。
+#   「快得测不出来」必须判绿，不能判红；分辨率不足只能削弱精度，不能把绿灯变成红灯。
+us_of(){  # $1=输出文件 $2=slices 数 ⇒ 打印微秒（无数据则什么也不打印）
+  local line us ms
+  line=$(grep "^slices=$2 " "$1" 2>/dev/null | head -1)
+  [ -n "$line" ] || return 0
+  us=$(printf '%s\n' "$line" | sed -n 's/.*total_us=\([0-9]\+\).*/\1/p')
+  if [ -n "$us" ]; then printf '%s' "$us"; return 0; fi
+  ms=$(printf '%s\n' "$line" | sed -n 's/.*total_ms=\([0-9]\+\).*/\1/p')
+  [ -n "$ms" ] && printf '%s' "$((ms * 1000))"
+}
 if timeout 600 "$PX" build --c "$W/p.px" > "$W/p.log" 2>&1 && [ -x "$W/build/p" ]; then
   timeout 120 "$W/build/p" > "$W/perf_fast.out" 2>&1
-  t2000=$(grep '^slices=2000 ' "$W/perf_fast.out" | sed 's/.*total_ms=\([0-9]*\).*/\1/')
-  t20000=$(grep '^slices=20000 ' "$W/perf_fast.out" | sed 's/.*total_ms=\([0-9]*\).*/\1/')
-  echo "     实测：2000 次=${t2000:-?}ms · 20000 次=${t20000:-?}ms"
-  [ -n "${t2000:-}" ] && [ "$t2000" -le 200 ] && ok "2000 次切片 ≤ 200ms（摊还 O(1)）" \
-    || bad "2000 次切片 = ${t2000:-?}ms（> 200ms）"
-  [ -n "${t20000:-}" ] && [ "$t20000" -le 1000 ] && ok "20000 次切片 ≤ 1000ms" \
-    || bad "20000 次切片 = ${t20000:-?}ms（> 1000ms）"
+  t2000=$(us_of "$W/perf_fast.out" 2000)
+  t20000=$(us_of "$W/perf_fast.out" 20000)
+  echo "     实测：2000 次=${t2000:-?}us（上限 200000）· 20000 次=${t20000:-?}us（上限 1000000）"
+  [ -n "${t2000:-}" ] && [ "$t2000" -le 200000 ] && ok "2000 次切片 ≤ 200ms（摊还 O(1)）" \
+    || bad "2000 次切片 = ${t2000:-?}us（> 200000us）"
+  [ -n "${t20000:-}" ] && [ "$t20000" -le 1000000 ] && ok "20000 次切片 ≤ 1000ms" \
+    || bad "20000 次切片 = ${t20000:-?}us（> 1000000us）"
 else
   bad "perf 语料 C 轨编译失败"; tail -3 "$W/p.log" | sed 's/^/     /'
 fi
@@ -89,25 +103,31 @@ fi
 echo "[4/5] 负控：PX_NO_STR_OFFS_SLICE=1（同一二进制，只切一条路径）"
 if [ -x "$W/build/p" ]; then
   PX_NO_STR_OFFS_SLICE=1 timeout 300 "$W/build/p" > "$W/perf_slow.out" 2>&1
-  s2000=$(grep '^slices=2000 ' "$W/perf_slow.out" | sed 's/.*total_ms=\([0-9]*\).*/\1/')
-  echo "     负控实测：2000 次=${s2000:-?}ms"
-  [ -n "${s2000:-}" ] && [ "$s2000" -ge 200 ] && ok "负控下 2000 次 ≥ 200ms（摊还判据有牙）" \
-    || bad "负控下 2000 次 = ${s2000:-?}ms（< 200ms ⇒ 判据在空转）"
+  s2000=$(us_of "$W/perf_slow.out" 2000)
+  echo "     负控实测：2000 次=${s2000:-?}us（下限 200000）"
+  [ -n "${s2000:-}" ] && [ "$s2000" -ge 200000 ] && ok "负控下 2000 次 ≥ 200ms（摊还判据有牙）" \
+    || bad "负控下 2000 次 = ${s2000:-?}us（< 200000us ⇒ 判据在空转）"
   # 逃生口语义不变：慢但结果必须一致
-  diff <(grep -E '^slices=.*bytes=' "$W/perf_fast.out" | sed 's/total_ms=[0-9]*//') \
-       <(grep -E '^slices=.*bytes=' "$W/perf_slow.out" | sed 's/total_ms=[0-9]*//') >/dev/null \
+  # 剥离两种耗时字段后再比 byte 计数（新增 total_us 后必须一并剥，否则快慢两行的
+  #   total_ms/total_us 本身就会让 diff 非空 —— 2026-11-28 本轮实测踩到，判据误红）
+  diff <(grep -E '^slices=.*bytes=' "$W/perf_fast.out" | sed 's/total_ms=[0-9]*//; s/total_us=[0-9]*//') \
+       <(grep -E '^slices=.*bytes=' "$W/perf_slow.out" | sed 's/total_ms=[0-9]*//; s/total_us=[0-9]*//') >/dev/null \
     && ok "逃生口只影响快慢、不影响结果（byte 计数一致）" || bad "逃生口改变了结果（语义被破坏）"
 else
   bad "缺 C 轨产物，负控无法执行"
 fi
 
 echo "[5/5] 前提自证：负控确实慢下来（≥5×）"
-if [ -n "${t2000:-}" ] && [ -n "${s2000:-}" ] && [ "${t2000:-0}" -gt 0 ]; then
-  ratio=$((s2000 / (t2000 > 0 ? t2000 : 1)))
-  echo "     负控/正面 = ${s2000}ms / ${t2000}ms ≈ ${ratio}×"
-  [ "$ratio" -ge 5 ] && ok "负控与正面差 ${ratio}×（扰动真发生）" || bad "负控/正面仅 ${ratio}×（扰动不明显）"
+# 缺陷 971 修法：正面耗时 = 0us 是「快过 1us 分辨率」，不是「缺数据」。
+#   分母取 max(t,1) ⇒ 报出的比值是**下界**（真实只会更高），文案写明，不伪造精度。
+#   判据仍有牙：[4] 要求负控绝对 ≥200000us，[3] 要求正面绝对 ≤200000us。
+if [ -n "${t2000:-}" ] && [ -n "${s2000:-}" ]; then
+  denom=$t2000; [ "$denom" -gt 0 ] || denom=1
+  ratio=$((s2000 / denom))
+  echo "     负控/正面 = ${s2000}us / ${t2000}us ≈ ${ratio}×（分母取 max(t,1) ⇒ 下界）"
+  [ "$ratio" -ge 5 ] && ok "负控与正面差 ≥${ratio}×（扰动真发生）" || bad "负控/正面仅 ${ratio}×（扰动不明显）"
 else
-  bad "缺耗时数据，无法自证"
+  bad "缺耗时数据，无法自证（t2000=${t2000:-无} s2000=${s2000:-无}）"
 fi
 
 echo

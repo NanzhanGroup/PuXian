@@ -91,6 +91,33 @@ C4  产品面零改动自证：git diff v0.2.448..v0.2.449 -- runtime/ stdlib/ �
        要么新建当场登记 allow.tsv。本轮选登记（脚本仍要被 systemd 现有 unit 路径引用）
 ```
 
+### ⑦ 缺陷 971（新）· m438_pxslice_offs 在快机器上「快得判红」（CI 假红 · 门面，非产品）
+
+```
+现场   远端 CI run 46126005554 / job 140920639817 / step 31（sha 882a7a4）：
+       m438_pxslice_offs rc=1，小计 12 通过 1 失败，唯一红 = [5]「缺耗时数据，无法自证」；
+       而 [3] 实测 2000 次=0ms · 20000 次=8ms，[4] 负控 2000 次=378ms ⇒ 扰动本已 378×。
+       同轮其它 38 个 step 全绿；本地（本机 16 vCPU）跑同一门也绿 ⇒ **只有更快的机器红**。
+机理   probes/m438_slice_perf.px 用 now_ms()（毫秒分辨率）；缓存表生效后 2000 次 <1ms
+       ⇒ 整数截断成 0。[5] 的守卫写成 `[ "$t2000" -gt 0 ]`：把「快过分辨率」当成「没采到数」
+       ⇒ 走 else 判红。**越优化越容易红**，方向是反的。
+修法   ① 探针加 now_us()（CLOCK_MONOTONIC 微秒）输出 total_us=，total_ms 保留兼容
+       ② 门内统一取微秒：us_of() 优先 total_us，旧语料/旧快照无该字段则 total_ms×1000 回落；
+          阈值按 ms×1000 等价平移（200ms/1000ms/负控 200ms），**不放松任何判据**
+       ③ [5] 分母取 max(t,1) ⇒ 比值为**下界**并在文案写明；t=0 合法（快过 1us），不再判「缺数据」
+       ④ [4] 的 byte 计数对拍同步剥 total_us —— 不剥则新增字段本身让 diff 非空（本轮实跑踩到，
+          第一次复跑就是这条假红 12/1，修后 13/0）
+证据   worktree /data/gatevm/ci438-verify（HEAD 882a7a4 + 本补丁，独立 gate_lock）：
+       `PX_GATE_LOCK=.px_gate_lock_ci438 bash selfhost/check_m438_pxslice_offs.sh`
+       ⇒ 13/0 EXIT=0（2000 次=3498us · 20000 次=23141us · 负控=906436us · 259×）
+       整门负控（同一脚本，缓存路径关掉）`PX_NO_STR_OFFS_SLICE=1 bash …`
+       ⇒ 10/3 EXIT=1（[3] 2000 次=791848us > 200000us、20000 次=8381081us > 1000000us、[5] 0×）
+       ⇒ 判据仍有牙，不是把红改绿
+影响   只动 selfhost/check_m438_pxslice_offs.sh + selfhost/probes/m438_slice_perf.px，
+       产品（runtime/stdlib/tools）零改动 ⇒ 不需重烘
+遗留   需 push 到 main 才能让远端 CI 转绿（本地档止于 commit）
+```
+
 ## M448（2026-11-27）：smtp STARTTLS / PNG 真压缩 / 文档小缺陷集 / --list 污染收口 / 分片判据 C-locale 失效 / m128 一次性闸跨线程失效（缺陷 954、957、959、962、963、964）
 
 > **一句话**：把晨曦提的 9 条外部需求里「改库不改 runtime」的那批做完并留门 ——
