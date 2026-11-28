@@ -69,6 +69,28 @@ C4  产品面零改动自证：git diff v0.2.448..v0.2.449 -- runtime/ stdlib/ �
        不把「判据自伤」当 LOAD-SENSITIVE 豁免掉（那正是判据纪律禁止的自欺形态）
 ```
 
+### ⑥ 缺陷 970（新）· M449 r2 唯一红 m410_criteria_scan —— 本轮自己的宿主脚本污染了 m410 扫描面（门面，非产品）
+
+```
+现场   r2（stamp /data/gatevm/shard-20261128-141007 · HEAD 62a60c90）绿 329 · 红 1：
+       m410_criteria_scan FAIL fails=3，低负载复跑仍红（5s）⇒ 判定产品红（不是 LOAD-SENSITIVE）
+       m410 的正控立刻点名三件：host:ci-watch-449.sh / host:m449-m128-fix-verify.sh /
+       host:m449-m128-negcontrol.sh —— R1（有 grep 判据 + OK 绿输出，从不打印扫描面）
+机理   m410 的宿主面口径是「/data/autodrive/*.sh 且 mtime ≥ 2026-11-16」；
+       本轮 13:58/14:05/14:09 为 969 修后复验新建的服务脚本/复验脚本/负控脚本落在顶层 ⇒ 进入扫描面。
+       r1（13:28 起）时它们还不存在 ⇒ r2（14:10）才第一次被抓：**门在替我把「一次性脚本没登记」这件事找出来**
+处置   按例外表机制登记三条（都是「规则不适用」，不是「懒得改」）：
+       · ci-watch-449.sh   判绿＝远端 run 的 conclusion 字段，扫不到由 5h/2.5h 超时分支落 NO-TAG/TIMEOUT(非绿)
+       · m449-m128-fix-verify.sh 判据完全委托仓库 m128 门（自带扫描面+零值守卫），本脚本只循环汇总
+       · m449-m128-negcontrol.sh 方向相反（发现不红即 BROKEN），无「判绿却漏测」的面
+证据   改后 m410 正式门：nscan=136 R1=14 R2=0 allow=14 · 例外表无烂账 ⇒ M410-CRITERIA-SCAN-OK
+       m410 --selftest 11/11 PASS（正控仍抓无扫描面/字面量 DONE/无零值守卫，负控不误报）
+       m415_cleanenv：m410 在宿主面缺席下绿（nscan=22 R1=6）+ 豁免回滚负控判红（fails=8）⇒ 三条 host: 条目在 CI 上正确 SKIP
+       「allow 会吃掉真红」的反证 = r2 本次 RED 本身（不登记就红）
+教训   在 /data/autodrive 顶层写一次性脚本 ⇒ 当轮就会被 m410 抓；要么写进 logs/ 子目录，
+       要么新建当场登记 allow.tsv。本轮选登记（脚本仍要被 systemd 现有 unit 路径引用）
+```
+
 ## M448（2026-11-27）：smtp STARTTLS / PNG 真压缩 / 文档小缺陷集 / --list 污染收口 / 分片判据 C-locale 失效 / m128 一次性闸跨线程失效（缺陷 954、957、959、962、963、964）
 
 > **一句话**：把晨曦提的 9 条外部需求里「改库不改 runtime」的那批做完并留门 ——

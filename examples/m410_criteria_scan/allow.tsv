@@ -12,3 +12,6 @@ host:tag_notify_watch.sh	探针外壳：判据委托给 check_tag_notify.sh（�
 host:m409_closeout2.sh	M409 收口归档脚本（11-16 15:30 定稿），已过时不再运行；追溯改写无收益
 host:m409_m256_loadcheck_r23.sh	M409 r23 失败复现脚本，一次性已归档；同一形状的现行判据在 m409_verify_m256_shard.sh（有扫描面 + 零值守卫）
 host:m425_chain_tail.sh	M425 R3 链尾补写脚本（11-21 一次性收尾，M425 已发布归档）：判绿＝按 R2 同形状写出 CHAIN-EXIT，不做内容扫描（绿来自标记件字段，不来自 grep 命中）；同形状的现役组件是 repo packaging/chain/chain_tail.sh（已有零载体守卫，见其 ALLOW 条目）
+host:ci-watch-449.sh	M449 补发轮一次性 CI 看护（11-28 13:58 写，只读 GitHub API 轮询，跑完即弃）：判绿＝远端 run 的 conclusion=success 字段，不是内容扫描；「扫不到」由 5h/2.5h 超时分支显式落 VERDICT=NO-TAG/TIMEOUT(非绿)，不存在「没扫到也判绿」（M449 登记）
+host:m449-m128-fix-verify.sh	M449 m128 判据修复后的复验脚本（11-28 14:05 写，一次性，已在争用条件连跑 3 次并归档 /data/autodrive/logs/m449-m128-fix-verify.log）：判据完全委托仓库 examples/m128_unlock_grow/verify.sh（该门自带扫描面与零值守卫），本脚本只做循环与汇总，无自有扫描面（M449 登记）
+host:m449-m128-negcontrol.sh	M449 m128 新判据的负控脚本（11-28 14:09 写，一次性）：判绿＝行为断言「假二进制只 print READY 不 listen ⇒ 必须 bad 且 PID 清空」，从仓库 verify.sh 原样抽取 start_bin 块喂入；方向相反（发现不红即 BROKEN），无「判绿却漏测」的面（M449 登记）
